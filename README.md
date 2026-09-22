@@ -171,5 +171,9 @@ The vendor driver binary (`MarvinBus64.sys`) and installer are **not** included.
 
 ## Licence
 
-The code in `src/` and `tools/` is available under the MIT licence
-([LICENSE](LICENSE)). The bitstream is excluded from that grant — see above.
+**GNU Affero General Public License v3.0** ([LICENSE](LICENSE)). If you run a
+modified version of this code as a network service, you must offer its source
+to that service's users.
+
+The FPGA bitstream is **excluded** from that grant — it is not ours to license.
+See the note above.

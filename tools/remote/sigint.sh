@@ -1,4 +1,12 @@
 #!/bin/bash
+# Pinnacle Studio 500-USB open driver
+# Copyright (C) 2026 Jonas Cz.
+#
+# This program is free software: you can redistribute it and/or modify it
+# under the terms of the GNU Affero General Public License as published by the
+# Free Software Foundation, either version 3 of the License, or (at your
+# option) any later version. This program is distributed WITHOUT ANY WARRANTY;
+# see <https://www.gnu.org/licenses/> for the full licence.
 # Verify the real Ctrl+C path: run without -t, send SIGINT, time the shutdown.
 rm -f /home/jonas/sig.dv /home/jonas/sig.log
 setsid nohup /home/jonas/pinnacle-driver/build/pincli \
