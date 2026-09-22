@@ -1,0 +1,31 @@
+# --- Vendor binaries -------------------------------------------------------
+# The vendor driver and its installer are Pinnacle's and are NOT redistributed.
+# (The FPGA bitstream is a deliberate exception and IS committed -- see the
+# "A note on the FPGA bitstream" section of README.md.)
+*.msi
+*.sys
+pinnaclembusb/
+marvin/
+
+# --- Large captures and traces ---------------------------------------------
+# usbmon recordings of the vendor driver, raw endpoint dumps, and DV captures.
+# All are the user's own multi-MB..GB recordings; the READMEs describe what
+# each one showed so the findings survive without the files.
+*.pcap
+*.pcapng
+*.avi
+*.dv
+traces/ep02-out-payload.bin
+traces/ep88-*.bin
+
+# --- Build output ----------------------------------------------------------
+build/
+*.o
+*.a
+*.exe
+
+# --- Local / editor --------------------------------------------------------
+.claude/
+__pycache__/
+*.pyc
+.DS_Store
