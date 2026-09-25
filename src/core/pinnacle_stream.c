@@ -291,8 +291,14 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
  * its own, so exactly one thread ever calls libusb_handle_events().
  */
 
-#define DV_QUEUE_DEPTH 32      /* ~1 MB in flight, ~290 ms of slack at NTSC DV rate */
-#define DV_XFER_BYTES  32768
+/* Depth is counted in transfers, not bytes: the device ends each transfer with
+ * a short packet after ~4 KB (8 KB at most), so a slot holds far less than its
+ * buffer size. 256 slots is ~1 MB of stream, ~290 ms of slack at HDV/DV rates.
+ * Measured: 32 slots (~36 ms) overflowed whenever a disk flush stalled the
+ * consumer for longer than that, and the FPGA then dropped ~25 bus cycles.
+ * Buffers stay small so the total (4 MB) is well inside usbfs_memory_mb (16). */
+#define DV_QUEUE_DEPTH 256
+#define DV_XFER_BYTES  16384
 
 struct rx_slot {
     struct libusb_transfer *xfer;
@@ -300,12 +306,14 @@ struct rx_slot {
     volatile int done;         /* set by the callback, cleared on resubmit */
     volatile int failed;
     int status;                /* libusb transfer status, when it failed */
+    struct timespec t_done;    /* when the completion callback ran (debug timing) */
 };
 
 static void LIBUSB_CALL dv_xfer_cb(struct libusb_transfer *xfer)
 {
     struct rx_slot *slot = xfer->user_data;
 
+    clock_gettime(CLOCK_MONOTONIC, &slot->t_done);
     slot->status = xfer->status;
     slot->failed = (xfer->status != LIBUSB_TRANSFER_COMPLETED);
     slot->submitted = 0;
@@ -477,16 +485,32 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
                     clock_gettime(CLOCK_MONOTONIC, &tnow);
                     double ms = (tnow.tv_sec - t0.tv_sec) * 1000.0 +
                                  (tnow.tv_nsec - t0.tv_nsec) / 1e6;
-                    char line[96];
+                    double cms = (slot->t_done.tv_sec - t0.tv_sec) * 1000.0 +
+                                 (slot->t_done.tv_nsec - t0.tv_nsec) / 1e6;
+                    char line[128];
                     int off = snprintf(line, sizeof(line),
-                                       "ep88 t=%.3fms size=%d n=%lu\n",
-                                       ms, n, completions);
+                                       "ep88 t=%.3fms size=%d n=%lu c=%.3f\n",
+                                       ms, n, completions, cms);
                     fwrite(line, 1, (size_t)off, stderr);
                 }
                 if (raw_dump)
                     fwrite(xfer->buffer, 1, (size_t)n, raw_dump);
+                struct timespec tcb0, tcb1;
+                if (debug)
+                    clock_gettime(CLOCK_MONOTONIC, &tcb0);
                 if (cb(xfer->buffer, (size_t)n, user) != 0)
                     finished = 1;
+                if (debug) {
+                    clock_gettime(CLOCK_MONOTONIC, &tcb1);
+                    double us = (tcb1.tv_sec - tcb0.tv_sec) * 1e6 +
+                                (tcb1.tv_nsec - tcb0.tv_nsec) / 1e3;
+                    if (us > 1000.0) {
+                        char sl[96];
+                        int so = snprintf(sl, sizeof(sl), "cbslow n=%lu us=%.0f\n",
+                                          completions, us);
+                        fwrite(sl, 1, (size_t)so, stderr);
+                    }
+                }
             }
 
             slot->done = 0;

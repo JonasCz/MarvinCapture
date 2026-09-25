@@ -20,9 +20,10 @@
  * pincli — minimal capture CLI for the Pinnacle 500-USB.
  *
  * Initialises the device (FPGA bitstream + alt setting), replays the
- * captured stream-start command sequence, and writes reassembled raw DV to
- * a file until Ctrl+C, at which point it replays the stream-stop sequence
- * and exits cleanly.
+ * captured stream-start command sequence, and writes the reassembled stream
+ * to a file until Ctrl+C, at which point it replays the stream-stop sequence
+ * and exits cleanly. A DV camera yields raw DV; an HDV camera yields an
+ * MPEG-2 transport stream. The format is detected from the stream itself.
  */
 
 #include "pinnacle_device.h"
@@ -36,6 +37,7 @@
 #include <string.h>
 #include <time.h>
 #if !defined(_WIN32)
+#include <pthread.h>
 #include <unistd.h>
 #endif
 
@@ -47,10 +49,174 @@ static void on_sigint(int sig)
     g_stop = 1;
 }
 
+/*
+ * The USB thread must never wait on the disk. A queue of EP 0x88 transfers is
+ * only ~300 ms deep; a filesystem flush that blocks fwrite() for longer than
+ * the queue can absorb makes the FPGA's receive FIFO overrun and drop bus
+ * cycles (seen as a hole in the stream ~5 s into a run, when the kernel's
+ * writeback first fires). So the USB thread only copies into a large buffer,
+ * and a second thread runs the reassembler and writes the file.
+ */
+#define SINK_BYTES (64u << 20)
+
 typedef struct {
     dv_reassembler_t *reasm;
-    unsigned long total_bytes;
     time_t last_report;
+#if !defined(_WIN32)
+    uint8_t *buf;
+    size_t head, tail;              /* monotonic byte counters into buf */
+    size_t max_fill;
+    int closed, failed, overflowed;
+    pthread_mutex_t lock;
+    pthread_cond_t wake;
+    pthread_t thread;
+    int started;
+#endif
+} sink_t;
+
+static void sink_progress(sink_t *s)
+{
+    time_t now = time(NULL);
+    if (now == s->last_report)
+        return;
+    s->last_report = now;
+    const dv_reassembler_t *r = s->reasm;
+    if (r->format == DV_FORMAT_HDV)
+        fprintf(stderr, "\rcaptured %.1f MB, HDV: %lu TS packets (%lu cc errors)   ",
+                r->bytes_fed / (1024.0 * 1024.0), r->ts_packets, r->ts_cc_errors);
+    else
+        fprintf(stderr, "\rcaptured %.1f MB, %lu frames, %lu sequences (%lu dropped)   ",
+                r->bytes_fed / (1024.0 * 1024.0), r->frames_written,
+                r->sequences_written, r->sequences_dropped);
+    fflush(stderr);
+}
+
+#if !defined(_WIN32)
+
+static void *sink_thread(void *arg)
+{
+    sink_t *s = arg;
+
+    pthread_mutex_lock(&s->lock);
+    for (;;) {
+        while (s->head == s->tail && !s->closed)
+            pthread_cond_wait(&s->wake, &s->lock);
+        if (s->head == s->tail)
+            break;                       /* closed and fully drained */
+
+        size_t off = s->tail % SINK_BYTES;
+        size_t n = s->head - s->tail;
+        if (n > SINK_BYTES - off)
+            n = SINK_BYTES - off;
+        pthread_mutex_unlock(&s->lock);
+
+        /* Bytes in [tail, head) are not touched by the producer, so no lock
+         * is held while this (possibly slow) write runs. */
+        int rc = dv_reassembler_feed(s->reasm, s->buf + off, n);
+        sink_progress(s);
+
+        pthread_mutex_lock(&s->lock);
+        s->tail += n;
+        if (rc != 0) {
+            s->failed = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&s->lock);
+    return NULL;
+}
+
+static int sink_start(sink_t *s, dv_reassembler_t *reasm)
+{
+    memset(s, 0, sizeof(*s));
+    s->reasm = reasm;
+    s->buf = malloc(SINK_BYTES);
+    if (!s->buf)
+        return -1;
+    pthread_mutex_init(&s->lock, NULL);
+    pthread_cond_init(&s->wake, NULL);
+    if (pthread_create(&s->thread, NULL, sink_thread, s) != 0) {
+        free(s->buf);
+        return -1;
+    }
+    s->started = 1;
+    return 0;
+}
+
+static int sink_push(sink_t *s, const uint8_t *data, size_t len)
+{
+    pthread_mutex_lock(&s->lock);
+    if (s->failed) {
+        pthread_mutex_unlock(&s->lock);
+        return -1;
+    }
+    size_t fill = s->head - s->tail;
+    if (len > SINK_BYTES - fill) {
+        s->overflowed = 1;
+        pthread_mutex_unlock(&s->lock);
+        return -1;
+    }
+    size_t off = s->head % SINK_BYTES;
+    size_t first = SINK_BYTES - off;
+    if (first > len)
+        first = len;
+    memcpy(s->buf + off, data, first);
+    memcpy(s->buf, data + first, len - first);
+    s->head += len;
+    if (s->head - s->tail > s->max_fill)
+        s->max_fill = s->head - s->tail;
+    pthread_cond_signal(&s->wake);
+    pthread_mutex_unlock(&s->lock);
+    return 0;
+}
+
+/* Lets the writer drain everything already queued, then joins it. */
+static void sink_stop(sink_t *s)
+{
+    if (!s->started)
+        return;
+    pthread_mutex_lock(&s->lock);
+    s->closed = 1;
+    pthread_cond_signal(&s->wake);
+    pthread_mutex_unlock(&s->lock);
+    pthread_join(s->thread, NULL);
+    s->started = 0;
+    if (s->overflowed)
+        fprintf(stderr,
+                "pincli: WARNING: the writer fell more than %u MB behind the USB "
+                "stream; capture was stopped (is the output disk stalled?)\n",
+                SINK_BYTES >> 20);
+    else if (s->failed)
+        fprintf(stderr, "pincli: write error in the output writer\n");
+    fprintf(stderr, "pincli: writer buffer high-water mark %.2f MB of %u MB\n",
+            s->max_fill / (1024.0 * 1024.0), SINK_BYTES >> 20);
+    free(s->buf);
+}
+
+#else /* _WIN32: no writer thread, feed synchronously */
+
+static int sink_start(sink_t *s, dv_reassembler_t *reasm)
+{
+    memset(s, 0, sizeof(*s));
+    s->reasm = reasm;
+    return 0;
+}
+
+static int sink_push(sink_t *s, const uint8_t *data, size_t len)
+{
+    if (dv_reassembler_feed(s->reasm, data, len) != 0)
+        return -1;
+    sink_progress(s);
+    return 0;
+}
+
+static void sink_stop(sink_t *s) { (void)s; }
+
+#endif
+
+typedef struct {
+    sink_t *sink;
+    unsigned long total_bytes;
     time_t deadline;      /* 0 = run until Ctrl+C */
 } capture_ctx_t;
 
@@ -59,34 +225,25 @@ static int on_data(const uint8_t *data, size_t len, void *user)
     capture_ctx_t *ctx = user;
     ctx->total_bytes += len;
 
-    if (dv_reassembler_feed(ctx->reasm, data, len) != 0) {
-        fprintf(stderr, "pincli: write error, stopping\n");
+    if (sink_push(ctx->sink, data, len) != 0) {
+        fprintf(stderr, "\npincli: output failed, stopping\n");
         return -1;
     }
 
-    time_t now = time(NULL);
-    if (ctx->deadline && now >= ctx->deadline)
+    if (ctx->deadline && time(NULL) >= ctx->deadline)
         g_stop = 1;
-    if (now != ctx->last_report) {
-        ctx->last_report = now;
-        fprintf(stderr,
-                "\rcaptured %.1f MB, %lu frames, %lu sequences (%lu dropped)   ",
-                ctx->total_bytes / (1024.0 * 1024.0),
-                ctx->reasm->frames_written,
-                ctx->reasm->sequences_written,
-                ctx->reasm->sequences_dropped);
-        fflush(stderr);
-    }
-
     return g_stop ? -1 : 0;
 }
 
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s -o <output.dv> -b <bitstream.bin>\n"
+            "usage: %s -o <output> -b <bitstream.bin>\n"
             "\n"
-            "  -o, --output <file>      raw DV output path (required)\n"
+            "  -o, --output <file>      output path (required). Raw DV from a DV\n"
+            "                           camera (use .dv), MPEG-2 transport stream\n"
+            "                           from an HDV camera (use .ts); the format is\n"
+            "                           detected from the stream.\n"
             "  -b, --bitstream <file>   FPGA bitstream blob, extracted from the\n"
             "                           user's own vendor driver install/capture\n"
             "                           (default: traces/fpga-bitstream-candidate.bin\n"
@@ -158,6 +315,10 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    /* The reassembler writes 188-byte TS packets / 12 KB DIF sequences; batch
+     * them into multi-megabyte writes so the disk sees few, large requests. */
+    setvbuf(out, NULL, _IOFBF, 4u << 20);
+
     dv_reassembler_t reasm;
     if (dv_reassembler_init(&reasm, out) != 0) {
         fprintf(stderr, "pincli: failed to initialise DV reassembler\n");
@@ -166,9 +327,19 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    sink_t sink;
+    if (sink_start(&sink, &reasm) != 0) {
+        fprintf(stderr, "pincli: failed to start the output writer\n");
+        dv_reassembler_finish(&reasm);
+        fclose(out);
+        pinnacle_close(&dev);
+        return 1;
+    }
+
     status = pinnacle_stream_start(&dev);
     if (status != PINNACLE_OK) {
         fprintf(stderr, "pincli: stream start failed: %s\n", pinnacle_strerror(status));
+        sink_stop(&sink);
         dv_reassembler_finish(&reasm);
         fclose(out);
         pinnacle_close(&dev);
@@ -176,7 +347,7 @@ int main(int argc, char **argv)
     }
     fprintf(stderr, "pincli: streaming started, writing to '%s' (Ctrl+C to stop)\n", output_path);
 
-    capture_ctx_t ctx = { .reasm = &reasm, .total_bytes = 0, .last_report = 0,
+    capture_ctx_t ctx = { .sink = &sink, .total_bytes = 0,
                           .deadline = duration_s ? time(NULL) + duration_s : 0 };
 #if !defined(_WIN32)
     /* Belt and braces for --duration: on_data only runs when bytes arrive, so
@@ -195,15 +366,29 @@ int main(int argc, char **argv)
     if (stop_status != PINNACLE_OK)
         fprintf(stderr, "pincli: stream stop sequence failed: %s\n", pinnacle_strerror(stop_status));
 
+    sink_stop(&sink);       /* drain the writer before finalising the file */
     dv_reassembler_finish(&reasm);
     fclose(out);
     pinnacle_close(&dev);
 
+    if (reasm.format == DV_FORMAT_HDV) {
+        fprintf(stderr,
+                "pincli: done. %lu bytes captured, HDV (MPEG2-TS): %lu TS packets "
+                "written (%lu held back before the first GOP)\n",
+                ctx.total_bytes, reasm.ts_packets, reasm.ts_discarded);
+        fprintf(stderr,
+                "pincli: TS integrity: %lu continuity-counter errors, %lu bad-sync "
+                "packets (+%lu CC jumps explained by CIP discontinuities)\n",
+                reasm.ts_cc_errors, reasm.ts_sync_errors, reasm.ts_cc_forgiven);
+        if (!reasm.ts_gate_open)
+            fprintf(stderr, "pincli: WARNING: no video GOP header seen; output is empty\n");
+    } else {
+        fprintf(stderr,
+                "pincli: done. %lu bytes captured, %lu frames, %lu sequences written, %lu zero-padded\n",
+                ctx.total_bytes, reasm.frames_written, reasm.sequences_written, reasm.sequences_dropped);
+    }
     fprintf(stderr,
-            "pincli: done. %lu bytes captured, %lu frames, %lu sequences written, %lu zero-padded\n",
-            ctx.total_bytes, reasm.frames_written, reasm.sequences_written, reasm.sequences_dropped);
-    fprintf(stderr,
-            "pincli: framing: %lu isoch packets (%lu empty), %lu DIF bytes, "
+            "pincli: framing: %lu isoch packets (%lu empty), %lu payload bytes, "
             "%lu message resyncs, %lu isoch resyncs\n",
             reasm.iso_packets, reasm.iso_empty, reasm.dif_bytes,
             reasm.msg_resyncs, reasm.iso_resyncs);

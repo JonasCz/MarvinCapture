@@ -6,7 +6,8 @@ An open user-space driver and DV capture tool for the **Pinnacle Studio
 increasingly unusable; this reverse-engineers the protocol from scratch and
 implements it on Linux with libusb.
 
-**Status: DV capture over the FireWire port works and is verified.** A
+**Status: DV capture over the FireWire port works and is verified, and HDV
+(MPEG-2 transport stream) capture works too — see [docs/hdv.md](docs/hdv.md).** A
 5-minute continuous capture produces 8,967 frames with zero dropped DIF
 sequences, zero CIP/DBC discontinuities and zero ffmpeg decode errors, and
 stops cleanly.
@@ -75,7 +76,12 @@ to tell those apart.
 
 ### Output
 
-A raw DV elementary stream (`.dv`), frame-aligned, playable directly:
+The format is detected from the stream. A DV camera gives a raw DV elementary
+stream (`.dv`); an **HDV camera gives an MPEG-2 transport stream (`.ts`)** —
+name the output accordingly. HDV details, and why its integrity check is
+different, are in [docs/hdv.md](docs/hdv.md).
+
+DV: a raw elementary stream, frame-aligned, playable directly:
 
 ```bash
 ffplay out.dv
@@ -127,6 +133,7 @@ All opt-in; the defaults are the right values.
 | | |
 |---|---|
 | **[docs/capture-reliability.md](docs/capture-reliability.md)** | **Start here to use it.** Running a capture, telling a device fault from a quiet camera, and proving no data was dropped. |
+| [docs/hdv.md](docs/hdv.md) | HDV over FireWire: what's on the wire, how the `.ts` is produced, and why the DBC check is weak for it. |
 | [docs/command-channel-findings.md](docs/command-channel-findings.md) | The protocol. Command word format, OHCI register usage, the two layers of EP 0x88 framing, the 1394 connection-management transaction, and what's still open. |
 | [HANDOFF.md](HANDOFF.md) | Overall state of the reverse-engineering effort: what's known about the hardware, what's still missing. |
 | [FEASIBILITY.md](FEASIBILITY.md) | The original plan and phases. |
@@ -143,10 +150,10 @@ All opt-in; the defaults are the right values.
 ```
 src/core/     pinnacle_device.c   open, bitstream upload, bring-up
               pinnacle_stream.c   start/stop sequences, queued EP 0x88 read loop
-              dv_reassembler.c    the two framing layers + DIF frame assembly
+              dv_reassembler.c    the two framing layers + DIF frame / MPEG2-TS assembly
               protocol_data.h     captured command sequences, replayed verbatim
 src/cli/      pincli.c            the capture tool
-tools/        dvcheck.py, ssh helpers, scripts that run on the capture host
+tools/        dvcheck.py, tscheck.py, ssh helpers, scripts that run on the capture host
 docs/         protocol findings and rig documentation
 ```
 

@@ -17,8 +17,10 @@
  */
 
 /*
- * Turns the raw EP 0x88 byte stream into a frame-aligned raw DV (.dv)
- * elementary stream that ffmpeg/VLC can read directly.
+ * Turns the raw EP 0x88 byte stream into either a frame-aligned raw DV (.dv)
+ * elementary stream or, for an HDV camera, an MPEG-2 transport stream (.ts),
+ * both of which ffmpeg/VLC can read directly. The format is detected from the
+ * CIP FMT field of the first data packet (0x00 = DV, 0x20 = MPEG2-TS/HDV).
  *
  * EP 0x88 is NOT raw DV. The FPGA implements an OHCI-1394 host controller and
  * tunnels its isochronous-receive DMA over USB, so the stream has two layers
@@ -47,6 +49,11 @@
  * or 12 (PAL), and Dseq==0 starts a new frame. If a sequence is missing we
  * write 12,000 zero bytes in its place so every frame stays a fixed, aligned
  * size — without that, one dropped sequence would desync every later frame.
+ *
+ * HDV (IEC 61883-4) uses the same two outer layers. Its CIP packets are
+ * FMT=0x20, DBS=6, FN=3, SPH=1: the payload is 1..n source packets of 192
+ * bytes, each a 4-byte timestamp followed by one 188-byte TS packet. The
+ * timestamp is dropped and the TS packets are written back to back.
  */
 
 #ifndef DV_REASSEMBLER_H
@@ -60,8 +67,15 @@
 extern "C" {
 #endif
 
+typedef enum {
+    DV_FORMAT_UNKNOWN = 0, /* no data packet seen yet */
+    DV_FORMAT_DV,          /* CIP FMT 0x00: DIF blocks -> raw .dv */
+    DV_FORMAT_HDV          /* CIP FMT 0x20: MPEG2-TS  -> .ts */
+} dv_format_t;
+
 typedef struct {
     FILE *out;
+    dv_format_t format;    /* locked by the first packet that carries data */
 
     /* Layer 1: type-9 message demux over the raw EP 0x88 stream. */
     uint8_t msg_hdr[4];
@@ -74,6 +88,36 @@ typedef struct {
     unsigned iso_hdr_have;
     unsigned iso_dif_left;  /* DIF bytes of this packet still to emit */
     unsigned iso_skip_left; /* quadlet padding + trailer still to skip */
+    unsigned iso_pos;       /* bytes of the current packet's payload consumed */
+
+    /* HDV: MPEG2-TS packets recovered from 192-byte source packets.
+     *
+     * Nothing is written until a video access unit that starts a GOP is seen
+     * (the analogue of DV waiting for Dseq 0): the ring is already running
+     * when we join, so the first bytes are a partial picture and possibly
+     * stale ring contents. The gate then opens by replaying the latest PAT
+     * and PMT, so the file is decodable from its first packet. At finish the
+     * trailing partial picture is cut, so the file ends on a whole one. */
+    int ts_gate_open;
+    int ts_video_pid;
+    int ts_pmt_pid;
+    uint8_t ts_pat[188];
+    uint8_t ts_pmt[188];
+    int ts_pat_valid;
+    int ts_pmt_valid;
+    long ts_frame_start_off;            /* file offset of the last video PES start */
+    unsigned long ts_frame_start_packets;
+    unsigned long ts_packets;           /* TS packets written */
+    unsigned long ts_discarded;         /* held back before the gate opened */
+    unsigned long ts_sync_errors;       /* dropped after the gate: no 0x47 */
+    unsigned long ts_cc_errors;         /* per-PID continuity counter jumps */
+    uint8_t ts_cc[8192];                /* last CC per PID, 0xFF = none yet */
+    uint8_t ts_buf[188];                /* TS packet being assembled */
+    unsigned ts_have;
+    uint32_t ts_pid_epoch[8192];        /* dbc_epoch when each PID was last seen */
+    unsigned long ts_cc_forgiven;       /* CC jumps explained by an already-counted
+                                         * CIP/DBC discontinuity (one hole shows
+                                         * up once per PID) */
 
     /* Layer 3: DIF sequence / frame assembly. */
     uint8_t *buf;
@@ -112,6 +156,7 @@ typedef struct {
     unsigned long dbc_blocks;     /* DIF blocks seen with a DBC */
     unsigned long dbc_gaps;       /* discontinuities detected after lock-on */
     unsigned long dbc_lost_blocks;/* blocks implied missing by those gaps */
+    uint32_t dbc_epoch;           /* bumped on every DBC discontinuity */
     unsigned long dbc_joins;      /* discontinuities seen while still syncing
                                    * in to the already-running ring; expected,
                                    * not loss */

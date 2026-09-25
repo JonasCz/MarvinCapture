@@ -177,17 +177,51 @@ frame count matches wall-clock duration.
 The two are independent and should agree. If `dvcheck` reports zero-filled
 sequences, `pincli`'s DBC line says whether they were really lost in transit.
 
+### The USB thread must never wait on the disk
+
+Found while chasing sporadic single holes in HDV captures (2026-09-25); it
+applies equally to DV. The evidence, from raw EP 0x88 dumps:
+
+- The holes always sat ~5 s into a run — the first time the kernel's writeback
+  flusher fires — and each followed a stall of 40–50 ms in the capture
+  callback (`fwrite` blocked on the filesystem).
+- The type-9 ring addresses were continuous, so nothing was lost on USB. The
+  OHCI record trailers carry the 1394 cycle count and jumped by ~25 cycles
+  (~3 ms). Just before the jump, one packet was **aborted mid-write** and the
+  next packet re-used the same ring address — the controller's receive FIFO
+  overran while the host was not reading, dropped whole bus cycles, then
+  resumed at the un-advanced buffer position.
+- The queue was 32 transfers, but the device ends each transfer after only
+  ~4 KB, so it held ~125 KB ≈ 36 ms, not the ~1 MB the comment claimed. Any
+  consumer stall longer than that overran the FPGA.
+
+Fix: 256 transfers (~1 MB, ~290 ms), and `pincli` copies each transfer into a
+64 MB ring buffer drained by a second thread that runs the reassembler and
+writes the file through a 4 MB stdio buffer. `pincli` prints the writer
+buffer's high-water mark at the end (under a deliberate `dd … fdatasync` disk
+storm it stayed under 4 MB) and stops with a warning if it ever overflowed.
+A/B under that storm, 30 s HDV runs: old binary 2 of 5 clean, new 5 of 5;
+a further 4×60 s and a 5-minute run were also clean.
+
+**Ring addresses are ignored by the reassembler.** It concatenates type-9
+payloads in arrival order. That is correct while addresses advance
+contiguously, but an OHCI overrun makes the controller rewrite an address, and
+the aborted partial record is then followed by the good one at the same place.
+With the stall fixed this no longer occurs in practice; if it ever shows up
+again (`hdvraw`-style analysis: look for a message whose address goes
+backwards), honour the addresses rather than the arrival order.
+
 ---
 
 ## 4. Tunables (all opt-in; defaults are the right values)
 
 | variable | effect |
 |---|---|
-| `PINNACLE_QUEUE_DEPTH=<n>` | EP 0x88 transfers kept in flight (default 32, max 32). `1` reproduces the old synchronous loop **and its data loss** — A/B only. |
+| `PINNACLE_QUEUE_DEPTH=<n>` | EP 0x88 transfers kept in flight (default 256, max 256). `1` reproduces the old synchronous loop **and its data loss** — A/B only. |
 | `PINNACLE_STOP_DRAIN=0` | Stop draining EP 0x88 during the stop sequence, i.e. go back to the stop failing on packet 3 of 4. A/B only. |
 | `PINNACLE_EP84_DRAIN=0` | Disable the EP 0x84 status drain. A/B only. |
 | `PINNACLE_PROBE=1` | Dump the OHCI registers above after the start sequence. |
-| `PINNACLE_DEBUG_EP88=1` | Log every EP 0x88 completion's size and arrival time. |
+| `PINNACLE_DEBUG_EP88=1` | Log every EP 0x88 completion: size, delivery time (`t=`), the time libusb completed it (`c=`), and any callback that took over 1 ms (`cbslow`). Not for loss testing: the log and `PINNACLE_RAW_DUMP` are written on the USB thread and add their own disk stalls. |
 | `PINNACLE_DEBUG_EP84=1` | Log every EP 0x84 record with its arrival time. |
 | `PINNACLE_RAW_DUMP=<path>` | Write the raw EP 0x88 byte stream to a file before the reassembler touches it. |
 

@@ -67,6 +67,18 @@ static int truncate_to(FILE *out, long off)
 #define ISO_TRAILER_BYTES 4
 #define ISO_MAX_DLEN 1024
 
+/* HDV / MPEG2-TS over IEC 61883-4. */
+#define CIP_FMT_DV 0x00
+#define CIP_FMT_MPEG2TS 0x20
+#define HDV_DBS_QUADLETS 6            /* 24-byte data blocks, 8 per source packet */
+#define HDV_SOURCE_PACKET_BYTES 192   /* 4-byte timestamp + 188-byte TS packet */
+#define HDV_SPH_BYTES 4
+#define TS_PACKET_BYTES 188
+/* HDV analogue of DV's "until the first frame starts": a discontinuity in the
+ * first ~60 ms (1000 TS packets at 25 Mbit/s) is the join into the already
+ * running ring, not loss. */
+#define HDV_JOIN_TS_PACKETS 1000
+
 /* ------------------------------------------------------------------ */
 /* Layer 3: DIF sequences -> frame-aligned output                      */
 /* ------------------------------------------------------------------ */
@@ -211,9 +223,12 @@ static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 /* ------------------------------------------------------------------ */
 
 /* Validates the 12 bytes of isoch header + CIP header we've accumulated, and
- * on success reports how many DIF bytes follow and how much to skip after
- * them. Kept strict so that resync after a glitch can't latch onto noise. */
-static int iso_header_ok(const uint8_t *h, unsigned *dif_len, unsigned *skip_len)
+ * on success reports how many payload bytes follow, how much to skip after
+ * them, and which format the CIP FMT field says this is. Kept strict so that
+ * resync after a glitch can't latch onto noise. Once a format is locked, only
+ * that format is accepted. */
+static int iso_header_ok(const uint8_t *h, dv_format_t locked, unsigned *dif_len,
+                         unsigned *skip_len, dv_format_t *fmt_out)
 {
     uint32_t w = (uint32_t)h[0] | ((uint32_t)h[1] << 8) |
                  ((uint32_t)h[2] << 16) | ((uint32_t)h[3] << 24);
@@ -225,12 +240,28 @@ static int iso_header_ok(const uint8_t *h, unsigned *dif_len, unsigned *skip_len
         return 0;
     if (dlen < CIP_HEADER_BYTES || dlen > ISO_MAX_DLEN)
         return 0;
-    if ((dlen - CIP_HEADER_BYTES) % DIF_BLOCK_BYTES != 0)
-        return 0;
     /* CIP quadlet 0 starts with 00b, quadlet 1 with 10b (IEC 61883-1). */
     if ((h[4] & 0xC0) != 0x00 || (h[8] & 0xC0) != 0x80)
         return 0;
 
+    unsigned fmt = h[8] & 0x3F;
+    dv_format_t f;
+    if (fmt == CIP_FMT_DV) {
+        if ((dlen - CIP_HEADER_BYTES) % DIF_BLOCK_BYTES != 0)
+            return 0;
+        f = DV_FORMAT_DV;
+    } else if (fmt == CIP_FMT_MPEG2TS) {
+        if (h[5] != HDV_DBS_QUADLETS ||
+            (dlen - CIP_HEADER_BYTES) % HDV_SOURCE_PACKET_BYTES != 0)
+            return 0;
+        f = DV_FORMAT_HDV;
+    } else {
+        return 0;
+    }
+    if (locked != DV_FORMAT_UNKNOWN && f != locked)
+        return 0;
+
+    *fmt_out = f;
     *dif_len = dlen - CIP_HEADER_BYTES;
     /* Payload is padded to a quadlet, then the status/timestamp trailer. */
     *skip_len = ((dlen + 3u) & ~3u) - dlen + ISO_TRAILER_BYTES;
@@ -268,7 +299,11 @@ static void check_dbc(dv_reassembler_t *r, unsigned dbc, unsigned blocks)
          * one discontinuity always showed up there, independent of run length
          * (measured over 20 s, 30 s, 60 s and 300 s captures), so counting it
          * as loss would put a permanent false positive on every run. */
-        if (r->frame_started) {
+        int joining = (r->format == DV_FORMAT_HDV)
+                          ? r->ts_packets < HDV_JOIN_TS_PACKETS
+                          : !r->frame_started;
+        r->dbc_epoch++;
+        if (!joining) {
             /* Distance forward, modulo 256. Anything else (a backwards jump)
              * is counted as a single lost block rather than ~255. */
             unsigned gap = (dbc - r->dbc_next) & 0xFF;
@@ -283,12 +318,147 @@ static void check_dbc(dv_reassembler_t *r, unsigned dbc, unsigned blocks)
     r->dbc_blocks += blocks;
 }
 
+/* True if `p[0..len)` contains the 4-byte sequence `pat`. */
+static int contains4(const uint8_t *p, size_t len, const uint8_t *pat)
+{
+    for (size_t i = 0; i + 4 <= len; i++)
+        if (memcmp(p + i, pat, 4) == 0)
+            return 1;
+    return 0;
+}
+
+/* HDV: handles one complete 188-byte TS packet. Returns 1 if it should be
+ * written to the output, 0 if it is held back or dropped. */
+static int ts_handle_packet(dv_reassembler_t *r)
+{
+    static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
+    const uint8_t *p = r->ts_buf;
+
+    if (p[0] != 0x47) {
+        /* Before the gate opens this is expected join noise (stale ring
+         * contents); afterwards it means the framing lost sync. */
+        if (r->ts_gate_open)
+            r->ts_sync_errors++;
+        else
+            r->ts_discarded++;
+        return 0;
+    }
+
+    unsigned pid = ((p[1] & 0x1F) << 8) | p[2];
+    int pusi = (p[1] & 0x40) != 0;
+    unsigned afc = (p[3] >> 4) & 3;
+    uint8_t cc = p[3] & 0x0F;
+    unsigned po = (afc & 2) ? 5u + p[4] : 4u; /* payload offset */
+    if (po > TS_PACKET_BYTES)
+        po = TS_PACKET_BYTES;
+
+    /* Continuity, only judged once we're writing: what precedes the gate is
+     * discarded anyway. */
+    if (pid != 0x1FFF && (afc & 1)) {
+        int discontinuity = (afc & 2) && p[4] > 0 && (p[5] & 0x80);
+        uint8_t last = r->ts_cc[pid];
+        if (r->ts_gate_open && last != 0xFF && !discontinuity && cc != last &&
+            cc != ((last + 1) & 0x0F)) {
+            if (r->ts_pid_epoch[pid] != r->dbc_epoch)
+                r->ts_cc_forgiven++;
+            else
+                r->ts_cc_errors++;
+        }
+        r->ts_cc[pid] = cc;
+        r->ts_pid_epoch[pid] = r->dbc_epoch;
+    }
+
+    /* Remember the latest PAT and PMT so the gate can replay them. Both are
+     * a single packet each on HDV. */
+    if (pusi && (afc & 1)) {
+        if (pid == 0 && po + 13 <= TS_PACKET_BYTES) {
+            unsigned sec = po + 1u + p[po]; /* skip pointer_field */
+            if (sec + 12 <= TS_PACKET_BYTES && p[sec] == 0x00) {
+                unsigned end = sec + 3 + (((p[sec + 1] & 0x0F) << 8) | p[sec + 2]) - 4; /* before CRC */
+                if (end > TS_PACKET_BYTES)
+                    end = TS_PACKET_BYTES;
+                for (unsigned e = sec + 8; e + 4 <= end; e += 4) {
+                    if (((p[e] << 8) | p[e + 1]) != 0) { /* program 0 is the NIT */
+                        r->ts_pmt_pid = ((p[e + 2] & 0x1F) << 8) | p[e + 3];
+                        break;
+                    }
+                }
+                memcpy(r->ts_pat, p, TS_PACKET_BYTES);
+                r->ts_pat_valid = 1;
+            }
+        } else if (r->ts_pmt_pid && (int)pid == r->ts_pmt_pid) {
+            memcpy(r->ts_pmt, p, TS_PACKET_BYTES);
+            r->ts_pmt_valid = 1;
+        }
+    }
+
+    /* A video PES start (stream_id 0xE0..0xEF) begins a picture. */
+    int video_start = pusi && (afc & 1) && po + 4 <= TS_PACKET_BYTES &&
+                      p[po] == 0x00 && p[po + 1] == 0x00 && p[po + 2] == 0x01 &&
+                      (p[po + 3] & 0xF0) == 0xE0;
+
+    if (!r->ts_gate_open) {
+        /* Open on a picture that carries a sequence header, i.e. the start
+         * of a GOP, so the decoder has everything it needs from packet one. */
+        if (!(video_start && contains4(p + po, TS_PACKET_BYTES - po, seq_hdr))) {
+            r->ts_discarded++;
+            return 0;
+        }
+        r->ts_gate_open = 1;
+        r->ts_video_pid = (int)pid;
+        if (r->ts_pat_valid && fwrite(r->ts_pat, 1, TS_PACKET_BYTES, r->out) == TS_PACKET_BYTES)
+            r->ts_packets++;
+        if (r->ts_pmt_valid && fwrite(r->ts_pmt, 1, TS_PACKET_BYTES, r->out) == TS_PACKET_BYTES)
+            r->ts_packets++;
+    }
+
+    if (video_start && (int)pid == r->ts_video_pid) {
+        r->ts_frame_start_off = ftell(r->out);
+        r->ts_frame_start_packets = r->ts_packets;
+    }
+    return 1;
+}
+
+static int ts_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
+{
+    r->dif_bytes += len;
+    while (len > 0) {
+        unsigned off = r->iso_pos % HDV_SOURCE_PACKET_BYTES;
+        size_t n;
+        if (off < HDV_SPH_BYTES) {
+            n = HDV_SPH_BYTES - off;
+            if (n > len)
+                n = len;
+        } else {
+            n = HDV_SOURCE_PACKET_BYTES - off;
+            if (n > len)
+                n = len;
+            memcpy(r->ts_buf + r->ts_have, data, n);
+            r->ts_have += (unsigned)n;
+            if (r->ts_have == TS_PACKET_BYTES) {
+                if (ts_handle_packet(r)) {
+                    if (fwrite(r->ts_buf, 1, TS_PACKET_BYTES, r->out) != TS_PACKET_BYTES)
+                        return -1;
+                    r->ts_packets++;
+                }
+                r->ts_have = 0;
+            }
+        }
+        r->iso_pos += (unsigned)n;
+        data += n;
+        len -= n;
+    }
+    return 0;
+}
+
 static int ring_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 {
     while (len > 0) {
         if (r->iso_dif_left > 0) {
             size_t n = r->iso_dif_left < len ? r->iso_dif_left : len;
-            if (dif_feed(r, data, n) != 0)
+            int rc = (r->format == DV_FORMAT_HDV) ? ts_feed(r, data, n)
+                                                  : dif_feed(r, data, n);
+            if (rc != 0)
                 return -1;
             data += n;
             len -= n;
@@ -314,13 +484,17 @@ static int ring_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
             break;
 
         unsigned dif_len = 0, skip_len = 0;
-        if (iso_header_ok(r->iso_hdr, &dif_len, &skip_len)) {
-            if (dif_len > 0)
+        dv_format_t fmt = DV_FORMAT_UNKNOWN;
+        if (iso_header_ok(r->iso_hdr, r->format, &dif_len, &skip_len, &fmt)) {
+            if (dif_len > 0) {
                 r->iso_packets++;
-            else
+                r->format = fmt;
+            } else {
                 r->iso_empty++;
+            }
+            r->iso_pos = 0;
             /* CIP data block size is DBS quadlets (0x78 = 480 bytes for DV,
-             * i.e. one data block per packet), not one 80-byte DIF block. */
+             * 6 = 24 bytes for HDV), not one 80-byte DIF block. */
             unsigned dbs_bytes = (r->iso_hdr[5] ? r->iso_hdr[5] : 256u) * 4u;
             check_dbc(r, r->iso_hdr[7], dif_len / dbs_bytes);
             r->iso_dif_left = dif_len;
@@ -394,12 +568,20 @@ int dv_reassembler_init(dv_reassembler_t *r, FILE *out)
     if (!r->buf)
         return -1;
     r->system_seq_count = NTSC_SEQ_COUNT;
+    memset(r->ts_cc, 0xFF, sizeof(r->ts_cc));
+    r->ts_frame_start_off = -1;
     return 0;
 }
 
 void dv_reassembler_finish(dv_reassembler_t *r)
 {
-    if (r->frame_started) {
+    if (r->format == DV_FORMAT_HDV) {
+        /* Cut the trailing partial picture so the file ends on a whole one.
+         * A non-seekable output (a pipe) can't be cut and keeps it. */
+        if (r->ts_gate_open && r->ts_frame_start_off >= 0 &&
+            truncate_to(r->out, r->ts_frame_start_off) == 0)
+            r->ts_packets = r->ts_frame_start_packets;
+    } else if (r->frame_started) {
         if (r->expected_dseq < r->system_seq_count) {
             /* Capture stopped mid-frame. Zero-padding it out would end every
              * file with a frame that is part black, so drop the partial frame

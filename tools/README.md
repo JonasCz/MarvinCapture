@@ -19,6 +19,30 @@ This is independent of the CIP/DBC continuity counter `pincli` reports, so the
 two cross-check each other. See
 [../docs/capture-reliability.md](../docs/capture-reliability.md).
 
+### `tscheck.py` — structural check of an HDV capture (`.ts`)
+
+```bash
+python3 tools/tscheck.py out.ts --duration-seconds 300
+```
+
+Verifies whole 188-byte packets, a `0x47` sync byte on each, unbroken per-PID
+continuity counters, and that the file opens with PAT/PMT and a video sequence
+header. Use this rather than trusting `pincli`'s DBC line for HDV: the DBC wraps
+after 32 source packets and can miss a hole. See [../docs/hdv.md](../docs/hdv.md).
+
+### `hdvraw.py` — diagnose an HDV capture from the raw USB stream
+
+```bash
+sudo env PINNACLE_RAW_DUMP=raw.bin PINNACLE_DEBUG_EP88=1 ./build/pincli -o out.ts -t 30 2> ep88.log
+python3 tools/hdvraw.py raw.bin ep88.log
+```
+
+Decodes both framing layers and reports ring-address discontinuities, records
+the reassembler would resync over, DBC jumps and TS continuity errors, each
+mapped back to a USB offset and arrival time. Note the first ~20 ms always
+shows join noise. This is how the ~5 s-in holes were traced to a host-side disk
+stall; see [../docs/capture-reliability.md](../docs/capture-reliability.md).
+
 ## Driving the capture host
 
 The development rig is a separate Ubuntu machine with the device attached.

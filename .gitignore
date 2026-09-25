@@ -15,6 +15,7 @@ marvin/
 *.pcapng
 *.avi
 *.dv
+captures/*.ts
 traces/ep02-out-payload.bin
 traces/ep88-*.bin
 
