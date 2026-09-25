@@ -174,6 +174,23 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
         return PINNACLE_ERR_USB_TRANSFER;
     }
 
+    /* "80 <index> 08 00..." reads 8 bytes of the device's configuration
+     * memory; the reply echoes the request header in bytes 0..3. Index 3 is
+     * the 1394 GUID that MarvinBus64 publishes in the node's config ROM
+     * (byte-identical in the cold-boot trace). Index 0 is another 8-byte ID
+     * (fb82ad03 8d615d0e on the development unit; meaning unknown). */
+    if (req_len >= 3 && req[0] == 0x80 && req[2] == 0x08 && transferred >= 12) {
+        if (req[1] == 0x03) {
+            dev->guid_hi = ((uint32_t)reply[4] << 24) | ((uint32_t)reply[5] << 16) |
+                           ((uint32_t)reply[6] << 8) | reply[7];
+            dev->guid_lo = ((uint32_t)reply[8] << 24) | ((uint32_t)reply[9] << 16) |
+                           ((uint32_t)reply[10] << 8) | reply[11];
+            dev->have_guid = 1;
+        } else if (req[1] == 0x00) {
+            memcpy(dev->id0, reply + 4, 8);
+        }
+    }
+
     /* The 2-byte 05/06 exchanges bracketing the bitstream upload are status
      * reads: the device answers "<cmd> 01" when it is ready and "<cmd> 00"
      * when it is not. We used to ignore the reply entirely and carry on, so a
@@ -217,6 +234,7 @@ static pinnacle_status_t config_replay_seq(pinnacle_device_t *dev,
 
 pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bitstream_path)
 {
+    dev->have_guid = 0;
     int rc = libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
                                                PINNACLE_ALT_SETTING_IDLE);
     if (rc != 0)

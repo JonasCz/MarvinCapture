@@ -43,6 +43,14 @@ mapped back to a USB offset and arrival time. Note the first ~20 ms always
 shows join noise. This is how the ~5 s-in holes were traced to a host-side disk
 stall; see [../docs/capture-reliability.md](../docs/capture-reliability.md).
 
+## Protocol decoding
+
+| Script | Use |
+|---|---|
+| `seqdecode.py` | Decode EP 0x02 traffic from a trace into named OHCI/FPGA register writes, RAM writes, descriptors and 1394 headers. Input is `tshark ... -e frame.number -e usb.endpoint_address -e usb.capdata`. |
+| `fcpdecode.py [-q]` | Decode 1394 async traffic, including FCP/AV-C, on EP 0x02 and EP 0x84. |
+| `extract-bitstreams.py MarvinAVS64.sys [outdir]` | Extract the three FPGA bitstreams (ohci, render, capture) from your own copy of the vendor driver, MD5-checked. Never redistribute the output. See [../docs/analog-notes.md](../docs/analog-notes.md). |
+
 ## Driving the capture host
 
 The development rig is a separate Ubuntu machine with the device attached.

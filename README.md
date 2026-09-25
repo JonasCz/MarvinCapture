@@ -14,7 +14,9 @@ stops cleanly.
 
 The analog input path is not implemented (the SAA7113 decoder is initialised,
 because the device refuses to work otherwise, but its video is not captured).
-Deck control (play/pause/FF/REW) is not implemented.
+Deck control (play/pause/stop/FF/REW, timecode) works with the `pindeck`
+tool, but is not yet wired into `pincli`. See
+[docs/deck-control.md](docs/deck-control.md).
 
 ---
 
@@ -64,8 +66,9 @@ sudo ./build/pincli -o out.dv -b traces/fpga-bitstream-candidate.bin -t 300
 `root` (or a udev rule granting access to `2304:0213`) is required to claim the
 interface.
 
-The device needs **~14 seconds of bring-up** before the first byte arrives:
-bitstream upload, a 1.5 s FPGA settle, then a 232-packet start sequence. `-t`
+The device needs **~5.5 seconds of bring-up** before the first byte arrives:
+bitstream upload, a 1.5 s FPGA settle, then the 1394 link start-up, finding the
+camera and connecting to its output plug ([docs/startup.md](docs/startup.md)). `-t`
 starts counting after that. A capture window shorter than the bring-up will
 look empty and mislead you.
 
@@ -134,6 +137,9 @@ All opt-in; the defaults are the right values.
 |---|---|
 | **[docs/capture-reliability.md](docs/capture-reliability.md)** | **Start here to use it.** Running a capture, telling a device fault from a quiet camera, and proving no data was dropped. |
 | [docs/hdv.md](docs/hdv.md) | HDV over FireWire: what's on the wire, how the `.ts` is produced, and why the DBC check is weak for it. |
+| [docs/startup.md](docs/startup.md) | Every step from plug-in to the first stream byte, and where each value comes from. |
+| [docs/deck-control.md](docs/deck-control.md) | Play/stop/FF/REW over AV/C, and the 1394 transaction layer. |
+| [docs/analog-notes.md](docs/analog-notes.md) | Notes for later: analog path, the three FPGA bitstreams, the other Marvin models. |
 | [docs/command-channel-findings.md](docs/command-channel-findings.md) | The protocol. Command word format, OHCI register usage, the two layers of EP 0x88 framing, the 1394 connection-management transaction, and what's still open. |
 | [HANDOFF.md](HANDOFF.md) | Overall state of the reverse-engineering effort: what's known about the hardware, what's still missing. |
 | [FEASIBILITY.md](FEASIBILITY.md) | The original plan and phases. |
@@ -149,10 +155,12 @@ All opt-in; the defaults are the right values.
 
 ```
 src/core/     pinnacle_device.c   open, bitstream upload, bring-up
-              pinnacle_stream.c   start/stop sequences, queued EP 0x88 read loop
+              pinnacle_1394.c     1394 link layer: link start-up, transactions, oPCR, AV/C
+              pinnacle_stream.c   start/stop, queued EP 0x88 read loop
               dv_reassembler.c    the two framing layers + DIF frame / MPEG2-TS assembly
-              protocol_data.h     captured command sequences, replayed verbatim
-src/cli/      pincli.c            the capture tool
+              protocol_data.h     config-channel sequence still replayed verbatim
+src/cli/      pindeck.c           deck control (play/stop/ff/rew/state/timecode)
+              pincli.c            the capture tool
 tools/        dvcheck.py, tscheck.py, ssh helpers, scripts that run on the capture host
 docs/         protocol findings and rig documentation
 ```

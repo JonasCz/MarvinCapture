@@ -29,6 +29,7 @@
 #define PINNACLE_DEVICE_H
 
 #include <libusb-1.0/libusb.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -65,6 +66,15 @@ typedef struct {
     libusb_context *usb_ctx;
     libusb_device_handle *handle;
     int interface_claimed;
+    /* read from the device's configuration memory by pinnacle_init_hardware
+     * (config-channel reads "80 00 08" and "80 03 08", 8 bytes each) */
+    int have_guid;
+    uint32_t guid_hi, guid_lo;  /* the 1394 EUI-64 our node publishes */
+    uint8_t id0[8];             /* the block at index 0; meaning unknown */
+    /* set by pinnacle_stream_start */
+    uint16_t camera_node;      /* 0xffc0 | node number, 0 if none found */
+    int iso_channel;           /* channel IR context 0 listens on */
+    int pcr_connected;         /* we hold a point-to-point connection on oPCR[0] */
 } pinnacle_device_t;
 
 /* Finds and opens the device, claims the vendor-class interface. Does not

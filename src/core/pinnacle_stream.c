@@ -17,7 +17,7 @@
  */
 
 #include "pinnacle_stream.h"
-#include "protocol_data.h"
+#include "pinnacle_1394.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -37,15 +37,6 @@ static void pinnacle_sleep_ms(unsigned ms)
 #endif
 
 #define CMD_TIMEOUT_MS 2000
-#define REPLY_DRAIN_TIMEOUT_MS 30
-/* The start sequence's early commands need their real inter-packet gaps
- * respected (observed up to ~700ms) -- clamping this too aggressively was
- * found to reliably wedge the device (it stopped ACKing bulk OUT writes
- * after exactly 2 commands, regardless of their content, when replayed
- * faster than the real driver did). The stop sequence has no such
- * dependency observed, so it can be clamped tighter to keep Ctrl+C snappy. */
-#define START_MAX_INTER_PACKET_DELAY_MS 1000
-#define STOP_MAX_INTER_PACKET_DELAY_MS 100
 
 /* Reads EP 0x84 until it goes quiet. Many command packets set the
  * "reply wanted" bit, and the device answers on this endpoint; leaving those
@@ -64,33 +55,6 @@ static void drain_replies(pinnacle_device_t *dev, unsigned timeout_ms)
         if (rc != 0 || len == 0)
             return;
     }
-}
-
-static pinnacle_status_t replay_sequence(pinnacle_device_t *dev,
-                                          const pinnacle_pkt_t *seq, unsigned count,
-                                          unsigned max_delay_ms)
-{
-    for (unsigned i = 0; i < count; i++) {
-        unsigned delay = seq[i].delay_ms;
-        if (delay > max_delay_ms)
-            delay = max_delay_ms;
-        if (delay > 0)
-            pinnacle_sleep_ms(delay);
-
-        int transferred = 0;
-        int rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CMD_OUT,
-                                       (uint8_t *)seq[i].data, (int)seq[i].len,
-                                       &transferred, CMD_TIMEOUT_MS);
-        if (rc != 0 || (unsigned)transferred != seq[i].len) {
-            fprintf(stderr, "pinnacle: command packet %u/%u failed (rc=%d, sent=%d/%u)\n",
-                    i + 1, count, rc, transferred, seq[i].len);
-            return PINNACLE_ERR_USB_TRANSFER;
-        }
-
-        drain_replies(dev, REPLY_DRAIN_TIMEOUT_MS);
-    }
-
-    return PINNACLE_OK;
 }
 
 /* --- EP 0x88 back-pressure ------------------------------------------------
@@ -216,29 +180,77 @@ static void probe_registers(pinnacle_device_t *dev)
 #endif
 }
 
+static int debug_1394(void)
+{
+    const char *v = getenv("PINNACLE_DEBUG_1394");
+    return v ? atoi(v) : 0;
+}
+
+/* Link up, find the camera, connect to its output plug, and start
+ * isochronous receive on the channel the plug reports. Every step is
+ * explained in docs/startup.md.
+ *
+ * This used to be a verbatim replay of 232 packets from a Windows trace.
+ * Besides the link setup it contained Windows' camera enumeration (config
+ * ROM reads) and ~45 AV/C inquiries with the tlabels of the camera it was
+ * recorded against; this camera answered them, and the leftovers confused
+ * the first deck commands. None of it was needed for capture. */
 pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
 {
-    pinnacle_status_t status =
-        replay_sequence(dev, PINNACLE_STREAM_START_SEQ, PINNACLE_STREAM_START_SEQ_COUNT,
-                         START_MAX_INTER_PACKET_DELAY_MS);
+    pinnacle_1394_t link;
+    uint32_t ompr = 0, opcr = 0;
+
+    p1394_init(&link, dev);
+    link.verbose = debug_1394();
+    dev->camera_node = 0;
+    dev->pcr_connected = 0;
+    dev->iso_channel = 63;
+
+    if (p1394_link_init(&link) != 0) {
+        fprintf(stderr, "pinnacle: 1394 link initialisation failed\n");
+        return PINNACLE_ERR_USB_TRANSFER;
+    }
+    fprintf(stderr, "pinnacle: 1394 bus has %d node(s), we are node %u\n",
+            link.node_count, link.local_node & 0x3f);
+
+    if (p1394_find_camera(&link, &dev->camera_node, &ompr) != 0) {
+        dev->camera_node = 0;
+        fprintf(stderr, "pinnacle: no camera answered on the 1394 bus; listening on "
+                        "broadcast channel 63 anyway\n");
+    } else if (p1394_connect(&link, dev->camera_node, &opcr) == 0) {
+        dev->pcr_connected = 1;
+        dev->iso_channel = (int)((opcr >> 16) & 0x3f);
+        fprintf(stderr, "pinnacle: camera is node %u (oMPR 0x%08x); connected to oPCR[0] "
+                        "0x%08x, channel %d\n", dev->camera_node & 0x3f, ompr, opcr,
+                dev->iso_channel);
+    } else {
+        /* still listen on whatever channel the plug names, if we got it */
+        if (opcr & 0x80000000u)
+            dev->iso_channel = (int)((opcr >> 16) & 0x3f);
+        fprintf(stderr, "pinnacle: camera is node %u but connecting to oPCR[0] failed "
+                        "(0x%08x); listening on channel %d\n",
+                dev->camera_node & 0x3f, opcr, dev->iso_channel);
+    }
+
+    if (p1394_ir_start(&link, (unsigned)dev->iso_channel) != 0)
+        return PINNACLE_ERR_USB_TRANSFER;
 
     const char *probe = getenv("PINNACLE_PROBE");
     if (probe && probe[0] == '1')
         probe_registers(dev);
 
-    return status;
+    return PINNACLE_OK;
 }
 
 pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
 {
     /* Clear out anything the device queued while we were streaming so the
-     * command channel starts the stop sequence unblocked. */
+     * command channel starts the stop unblocked. */
     drain_replies(dev, 50);
 
 #if !defined(_WIN32)
-    /* Keep EP 0x88 moving for the whole sequence — see the comment above.
-     * The device is still streaming when we send packet 1, and only stops
-     * when packet 2 takes the isochronous receive context out of "run".
+    /* Keep EP 0x88 moving throughout — see the comment above. Data keeps
+     * arriving until IR0 is out of "run".
      *
      * This was off by default for a while: the first time the sequence ran
      * to completion, the following captures all got zero bytes, and only a
@@ -255,9 +267,33 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
     int drain_started = want_drain && dv_drain_start(&drain, &drain_thread, dev);
 #endif
 
-    pinnacle_status_t status =
-        replay_sequence(dev, PINNACLE_STREAM_STOP_SEQ, PINNACLE_STREAM_STOP_SEQ_COUNT,
-                         STOP_MAX_INTER_PACKET_DELAY_MS);
+    pinnacle_status_t status = PINNACLE_OK;
+    pinnacle_1394_t link;
+    p1394_init(&link, dev);
+    link.verbose = debug_1394();
+
+    /* isochronous-to-USB off, IR0 out of run, wait for it to go idle */
+    if (p1394_ir_stop(&link) != 0) {
+        status = PINNACLE_ERR_USB_TRANSFER;
+    } else {
+        uint32_t ctl = 0;
+        for (int i = 0; i < 50; i++) {
+            if (p1394_reg_read(&link, 0x400, &ctl) == 0 && !(ctl & 0x400))
+                break;
+            pinnacle_sleep_ms(2);
+        }
+        /* hand the camera's plug back */
+        if (dev->pcr_connected && dev->camera_node) {
+            uint32_t opcr = 0;
+            if (p1394_disconnect(&link, dev->camera_node, &opcr) == 0) {
+                dev->pcr_connected = 0;
+                if (link.verbose)
+                    fprintf(stderr, "pinnacle: released oPCR[0], now 0x%08x\n", opcr);
+            } else
+                fprintf(stderr, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
+                        opcr);
+        }
+    }
 
 #if !defined(_WIN32)
     dv_drain_join(&drain, drain_thread, drain_started);

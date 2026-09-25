@@ -8,9 +8,10 @@ the FireWire port only, with deck control. Analog path is out of scope.
 > produced 8,967 frames with zero dropped DIF sequences, zero CIP/DBC
 > discontinuities and zero ffmpeg decode errors, and stopped cleanly. See
 > [docs/capture-reliability.md](docs/capture-reliability.md) for how to run it and
-> how that was proven. The main remaining weakness is **connection management** —
-> the start sequence hardcodes the camera's node ID and isochronous channel
-> instead of reading them (section 4).
+> how that was proven. Since 2026-09-25 the 1394 start-up is generated
+> step by step instead of replayed. It discovers the camera and its channel
+> and makes a real oPCR connection ([docs/startup.md](docs/startup.md)).
+> Deck control works ([docs/deck-control.md](docs/deck-control.md)).
 
 **Approach decided:** build the driver on **Linux**, using a Windows VM running the
 vendor driver as the reference implementation to observe.
@@ -173,8 +174,8 @@ of the same NTSC source (verified `dvsd`, 720×480, 29.971 fps, 198 frames).
 | ~~Command channel semantics~~ | **Solved** — the FPGA is an OHCI-1394 controller; the command word layout and message types are documented in `docs/command-channel-findings.md`. |
 | ~~A drop-free DV trace~~ | **Have one** — `captures/20260922-clean-3s.dv`, decodes with zero errors. |
 | ~~Clean stream stop~~ | **Solved** — the command channel blocks while EP 0x88 has an unread backlog, so the stop sequence now keeps EP 0x88 drained while it runs. All 4 packets ACK and the device streams normally afterwards. |
-| **Connection management** | The start sequence hardcodes what it should negotiate: the camera's node ID (`0xFFC1`), the isochronous channel (63) programmed into `IR0.ContextMatch`, and a blind `compare_swap` on `oPCR[0]` expecting `0xC03F3C7A`. A camera power-cycle or a differently-populated 1394 bus renumbers nodes and would silently produce zero data. The packet is fully decoded now — see **Next steps** in `docs/command-channel-findings.md`. |
-| **Deck control** | Still not captured; see the row above — the AV/C encapsulation has to come out of `MarvinBus64.sys`. |
+| ~~Connection management~~ | **Done** (2026-09-25). The camera node is found by reading each node's oMPR. The oPCR is read, then compare-swapped with its current value, and released on stop. IR0 listens on the channel the plug reports. See [docs/startup.md](docs/startup.md). Still open: re-connecting after a bus reset *during* capture. |
+| ~~Deck control~~ | **Working** (2026-09-25) with `build/pindeck`: Play/Pause/Stop/FF/REW and timecode, verified on a Canon HDV camera. Every command is answered on a single send. The transport is in the core library (`p1394_avc`). See [docs/deck-control.md](docs/deck-control.md). Next: wire it into `pincli`. |
 
 ---
 

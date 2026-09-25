@@ -2,10 +2,11 @@
 
 Read [../HANDOFF.md](../HANDOFF.md) first for background.
 
-Status: capture, clean stop, and multi-minute stability all work. The two
-remaining known weaknesses are both in *connection management* — the start
-sequence hardcodes the camera's node ID (1) and isochronous channel (63)
-instead of reading them — see **Next steps**.
+Status: capture, clean stop, and multi-minute stability all work. Since
+2026-09-25 the 1394 start-up is no longer a replay. It is generated step by
+step, the camera's node and channel are discovered, and a real oPCR
+connection is made: see [startup.md](startup.md), which supersedes the
+start-sequence details below.
 
 ## Resolved: the command-channel wedge
 
@@ -82,7 +83,9 @@ bits 15:0   device RAM address    (payload messages)
 |------|---------|
 | 2 | OHCI register write — address is `0x10000 + reg_offset`, value follows |
 | 3 | OHCI register read — same addressing, reply carries the value |
-| 4 | vendor config register write (indexed, driver-side shadow cache) |
+| 4 | FPGA USB-side register write (indexed; the driver keeps a shadow copy). Index 0 = EP 0x84 idle time / isochronous-to-USB gate; see [startup.md](startup.md). |
+| 5 | read of that bank (reply comes back as type 5) |
+| 6 | FPGA extension-bank write (OHCI-style offsets, separate register file) |
 | 8 | block write to device RAM (`len` bytes follow) |
 | 9 | block read / device→host data (`len` bytes follow) |
 | 10 | OHCI `IntEvent` report |
@@ -345,6 +348,9 @@ file is always a whole number of complete frames.
 
 ## Diagnostics added (opt-in, no effect unless set)
 
+- `PINNACLE_DEBUG_1394=1|2`: logs the generated start-up. That covers
+  vendor status, NodeID/SelfIDCount, and camera and oPCR values. Level 2
+  adds every EP 0x84 record and our config ROM.
 - `PINNACLE_DEBUG_EP88=1` — logs every non-zero EP 0x88 read's size and
   arrival time to stderr. Use this instead of usbmon to characterise our own
   process's receive pattern (see race explanation above).
@@ -367,52 +373,29 @@ file is always a whole number of complete frames.
 
 ## Next steps
 
-1. Replace the blind replay of the connection-management step with a real
-   transaction. Start-sequence packet [222] is a 1394 `lock_req` /
-   `compare_swap` on the camera's `oPCR[0]` (CSR `0xFFFF_F000_0904`),
-   expecting `0xC03F3C7A` and writing `0xC13F3C7A` (point-to-point count
-   +1, channel 63, S100, 488-byte payload). A compare-swap only takes
-   effect if the camera's oPCR currently holds the expected value, so a
-   blind replay is fragile by construction. Read oPCR first, then
-   compare-swap with the observed value and check the lock response.
+1. ~~Replace the blind replay of the connection-management step with a real
+   transaction.~~ **Done (2026-09-25).** The camera is found by reading each
+   node's oMPR. The oPCR is read and then compare-swapped, IR0 listens on
+   the channel the plug reports, and the connection is released on stop.
+   See [startup.md](startup.md).
+2. Decode the EP 0x84 event stream properly. Type-10 messages carry the
+   OHCI `IntEvent` register:
 
-   The full decode of that packet is now in hand, which makes this
-   straightforward. It is a type-8 block write of 56 bytes to device RAM at
-   `0x1200`, then a 4-byte write at `0x11E8`, then an OHCI register write of
-   `0x9000` (run|wake) to `0x180` (AT request ContextControlSet) to kick it.
-   The 56 bytes are an OHCI AT descriptor pair plus the 1394 header:
+   | bit | event |
+   |---|---|
+   | 17 | selfIDComplete |
+   | 18 | busReset |
+   | 23 | cycleLost |
+   | 24 | cycleInconsistent |
+   | 26 | cycleTooLong |
 
-   | quadlet | value | meaning |
-   |---|---|---|
-   | 0 | `0x02000010` | OUTPUT_MORE-Immediate, 16 bytes of header |
-   | 4 | `0x00000590` | tLabel 1, rt 1, tcode 9 (`lock_req`), spd S100 |
-   | 5 | `0xFFC1FFFF` | destination node `0xFFC1` (node 1), offset high `0xFFFF` |
-   | 6 | `0xF0000904` | offset low — CSR `oPCR[0]` |
-   | 7 | `0x00080002` | 8 data bytes, extended tcode 2 = `compare_swap` |
-   | 8 | `0x100C0008` | OUTPUT_LAST, 8 bytes of payload |
-   | 9 | `0x00001230` | payload address (device RAM `0x1230`) |
-   | 12, 13 | `0xC03F3C7A`, `0xC13F3C7A` | arg (expected) and data (new), big-endian |
-
-   `0xC03F3C7A` decodes as on-line, broadcast-connection counter 1,
-   point-to-point counter 0, **channel 63**, S100, 488-byte payload — which
-   matches both the 488-byte isochronous packets we actually receive and the
-   channel 63 programmed into `IR0.ContextMatch`. The swap raises the
-   point-to-point counter to 1. The stop sequence's 4th packet is the same
-   transaction in reverse, releasing the connection.
-
-   Doing this properly also means programming `IR0.ContextMatch` from the
-   channel read out of the oPCR rather than hardcoding 63, and taking the
-   destination node ID from a SelfID scan rather than hardcoding node 1.
-3. Decode the EP 0x84 event stream properly (type-10 messages carry the
-   OHCI `IntEvent` register: bit 17 selfIDComplete, 18 busReset,
-   23 cycleLost, 24 cycleInconsistent, 26 cycleTooLong). Would turn most
-   future failures into a printed reason instead of a bisect.
-4. Audio: `ffprobe` reports two `pcm_s16le` 32 kHz stereo streams in the
-   captured DV and they survive a full decode of a 5-minute file, so audio
-   is coming through — it just hasn't been listened to yet.
-5. Deck control (Play/Pause/FF/REW) is still entirely uncaptured. The plan
-   remains to reverse the AV/C encapsulation out of `MarvinBus64.sys`; the
-   command-word format is known now, which narrows the search considerably.
+   That would turn most future failures into a printed reason instead of a
+   bisect. Handling a bus reset *during* capture belongs here too: the
+   connection must be re-established within 1 s.
+3. Audio: `ffprobe` reports two `pcm_s16le` 32 kHz stereo streams in the
+   captured DV, and they survive a full decode of a 5-minute file. So audio
+   is coming through; it just hasn't been listened to yet.
+4. ~~Deck control~~ **Done.** See [deck-control.md](deck-control.md).
 
 ### Not worth doing
 
