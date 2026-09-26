@@ -21,28 +21,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#include <io.h>
-#define pinnacle_ftruncate(fd, len) _chsize_s((fd), (len))
-#define pinnacle_fileno _fileno
-#else
-#include <unistd.h>
-#define pinnacle_ftruncate(fd, len) ftruncate((fd), (len))
-#define pinnacle_fileno fileno
-#endif
-
-/* Cuts the output file back to `off`. Only used to discard a frame that the
- * capture stopped in the middle of. Returns 0 on success; a non-seekable
- * output (a pipe) fails here and the caller falls back to zero-padding. */
-static int truncate_to(FILE *out, long off)
+/* Convenience sink: writes each whole unit to a FILE*, same as every write()
+ * call this file used to make directly before the callback refactor. */
+static int file_write(const uint8_t *data, size_t len, void *user)
 {
-    if (off < 0 || fflush(out) != 0)
-        return -1;
-    if (pinnacle_ftruncate(pinnacle_fileno(out), off) != 0)
-        return -1;
-    if (fseek(out, off, SEEK_SET) != 0)
-        return -1;
-    return 0;
+    FILE *f = user;
+    return fwrite(data, 1, len, f) == len ? 0 : -1;
+}
+
+void dv_output_file(dv_output_t *out, FILE *fp)
+{
+    out->write = file_write;
+    out->on_unit = NULL;
+    out->user = fp;
 }
 
 #define DIF_SEQUENCE_BYTES (150 * 80) /* 12,000 */
@@ -104,25 +95,28 @@ static size_t find_header(const uint8_t *buf, size_t len, size_t from, unsigned 
     return (size_t)-1;
 }
 
-static int write_zero_sequence(dv_reassembler_t *r)
+/* Emits the completed frame in r->frame_buf to the output callbacks.
+ * r->expected_dseq is the sequence count: it starts at 0, increments once
+ * per sequence written (real or zero-padded), and the caller's completion
+ * loop has already brought it up to at least system_seq_count -- so it's
+ * equal to system_seq_count normally, or (matching the pre-refactor
+ * file-sequential code, which had no ceiling of its own) larger, on a
+ * capture where a bogus dseq briefly ran past the end of the frame. */
+static int emit_frame(dv_reassembler_t *r)
 {
-    static const uint8_t zeros[DIF_SEQUENCE_BYTES];
-    if (fwrite(zeros, 1, DIF_SEQUENCE_BYTES, r->out) != DIF_SEQUENCE_BYTES)
+    size_t len = (size_t)r->expected_dseq * DIF_SEQUENCE_BYTES;
+    if (r->out.write && r->out.write(r->frame_buf, len, r->out.user) != 0)
         return -1;
-    r->sequences_dropped++;
-    return 0;
-}
-
-static int write_real_sequence(dv_reassembler_t *r, const uint8_t *p)
-{
-    if (fwrite(p, 1, DIF_SEQUENCE_BYTES, r->out) != DIF_SEQUENCE_BYTES)
-        return -1;
-    r->sequences_written++;
+    if (r->out.on_unit)
+        r->out.on_unit(DV_FORMAT_DV, r->frame_buf, len, r->out.user);
     return 0;
 }
 
 /* Handles one located DIF sequence at buf+p with the given dseq. Advances
- * frame/sequence bookkeeping and writes to the output file. */
+ * frame/sequence bookkeeping and copies real data into the in-progress
+ * frame buffer; a frame is only handed to the output callbacks once it's
+ * complete (handle_sequence for the next frame's dseq 0, or
+ * dv_reassembler_finish at end of capture). */
 static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
 {
     if (dseq >= r->system_seq_count) {
@@ -133,24 +127,25 @@ static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
     if (dseq == 0) {
         if (r->frame_started) {
             while (r->expected_dseq < r->system_seq_count) {
-                if (write_zero_sequence(r) != 0)
-                    return -1;
+                r->sequences_dropped++;
                 r->expected_dseq++;
             }
+            if (emit_frame(r) != 0)
+                return -1;
             r->frames_written++;
         }
         r->frame_started = 1;
-        r->frame_start_off = ftell(r->out);
         r->frame_start_written = r->sequences_written;
         r->frame_start_dropped = r->sequences_dropped;
-        if (write_real_sequence(r, p) != 0)
-            return -1;
+        memset(r->frame_buf, 0, sizeof(r->frame_buf));
+        memcpy(r->frame_buf, p, DIF_SEQUENCE_BYTES);
+        r->sequences_written++;
         r->expected_dseq = 1;
         return 0;
     }
 
     if (!r->frame_started) {
-        /* Haven't seen sequence 0 yet; ignore until we do, so the file
+        /* Haven't seen sequence 0 yet; ignore until we do, so the output
          * always starts frame-aligned. */
         return 0;
     }
@@ -161,12 +156,11 @@ static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
     }
 
     while (r->expected_dseq < dseq) {
-        if (write_zero_sequence(r) != 0)
-            return -1;
+        r->sequences_dropped++;
         r->expected_dseq++;
     }
-    if (write_real_sequence(r, p) != 0)
-        return -1;
+    memcpy(r->frame_buf + (size_t)dseq * DIF_SEQUENCE_BYTES, p, DIF_SEQUENCE_BYTES);
+    r->sequences_written++;
     r->expected_dseq = dseq + 1;
     return 0;
 }
@@ -327,8 +321,45 @@ static int contains4(const uint8_t *p, size_t len, const uint8_t *pat)
     return 0;
 }
 
-/* HDV: handles one complete 188-byte TS packet. Returns 1 if it should be
- * written to the output, 0 if it is held back or dropped. */
+/* Appends one 188-byte TS packet to the picture currently being
+ * accumulated, growing the buffer as needed. */
+static int ts_pic_append(dv_reassembler_t *r, const uint8_t *pkt)
+{
+    if (r->ts_pic_len + TS_PACKET_BYTES > r->ts_pic_cap) {
+        size_t new_cap = r->ts_pic_cap ? r->ts_pic_cap * 2 : (64u << 10);
+        while (new_cap < r->ts_pic_len + TS_PACKET_BYTES)
+            new_cap *= 2;
+        uint8_t *nb = realloc(r->ts_pic_buf, new_cap);
+        if (!nb)
+            return -1;
+        r->ts_pic_buf = nb;
+        r->ts_pic_cap = new_cap;
+    }
+    memcpy(r->ts_pic_buf + r->ts_pic_len, pkt, TS_PACKET_BYTES);
+    r->ts_pic_len += TS_PACKET_BYTES;
+    return 0;
+}
+
+/* Emits the picture accumulated in r->ts_pic_buf to the output callbacks and
+ * resets the accumulator so the next picture starts empty. */
+static int emit_picture(dv_reassembler_t *r)
+{
+    int rc = 0;
+    if (r->ts_pic_len > 0) {
+        if (r->out.write && r->out.write(r->ts_pic_buf, r->ts_pic_len, r->out.user) != 0)
+            rc = -1;
+        else if (r->out.on_unit)
+            r->out.on_unit(DV_FORMAT_HDV, r->ts_pic_buf, r->ts_pic_len, r->out.user);
+    }
+    r->ts_pic_len = 0;
+    return rc;
+}
+
+/* HDV: handles one complete 188-byte TS packet. Buffers it into the picture
+ * currently being accumulated (starting a new one, and flushing the
+ * previous complete one, at each video PES start for the tracked PID);
+ * nothing is handed to the output callbacks until a whole picture is ready.
+ * Returns -1 if an output callback failed, 0 otherwise. */
 static int ts_handle_packet(dv_reassembler_t *r)
 {
     static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
@@ -406,17 +437,38 @@ static int ts_handle_packet(dv_reassembler_t *r)
         }
         r->ts_gate_open = 1;
         r->ts_video_pid = (int)pid;
-        if (r->ts_pat_valid && fwrite(r->ts_pat, 1, TS_PACKET_BYTES, r->out) == TS_PACKET_BYTES)
+        /* PAT/PMT replay is its own small unit, written immediately and
+         * unconditionally -- unlike a picture, it is never dropped even if
+         * the capture stops before the first picture completes. */
+        if (r->ts_pat_valid) {
+            if (r->out.write && r->out.write(r->ts_pat, TS_PACKET_BYTES, r->out.user) != 0)
+                return -1;
             r->ts_packets++;
-        if (r->ts_pmt_valid && fwrite(r->ts_pmt, 1, TS_PACKET_BYTES, r->out) == TS_PACKET_BYTES)
+        }
+        if (r->ts_pmt_valid) {
+            if (r->out.write && r->out.write(r->ts_pmt, TS_PACKET_BYTES, r->out.user) != 0)
+                return -1;
             r->ts_packets++;
+        }
+        r->ts_pic_start_packets = r->ts_packets;
+        r->ts_pic_active = 1;
+        if (ts_pic_append(r, p) != 0)
+            return -1;
+        r->ts_packets++;
+        return 0;
     }
 
     if (video_start && (int)pid == r->ts_video_pid) {
-        r->ts_frame_start_off = ftell(r->out);
-        r->ts_frame_start_packets = r->ts_packets;
+        if (r->ts_pic_active && emit_picture(r) != 0)
+            return -1;
+        r->ts_pic_start_packets = r->ts_packets;
+        r->ts_pic_active = 1;
     }
-    return 1;
+
+    if (ts_pic_append(r, p) != 0)
+        return -1;
+    r->ts_packets++;
+    return 0;
 }
 
 static int ts_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
@@ -436,11 +488,8 @@ static int ts_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
             memcpy(r->ts_buf + r->ts_have, data, n);
             r->ts_have += (unsigned)n;
             if (r->ts_have == TS_PACKET_BYTES) {
-                if (ts_handle_packet(r)) {
-                    if (fwrite(r->ts_buf, 1, TS_PACKET_BYTES, r->out) != TS_PACKET_BYTES)
-                        return -1;
-                    r->ts_packets++;
-                }
+                if (ts_handle_packet(r) != 0)
+                    return -1;
                 r->ts_have = 0;
             }
         }
@@ -559,48 +608,46 @@ int dv_reassembler_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
     return 0;
 }
 
-int dv_reassembler_init(dv_reassembler_t *r, FILE *out)
+int dv_reassembler_init(dv_reassembler_t *r, const dv_output_t *out)
 {
     memset(r, 0, sizeof(*r));
-    r->out = out;
+    r->out = *out;
     r->buf_cap = MAX_RESYNC_WINDOW + DIF_SEQUENCE_BYTES;
     r->buf = malloc(r->buf_cap);
     if (!r->buf)
         return -1;
     r->system_seq_count = NTSC_SEQ_COUNT;
     memset(r->ts_cc, 0xFF, sizeof(r->ts_cc));
-    r->ts_frame_start_off = -1;
     return 0;
 }
 
 void dv_reassembler_finish(dv_reassembler_t *r)
 {
     if (r->format == DV_FORMAT_HDV) {
-        /* Cut the trailing partial picture so the file ends on a whole one.
-         * A non-seekable output (a pipe) can't be cut and keeps it. */
-        if (r->ts_gate_open && r->ts_frame_start_off >= 0 &&
-            truncate_to(r->out, r->ts_frame_start_off) == 0)
-            r->ts_packets = r->ts_frame_start_packets;
+        /* Drop the trailing partial picture (never handed to the output
+         * callbacks in the first place) so the output ends on a whole one,
+         * and roll the packet count back to match. */
+        if (r->ts_gate_open && r->ts_pic_active)
+            r->ts_packets = r->ts_pic_start_packets;
+        r->ts_pic_active = 0;
     } else if (r->frame_started) {
         if (r->expected_dseq < r->system_seq_count) {
             /* Capture stopped mid-frame. Zero-padding it out would end every
-             * file with a frame that is part black, so drop the partial frame
-             * instead and leave the file a whole number of good frames. */
-            if (truncate_to(r->out, r->frame_start_off) == 0) {
-                r->sequences_written = r->frame_start_written;
-                r->sequences_dropped = r->frame_start_dropped;
-            } else {
-                while (r->expected_dseq < r->system_seq_count) {
-                    write_zero_sequence(r);
-                    r->expected_dseq++;
-                }
-                r->frames_written++;
-            }
+             * output with a frame that is part black, so drop the partial
+             * frame instead (it was never handed to the output callbacks)
+             * and leave the output a whole number of good frames. */
+            r->sequences_written = r->frame_start_written;
+            r->sequences_dropped = r->frame_start_dropped;
         } else {
+            /* Fully received, but not yet flushed -- that only happens when
+             * a later frame's dseq 0 arrives, and the capture stopped first. */
+            emit_frame(r);
             r->frames_written++;
         }
         r->frame_started = 0;
     }
     free(r->buf);
     r->buf = NULL;
+    free(r->ts_pic_buf);
+    r->ts_pic_buf = NULL;
 }

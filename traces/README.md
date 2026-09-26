@@ -31,6 +31,7 @@ dropping it, not us. See "Known limitation" at the bottom.
 | `20260922-135855-idle-baseline.pcapng` | 1.7 KB | Device attached, nothing streaming. Proof the device is *totally* silent when idle. |
 | `20260922-140110-stream-start.pcapng` | 1.7 KB | Negative control — empty because WinDV needs >20 s to build its DirectShow graph and the window closed too early. |
 | `20260922-142935-stream-start-full.pcapng` | 1.7 KB | Negative control — Start-menu search opened the `WinDV-1.2.3` **zip folder**, not the exe, so nothing ever streamed. |
+| `20260925-154656-analog-plug-virtualdub-preview.pcapng` | 12 MB | **Analog.** Captured 2026-09-25, device at **`usb.device_address == 10`**. Plug-in (OHCI bitstream, alt 1), then VirtualDub opens the analog capture: alt 0, **Capture bitstream** (MD5 `280bacc6…`), alt 3, SAA7113 + capture block + AC'97 set-up on EP 0x01/0x81, then ~40 s of PAL preview on EP 0x82 (video) and EP 0x86 (audio). Control traffic and audio are complete; **most EP 0x82 payload is missing** (usbmon flag `D`: the host IOMMU merges big URBs' scatter-gather buffers), but the frame headers survive. Decoded in [../docs/analog.md](../docs/analog.md). |
 | `20260822-descriptors-idle.pcap` | 396 KB | Older USBPcap capture from the bare-metal Windows box. Descriptors only; that tool never captured this device. See [../docs/capture-tooling.md](../docs/capture-tooling.md). |
 
 Not copied here: **`20260922-144400-stream-start-transition.pcapng`** (131 MB), the

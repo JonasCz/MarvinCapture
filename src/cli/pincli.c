@@ -27,6 +27,8 @@
  */
 
 #include "pinnacle_device.h"
+#include "pinnacle_enum.h"
+#include "pinnacle_lock.h"
 #include "pinnacle_stream.h"
 #include "dv_reassembler.h"
 
@@ -36,10 +38,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#if !defined(_WIN32)
+/* winpthreads gives MinGW/UCRT64 the same pthreads as Linux, so the writer
+ * thread below no longer needs a separate _WIN32 fork. alarm()/SIGALRM
+ * genuinely don't exist on Windows and stay guarded, further down. */
 #include <pthread.h>
 #include <unistd.h>
-#endif
 
 static volatile sig_atomic_t g_stop = 0;
 
@@ -47,6 +50,16 @@ static void on_sigint(int sig)
 {
     (void)sig;
     g_stop = 1;
+}
+
+/* Every exit path past a successful pinnacle_lock_acquire() needs both the
+ * lock and the device released, in that order (see pinnacle_close(),
+ * which -- unlike pinnacle_lock_release() -- is also safe to call again on
+ * an already-closed dev, so ordering here only matters for the lock). */
+static void release_and_close(pinnacle_lock_t *lock, pinnacle_device_t *dev)
+{
+    pinnacle_lock_release(lock);
+    pinnacle_close(dev);
 }
 
 /*
@@ -62,7 +75,6 @@ static void on_sigint(int sig)
 typedef struct {
     dv_reassembler_t *reasm;
     time_t last_report;
-#if !defined(_WIN32)
     uint8_t *buf;
     size_t head, tail;              /* monotonic byte counters into buf */
     size_t max_fill;
@@ -71,7 +83,6 @@ typedef struct {
     pthread_cond_t wake;
     pthread_t thread;
     int started;
-#endif
 } sink_t;
 
 static void sink_progress(sink_t *s)
@@ -90,8 +101,6 @@ static void sink_progress(sink_t *s)
                 r->sequences_written, r->sequences_dropped);
     fflush(stderr);
 }
-
-#if !defined(_WIN32)
 
 static void *sink_thread(void *arg)
 {
@@ -193,27 +202,6 @@ static void sink_stop(sink_t *s)
     free(s->buf);
 }
 
-#else /* _WIN32: no writer thread, feed synchronously */
-
-static int sink_start(sink_t *s, dv_reassembler_t *reasm)
-{
-    memset(s, 0, sizeof(*s));
-    s->reasm = reasm;
-    return 0;
-}
-
-static int sink_push(sink_t *s, const uint8_t *data, size_t len)
-{
-    if (dv_reassembler_feed(s->reasm, data, len) != 0)
-        return -1;
-    sink_progress(s);
-    return 0;
-}
-
-static void sink_stop(sink_t *s) { (void)s; }
-
-#endif
-
 typedef struct {
     sink_t *sink;
     unsigned long total_bytes;
@@ -298,20 +286,36 @@ int main(int argc, char **argv)
         fprintf(stderr, "pincli: open failed: %s\n", pinnacle_strerror(status));
         return 1;
     }
+    pinnacle_tuning_from_env(&dev.tuning);
     fprintf(stderr, "pincli: device opened\n");
+
+    /* Cross-process ownership (pinnacle_lock.h): refuse to fight another
+     * pincli/pindeck/pinanalog -- or a future pinctl -- over this device.
+     * Starts in PREPARING, matching what we're about to do below. */
+    char device_id[PINNACLE_ENUM_ID_MAX];
+    pinnacle_enum_build_id(libusb_get_device(dev.handle), device_id, sizeof(device_id));
+    pinnacle_lock_t *lock = NULL;
+    status = pinnacle_lock_acquire(device_id, &lock);
+    if (status != PINNACLE_OK) {
+        fprintf(stderr, "pincli: %s\n", status == PINNACLE_ERR_BUSY
+                ? "device is already in use by another process" : "failed to take the device lock");
+        pinnacle_close(&dev);
+        return 1;
+    }
 
     status = pinnacle_init_hardware(&dev, bitstream_path);
     if (status != PINNACLE_OK) {
         fprintf(stderr, "pincli: init failed: %s\n", pinnacle_strerror(status));
-        pinnacle_close(&dev);
+        release_and_close(lock, &dev);
         return 1;
     }
     fprintf(stderr, "pincli: FPGA bitstream uploaded, alt setting 1 selected\n");
+    pinnacle_lock_update(lock, PINNACLE_LOCK_READY, dev.guid_hi, dev.guid_lo);
 
     FILE *out = fopen(output_path, "wb");
     if (!out) {
         fprintf(stderr, "pincli: cannot open output '%s': %s\n", output_path, strerror(errno));
-        pinnacle_close(&dev);
+        release_and_close(lock, &dev);
         return 1;
     }
 
@@ -319,11 +323,14 @@ int main(int argc, char **argv)
      * them into multi-megabyte writes so the disk sees few, large requests. */
     setvbuf(out, NULL, _IOFBF, 4u << 20);
 
+    dv_output_t file_sink;
+    dv_output_file(&file_sink, out);
+
     dv_reassembler_t reasm;
-    if (dv_reassembler_init(&reasm, out) != 0) {
+    if (dv_reassembler_init(&reasm, &file_sink) != 0) {
         fprintf(stderr, "pincli: failed to initialise DV reassembler\n");
         fclose(out);
-        pinnacle_close(&dev);
+        release_and_close(lock, &dev);
         return 1;
     }
 
@@ -332,7 +339,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "pincli: failed to start the output writer\n");
         dv_reassembler_finish(&reasm);
         fclose(out);
-        pinnacle_close(&dev);
+        release_and_close(lock, &dev);
         return 1;
     }
 
@@ -342,9 +349,10 @@ int main(int argc, char **argv)
         sink_stop(&sink);
         dv_reassembler_finish(&reasm);
         fclose(out);
-        pinnacle_close(&dev);
+        release_and_close(lock, &dev);
         return 1;
     }
+    pinnacle_lock_update(lock, PINNACLE_LOCK_CAPTURING, dev.guid_hi, dev.guid_lo);
     fprintf(stderr, "pincli: streaming started, writing to '%s' (Ctrl+C to stop)\n", output_path);
 
     capture_ctx_t ctx = { .sink = &sink, .total_bytes = 0,
@@ -369,7 +377,7 @@ int main(int argc, char **argv)
     sink_stop(&sink);       /* drain the writer before finalising the file */
     dv_reassembler_finish(&reasm);
     fclose(out);
-    pinnacle_close(&dev);
+    release_and_close(lock, &dev);
 
     if (reasm.format == DV_FORMAT_HDV) {
         fprintf(stderr,

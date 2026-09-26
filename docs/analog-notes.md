@@ -1,6 +1,8 @@
 # Analog path, mode switching and other Marvin models — notes for later (2026-09-25)
 
-This is not implemented yet. The notes record what turned up while the 1394
+**Superseded for capture by [analog.md](analog.md)**, which has the
+implemented, tested picture; the open-work list at the end of this file is
+done. The notes record what turned up while the 1394
 start-up was being reverse engineered ([startup.md](startup.md)), so the
 analog work does not start from zero.
 

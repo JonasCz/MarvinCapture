@@ -1,0 +1,7 @@
+# dotnet build output
+bin/
+obj/
+*.user
+.vs/
+bin-dev/
+bin-real/

@@ -37,6 +37,8 @@
 
 #include "pinnacle_1394.h"
 #include "pinnacle_device.h"
+#include "pinnacle_enum.h"
+#include "pinnacle_lock.h"
 #include "pinnacle_stream.h"
 
 #include <pthread.h>
@@ -235,19 +237,35 @@ int main(int argc, char **argv)
     setvbuf(stdout, NULL, _IOLBF, 0);
     g_t0 = now_s();
 
+    /* Cross-process ownership (pinnacle_lock.h): refuse to fight another
+     * pincli/pindeck/pinanalog -- or a future pinctl -- over this device. */
+    pinnacle_lock_t *lock = NULL;
     pinnacle_status_t st = pinnacle_open(&g_dev);
+    if (st == PINNACLE_OK)
+        pinnacle_tuning_from_env(&g_dev.tuning);
+    if (st == PINNACLE_OK) {
+        char device_id[PINNACLE_ENUM_ID_MAX];
+        pinnacle_enum_build_id(libusb_get_device(g_dev.handle), device_id, sizeof(device_id));
+        st = pinnacle_lock_acquire(device_id, &lock);
+    }
     if (st == PINNACLE_OK)
         st = pinnacle_init_hardware(&g_dev, bitstream);
     if (st == PINNACLE_OK)
+        pinnacle_lock_update(lock, PINNACLE_LOCK_READY, g_dev.guid_hi, g_dev.guid_lo);
+    if (st == PINNACLE_OK)
         st = pinnacle_stream_start(&g_dev);
+    if (st == PINNACLE_OK)
+        pinnacle_lock_update(lock, PINNACLE_LOCK_CAPTURING, g_dev.guid_hi, g_dev.guid_lo);
     if (st != PINNACLE_OK) {
         fprintf(stderr, "pindeck: bring-up failed: %s\n", pinnacle_strerror(st));
+        pinnacle_lock_release(lock);
         pinnacle_close(&g_dev);
         return 1;
     }
     if (!g_dev.camera_node) {
         fprintf(stderr, "pindeck: no camera on the 1394 bus\n");
         pinnacle_stream_stop(&g_dev);
+        pinnacle_lock_release(lock);
         pinnacle_close(&g_dev);
         return 1;
     }
@@ -318,6 +336,7 @@ int main(int argc, char **argv)
     /* stops isochronous receive (draining EP 0x88 itself) and releases the
      * camera's plug; the tape keeps doing whatever it was last told */
     pinnacle_stream_stop(&g_dev);
+    pinnacle_lock_release(lock);
     pinnacle_close(&g_dev);
     printf("done\n");
     return 0;

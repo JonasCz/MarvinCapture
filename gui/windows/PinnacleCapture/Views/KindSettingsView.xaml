@@ -1,0 +1,85 @@
+<UserControl
+    x:Class="PinnacleCapture.Views.KindSettingsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:vm="using:PinnacleCapture.ViewModels">
+
+    <!-- One "Settings for: DV | HDV" page: format, title, scene split, idle stop, passes. -->
+    <StackPanel Spacing="10">
+        <Grid ColumnSpacing="8">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="104" />
+            </Grid.ColumnDefinitions>
+            <ComboBox
+            Header="Format"
+            HorizontalAlignment="Stretch"
+            ItemsSource="{x:Bind ViewModel.Formats}"
+            SelectedItem="{x:Bind ViewModel.SelectedFormat, Mode=TwoWay}"
+            IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
+            AutomationProperties.Name="{x:Bind FormatAutomationName}">
+            <ComboBox.ItemTemplate>
+                <DataTemplate x:DataType="vm:FormatItem">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Text="{x:Bind Extension}"
+                                   Style="{StaticResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                   VerticalAlignment="Center" />
+                    </Grid>
+                </DataTemplate>
+            </ComboBox.ItemTemplate>
+        </ComboBox>
+            <ComboBox Grid.Column="1" Header="Aspect" HorizontalAlignment="Stretch"
+                      SelectedIndex="{x:Bind ViewModel.AspectIndex, Mode=TwoWay}"
+                      IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
+                      AutomationProperties.Name="{x:Bind AspectAutomationName}"
+                      AutomationProperties.HelpText="Overrides the aspect ratio for the preview and the file. Auto uses what the tape reports.">
+                <ComboBoxItem Content="Auto" />
+                <ComboBoxItem Content="4:3" />
+                <ComboBoxItem Content="16:9" />
+            </ComboBox>
+        </Grid>
+
+        <TextBox
+            PlaceholderText="{x:Bind TitlePlaceholder(ViewModel.TitleEnabled), Mode=OneWay}"
+            Text="{x:Bind ViewModel.Title, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            IsEnabled="{x:Bind Both(ViewModel.TitleEnabled, IsEditable), Mode=OneWay}"
+            AutomationProperties.Name="{x:Bind TitleAutomationName}"
+            AutomationProperties.HelpText="Stored as the title metadata of the file. Not available for raw .dv or .ts files." />
+
+        <CheckBox
+            Content="Split into scenes"
+            IsChecked="{x:Bind ViewModel.SplitIntoScenes, Mode=TwoWay}"
+            IsEnabled="{x:Bind Both(ViewModel.SplitEnabled, IsEditable), Mode=OneWay}"
+            AutomationProperties.HelpText="Starts a new numbered file at every recording start, timecode jump or date change on the tape." />
+
+        <Grid ColumnSpacing="12">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <NumberBox
+                Header="Stop after no data (min)"
+                Minimum="0" Maximum="600" SmallChange="1" LargeChange="5"
+                SpinButtonPlacementMode="Compact"
+                Value="{x:Bind ViewModel.IdleStopMinutes, Mode=TwoWay}"
+                IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
+                AutomationProperties.Name="Stop when no data for this many minutes"
+                AutomationProperties.HelpText="0 means never stop automatically." />
+            <NumberBox
+                Grid.Column="1"
+                Header="Capture passes"
+                Minimum="1" Maximum="20" SmallChange="1"
+                SpinButtonPlacementMode="Compact"
+                Value="{x:Bind ViewModel.Passes, Mode=TwoWay}"
+                IsEnabled="{x:Bind Both(ViewModel.PassesEnabled, IsEditable), Mode=OneWay}"
+                AutomationProperties.Name="Capture passes"
+                AutomationProperties.HelpText="1 captures the tape once. More passes rewind to the start of the tape and capture it again." />
+        </Grid>
+    </StackPanel>
+</UserControl>

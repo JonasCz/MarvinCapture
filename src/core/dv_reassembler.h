@@ -73,8 +73,32 @@ typedef enum {
     DV_FORMAT_HDV          /* CIP FMT 0x20: MPEG2-TS  -> .ts */
 } dv_format_t;
 
+/* Where reassembled output goes. Whole units only: `write` is called once
+ * per complete DV frame or complete HDV picture (never a partial one, and
+ * never byte-at-a-time) -- the old FILE*-based version buffered nothing and
+ * wrote every 12,000-byte DIF sequence / 188-byte TS packet as it arrived,
+ * relying on ftell()+truncate() at finish() to cut a trailing partial unit;
+ * this buffers a whole unit first, so a partial trailing unit is simply
+ * never handed to `write` at all, and truncation is no longer needed (or
+ * possible, for a non-seekable sink such as a pipe or a GUI callback).
+ *
+ * `on_unit` is an optional second look at the same buffer -- e.g. a live
+ * preview or scene-split hook -- called right after a successful `write`.
+ * Neither callback owns the buffer past the call. */
 typedef struct {
-    FILE *out;
+    int (*write)(const uint8_t *data, size_t len, void *user);
+    void (*on_unit)(dv_format_t fmt, const uint8_t *data, size_t len, void *user);
+    void *user;
+} dv_output_t;
+
+/* Convenience sink matching the old FILE*-based behaviour: writes each whole
+ * unit to `fp` with fwrite(), same as pincli did before this refactor. Fills
+ * *out ready to pass to dv_reassembler_init(); does not take ownership of
+ * fp (the caller still opens/closes it). */
+void dv_output_file(dv_output_t *out, FILE *fp);
+
+typedef struct {
+    dv_output_t out;
     dv_format_t format;    /* locked by the first packet that carries data */
 
     /* Layer 1: type-9 message demux over the raw EP 0x88 stream. */
@@ -92,12 +116,17 @@ typedef struct {
 
     /* HDV: MPEG2-TS packets recovered from 192-byte source packets.
      *
-     * Nothing is written until a video access unit that starts a GOP is seen
+     * Nothing is emitted until a video access unit that starts a GOP is seen
      * (the analogue of DV waiting for Dseq 0): the ring is already running
      * when we join, so the first bytes are a partial picture and possibly
      * stale ring contents. The gate then opens by replaying the latest PAT
-     * and PMT, so the file is decodable from its first packet. At finish the
-     * trailing partial picture is cut, so the file ends on a whole one. */
+     * and PMT as their own small unit (write()-ed immediately, unconditional
+     * -- they aren't subject to the trailing-partial-picture drop below),
+     * then TS packets from that first video PES start are buffered as a
+     * picture. A picture is emitted (write() + on_unit()) once the next
+     * video PES start for the tracked PID arrives; the one still being
+     * accumulated when the capture stops is dropped at finish() instead of
+     * emitted, so the output always ends on a whole picture. */
     int ts_gate_open;
     int ts_video_pid;
     int ts_pmt_pid;
@@ -105,8 +134,11 @@ typedef struct {
     uint8_t ts_pmt[188];
     int ts_pat_valid;
     int ts_pmt_valid;
-    long ts_frame_start_off;            /* file offset of the last video PES start */
-    unsigned long ts_frame_start_packets;
+    uint8_t *ts_pic_buf;                 /* the picture currently being accumulated */
+    size_t ts_pic_len;
+    size_t ts_pic_cap;
+    int ts_pic_active;                   /* a picture is being accumulated (gate is open) */
+    unsigned long ts_pic_start_packets;  /* ts_packets snapshotted when this picture began */
     unsigned long ts_packets;           /* TS packets written */
     unsigned long ts_discarded;         /* held back before the gate opened */
     unsigned long ts_sync_errors;       /* dropped after the gate: no 0x47 */
@@ -124,13 +156,21 @@ typedef struct {
     size_t buf_len;
     size_t buf_cap;
 
+    /* The frame currently being assembled: zero-filled for sequences that
+     * haven't arrived (or never will) and overwritten in place as real
+     * sequences are matched. Dseq is a 4-bit field (is_dif_header), so a
+     * bogus header match -- noise resync, not a real camera -- can claim any
+     * value 0..15 regardless of system_seq_count; sized for that worst case
+     * (16 sequences) so it's never a buffer overrun, only an odd-sized
+     * frame, exactly mirroring the pre-refactor file-sequential behaviour
+     * (which had no such ceiling either -- see emit_frame). */
+    uint8_t frame_buf[16 * 150 * 80];
     unsigned system_seq_count; /* 10 = NTSC, 12 = PAL; starts at 10, upgrades if seen */
     unsigned expected_dseq;
     int frame_started;
     /* State snapshotted at the start of the in-progress frame, so a capture
      * stopped mid-frame can drop that frame rather than leave a zero-padded
      * partial one — and so the counters stay honest when it does. */
-    long frame_start_off;
     unsigned long frame_start_written;
     unsigned long frame_start_dropped;
 
@@ -162,15 +202,20 @@ typedef struct {
                                    * not loss */
 } dv_reassembler_t;
 
-int dv_reassembler_init(dv_reassembler_t *r, FILE *out);
+/* *out is copied by value; the callbacks/user pointer must stay valid for
+ * the reassembler's whole lifetime (until dv_reassembler_finish returns). */
+int dv_reassembler_init(dv_reassembler_t *r, const dv_output_t *out);
 
-/* Feed raw bytes as read off EP 0x88, in order. Writes completed,
- * frame-aligned DIF sequences to `out` as they're found. Returns 0 on
- * success, -1 on a write error. */
+/* Feed raw bytes as read off EP 0x88, in order. Hands complete, whole units
+ * (a frame-aligned DIF frame, or an HDV picture's TS packets) to out.write()
+ * / out.on_unit() as they're found. Returns 0 on success, -1 if out.write()
+ * failed. */
 int dv_reassembler_feed(dv_reassembler_t *r, const uint8_t *data, size_t len);
 
-/* Flushes any in-progress frame (zero-padding missing trailing sequences)
- * and frees internal buffers. Call once at end of capture. */
+/* Emits the in-progress frame if it's complete (zero-padding missing
+ * trailing sequences) or drops it if it isn't -- likewise for HDV's
+ * in-progress picture -- and frees internal buffers. Call once at end of
+ * capture. */
 void dv_reassembler_finish(dv_reassembler_t *r);
 
 #ifdef __cplusplus

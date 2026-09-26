@@ -17,6 +17,8 @@
  */
 
 #include "pinnacle_device.h"
+#include "pin_log.h"
+#include "pinnacle_enum.h"
 #include "protocol_data.h"
 
 #include <errno.h>
@@ -24,6 +26,50 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+void pinnacle_tuning_defaults(pinnacle_tuning_t *t)
+{
+    memset(t, 0, sizeof(*t));
+    t->debug_1394 = 0;
+    t->probe_registers = 0;
+    t->stop_drain = 1;      /* PINNACLE_STOP_DRAIN=0 turns this off */
+    t->debug_ep88 = 0;
+    t->raw_dump_path = NULL;
+    t->queue_depth = 0;     /* 0 = use DV_QUEUE_DEPTH */
+    t->debug_ep84 = 0;
+    t->ep84_drain = 1;      /* PINNACLE_EP84_DRAIN=0 turns this off */
+    t->video_queue = 0;     /* 0 = use VIDEO_QUEUE */
+    t->video_xfer = 0;      /* 0 = use VIDEO_XFER */
+    t->debug_analog = 0;
+}
+
+void pinnacle_tuning_from_env(pinnacle_tuning_t *t)
+{
+    const char *e;
+
+    if ((e = getenv("PINNACLE_DEBUG_1394")))
+        t->debug_1394 = atoi(e);
+    if ((e = getenv("PINNACLE_PROBE")))
+        t->probe_registers = (e[0] == '1');
+    if ((e = getenv("PINNACLE_STOP_DRAIN")))
+        t->stop_drain = !(e[0] == '0');
+    if ((e = getenv("PINNACLE_DEBUG_EP88")))
+        t->debug_ep88 = (e[0] == '1');
+    if ((e = getenv("PINNACLE_RAW_DUMP")))
+        t->raw_dump_path = e;
+    if ((e = getenv("PINNACLE_QUEUE_DEPTH")))
+        t->queue_depth = (unsigned)strtoul(e, NULL, 10);
+    if ((e = getenv("PINNACLE_DEBUG_EP84")))
+        t->debug_ep84 = (e[0] == '1');
+    if ((e = getenv("PINNACLE_EP84_DRAIN")))
+        t->ep84_drain = !(e[0] == '0');
+    if ((e = getenv("PINNACLE_VIDEO_QUEUE")))
+        t->video_queue = (unsigned)atoi(e);
+    if ((e = getenv("PINNACLE_VIDEO_XFER")))
+        t->video_xfer = (unsigned)atoi(e);
+    if ((e = getenv("PINNACLE_DEBUG_ANALOG")))
+        t->debug_analog = (e[0] == '1');
+}
 
 static void sleep_ms(unsigned ms)
 {
@@ -45,22 +91,83 @@ const char *pinnacle_strerror(pinnacle_status_t status)
     case PINNACLE_ERR_USB_TRANSFER: return "USB bulk transfer failed";
     case PINNACLE_ERR_BITSTREAM_READ: return "failed to read FPGA bitstream file";
     case PINNACLE_ERR_NOT_READY: return "device reports not ready (FPGA did not come up; needs a physical USB power cycle)";
+    case PINNACLE_ERR_BUSY: return "device already open in another process";
+    case PINNACLE_ERR_LOCK: return "internal locking error";
     }
     return "unknown error";
 }
 
-pinnacle_status_t pinnacle_open(pinnacle_device_t *dev)
+/* Finds the libusb_device matching device_id (NULL/"first" = first
+ * supported-PID device) in ctx's current device list, without opening it.
+ * Returns PINNACLE_OK with *match set (ref'd; caller must
+ * libusb_unref_device() it) or PINNACLE_ERR_NOT_FOUND. list_out receives
+ * the device list so the caller can free it after it's done with *match
+ * (libusb_device* pointers from the list are only valid while it's alive,
+ * or until individually ref'd, which we do here). */
+static pinnacle_status_t find_device(libusb_context *ctx, const char *device_id,
+                                      libusb_device **match_out)
+{
+    int use_first = (!device_id || strcmp(device_id, "first") == 0);
+
+    libusb_device **list = NULL;
+    ssize_t n = libusb_get_device_list(ctx, &list);
+    pinnacle_status_t status = PINNACLE_ERR_NOT_FOUND;
+
+    for (ssize_t i = 0; i < n; i++) {
+        struct libusb_device_descriptor desc;
+        if (libusb_get_device_descriptor(list[i], &desc) != 0)
+            continue;
+        if (desc.idVendor != PINNACLE_VID || desc.idProduct != PINNACLE_PID)
+            continue; /* only 0213 is ever actually opened -- see pinnacle_enum.h for the rest of the model table */
+
+        if (use_first) {
+            *match_out = libusb_ref_device(list[i]);
+            status = PINNACLE_OK;
+            break;
+        }
+
+        char id[PINNACLE_ENUM_ID_MAX];
+        pinnacle_enum_build_id(list[i], id, sizeof(id));
+        if (strcmp(id, device_id) == 0) {
+            *match_out = libusb_ref_device(list[i]);
+            status = PINNACLE_OK;
+            break;
+        }
+    }
+
+    if (list)
+        libusb_free_device_list(list, 1);
+    return status;
+}
+
+pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device_id)
 {
     memset(dev, 0, sizeof(*dev));
+    pinnacle_tuning_defaults(&dev->tuning);
 
     if (libusb_init(&dev->usb_ctx) != 0)
         return PINNACLE_ERR_USB_INIT;
 
-    dev->handle = libusb_open_device_with_vid_pid(dev->usb_ctx, PINNACLE_VID, PINNACLE_PID);
-    if (!dev->handle) {
+    libusb_device *match = NULL;
+    pinnacle_status_t status = find_device(dev->usb_ctx, device_id, &match);
+    if (status != PINNACLE_OK) {
         libusb_exit(dev->usb_ctx);
         dev->usb_ctx = NULL;
-        return PINNACLE_ERR_NOT_FOUND;
+        return status;
+    }
+
+    int rc = libusb_open(match, &dev->handle);
+    libusb_unref_device(match);
+    if (rc != 0) {
+        dev->handle = NULL;
+        libusb_exit(dev->usb_ctx);
+        dev->usb_ctx = NULL;
+        /* ACCESS/BUSY here means some other opener (another process without
+         * our lock, or -- on POSIX -- a permissions problem) got there
+         * first or blocks us outright; pinnacle_lock.[ch] is the primary
+         * way callers should avoid racing this in the first place. */
+        return (rc == LIBUSB_ERROR_ACCESS || rc == LIBUSB_ERROR_BUSY)
+                   ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_OPEN;
     }
 
     libusb_set_auto_detach_kernel_driver(dev->handle, 1);
@@ -71,22 +178,32 @@ pinnacle_status_t pinnacle_open(pinnacle_device_t *dev)
      * soft USB reset on this device is one of the few remaining variables.
      * Disabled pending investigation -- see git history if reintroducing. */
 
-    if (libusb_set_configuration(dev->handle, 1) != 0) {
+    /* On Linux a second process gets as far as libusb_open(); it's setting
+     * the configuration of an interface someone else has claimed that fails,
+     * with LIBUSB_ERROR_BUSY. Report that as "in use", not as a USB fault. */
+    rc = libusb_set_configuration(dev->handle, 1);
+    if (rc != 0) {
         libusb_close(dev->handle);
         libusb_exit(dev->usb_ctx);
         memset(dev, 0, sizeof(*dev));
-        return PINNACLE_ERR_USB_CONFIG;
+        return rc == LIBUSB_ERROR_BUSY ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_CONFIG;
     }
 
-    if (libusb_claim_interface(dev->handle, PINNACLE_INTERFACE_NUM) != 0) {
+    rc = libusb_claim_interface(dev->handle, PINNACLE_INTERFACE_NUM);
+    if (rc != 0) {
         libusb_close(dev->handle);
         libusb_exit(dev->usb_ctx);
         memset(dev, 0, sizeof(*dev));
-        return PINNACLE_ERR_USB_CLAIM;
+        return rc == LIBUSB_ERROR_BUSY ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_CLAIM;
     }
     dev->interface_claimed = 1;
 
     return PINNACLE_OK;
+}
+
+pinnacle_status_t pinnacle_open(pinnacle_device_t *dev)
+{
+    return pinnacle_open_by_id(dev, NULL);
 }
 
 void pinnacle_close(pinnacle_device_t *dev)
@@ -107,7 +224,7 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
 {
     FILE *f = fopen(path, "rb");
     if (!f) {
-        fprintf(stderr, "pinnacle: cannot open bitstream '%s': %s\n", path, strerror(errno));
+        pin_logf(PIN_LOG_ERROR, "pinnacle: cannot open bitstream '%s': %s\n", path, strerror(errno));
         return PINNACLE_ERR_BITSTREAM_READ;
     }
 
@@ -120,7 +237,7 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
     size_t n = fread(buf, 1, PINNACLE_BITSTREAM_TOTAL_SIZE, f);
     fclose(f);
     if (n != PINNACLE_BITSTREAM_TOTAL_SIZE) {
-        fprintf(stderr, "pinnacle: bitstream '%s' is %zu bytes, expected %d\n",
+        pin_logf(PIN_LOG_ERROR, "pinnacle: bitstream '%s' is %zu bytes, expected %d\n",
                 path, n, PINNACLE_BITSTREAM_TOTAL_SIZE);
         free(buf);
         return PINNACLE_ERR_BITSTREAM_READ;
@@ -135,7 +252,7 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
                                        buf + offset, (int)chunk_len,
                                        &transferred, BULK_TIMEOUT_MS);
         if (rc != 0 || (unsigned)transferred != chunk_len) {
-            fprintf(stderr, "pinnacle: bitstream chunk %u/%u failed (rc=%d, sent=%d/%u)\n",
+            pin_logf(PIN_LOG_ERROR, "pinnacle: bitstream chunk %u/%u failed (rc=%d, sent=%d/%u)\n",
                     i + 1, PINNACLE_BITSTREAM_CHUNK_COUNT, rc, transferred, chunk_len);
             status = PINNACLE_ERR_USB_TRANSFER;
             break;
@@ -162,7 +279,7 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
     int rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CONFIG_OUT,
                                    (uint8_t *)req, req_len, &transferred, BULK_TIMEOUT_MS);
     if (rc != 0 || transferred != req_len) {
-        fprintf(stderr, "pinnacle: config write failed (rc=%d, sent=%d/%d)\n",
+        pin_logf(PIN_LOG_ERROR, "pinnacle: config write failed (rc=%d, sent=%d/%d)\n",
                 rc, transferred, req_len);
         return PINNACLE_ERR_USB_TRANSFER;
     }
@@ -170,7 +287,7 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
     rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CONFIG_IN,
                                reply, sizeof(reply), &transferred, BULK_TIMEOUT_MS);
     if (rc != 0) {
-        fprintf(stderr, "pinnacle: config reply read failed (rc=%d)\n", rc);
+        pin_logf(PIN_LOG_ERROR, "pinnacle: config reply read failed (rc=%d)\n", rc);
         return PINNACLE_ERR_USB_TRANSFER;
     }
 
@@ -198,7 +315,7 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
      * command channel silently refused to answer much later. Report it. */
     if (req_len == 2 && (req[0] == 0x05 || req[0] == 0x06) && transferred >= 2) {
         if (reply[1] != 0x01) {
-            fprintf(stderr,
+            pin_logf(PIN_LOG_WARN,
                     "pinnacle: WARNING: device reports NOT READY to status read %02x "
                     "(replied %02x %02x, expected %02x 01).\n"
                     "pinnacle: the FPGA has not come up; this normally needs a physical "
@@ -209,6 +326,20 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
         }
     }
 
+    return PINNACLE_OK;
+}
+
+pinnacle_status_t pinnacle_read_guid(pinnacle_device_t *dev, uint32_t *guid_hi, uint32_t *guid_lo)
+{
+    static const uint8_t req[10] = { 0x80, 0x03, 0x08 };
+    dev->have_guid = 0;
+    pinnacle_status_t st = config_exchange(dev, req, sizeof(req));
+    if (st != PINNACLE_OK)
+        return st;
+    if (!dev->have_guid)
+        return PINNACLE_ERR_USB_TRANSFER; /* short or malformed reply */
+    *guid_hi = dev->guid_hi;
+    *guid_lo = dev->guid_lo;
     return PINNACLE_OK;
 }
 

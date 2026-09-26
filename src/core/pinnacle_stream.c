@@ -18,23 +18,24 @@
 
 #include "pinnacle_stream.h"
 #include "pinnacle_1394.h"
+#include "pin_log.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#if defined(_WIN32)
-#include <windows.h>
-#define pinnacle_sleep_ms(ms) Sleep(ms)
-#else
+/* winpthreads gives MinGW/UCRT64 the same pthread calls, nanosleep() and
+ * clock_gettime() as any other POSIX target, so this file no longer needs a
+ * _WIN32 fork: one code path, built the same everywhere the core supports
+ * (Linux, and now Windows via MSYS2 UCRT64). */
 #include <pthread.h>
 #include <time.h>
+
 static void pinnacle_sleep_ms(unsigned ms)
 {
     struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000L };
     nanosleep(&ts, NULL);
 }
-#endif
 
 #define CMD_TIMEOUT_MS 2000
 
@@ -77,7 +78,6 @@ static void drain_replies(pinnacle_device_t *dev, unsigned timeout_ms)
  * 0x88 drained. That's what this thread is for: it reads and discards until
  * told to stop.
  */
-#if !defined(_WIN32)
 struct dv_drain {
     pinnacle_device_t *dev;
     volatile int stop;
@@ -116,7 +116,6 @@ static void dv_drain_join(struct dv_drain *d, pthread_t tid, int started)
     d->stop = 1;
     pthread_join(tid, NULL);
 }
-#endif
 
 /* Reads a handful of OHCI registers and prints the replies, to tell "our
  * receiver is broken" apart from "the camera stopped sending". Command word
@@ -138,14 +137,12 @@ static void probe_registers(pinnacle_device_t *dev)
 
     drain_replies(dev, 50);
 
-#if !defined(_WIN32)
     /* The probe runs after the start sequence, so DV may already be flowing;
      * without this every register write times out. See the back-pressure
      * comment above. */
     struct dv_drain drain;
     pthread_t drain_thread;
     int drain_started = dv_drain_start(&drain, &drain_thread, dev);
-#endif
 
     for (unsigned i = 0; i < sizeof(regs) / sizeof(regs[0]); i++) {
         uint32_t cmd = 0x38000000u | (1u << 20) | (0x10000u + regs[i].off);
@@ -157,7 +154,7 @@ static void probe_registers(pinnacle_device_t *dev)
         int rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CMD_OUT, pkt, sizeof(pkt),
                                        &n, CMD_TIMEOUT_MS);
         if (rc != 0) {
-            fprintf(stderr, "probe %-15s write failed: %s\n", regs[i].name, libusb_error_name(rc));
+            pin_logf(PIN_LOG_DEBUG, "probe %-15s write failed: %s\n", regs[i].name, libusb_error_name(rc));
             continue;
         }
 
@@ -166,24 +163,16 @@ static void probe_registers(pinnacle_device_t *dev)
         rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CMD_IN, reply, sizeof(reply),
                                    &len, 500);
         if (rc != 0 || len < 8) {
-            fprintf(stderr, "probe %-15s (0x%03x): no reply (%s, len=%d)\n",
+            pin_logf(PIN_LOG_DEBUG, "probe %-15s (0x%03x): no reply (%s, len=%d)\n",
                     regs[i].name, regs[i].off, libusb_error_name(rc), len);
             continue;
         }
         uint32_t val = (uint32_t)reply[4] | ((uint32_t)reply[5] << 8) |
                        ((uint32_t)reply[6] << 16) | ((uint32_t)reply[7] << 24);
-        fprintf(stderr, "probe %-15s (0x%03x) = 0x%08x\n", regs[i].name, regs[i].off, val);
+        pin_logf(PIN_LOG_DEBUG, "probe %-15s (0x%03x) = 0x%08x\n", regs[i].name, regs[i].off, val);
     }
 
-#if !defined(_WIN32)
     dv_drain_join(&drain, drain_thread, drain_started);
-#endif
-}
-
-static int debug_1394(void)
-{
-    const char *v = getenv("PINNACLE_DEBUG_1394");
-    return v ? atoi(v) : 0;
 }
 
 /* Link up, find the camera, connect to its output plug, and start
@@ -201,33 +190,33 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
     uint32_t ompr = 0, opcr = 0;
 
     p1394_init(&link, dev);
-    link.verbose = debug_1394();
+    link.verbose = dev->tuning.debug_1394;
     dev->camera_node = 0;
     dev->pcr_connected = 0;
     dev->iso_channel = 63;
 
     if (p1394_link_init(&link) != 0) {
-        fprintf(stderr, "pinnacle: 1394 link initialisation failed\n");
+        pin_logf(PIN_LOG_ERROR, "pinnacle: 1394 link initialisation failed\n");
         return PINNACLE_ERR_USB_TRANSFER;
     }
-    fprintf(stderr, "pinnacle: 1394 bus has %d node(s), we are node %u\n",
+    pin_logf(PIN_LOG_INFO, "pinnacle: 1394 bus has %d node(s), we are node %u\n",
             link.node_count, link.local_node & 0x3f);
 
     if (p1394_find_camera(&link, &dev->camera_node, &ompr) != 0) {
         dev->camera_node = 0;
-        fprintf(stderr, "pinnacle: no camera answered on the 1394 bus; listening on "
+        pin_logf(PIN_LOG_WARN, "pinnacle: no camera answered on the 1394 bus; listening on "
                         "broadcast channel 63 anyway\n");
     } else if (p1394_connect(&link, dev->camera_node, &opcr) == 0) {
         dev->pcr_connected = 1;
         dev->iso_channel = (int)((opcr >> 16) & 0x3f);
-        fprintf(stderr, "pinnacle: camera is node %u (oMPR 0x%08x); connected to oPCR[0] "
+        pin_logf(PIN_LOG_INFO, "pinnacle: camera is node %u (oMPR 0x%08x); connected to oPCR[0] "
                         "0x%08x, channel %d\n", dev->camera_node & 0x3f, ompr, opcr,
                 dev->iso_channel);
     } else {
         /* still listen on whatever channel the plug names, if we got it */
         if (opcr & 0x80000000u)
             dev->iso_channel = (int)((opcr >> 16) & 0x3f);
-        fprintf(stderr, "pinnacle: camera is node %u but connecting to oPCR[0] failed "
+        pin_logf(PIN_LOG_WARN, "pinnacle: camera is node %u but connecting to oPCR[0] failed "
                         "(0x%08x); listening on channel %d\n",
                 dev->camera_node & 0x3f, opcr, dev->iso_channel);
     }
@@ -235,8 +224,7 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
     if (p1394_ir_start(&link, (unsigned)dev->iso_channel) != 0)
         return PINNACLE_ERR_USB_TRANSFER;
 
-    const char *probe = getenv("PINNACLE_PROBE");
-    if (probe && probe[0] == '1')
+    if (dev->tuning.probe_registers)
         probe_registers(dev);
 
     return PINNACLE_OK;
@@ -248,7 +236,6 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
      * command channel starts the stop unblocked. */
     drain_replies(dev, 50);
 
-#if !defined(_WIN32)
     /* Keep EP 0x88 moving throughout — see the comment above. Data keeps
      * arriving until IR0 is out of "run".
      *
@@ -260,17 +247,15 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
      * healthy and answering register reads), and we had no way to tell the
      * two apart until the not-ready check and the register probe went in.
      * Set PINNACLE_STOP_DRAIN=0 to get the old truncated-stop behaviour. */
-    const char *stop_drain_env = getenv("PINNACLE_STOP_DRAIN");
-    int want_drain = !(stop_drain_env && stop_drain_env[0] == '0');
+    int want_drain = dev->tuning.stop_drain;
     struct dv_drain drain;
     pthread_t drain_thread;
     int drain_started = want_drain && dv_drain_start(&drain, &drain_thread, dev);
-#endif
 
     pinnacle_status_t status = PINNACLE_OK;
     pinnacle_1394_t link;
     p1394_init(&link, dev);
-    link.verbose = debug_1394();
+    link.verbose = dev->tuning.debug_1394;
 
     /* isochronous-to-USB off, IR0 out of run, wait for it to go idle */
     if (p1394_ir_stop(&link) != 0) {
@@ -288,18 +273,16 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
             if (p1394_disconnect(&link, dev->camera_node, &opcr) == 0) {
                 dev->pcr_connected = 0;
                 if (link.verbose)
-                    fprintf(stderr, "pinnacle: released oPCR[0], now 0x%08x\n", opcr);
+                    pin_logf(PIN_LOG_DEBUG, "pinnacle: released oPCR[0], now 0x%08x\n", opcr);
             } else
-                fprintf(stderr, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
+                pin_logf(PIN_LOG_WARN, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
                         opcr);
         }
     }
 
-#if !defined(_WIN32)
     dv_drain_join(&drain, drain_thread, drain_started);
     if (drain_started && drain.bytes)
-        fprintf(stderr, "pinnacle: discarded %lu bytes of DV during stop\n", drain.bytes);
-#endif
+        pin_logf(PIN_LOG_INFO, "pinnacle: discarded %lu bytes of DV during stop\n", drain.bytes);
 
     return status;
 }
@@ -370,6 +353,7 @@ struct ep84_state {
     struct timespec t0;
     unsigned long packets;
     unsigned long bytes;
+    pinnacle_1394_t *link;   /* non-NULL: also feed completions to p1394_parse_ep84() */
 };
 
 static void LIBUSB_CALL ep84_cb(struct libusb_transfer *xfer)
@@ -379,6 +363,8 @@ static void LIBUSB_CALL ep84_cb(struct libusb_transfer *xfer)
     if (xfer->status == LIBUSB_TRANSFER_COMPLETED && xfer->actual_length > 0) {
         st->packets++;
         st->bytes += (unsigned long)xfer->actual_length;
+        if (st->link)
+            p1394_parse_ep84(st->link, xfer->buffer, xfer->actual_length);
         if (st->log) {
             /* One fwrite, not a sequence of fprintfs: stderr is shared with
              * the EP 0x88 logging and interleaved fragments are unparseable. */
@@ -392,7 +378,7 @@ static void LIBUSB_CALL ep84_cb(struct libusb_transfer *xfer)
             for (int i = 0; i < xfer->actual_length && off + 3 < (int)sizeof(line); i++)
                 off += snprintf(line + off, sizeof(line) - off, "%02x", xfer->buffer[i]);
             off += snprintf(line + off, sizeof(line) - off, "\n");
-            fwrite(line, 1, (size_t)off, stderr);
+            pin_logf(PIN_LOG_DEBUG, "%s", line);
         }
     }
 
@@ -409,21 +395,28 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
                                              pinnacle_data_cb cb, void *user,
                                              volatile int *stop_flag)
 {
+    return pinnacle_stream_read_loop_ex(dev, cb, user, stop_flag, NULL, NULL, NULL);
+}
+
+pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
+                                                pinnacle_data_cb cb, void *user,
+                                                volatile int *stop_flag,
+                                                pinnacle_1394_t *link,
+                                                pinnacle_stream_tick_fn tick, void *tick_user)
+{
     /* PINNACLE_DEBUG_EP88=1 logs every completion's size and arrival time, to
      * characterise the raw receive pattern independently of usbmon (which was
      * found unreliable for this process's own high-frequency reads). */
-    const char *dbg_env = getenv("PINNACLE_DEBUG_EP88");
-    int debug = dbg_env && dbg_env[0] == '1';
+    int debug = dev->tuning.debug_ep88;
     struct timespec t0, tnow;
     clock_gettime(CLOCK_MONOTONIC, &t0);
 
-    const char *raw_dump_path = getenv("PINNACLE_RAW_DUMP");
+    const char *raw_dump_path = dev->tuning.raw_dump_path;
     FILE *raw_dump = raw_dump_path ? fopen(raw_dump_path, "wb") : NULL;
 
     /* PINNACLE_QUEUE_DEPTH exists to A/B the queue against the old
      * one-transfer-at-a-time behaviour (depth 1 reproduces it). */
-    const char *depth_env = getenv("PINNACLE_QUEUE_DEPTH");
-    unsigned depth = depth_env ? (unsigned)strtoul(depth_env, NULL, 10) : DV_QUEUE_DEPTH;
+    unsigned depth = dev->tuning.queue_depth ? dev->tuning.queue_depth : DV_QUEUE_DEPTH;
     if (depth < 1)
         depth = 1;
     if (depth > DV_QUEUE_DEPTH)
@@ -470,14 +463,14 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
     if (submitted == 0)
         status = PINNACLE_ERR_USB_TRANSFER;
 
-    /* EP 0x84 drain, on this same event loop. */
-    const char *ep84_env = getenv("PINNACLE_DEBUG_EP84");
-    const char *drain_env = getenv("PINNACLE_EP84_DRAIN");
-    int drain_enabled = !(drain_env && drain_env[0] == '0');
+    /* EP 0x84 drain, on this same event loop. Forced on when link is given:
+     * async AV/C (p1394_avc_begin/poll) has nothing to poll without it. */
+    int drain_enabled = dev->tuning.ep84_drain || link != NULL;
     struct ep84_state ep84;
     memset(&ep84, 0, sizeof(ep84));
-    ep84.log = ep84_env && ep84_env[0] == '1';
+    ep84.log = dev->tuning.debug_ep84;
     ep84.t0 = t0;
+    ep84.link = link;
     struct libusb_transfer *ep84_xfer = NULL;
     if (drain_enabled) {
         ep84_xfer = libusb_alloc_transfer(0);
@@ -499,6 +492,13 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
         if (libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL) != 0)
             break;
 
+        /* Any EP 0x84 bytes from this pass already reached p1394_parse_ep84()
+         * via ep84_cb above (libusb_handle_events_timeout_completed() is what
+         * runs the completion callbacks), so it's safe for the tick to poll
+         * p1394_avc_poll() / check transport state now. */
+        if (tick)
+            tick(tick_user);
+
         /* Deliver in submission order, whatever order completions arrived. */
         while (slots[head].done) {
             struct rx_slot *slot = &slots[head];
@@ -506,7 +506,7 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
 
             if (slot->failed) {
                 if (!*stop_flag && slot->status != LIBUSB_TRANSFER_CANCELLED) {
-                    fprintf(stderr, "pinnacle: EP 0x88 transfer failed (status %d)\n",
+                    pin_logf(PIN_LOG_ERROR, "pinnacle: EP 0x88 transfer failed (status %d)\n",
                             slot->status);
                     status = PINNACLE_ERR_USB_TRANSFER;
                 }
@@ -524,10 +524,10 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
                     double cms = (slot->t_done.tv_sec - t0.tv_sec) * 1000.0 +
                                  (slot->t_done.tv_nsec - t0.tv_nsec) / 1e6;
                     char line[128];
-                    int off = snprintf(line, sizeof(line),
-                                       "ep88 t=%.3fms size=%d n=%lu c=%.3f\n",
-                                       ms, n, completions, cms);
-                    fwrite(line, 1, (size_t)off, stderr);
+                    snprintf(line, sizeof(line),
+                             "ep88 t=%.3fms size=%d n=%lu c=%.3f\n",
+                             ms, n, completions, cms);
+                    pin_logf(PIN_LOG_DEBUG, "%s", line);
                 }
                 if (raw_dump)
                     fwrite(xfer->buffer, 1, (size_t)n, raw_dump);
@@ -542,9 +542,9 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
                                 (tcb1.tv_nsec - tcb0.tv_nsec) / 1e3;
                     if (us > 1000.0) {
                         char sl[96];
-                        int so = snprintf(sl, sizeof(sl), "cbslow n=%lu us=%.0f\n",
-                                          completions, us);
-                        fwrite(sl, 1, (size_t)so, stderr);
+                        snprintf(sl, sizeof(sl), "cbslow n=%lu us=%.0f\n",
+                                 completions, us);
+                        pin_logf(PIN_LOG_DEBUG, "%s", sl);
                     }
                 }
             }
@@ -599,7 +599,7 @@ pinnacle_status_t pinnacle_stream_read_loop(pinnacle_device_t *dev,
         libusb_free_transfer(ep84_xfer);
 
     if (ep84.log)
-        fprintf(stderr, "ep84 total: %lu records, %lu bytes\n",
+        pin_logf(PIN_LOG_DEBUG, "ep84 total: %lu records, %lu bytes\n",
                 ep84.packets, ep84.bytes);
 
     if (raw_dump)

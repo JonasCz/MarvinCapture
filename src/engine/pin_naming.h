@@ -1,0 +1,73 @@
+/*
+ * Pinnacle Studio 500-USB open driver
+ * Copyright (C) 2026 Jonas Cz.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+ * for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+/*
+ * Output filename generation: base.ext / base-0001.ext (scene split) /
+ * base-pass-2.ext (multi-pass, no split) / base-pass-2-0001.ext (both).
+ * Never overwrites: pin_naming_collides() lets the GUI check first.
+ *
+ * Handles both '/' and '\\' as separators everywhere (a Windows path may
+ * use either; POSIX paths only ever have '/', which this code treats as
+ * just another separator, so it works unmodified there too).
+ */
+
+#ifndef PIN_NAMING_H
+#define PIN_NAMING_H
+
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct {
+    int scene_split;   /* append -NNNN */
+    unsigned scene_index; /* 1-based when scene_split is set */
+    unsigned pass;      /* 1 = no "-pass-N" suffix; >=2 adds it */
+} pin_naming_opts_t;
+
+/* Strips a trailing "." + extension matching `known_ext` (case-insensitive,
+ * without the dot, e.g. "dv") from base_path if present, into
+ * out (out_size bytes). If it doesn't match, base_path is copied unchanged.
+ * Returns 0 on success, -1 if out_size was too small. */
+int pin_naming_strip_extension(const char *base_path, const char *known_ext, char *out,
+                                size_t out_size);
+
+/* Builds the output path into out (out_size bytes) from a base path that
+ * has already had any extension stripped (pin_naming_strip_extension), the
+ * options above, and the extension to add (without the leading dot).
+ * Returns 0 on success, -1 if out_size was too small or arguments are
+ * invalid (pass == 0, or scene_split with scene_index == 0). */
+int pin_naming_build(const char *base_no_ext, const pin_naming_opts_t *opts, const char *ext,
+                      char *out, size_t out_size);
+
+/* Checks whether ANY file matching this capture's naming pattern already
+ * exists on disk: base.ext, base-NNNN.ext, base-pass-N.ext and
+ * base-pass-N-NNNN.ext, for the given base (already extension-stripped)
+ * and ext. Returns 1 if at least one exists, 0 if none do, -1 on error
+ * (e.g. the directory can't be opened -- treated by callers as "can't be
+ * sure", not as "no collision"). first_match, if non-NULL, receives the
+ * first colliding path found (first_match_size bytes); safe to pass NULL. */
+int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_match,
+                         size_t first_match_size);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* PIN_NAMING_H */

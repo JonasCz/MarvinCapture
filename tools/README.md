@@ -43,6 +43,17 @@ mapped back to a USB offset and arrival time. Note the first ~20 ms always
 shows join noise. This is how the ~5 s-in holes were traced to a host-side disk
 stall; see [../docs/capture-reliability.md](../docs/capture-reliability.md).
 
+### `analogcheck.py` — check an analog capture's raw USB dump
+
+```bash
+sudo ./build/pinanalog -b fpga-capture.bin -t 30 --raw raw.bin
+python3 tools/analogcheck.py raw.bin
+```
+
+Reassembles EP 0x82 frames and EP 0x86 audio packets independently of the
+C code, and reports short frames, counter gaps, and how the device clock,
+the frame rate and the audio rate relate. See [../docs/analog.md](../docs/analog.md).
+
 ## Protocol decoding
 
 | Script | Use |
@@ -87,6 +98,7 @@ mangled into Windows ones.
 |---|---|
 | `longrun.sh [secs] [out] [log]` | Launch a capture fully detached (`setsid nohup`) so an SSH timeout can't kill it. Prints the pid and returns. Use for anything over ~100 s. |
 | `sigint.sh` | Exercise the real Ctrl+C path: start a capture with no `-t`, send SIGINT, time the shutdown, and confirm the file ends on a whole frame boundary. |
+| `avicheck.sh file.avi [t]` | Check a `pinanalog` AVI with ffmpeg: streams, full decode, video frames against audio samples (1920 per PAL frame), audio levels, and a PNG still at `t` seconds. |
 | `ffcheck.sh [file]` | Independent verification with ffmpeg: list streams, full decode reporting only errors, and count decoded frames. A healthy capture yields 0 errors and one `Detected timecode is invalid` line (expected — the camera emits no timecode in live view). |
 
 Run them with `sshrun.py script tools/remote/<name>.sh --sudo`.

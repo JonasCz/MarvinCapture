@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>PinnacleCapture</RootNamespace>
+    <AssemblyName>PinnacleCapture</AssemblyName>
+    <UseWinUI>true</UseWinUI>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>latest</LangVersion>
+    <!-- Field-style [ObservableProperty] is fine: the app is JIT, not trimmed/AOT. -->
+    <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
+
+    <!-- Unpackaged, self-contained, x64 only, no MSIX. -->
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <SelfContained>true</SelfContained>
+    <Platforms>x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+
+    <!-- Where pinnacle-oss-core.dll (built by the parallel core/stub workstream) lives.
+         Override with: dotnet build -p:PinnacleCoreDir=C:\path\to\dir -->
+    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\tests\stub\build-stub</PinnacleCoreDir>
+    <!-- The MinGW-built core needs libwinpthread-1.dll at runtime; copied from here if present. -->
+    <PinnacleRuntimeDllDir Condition="'$(PinnacleRuntimeDllDir)' == ''">C:\msys64\ucrt64\bin</PinnacleRuntimeDllDir>
+
+    <EnableMsixTooling>false</EnableMsixTooling>
+    <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
+    <PackageReference Include="Vortice.DXGI" Version="3.8.3" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.8.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!--
+    Copy pinnacle-oss-core.dll next to the built exe if it exists at build time.
+    This does not fail the build when the DLL is missing (e.g. the parallel
+    stub/core workstream has not produced it yet); the Condition="Exists(...)"
+    just makes the target a no-op in that case, and the wiring is exercised
+    again on every subsequent build once the DLL shows up.
+  -->
+  <Target Name="CopyPinnacleCore" AfterTargets="Build;Publish">
+    <ItemGroup>
+      <PinnacleCoreFiles Include="$(PinnacleCoreDir)\pinnacle-oss-core.dll" Condition="Exists('$(PinnacleCoreDir)\pinnacle-oss-core.dll')" />
+      <PinnacleCoreFiles Include="$(PinnacleCoreDir)\libusb-1.0.dll" Condition="Exists('$(PinnacleCoreDir)\libusb-1.0.dll')" />
+      <PinnacleCoreFiles Include="$(PinnacleRuntimeDllDir)\libwinpthread-1.dll" Condition="Exists('$(PinnacleCoreDir)\pinnacle-oss-core.dll') And Exists('$(PinnacleRuntimeDllDir)\libwinpthread-1.dll')" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PinnacleCoreFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(PinnacleCoreFiles)' != ''" />
+  </Target>
+
+</Project>

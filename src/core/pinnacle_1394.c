@@ -17,6 +17,7 @@
  */
 
 #include "pinnacle_1394.h"
+#include "pin_log.h"
 
 #include <stdio.h>
 #include <string.h>
@@ -156,7 +157,7 @@ static void handle_ar_packet(pinnacle_1394_t *l, uint16_t ram, const uint8_t *d,
         l->fcp_len[slot] = (int)len;
         l->fcp_seq++;
     } else if (l->verbose && tcode != 0xe) {   /* 0xe: PHY packets (self-IDs) */
-        fprintf(stderr, "p1394: unexpected request tcode=%x from %04x to %04x%08x\n",
+        pin_logf(PIN_LOG_DEBUG, "p1394: unexpected request tcode=%x from %04x to %04x%08x\n",
                 tcode, src, q1 & 0xffff, q2);
     }
     /* our link acked it "pending": the sender now waits for a write response */
@@ -168,7 +169,7 @@ static void handle_ar_packet(pinnacle_1394_t *l, uint16_t ram, const uint8_t *d,
     }
 }
 
-static void parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len)
+void p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len)
 {
     int o = 0;
     while (o + 4 <= len) {
@@ -200,11 +201,11 @@ static void parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len)
             o += 8;
         } else if (type == MSG_INT_EVENT) {
             if (l->verbose > 1 && o + 8 <= len)
-                fprintf(stderr, "p1394: IntEvent 0x%08x\n", get32(p + o + 4));
+                pin_logf(PIN_LOG_DEBUG, "p1394: IntEvent 0x%08x\n", get32(p + o + 4));
             o += 8;
         } else {
             if (l->verbose)
-                fprintf(stderr, "p1394: unparsed EP 0x84 message type %x\n", type);
+                pin_logf(PIN_LOG_DEBUG, "p1394: unparsed EP 0x84 message type %x\n", type);
             break;
         }
     }
@@ -221,12 +222,16 @@ int p1394_pump(pinnacle_1394_t *l, unsigned timeout_ms)
     if (rc != 0)
         return -1;
     if (l->verbose > 1) {
-        fprintf(stderr, "p1394: ep84 ");
-        for (int i = 0; i < n; i++)
-            fprintf(stderr, "%02x", buf[i]);
-        fprintf(stderr, "\n");
+        /* One line, not a sequence of formats: same reasoning as ep84_cb in
+         * pinnacle_stream.c -- interleaved partial writes are unparseable. */
+        char line[2 + 2 * sizeof(buf) + 16];
+        int off = snprintf(line, sizeof(line), "p1394: ep84 ");
+        for (int i = 0; i < n && off + 3 < (int)sizeof(line); i++)
+            off += snprintf(line + off, sizeof(line) - off, "%02x", buf[i]);
+        snprintf(line + off, sizeof(line) - off, "\n");
+        pin_logf(PIN_LOG_DEBUG, "%s", line);
     }
-    parse_ep84(l, buf, n);
+    p1394_parse_ep84(l, buf, n);
     return n;
 }
 
@@ -237,7 +242,7 @@ int p1394_send(pinnacle_1394_t *l, const uint8_t *msg, int len)
     int n = 0;
     int rc = libusb_bulk_transfer(l->dev->handle, PINNACLE_EP_CMD_OUT, (uint8_t *)msg, len, &n, 2000);
     if (rc != 0 || n != len) {
-        fprintf(stderr, "p1394: EP 0x02 write failed: %s (%d/%d)\n", libusb_error_name(rc), n, len);
+        pin_logf(PIN_LOG_ERROR, "p1394: EP 0x02 write failed: %s (%d/%d)\n", libusb_error_name(rc), n, len);
         return -1;
     }
     return 0;
@@ -286,7 +291,7 @@ int p1394_at_reset(pinnacle_1394_t *l)
             return 0;
         sleep_ms(2);
     }
-    fprintf(stderr, "p1394: AT request context still active (0x%08x)\n", v);
+    pin_logf(PIN_LOG_WARN, "p1394: AT request context still active (0x%08x)\n", v);
     return -1;
 }
 
@@ -300,7 +305,7 @@ int p1394_read_topology(pinnacle_1394_t *l)
         sleep_ms(20);
     }
     if (!(id & 0x80000000u) || p1394_reg_read(l, OHCI_SELF_ID_COUNT, &cnt) != 0) {
-        fprintf(stderr, "p1394: no valid node ID (NodeID 0x%08x)\n", id);
+        pin_logf(PIN_LOG_ERROR, "p1394: no valid node ID (NodeID 0x%08x)\n", id);
         return -1;
     }
     l->local_node = (uint16_t)(0xffc0u | (id & 0x3f));
@@ -311,7 +316,7 @@ int p1394_read_topology(pinnacle_1394_t *l)
     unsigned q = (cnt >> 2) & 0x1ff;
     l->node_count = q > 1 ? (int)((q - 1) / 2) : 0;
     if (l->verbose)
-        fprintf(stderr, "p1394: NodeID 0x%08x SelfIDCount 0x%08x -> node %u of %d\n",
+        pin_logf(PIN_LOG_DEBUG, "p1394: NodeID 0x%08x SelfIDCount 0x%08x -> node %u of %d\n",
                 id, cnt, id & 0x3f, l->node_count);
     return 0;
 }
@@ -452,7 +457,7 @@ void p1394_answer_owed(pinnacle_1394_t *l)
                             (uint32_t)src << 16, 0, 0 };
         int evt = p1394_submit(l, hdr, 12, NULL, 0);
         if (l->verbose)
-            fprintf(stderr, "p1394: write response tl=%u -> event 0x%02x\n", tl, evt);
+            pin_logf(PIN_LOG_DEBUG, "p1394: write response tl=%u -> event 0x%02x\n", tl, evt);
     }
 }
 
@@ -476,7 +481,7 @@ int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned le
     }
     if (evt != P1394_EVT_ACK_PENDING && evt != P1394_EVT_ACK_COMPLETE) {
         if (l->verbose)
-            fprintf(stderr, "p1394: FCP command not delivered (event 0x%02x)\n", evt);
+            pin_logf(PIN_LOG_DEBUG, "p1394: FCP command not delivered (event 0x%02x)\n", evt);
         return -1;
     }
 
@@ -494,7 +499,7 @@ int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned le
             if (flen < 3 || f[1] != cmd[1] ||
                 !(f[2] == cmd[2] || (cmd[2] == 0xd0 && f[2] >= 0xc1 && f[2] <= 0xc4))) {
                 if (l->verbose)
-                    fprintf(stderr, "p1394: ignoring unrelated FCP response %02x %02x %02x\n",
+                    pin_logf(PIN_LOG_DEBUG, "p1394: ignoring unrelated FCP response %02x %02x %02x\n",
                             f[0], f[1], f[2]);
                 continue;
             }
@@ -512,6 +517,135 @@ int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned le
     }
     p1394_answer_owed(l);
     return -1;
+}
+
+/* --- async AV/C (for use while something else owns EP 0x84) --------------
+ *
+ * p1394_avc() above blocks inside p1394_submit()/p1394_pump(), each of which
+ * does its own synchronous libusb_bulk_transfer() read of EP 0x84 -- fine
+ * when nothing else is streaming, wrong once pinnacle_stream_read_loop() is
+ * running its own async queue on that same endpoint (only one reader may
+ * ever have URBs outstanding on an endpoint at a time).
+ *
+ * This split version only ever *writes* EP 0x02 (p1394_send(), same as
+ * p1394_submit() but without its wait-for-ack-writeback loop) and reads its
+ * state from whatever already fed p1394_parse_ep84() -- the stream loop's
+ * own EP 0x84 completion handler, via its tick hook (pinnacle_stream.h).
+ * One outstanding async command at a time per link, which is all a deck
+ * control caller ever needs (see engine/pin_deck.c). */
+int p1394_avc_begin(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len)
+{
+    if (len != 4 && (len < 1 || len > 128))
+        return -1;
+
+    uint8_t pkt[256];
+    int o = 0;
+    uint32_t desc[12];
+    unsigned nq;
+
+    uint32_t hdr[4];
+    if (len == 4) {
+        uint32_t q = get32(cmd);
+        hdr[0] = req_q0(l, TC_WRITE_QUADLET);
+        hdr[1] = ((uint32_t)node << 16) | 0xffff;
+        hdr[2] = P1394_CSR_FCP_COMMAND;
+        hdr[3] = q;
+        desc[0] = 0x120c0000u | 16; desc[1] = 0; desc[2] = 0; desc[3] = 0;
+        memcpy(&desc[4], hdr, 16);
+        nq = 8;
+        l->avc_status_addr = AT_SLOT + 0x0c;
+    } else {
+        hdr[0] = req_q0(l, TC_WRITE_BLOCK);
+        hdr[1] = ((uint32_t)node << 16) | 0xffff;
+        hdr[2] = P1394_CSR_FCP_COMMAND;
+        hdr[3] = len << 16;
+        desc[0] = 0x02000000u | 16; desc[1] = 0; desc[2] = 0; desc[3] = 0;
+        memcpy(&desc[4], hdr, 16);
+        unsigned padded = (len + 3) & ~3u;
+        desc[8] = 0x100c0000u | len; desc[9] = AT_SLOT + 0x30u; desc[10] = 0; desc[11] = 0;
+        nq = 12;
+        l->avc_status_addr = AT_SLOT + 0x2c;
+        (void)padded;
+    }
+
+    o += put_reg_write(pkt + o, OHCI_ATREQ_CLEAR, CTX_RUN);
+    unsigned padded = len == 4 ? 0 : ((len + 3) & ~3u);
+    put32(pkt + o, (MSG_RAM_WRITE << 28) | ((nq * 4 + padded) << 16) | AT_SLOT); o += 4;
+    for (unsigned i = 0; i < nq; i++) { put32(pkt + o, desc[i]); o += 4; }
+    if (len != 4) {
+        memset(pkt + o, 0, padded);
+        memcpy(pkt + o, cmd, len);
+        o += (int)padded;
+    }
+    o += put_reg_write(pkt + o, OHCI_ATREQ_CMDPTR, AT_SLOT | (len == 4 ? 2u : 3u));
+    o += put_reg_write(pkt + o, OHCI_ATREQ_SET, CTX_RUN | CTX_WAKE);
+
+    if (p1394_send(l, pkt, o) != 0) {
+        l->avc_status_addr = 0;
+        return -1;
+    }
+
+    l->avc_pending = 1;
+    l->avc_match_subunit = cmd[1];
+    l->avc_match_opcode = cmd[2];
+    l->avc_fcp_seq0 = l->fcp_seq;
+    l->avc_deadline_ms = now_ms() + 3000;
+    l->at_status_addr = (uint16_t)l->avc_status_addr; /* so parse_ep84 also updates at_evt for us */
+    l->at_evt = -1;
+    return 0;
+}
+
+/* Call every tick (after feeding new EP 0x84 bytes to p1394_parse_ep84()).
+ * Returns >0 = response length in resp (command complete, whether accepted
+ * or rejected -- the caller checks resp[0] same as p1394_avc()), 0 = still
+ * pending, -1 = timed out or no async command in flight. Retrying a
+ * NOT_IMPLEMENTED (camera busy) is the caller's job, same rule as
+ * pindeck/pin_deck's synchronous retry. */
+int p1394_avc_poll(pinnacle_1394_t *l, uint8_t *resp, unsigned resp_max)
+{
+    if (!l->avc_pending)
+        return -1;
+
+    p1394_answer_owed(l);
+
+    int seq0 = l->avc_fcp_seq0;
+    if (l->fcp_seq - seq0 > P1394_FCP_SLOTS)
+        seq0 = l->fcp_seq - P1394_FCP_SLOTS;
+    while (seq0 != l->fcp_seq) {
+        const uint8_t *f = l->fcp[seq0 % P1394_FCP_SLOTS];
+        int flen = l->fcp_len[seq0 % P1394_FCP_SLOTS];
+        seq0++;
+        if (flen < 3 || f[1] != l->avc_match_subunit ||
+            !(f[2] == l->avc_match_opcode ||
+              (l->avc_match_opcode == 0xd0 && f[2] >= 0xc1 && f[2] <= 0xc4)))
+            continue;
+        l->avc_fcp_seq0 = seq0;
+        if (f[0] == 0x0f) {                 /* INTERIM: keep waiting, longer */
+            l->avc_deadline_ms = now_ms() + 10000;
+            continue;
+        }
+        unsigned n = (unsigned)flen < resp_max ? (unsigned)flen : resp_max;
+        memcpy(resp, f, n);
+        l->avc_pending = 0;
+        l->avc_status_addr = 0;
+        return (int)n;
+    }
+    l->avc_fcp_seq0 = seq0;
+
+    if (now_ms() >= l->avc_deadline_ms) {
+        l->avc_pending = 0;
+        l->avc_status_addr = 0;
+        return -1;
+    }
+    return 0;
+}
+
+int p1394_avc_cancel(pinnacle_1394_t *l)
+{
+    int was_pending = l->avc_pending;
+    l->avc_pending = 0;
+    l->avc_status_addr = 0;
+    return was_pending;
 }
 
 /* --- link bring-up --------------------------------------------------------
@@ -780,7 +914,7 @@ int p1394_link_init(pinnacle_1394_t *l)
      * and then with 0 (its shadow being initialised); leaving both out made
      * no difference, and register 0 gets its value further down. */
     if (vendor_read(l, 0, &v) == 0 && l->verbose)
-        fprintf(stderr, "p1394: vendor status 0x%08x\n", v);
+        pin_logf(PIN_LOG_DEBUG, "p1394: vendor status 0x%08x\n", v);
     /* index 1 is computed from the registry value LengthOfIsochBuffer
      * (default 0x5000): high byte (0x5000 / 0x1d4a) * 2 + 0xfa, low byte
      * 0x5000 / 0x4096. What the fields do is unknown; leaving it out made no
@@ -853,14 +987,16 @@ int p1394_link_init(pinnacle_1394_t *l)
     uint32_t guid_hi = l->dev->have_guid ? l->dev->guid_hi : FALLBACK_GUID_HI;
     uint32_t guid_lo = l->dev->have_guid ? l->dev->guid_lo : FALLBACK_GUID_LO;
     if (!l->dev->have_guid)
-        fprintf(stderr, "p1394: device GUID not read; publishing the development unit's\n");
+        pin_logf(PIN_LOG_WARN, "p1394: device GUID not read; publishing the development unit's\n");
     uint32_t rom[ROM_WORDS], be[ROM_WORDS];
     build_config_rom(rom, guid_hi, guid_lo);
     if (l->verbose > 1) {
-        fprintf(stderr, "p1394: config ROM");
+        char line[16 + 9 * ROM_WORDS];
+        int off = snprintf(line, sizeof(line), "p1394: config ROM");
         for (unsigned i = 0; i < ROM_WORDS; i++)
-            fprintf(stderr, " %08x", rom[i]);
-        fprintf(stderr, "\n");
+            off += snprintf(line + off, sizeof(line) - off, " %08x", rom[i]);
+        snprintf(line + off, sizeof(line) - off, "\n");
+        pin_logf(PIN_LOG_DEBUG, "%s", line);
     }
     b_ext(&m, 0x074, bswap32(guid_lo));
     if (b_send(l, &m, 13) != 0) return -1;

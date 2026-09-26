@@ -1,0 +1,15 @@
+# Frozen Phase-1 baseline: sha256 of dv_reassembler's output for each trace
+# sample in traces/, produced by tests/replay_reassembler.c built against the
+# pre-refactor (FILE*-based) dv_reassembler.c. The refactored (callback-based)
+# dv_reassembler must keep producing byte-identical output -- see
+# tests/CMakeLists.txt, which builds replay_reassembler against the current
+# source tree and compares its output's hash against the lines below.
+#
+# Format: <trace file under traces/> <sha256>
+#
+# Regenerate only if a change is *meant* to alter reassembler output (it
+# shouldn't be, for Phase 1): build tests/replay_reassembler.c against the
+# known-good dv_reassembler.c, run it over each sample, and sha256sum the
+# result.
+ep88-sample.bin 6a0fb03aadc0878dc5905d4237c6470cf8fa5c42f4d2a56e9e91112cb6aac138
+ep88-ntsc-sample.bin 0dbb751ce653db06a44ed36f45971f09e7da26e7d2b92ae1bb8195247a9690de

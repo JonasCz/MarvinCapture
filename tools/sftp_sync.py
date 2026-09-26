@@ -37,8 +37,12 @@ def push(local_root, remote_root):
     transport, sftp = connect()
     try:
         for dirpath, dirnames, filenames in os.walk(local_root):
-            rel = os.path.relpath(dirpath, local_root)
+            # Windows relpaths use backslashes, which the remote would take as
+            # part of a file name.
+            rel = os.path.relpath(dirpath, local_root).replace(os.sep, "/")
             remote_dir = posixpath.normpath(posixpath.join(remote_root, rel)) if rel != "." else remote_root
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+            mkdirs(sftp, remote_dir)
             for fn in filenames:
                 local_path = os.path.join(dirpath, fn)
                 remote_path = posixpath.join(remote_dir, fn)

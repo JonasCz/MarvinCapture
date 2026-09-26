@@ -21,9 +21,17 @@ traces/ep88-*.bin
 
 # --- Build output ----------------------------------------------------------
 build/
+build-*/
 *.o
 *.a
 *.exe
+
+# --- Vendored FFmpeg (fetched/built by tools/build-ffmpeg.sh) --------------
+# Source tarball + extracted tree, and the per-OS/arch build and install
+# directories. None of this is committed; the script re-fetches and
+# re-verifies (sha256) on demand. See third_party/README.md.
+third_party/ffmpeg-src/
+third_party/ffmpeg-*/
 
 # --- Local / editor --------------------------------------------------------
 .claude/

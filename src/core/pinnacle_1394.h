@@ -82,6 +82,13 @@ typedef struct {
     int fcp_len[P1394_FCP_SLOTS];
     struct { uint8_t tl; uint16_t src; } owed[64];
     int n_owed;
+
+    /* async AV/C (p1394_avc_begin/poll), one outstanding command at a time */
+    int avc_pending;
+    uint8_t avc_match_subunit, avc_match_opcode;
+    int avc_fcp_seq0;
+    unsigned avc_status_addr;
+    unsigned long long avc_deadline_ms;
 } pinnacle_1394_t;
 
 void p1394_init(pinnacle_1394_t *l, pinnacle_device_t *dev);
@@ -122,6 +129,27 @@ void p1394_answer_owed(pinnacle_1394_t *l);
  * Returns the response length, or -1. */
 int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len,
               uint8_t *resp, unsigned resp_max, unsigned timeout_ms);
+
+/* Processes bytes already read from EP 0x84 by someone else (the streaming
+ * read loop's own async queue, see pinnacle_stream_read_loop_ex()). Same
+ * parsing p1394_pump() does after its own blocking read; exposed separately
+ * so exactly one thing ever issues the EP 0x84 libusb read while streaming
+ * is active. */
+void p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len);
+
+/* Non-blocking AV/C: begin() writes the command (one EP 0x02 send, no wait)
+ * and returns at once; poll() (call it every tick, after new EP 0x84 bytes
+ * have gone through p1394_parse_ep84()) reports 0 while still waiting, the
+ * response length once one arrives (matching p1394_avc()'s ctype-byte
+ * convention, including NOT_IMPLEMENTED == busy, the caller's job to
+ * retry), or -1 on send failure / timeout. One outstanding command per
+ * link; begin() while another is still pending fails it silently (the
+ * caller in engine/pin_deck.c never does this). */
+int p1394_avc_begin(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len);
+int p1394_avc_poll(pinnacle_1394_t *l, uint8_t *resp, unsigned resp_max);
+/* Gives up on the outstanding async command, if any (e.g. the session is
+ * closing). Returns 1 if one was in fact pending. */
+int p1394_avc_cancel(pinnacle_1394_t *l);
 
 /* Brings the link up the way MarvinBus64.sys does, ending with a bus reset
  * and a topology read. docs/startup.md explains every step. */

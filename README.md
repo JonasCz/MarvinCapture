@@ -12,8 +12,11 @@ implements it on Linux with libusb.
 sequences, zero CIP/DBC discontinuities and zero ffmpeg decode errors, and
 stops cleanly.
 
-The analog input path is not implemented (the SAA7113 decoder is initialised,
-because the device refuses to work otherwise, but its video is not captured).
+**Analog capture (composite, PAL) works too**, with the `pinanalog` tool: it
+loads the vendor's Capture FPGA design (switching over from DV without a
+replug) and writes an AVI with uncompressed YUY2 video and 48 kHz stereo
+PCM, frame-exact and with audio locked to video. S-video and NTSC are
+implemented but untested. See [docs/analog.md](docs/analog.md).
 Deck control (play/pause/stop/FF/REW, timecode) works with the `pindeck`
 tool, but is not yet wired into `pincli`. See
 [docs/deck-control.md](docs/deck-control.md).
@@ -46,9 +49,51 @@ Needs `libusb-1.0` development headers and a C11 compiler.
 cd src && make
 ```
 
-Produces `build/pincli` and `build/libpinnacle500.a`. The core library is kept
+Produces `build/pincli`, `build/pindeck`, `build/pinanalog` and `build/libpinnacle500.a`. The core library is kept
 separate on purpose so a future GUI links the same code without the
 file-writing concerns.
+
+### CMake (also builds on Windows)
+
+A top-level `CMakeLists.txt` builds the same core and CLIs, plus a `ctest`
+regression suite (byte-identical DV/HDV reassembler output against a frozen
+baseline). On Linux:
+
+```bash
+cmake -G Ninja -B build
+cmake --build build
+ctest --test-dir build --output-on-failure
+```
+
+On Windows, install [MSYS2](https://www.msys2.org/) and, from an MSYS2
+UCRT64 shell, `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,libusb,pkgconf}`,
+then run the same three commands from a UCRT64 shell (winpthreads supplies
+the same pthreads/`nanosleep`/`clock_gettime` the core uses on Linux, so it's
+the same source, not a Windows fork). No device is needed to build or run
+`ctest`; hardware tests still happen on the Linux capture rig.
+
+## GUI & pinctl
+
+The pieces above (`pincli`/`pindeck`/`pinanalog`) talk to `src/core` directly
+and stay as low-level debug tools. Everything else — session state machine,
+capture, scene splitting, muxing, preview — lives behind one flat C API,
+**`src/api/pin_api.h`**, built as the shared `pinnacle-oss-core` library
+(`src/engine`, `src/sinks`, `src/api`; see `src/engine/README.md`). A GUI
+(`gui/`, WinUI 3 first) links only that header; **`pinctl`** is the same
+thing as a CLI, and doubles as the API's own integration test.
+
+No hardware is needed to build or exercise any of this: set `PIN_REPLAY=<file>`
+(a `.dv`, `.ts`, or raw EP 0x88 dump) to get a virtual "replay" device that
+plays a recorded source back through the full pipeline —
+
+```bash
+PIN_REPLAY=traces/ep88-sample.bin ./build/pinctl capture -i dv -f dv -o out --duration 5
+```
+
+— and `tests/engine_replay/` is a hardware-free `ctest` suite built entirely
+on top of that: DV/HDV formats and scene splitting, multi-pass, preview
+frames, `pin_launch_parse()`, and `pin_check_output()`, all driven only
+through `pin_api.h`. It runs as part of the normal `ctest` invocation above.
 
 ## Usage
 
@@ -139,7 +184,8 @@ All opt-in; the defaults are the right values.
 | [docs/hdv.md](docs/hdv.md) | HDV over FireWire: what's on the wire, how the `.ts` is produced, and why the DBC check is weak for it. |
 | [docs/startup.md](docs/startup.md) | Every step from plug-in to the first stream byte, and where each value comes from. |
 | [docs/deck-control.md](docs/deck-control.md) | Play/stop/FF/REW over AV/C, and the 1394 transaction layer. |
-| [docs/analog-notes.md](docs/analog-notes.md) | Notes for later: analog path, the three FPGA bitstreams, the other Marvin models. |
+| [docs/analog.md](docs/analog.md) | Analog capture: the Capture bitstream, the config-channel opcodes, SAA7113 / AC'97 / capture-block registers, the stream format, and how clocks and A/V sync work. |
+| [docs/analog-notes.md](docs/analog-notes.md) | Earlier notes: the three FPGA bitstreams, the other Marvin models. |
 | [docs/command-channel-findings.md](docs/command-channel-findings.md) | The protocol. Command word format, OHCI register usage, the two layers of EP 0x88 framing, the 1394 connection-management transaction, and what's still open. |
 | [HANDOFF.md](HANDOFF.md) | Overall state of the reverse-engineering effort: what's known about the hardware, what's still missing. |
 | [FEASIBILITY.md](FEASIBILITY.md) | The original plan and phases. |
@@ -158,9 +204,13 @@ src/core/     pinnacle_device.c   open, bitstream upload, bring-up
               pinnacle_1394.c     1394 link layer: link start-up, transactions, oPCR, AV/C
               pinnacle_stream.c   start/stop, queued EP 0x88 read loop
               dv_reassembler.c    the two framing layers + DIF frame / MPEG2-TS assembly
+              pinnacle_cfg.c      config channel (EP 0x01/0x81): I2C, chip reset, FPGA load
+              pinnacle_analog.c   analog: SAA7113, AC'97, capture block, frame/audio assembly
+              avi_writer.c        OpenDML AVI writer (YUY2 + PCM)
               protocol_data.h     config-channel sequence still replayed verbatim
 src/cli/      pindeck.c           deck control (play/stop/ff/rew/state/timecode)
               pincli.c            the capture tool
+              pinanalog.c         analog capture tool
 tools/        dvcheck.py, tscheck.py, ssh helpers, scripts that run on the capture host
 docs/         protocol findings and rig documentation
 ```
