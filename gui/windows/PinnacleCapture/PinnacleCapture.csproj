@@ -62,6 +62,12 @@
       <PinnacleCoreFiles Include="$(PinnacleRuntimeDllDir)\libwinpthread-1.dll" Condition="Exists('$(PinnacleCoreDir)\pinnacle-oss-core.dll') And Exists('$(PinnacleRuntimeDllDir)\libwinpthread-1.dll')" />
     </ItemGroup>
     <Copy SourceFiles="@(PinnacleCoreFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(PinnacleCoreFiles)' != ''" />
+    <!-- The FPGA bitstreams: the core build puts them in firmware/ next to the
+         DLL; the core looks for firmware/ next to itself. -->
+    <ItemGroup>
+      <PinnacleFirmwareFiles Include="$(PinnacleCoreDir)\firmware\*.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PinnacleFirmwareFiles)" DestinationFolder="$(OutDir)firmware" SkipUnchangedFiles="true" Condition="'@(PinnacleFirmwareFiles)' != ''" />
   </Target>
 
 </Project>

@@ -39,6 +39,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #else
+#include <dlfcn.h> /* dladdr */
 #include <sys/statvfs.h>
 #include <sys/stat.h>
 #if defined(__linux__)
@@ -258,40 +259,168 @@ int pin_session_get_replay_file(char *out, size_t out_size)
     return have ? 0 : -1;
 }
 
-pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t out_size)
+/* Directory of the module that contains this code: the pinnacle-oss-core
+ * DLL / .so / .dylib, or the executable when the core is linked in
+ * statically (pinctl, tests). */
+static int lib_dir(char *out, size_t cap)
 {
-    char dir[PIN_PATH_MAX];
+#if defined(_WIN32)
+    HMODULE mod = NULL;
+    if (!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                            (LPCWSTR)(void *)&lib_dir, &mod))
+        return -1;
+    wchar_t wpath[MAX_PATH];
+    DWORD n = GetModuleFileNameW(mod, wpath, MAX_PATH);
+    if (n == 0 || n == MAX_PATH)
+        return -1;
+    char path[MAX_PATH * 4];
+    int len = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)n, path, (int)sizeof(path) - 1, NULL, NULL);
+    if (len <= 0)
+        return -1;
+    path[len] = 0;
+#else
+    Dl_info info;
+    if (!dladdr((void *)&lib_dir, &info) || !info.dli_fname)
+        return -1;
+    char path[4096];
+    if (!realpath(info.dli_fname, path))
+        return -1;
+#endif
+    char *slash = strrchr(path, '/');
+#if defined(_WIN32)
+    char *bs = strrchr(path, '\\');
+    if (bs && (!slash || bs > slash))
+        slash = bs;
+#endif
+    if (!slash || (size_t)(slash - path) + 1 > cap)
+        return -1;
+    memcpy(out, path, (size_t)(slash - path));
+    out[slash - path] = 0;
+    return 0;
+}
+
+/* Size of a file, or -1 if it cannot be opened. */
+static long long file_size(const char *path)
+{
+#if defined(_WIN32)
+    wchar_t wpath[PIN_PATH_MAX];
+    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, PIN_PATH_MAX))
+        return -1;
+    FILE *f = _wfopen(wpath, L"rb");
+#else
+    FILE *f = fopen(path, "rb");
+#endif
+    if (!f)
+        return -1;
+    long long n = -1;
+    if (fseek(f, 0, SEEK_END) == 0)
+        n = ftell(f);
+    fclose(f);
+    return n;
+}
+
+#if defined(_WIN32)
+#define DIR_SEP "\\"
+#else
+#define DIR_SEP "/"
+#endif
+
+/* Every bitstream (fpga-ohci.bin, fpga-capture.bin) is exactly this long. */
+#define PIN_BITSTREAM_BYTES 78422
+
+pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t out_size,
+                                       char *why, size_t why_size)
+{
+    const char *name = for_kind == PIN_KIND_ANALOG ? "fpga-capture.bin" : "fpga-ohci.bin";
+    enum { MAX_DIRS = 4 };
+    char dirs[MAX_DIRS][PIN_PATH_MAX];
+    int ndirs = 0;
+
+    /* 1. pin_set_firmware_dir() */
     pthread_mutex_lock(&g_fw_mtx);
-    strncpy(dir, g_firmware_dir, sizeof(dir) - 1);
-    dir[sizeof(dir) - 1] = 0;
+    if (g_firmware_dir[0])
+        snprintf(dirs[ndirs++], PIN_PATH_MAX, "%s", g_firmware_dir);
     pthread_mutex_unlock(&g_fw_mtx);
 
-    if (dir[0] == 0) {
-        /* settings key "firmware_dir" (section "Paths") overrides the
-         * <exe dir>/firmware default. */
+    /* 2. settings key "firmware_dir" (section "Paths") */
+    {
         char settings_path[PIN_PATH_MAX];
-        char override[PIN_PATH_MAX] = { 0 };
         pin_settings_t st;
         pin_settings_init(&st);
         if (pin_settings_default_path(settings_path, sizeof(settings_path)) == 0 &&
-            pin_settings_load(&st, settings_path) == 0)
-            strncpy(override, pin_settings_get_string(&st, "Paths", "firmware_dir", ""),
-                    sizeof(override) - 1);
+            pin_settings_load(&st, settings_path) == 0) {
+            const char *o = pin_settings_get_string(&st, "Paths", "firmware_dir", "");
+            if (o[0])
+                snprintf(dirs[ndirs++], PIN_PATH_MAX, "%s", o);
+        }
         pin_settings_free(&st);
+    }
 
-        if (override[0]) {
-            strncpy(dir, override, sizeof(dir) - 1);
-            dir[sizeof(dir) - 1] = 0;
-        } else if (exe_dir(dir, sizeof(dir)) == 0) {
-            strncat(dir, "/firmware", sizeof(dir) - strlen(dir) - 1);
-        } else {
-            strncpy(dir, "firmware", sizeof(dir) - 1);
+    /* 3. firmware/ next to the core library, 4. firmware/ next to the exe */
+    char base[PIN_PATH_MAX];
+    if (lib_dir(base, sizeof(base)) == 0)
+        snprintf(dirs[ndirs++], PIN_PATH_MAX, "%s" DIR_SEP "firmware", base);
+    if (exe_dir(base, sizeof(base)) == 0) {
+        char d[PIN_PATH_MAX];
+        snprintf(d, sizeof(d), "%s" DIR_SEP "firmware", base);
+        int dup = 0;
+        for (int i = 0; i < ndirs; i++)
+            dup |= strcmp(dirs[i], d) == 0;
+        if (!dup)
+            snprintf(dirs[ndirs++], PIN_PATH_MAX, "%s", d);
+    }
+    if (ndirs == 0)
+        snprintf(dirs[ndirs++], PIN_PATH_MAX, "firmware");
+
+    /* First candidate of the right size wins; a present but wrong-sized
+     * file is reported as such rather than as "not found". */
+    int bad = -1;
+    long long bad_size = 0;
+    for (int i = 0; i < ndirs; i++) {
+        char path[PIN_PATH_MAX];
+        if (snprintf(path, sizeof(path), "%s" DIR_SEP "%s", dirs[i], name) >= (int)sizeof(path))
+            continue;
+        long long n = file_size(path);
+        if (n == PIN_BITSTREAM_BYTES) {
+            snprintf(out, out_size, "%s", path);
+            return PIN_OK;
+        }
+        if (n >= 0 && bad < 0) {
+            bad = i;
+            bad_size = n;
         }
     }
 
-    const char *name = for_kind == PIN_KIND_ANALOG ? "fpga-capture.bin" : "fpga-ohci.bin";
-    int n = snprintf(out, out_size, "%s/%s", dir, name);
-    return (n > 0 && (size_t)n < out_size) ? PIN_OK : PIN_ERR_ARG;
+    snprintf(out, out_size, "%s" DIR_SEP "%s", dirs[bad >= 0 ? bad : 0], name);
+    if (why && why_size) {
+        if (bad >= 0) {
+            snprintf(why, why_size,
+                     "FPGA bitstream %s is %lld bytes, expected %d (wrong or truncated file)",
+                     out, bad_size, PIN_BITSTREAM_BYTES);
+        } else {
+            int len = snprintf(why, why_size, "FPGA bitstream %s not found. Looked in:", name);
+            for (int i = 0; i < ndirs && len > 0 && (size_t)len < why_size; i++)
+                len += snprintf(why + len, why_size - (size_t)len, "%s %s", i ? ";" : "", dirs[i]);
+        }
+    }
+    return PIN_ERR_FIRMWARE;
+}
+
+/* Error for a failed pinnacle_init_hardware() / pinnacle_analog_open()
+ * after the bitstream file itself was found and validated. */
+static void set_init_error(pin_session_t *s, pinnacle_status_t pst, const char *fw)
+{
+    char msg[PIN_TEXT_MAX];
+    if (pst == PINNACLE_ERR_BITSTREAM_READ)
+        snprintf(msg, sizeof(msg), "Cannot read FPGA bitstream %s", fw);
+    else if (pst == PINNACLE_ERR_NOT_READY)
+        snprintf(msg, sizeof(msg), "The device did not accept the FPGA bitstream %s: %s", fw,
+                 pinnacle_strerror(pst));
+    else
+        snprintf(msg, sizeof(msg), "Device initialisation failed: %s", pinnacle_strerror(pst));
+    set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY
+                     ? PIN_ERR_FIRMWARE : PIN_ERR_USB, msg);
 }
 
 /* ========================================================================
@@ -1220,12 +1349,15 @@ static void do_run_dv(pin_session_t *s)
         return;
     }
 
-    char fw[PIN_PATH_MAX];
-    pin_session_firmware_path(PIN_KIND_DV, fw, sizeof(fw));
+    char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
+    if (pin_session_firmware_path(PIN_KIND_DV, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
+        set_error(s, PIN_ERR_FIRMWARE, why);
+        return;
+    }
 
     pinnacle_status_t pst = pinnacle_init_hardware(&s->dev, fw);
     if (pst != PINNACLE_OK) {
-        set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ ? PIN_ERR_FIRMWARE : PIN_ERR_USB, NULL);
+        set_init_error(s, pst, fw);
         return;
     }
     pinnacle_lock_update(s->lock, PINNACLE_LOCK_READY, s->dev.guid_hi, s->dev.guid_lo);
@@ -1402,8 +1534,11 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
 
 static void do_run_analog(pin_session_t *s, pin_input_t input)
 {
-    char fw[PIN_PATH_MAX];
-    pin_session_firmware_path(PIN_KIND_ANALOG, fw, sizeof(fw));
+    char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
+    if (pin_session_firmware_path(PIN_KIND_ANALOG, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
+        set_error(s, PIN_ERR_FIRMWARE, why);
+        return;
+    }
 
     pinnacle_analog_config_t cfg;
     pinnacle_analog_config_defaults(&cfg);
@@ -1413,7 +1548,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
 
     pinnacle_status_t pst = pinnacle_analog_open(&s->analog, &s->dev, fw, &cfg);
     if (pst != PINNACLE_OK) {
-        set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ ? PIN_ERR_FIRMWARE : PIN_ERR_USB, NULL);
+        set_init_error(s, pst, fw);
         return;
     }
     pinnacle_lock_update(s->lock, PINNACLE_LOCK_READY, s->dev.guid_hi, s->dev.guid_lo);

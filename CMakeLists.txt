@@ -103,6 +103,9 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     if(WIN32)
         # pin_devices_wait.c: CM_Register_Notification (device hotplug).
         target_link_libraries(pinnacle_engine PUBLIC cfgmgr32)
+    else()
+        # pin_session.c: dladdr() finds the core library's own directory.
+        target_link_libraries(pinnacle_engine PUBLIC ${CMAKE_DL_LIBS})
     endif()
     # This target is only ever linked into the pinnacle-oss-core DLL, never
     # a consumer of it, so pin_api.h's functions must not be seen as
@@ -136,6 +139,16 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
         target_link_options(pinnacle-oss-core PRIVATE -static-libgcc)
         set_target_properties(pinnacle-oss-core PROPERTIES C_VISIBILITY_PRESET hidden)
     endif()
+
+    # The FPGA bitstreams go in firmware/ next to the core library, where
+    # the core looks for them first (see pin_set_firmware_dir()).
+    add_custom_command(TARGET pinnacle-oss-core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:pinnacle-oss-core>/firmware
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            ${CMAKE_SOURCE_DIR}/firmware/fpga-ohci.bin
+            ${CMAKE_SOURCE_DIR}/firmware/fpga-capture.bin
+            ${CMAKE_SOURCE_DIR}/firmware/README.md
+            $<TARGET_FILE_DIR:pinnacle-oss-core>/firmware)
 
     add_executable(pinctl src/cli/pinctl.c)
     target_link_libraries(pinctl PRIVATE pinnacle-oss-core)

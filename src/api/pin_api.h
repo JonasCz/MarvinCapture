@@ -86,7 +86,7 @@ typedef enum {
     PIN_ERR_BUSY,           /* device in use by another process */
     PIN_ERR_NO_DRIVER,      /* Windows: device not bound to WinUSB */
     PIN_ERR_USB,
-    PIN_ERR_FIRMWARE,       /* FPGA bitstream missing, unreadable or rejected */
+    PIN_ERR_FIRMWARE,       /* FPGA bitstream missing, unreadable or rejected; the error event says which */
     PIN_ERR_NOT_READY,      /* device needs a power cycle (replug) */
     PIN_ERR_NO_CAMERA,      /* DV: no camera / deck on the 1394 bus */
     PIN_ERR_DECK,           /* DV: AV/C command rejected */
@@ -102,8 +102,10 @@ PIN_API uint32_t pin_api_version(void);          /* == PIN_API_VERSION */
 PIN_API const char *pin_version_string(void);    /* "pinnacle-oss-core 0.x (git ...)" */
 PIN_API const char *pin_strerror(pin_status_t s);
 
-/* Optional. Where the FPGA bitstreams live (firmware/ next to the
- * executable by default; the settings key "firmware_dir" overrides it). */
+/* Optional. Where the FPGA bitstreams live. Searched in order: this dir,
+ * the settings key Paths/firmware_dir, firmware/ next to the core library,
+ * firmware/ next to the executable. The build puts firmware/ next to the
+ * library. */
 PIN_API pin_status_t pin_set_firmware_dir(const char *utf8_dir);
 
 /* ---- devices ---------------------------------------------------------- */

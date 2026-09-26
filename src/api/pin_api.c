@@ -68,7 +68,7 @@ const char *pin_strerror(pin_status_t s)
     case PIN_ERR_BUSY: return "device is in use by another process";
     case PIN_ERR_NO_DRIVER: return "device driver not bound (Windows: use Zadig)";
     case PIN_ERR_USB: return "USB error";
-    case PIN_ERR_FIRMWARE: return "FPGA bitstream missing, unreadable or rejected";
+    case PIN_ERR_FIRMWARE: return "FPGA bitstream problem";
     case PIN_ERR_NOT_READY: return "device needs a power cycle (replug)";
     case PIN_ERR_NO_CAMERA: return "no camera/deck found on the 1394 bus";
     case PIN_ERR_DECK: return "deck command rejected or timed out";

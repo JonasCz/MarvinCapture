@@ -117,7 +117,7 @@ struct pin_session {
     /* status */
     pin_state_t state;
     pin_status_t last_error;
-    char error_text[PIN_TEXT_MAX];
+    char error_text[PIN_PATH_MAX]; /* full text for the error event; the status snapshot gets a truncated copy */
     pin_input_t input;
     pin_kind_t stream_kind;
     int signal, is_60hz, width, height, dar_num, dar_den;
