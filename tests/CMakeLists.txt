@@ -32,11 +32,11 @@ foreach(line IN LISTS baseline_lines)
     list(GET fields 0 sample_name)
     list(GET fields 1 sample_hash)
 
-    set(sample_path "${PROJECT_SOURCE_DIR}/traces/${sample_name}")
-    # The traces are the developer's own recordings and aren't committed
+    set(sample_path "${PROJECT_SOURCE_DIR}/tests/data/${sample_name}")
+    # tests/data/ holds small local fixtures that aren't committed
     # (.gitignore); without them there's nothing to compare against.
     if(NOT EXISTS "${sample_path}")
-        message(STATUS "traces/${sample_name} not present: skipping its baseline test")
+        message(STATUS "tests/data/${sample_name} not present: skipping its baseline test")
         continue()
     endif()
     set(out_path "${CMAKE_CURRENT_BINARY_DIR}/${sample_name}.out")

@@ -24,7 +24,7 @@
  *
  * EP 0x88 is NOT raw DV. The FPGA implements an OHCI-1394 host controller and
  * tunnels its isochronous-receive DMA over USB, so the stream has two layers
- * of framing on top of the DIF data (see docs/command-channel-findings.md):
+ * of framing on top of the DIF data (see docs/protocol.md):
  *
  *   1. Type-9 messages — the same command framing the command channel uses:
  *        u32 LE header = (9 << 28) | flags | (len << 16) | ram_addr

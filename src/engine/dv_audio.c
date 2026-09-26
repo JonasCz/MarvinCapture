@@ -43,7 +43,7 @@
  * dv_audio_12to16()'s 12-bit nonlinear expansion -- is transcribed from
  * FFmpeg's libavformat/dv.c (dv_extract_audio(), dv_audio_12to16()) and
  * libavcodec/dv_profile.c (dv_audio_shuffle525/625, audio_min_samples),
- * read from the FFmpeg source tree tools/build-ffmpeg.sh unpacks, in this
+ * read from the FFmpeg source tree scripts/build-ffmpeg.sh unpacks, in this
  * project's own code -- pinnacle_engine_pure links no FFmpeg. See
  * dv_audio.h for how this has been validated (and, for the 12-bit mode,
  * how it has *not*).

@@ -33,10 +33,10 @@ copy.
 
 | Property | Default | Purpose |
 |---|---|---|
-| `PinnacleCoreDir` | `..\..\..\tests\stub\build-stub` | Folder with `pinnacle-oss-core.dll` (and `libusb-1.0.dll` if present) |
+| `PinnacleCoreDir` | `..\..\..\build\core` | Folder with `pinnacle-oss-core.dll` (and `libusb-1.0.dll` if present) |
 | `PinnacleRuntimeDllDir` | `C:\msys64\ucrt64\bin` | Where `libwinpthread-1.dll` is taken from. MinGW/UCRT64 builds of the core need it. |
 
-To build against the real core instead of the stub:
+To build against a core built elsewhere:
 
 ```powershell
 dotnet build -c Debug -p:Platform=x64 -p:PinnacleCoreDir=C:\path\to\core\build
@@ -79,33 +79,6 @@ text comes from `pin_launch_help()`, so it always matches the core in use.
 
 Each window runs as its own process. "..." > "New window" starts a second one,
 for example to use a second device.
-
-## Testing without hardware (stub DLL)
-
-`tests/stub` builds a fake `pinnacle-oss-core.dll` that implements the whole
-`pin_api.h`. It provides two fake devices, colour-bar preview frames, deck
-transport, captures that write small files, and command-line parsing. Build it
-from an MSYS2 UCRT64 shell (or see `tests/stub/build.sh`):
-
-```bash
-tests/stub/build.sh          # -> tests/stub/build-stub/pinnacle-oss-core.dll
-```
-
-Then build the app as above. The default `PinnacleCoreDir` already points at
-`tests/stub/build-stub`, so the stub is copied next to the exe automatically.
-
-## Transitional ABI fields
-
-The engine is appending these to `pin_api.h`. The app already uses them, and
-the stub accepts both the old and the new struct sizes (`tests/stub/pin_stub_abi2.h`):
-
-- `pin_capture_opts_t.rewind_first`
-- `pin_status_snapshot_t.disk_free_bytes`, `est_seconds_left` and `disk_low`
-- `pin_set_output_hint()`
-
-`pin_launch_t` grows too, because it embeds the capture options. If a core
-lacks `pin_set_output_hint`, the app just doesn't show the disk estimate
-before a capture starts.
 
 ## Theme testing
 

@@ -28,12 +28,12 @@
  * same algorithm FFmpeg's libavformat/dv.c dv_extract_audio() and
  * libavcodec/dv_profile.c's audio_shuffle525/625 tables and
  * libavformat/dv.c's dv_audio_12to16() implement, read from the FFmpeg
- * source tree tools/build-ffmpeg.sh unpacks (third_party/ffmpeg-src) and
+ * source tree scripts/build-ffmpeg.sh unpacks (third_party/ffmpeg-src) and
  * reimplemented here in this project's own style so pinnacle_engine_pure
  * (hardware-free, no FFmpeg) can extract audio without linking libavformat.
  * Validated sample-for-sample against libavformat's own "dv" demuxer on
  * real captures -- see tests/engine_replay/test_dv_audio_vs_libavformat.c
- * -- for every trace this project has to hand: all of captures/*.dv
+ * -- for every trace this project has to hand: all of tests/data/dv-ntsc.dv
  * (9,557 real frames, ~10.2 million 16-bit stereo samples), exact match,
  * 0 mismatches, including the full 5-minute/8,967-frame capture. All of
  * those are 48 kHz/16-bit/2-channel/NTSC; no PAL or 32 kHz/12-bit-nonlinear

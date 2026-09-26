@@ -20,7 +20,7 @@
  * IEEE 1394 link layer over the Pinnacle's USB tunnel.
  *
  * The FPGA is an OHCI-1394 controller whose registers and DMA RAM are reached
- * through messages on EP 0x02 (see docs/command-channel-findings.md). This
+ * through messages on EP 0x02 (see docs/protocol.md). This
  * module turns that into ordinary 1394 operations: OHCI register access,
  * asynchronous transactions (quadlet read, lock, write, write response) and
  * FCP/AV-C commands. docs/startup.md and docs/deck-control.md describe the

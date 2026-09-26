@@ -1,15 +1,17 @@
-# Frozen Phase-1 baseline: sha256 of dv_reassembler's output for each trace
-# sample in traces/, produced by tests/replay_reassembler.c built against the
-# pre-refactor (FILE*-based) dv_reassembler.c. The refactored (callback-based)
-# dv_reassembler must keep producing byte-identical output -- see
-# tests/CMakeLists.txt, which builds replay_reassembler against the current
-# source tree and compares its output's hash against the lines below.
+# Reassembler regression baseline: sha256 of dv_reassembler's output for each
+# raw EP 0x88 fixture in tests/data/ (see tests/data/README.md). Checked by
+# tests/CMakeLists.txt, which runs tests/replay_reassembler.c over each fixture
+# and compares the hash of its output against the lines below; the output must
+# stay byte-identical across refactors.
 #
-# Format: <trace file under traces/> <sha256>
+# The fixtures are the first 2 MiB of the original full-length recordings. The
+# hashes were regenerated from the current reassembler when the fixtures were
+# cut down (the full-length hashes had been frozen from the pre-refactor
+# implementation, and the current code reproduced them exactly).
 #
-# Regenerate only if a change is *meant* to alter reassembler output (it
-# shouldn't be, for Phase 1): build tests/replay_reassembler.c against the
-# known-good dv_reassembler.c, run it over each sample, and sha256sum the
-# result.
-ep88-sample.bin 6a0fb03aadc0878dc5905d4237c6470cf8fa5c42f4d2a56e9e91112cb6aac138
-ep88-ntsc-sample.bin 0dbb751ce653db06a44ed36f45971f09e7da26e7d2b92ae1bb8195247a9690de
+# Format: <fixture under tests/data/> <sha256>
+#
+# Regenerate only if a change is *meant* to alter reassembler output: run
+# replay_reassembler over each fixture and sha256sum the result.
+ep88-pal.bin d929c81c6dbae0f390607132aa0b41d1089d1440c9d978622892047859e98623
+ep88-ntsc.bin c4309d35fe2383edf9e98358653a0fab1a14aac417316aa44ac14bb48e5a95bd

@@ -8,7 +8,7 @@
 the GUI, not in the core).
 
 - **Version:** FFmpeg 8.1.3 (pinned; source tarball sha256 verified in
-  `tools/build-ffmpeg.sh`).
+  `scripts/build-ffmpeg.sh`).
 - **License:** LGPL-2.1-or-later. The build has `--enable-gpl` and
   `--enable-nonfree` both **off**, and only LGPL-safe components are
   compiled in, so the resulting static libraries can be linked into the
@@ -29,8 +29,8 @@ the GUI, not in the core).
 ### Rebuilding
 
 ```sh
-tools/build-ffmpeg.sh          # fetch, verify sha256, configure, build, install
-tools/build-ffmpeg.sh --clean  # wipe the build/install dirs for this OS/arch first
+scripts/build-ffmpeg.sh          # fetch, verify sha256, configure, build, install
+scripts/build-ffmpeg.sh --clean  # wipe the build/install dirs for this OS/arch first
 ```
 
 On Windows this must run inside an MSYS2 UCRT64 shell (gcc, make, nasm,
@@ -54,5 +54,5 @@ The project links these libraries **statically** into `pinnacle-oss-core`
 (`pinnacle-oss-core.dll` / `libpinnacle-oss-core.so` / `.dylib`); no FFmpeg
 shared libraries are shipped or required at runtime. Per LGPL-2.1 section 6,
 the pinned version and this document record exactly what was built and how,
-and `tools/build-ffmpeg.sh` lets anyone reproduce or relink against a
+and `scripts/build-ffmpeg.sh` lets anyone reproduce or relink against a
 different FFmpeg build from the same (or a compatible) source.

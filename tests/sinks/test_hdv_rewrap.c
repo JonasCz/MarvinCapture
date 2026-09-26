@@ -17,8 +17,8 @@
  */
 
 /*
- * ctest: feeds a real HDV capture (captures/20260925-hdv-5min.ts, see
- * captures/README.md) through sink_rewrap's HDV path (PIN_FMT_HDV_MOV,
+ * ctest: feeds a real HDV capture (tests/data/hdv.ts, see
+ * tests/data/README.md) through sink_rewrap's HDV path (PIN_FMT_HDV_MOV,
  * which for HDV always takes the plan's documented raw-then-remux-at-close
  * fallback -- see sink_rewrap.c's header comment) and checks the result
  * with libavformat: stream codecs, dimensions, field order, SAR, title.
@@ -39,7 +39,7 @@
  *
  * Skips (prints a message, exits 0) if the capture file isn't present --
  * it's the user's own recording, gitignored, not guaranteed to exist on
- * every machine that builds this project (see captures/README.md).
+ * every machine that builds this project (see tests/data/README.md).
  */
 
 #include "test_util.h"
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
 
     FILE *in = fopen(cap_path, "rb");
     if (!in) {
-        printf("SKIP: %s not present (see captures/README.md) -- HDV rewrap test skipped\n",
+        printf("SKIP: %s not present (see tests/data/README.md) -- HDV rewrap test skipped\n",
                cap_path);
         return 0;
     }

@@ -3,7 +3,7 @@
 Status as of **2026-09-25**. HDV over the FireWire port works with the same
 hardware, the same unmodified FPGA bitstream and the same start sequence as DV.
 Only the host-side reassembly is different. Read
-[command-channel-findings.md](command-channel-findings.md) first for the two
+[protocol.md](protocol.md) first for the two
 outer framing layers, which are shared.
 
 ## Why it works
@@ -73,25 +73,21 @@ rather than being double-counted as loss.
 Independent check on the file:
 
 ```bash
-python3 tools/tscheck.py out.ts --duration-seconds 300
 ffmpeg -v error -i out.ts -map 0:v:0 -f null -    # a healthy file prints nothing or one join warning
 ```
 
 ## Known behaviour
 
-- **A clean 5-minute run exists**: [captures/20260925-hdv-5min.ts](../captures/README.md)
-  — 7,487 pictures, 0 CC errors, 0 DBC discontinuities, ffmpeg decodes it
+- **A clean 5-minute run exists**: 7,487 pictures, 0 CC errors, 0 DBC discontinuities, ffmpeg decodes it
   with no messages at all.
 - **Earlier sporadic holes were a host-side stall, now fixed.** Early runs
   occasionally had one hole of ~25 bus cycles (~3 ms, a damaged picture)
   about 5 s in. Cause: a filesystem flush blocked the thread that keeps the
   USB queue full, the FPGA's receive FIFO overran and dropped bus cycles. Not
   the camera, not the bus. `pincli` now decouples disk writes from USB reads;
-  see [capture-reliability.md](capture-reliability.md#the-usb-thread-must-never-wait-on-the-disk)
+  see [usage.md](usage.md#the-usb-thread-must-never-wait-on-the-disk)
   for the evidence and the A/B. A hole, if one ever occurs, is kept as received
   and only counted (TS has no fixed-size unit to zero-pad, unlike DV).
 - **Live mode only.** As with DV, this receives whatever the camera transmits.
-  Tape transport control (play/FF/REW) is not implemented.
-- **Connection management is still hardcoded** (node 1, channel 63). It worked
-  for this camera; a differently-configured HDV camera may use another channel.
+  Tape transport control is separate: see [deck-control.md](deck-control.md).
 - Not tested: 720p HDV, S400 cameras, PAL/NTSC variants (only 1080i/25).

@@ -1,244 +1,106 @@
 # Pinnacle Studio 500-USB — open driver
 
-An open user-space driver and DV capture tool for the **Pinnacle Studio
-500-USB** (`USB\VID_2304&PID_0213`, codename *Marvin-Lite*), a discontinued
-~2005 analog/DV capture box. The vendor driver is 32/64-bit Windows XP-era and
-increasingly unusable; this reverse-engineers the protocol from scratch and
-implements it on Linux with libusb.
+An open user-space driver, command-line tools and a Windows capture app for the
+**Pinnacle Studio 500-USB** (`USB\VID_2304&PID_0213`, codename *Marvin-Lite*), a
+discontinued ~2005 analog/DV/HDV capture box. The vendor driver is XP/Vista-era
+and increasingly unusable; this reverse-engineers the protocol from scratch and
+implements it on libusb.
 
-**Status: DV capture over the FireWire port works and is verified, and HDV
-(MPEG-2 transport stream) capture works too — see [docs/hdv.md](docs/hdv.md).** A
-5-minute continuous capture produces 8,967 frames with zero dropped DIF
-sequences, zero CIP/DBC discontinuities and zero ffmpeg decode errors, and
-stops cleanly.
+**What works**
 
-**Analog capture (composite, PAL) works too**, with the `pinanalog` tool: it
-loads the vendor's Capture FPGA design (switching over from DV without a
-replug) and writes an AVI with uncompressed YUY2 video and 48 kHz stereo
-PCM, frame-exact and with audio locked to video. S-video and NTSC are
-implemented but untested. See [docs/analog.md](docs/analog.md).
-Deck control (play/pause/stop/FF/REW, timecode) works with the `pindeck`
-tool, but is not yet wired into `pincli`. See
-[docs/deck-control.md](docs/deck-control.md).
+- **DV capture** over FireWire, verified: a 5-minute capture is 8,967 frames with
+  zero dropped DIF sequences, zero CIP/DBC discontinuities and zero ffmpeg decode
+  errors.
+- **HDV capture** (MPEG-2 transport stream), verified the same way.
+- **Analog capture** (composite, PAL tested): AVI with uncompressed YUY2 video and
+  48 kHz stereo PCM, frame-exact, audio locked to video. S-video and NTSC are
+  implemented but untested.
+- **Deck control**: play, pause, stop, FF, REW, timecode over AV/C.
+- **PinnacleCapture**, a WinUI 3 app: live preview, capture with scene splitting,
+  DV/AVI/MOV/MKV/FFV1 outputs, deck control, audio monitoring.
 
----
+## Quick start
 
-## What the hardware actually is
-
-The interesting finding, which took most of the work: **the FPGA implements a
-standard OHCI-1394 host controller**, and EP 0x88 carries its isochronous
-receive DMA tunnelled over USB. The stream is not raw DV — it has two layers of
-framing on top of the DIF data (variable-length type-9 messages, then OHCI
-buffer-fill records holding IEC 61883 CIP packets). Strip both and you get a
-byte-exact DV elementary stream.
-
-All four endpoints are bulk, 512-byte max packet; there are no isochronous USB
-endpoints at all. There is no host-side FX2 firmware download — the CY7C68013A
-boots from its own EEPROM. The FPGA bitstream is a static 78,422-byte Altera
-Cyclone EP1C3 `.rbf` blob that the driver simply replays.
-
-Full protocol decode: **[docs/command-channel-findings.md](docs/command-channel-findings.md)**.
-
----
-
-## Building
-
-Needs `libusb-1.0` development headers and a C11 compiler.
-
-```bash
-cd src && make
+```powershell
+scripts\build.ps1
 ```
 
-Produces `build/pincli`, `build/pindeck`, `build/pinanalog` and `build/libpinnacle500.a`. The core library is kept
-separate on purpose so a future GUI links the same code without the
-file-writing concerns.
-
-### CMake (also builds on Windows)
-
-A top-level `CMakeLists.txt` builds the same core and CLIs, plus a `ctest`
-regression suite (byte-identical DV/HDV reassembler output against a frozen
-baseline). On Linux:
-
-```bash
-cmake -G Ninja -B build
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-On Windows, install [MSYS2](https://www.msys2.org/) and, from an MSYS2
-UCRT64 shell, `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,libusb,pkgconf}`,
-then run the same three commands from a UCRT64 shell (winpthreads supplies
-the same pthreads/`nanosleep`/`clock_gettime` the core uses on Linux, so it's
-the same source, not a Windows fork). No device is needed to build or run
-`ctest`; hardware tests still happen on the Linux capture rig.
-
-## GUI & pinctl
-
-The pieces above (`pincli`/`pindeck`/`pinanalog`) talk to `src/core` directly
-and stay as low-level debug tools. Everything else — session state machine,
-capture, scene splitting, muxing, preview — lives behind one flat C API,
-**`src/api/pin_api.h`**, built as the shared `pinnacle-oss-core` library
-(`src/engine`, `src/sinks`, `src/api`; see `src/engine/README.md`). A GUI
-(`gui/`, WinUI 3 first) links only that header; **`pinctl`** is the same
-thing as a CLI, and doubles as the API's own integration test.
-
-No hardware is needed to build or exercise any of this: set `PIN_REPLAY=<file>`
-(a `.dv`, `.ts`, or raw EP 0x88 dump) to get a virtual "replay" device that
-plays a recorded source back through the full pipeline —
-
-```bash
-PIN_REPLAY=traces/ep88-sample.bin ./build/pinctl capture -i dv -f dv -o out --duration 5
-```
-
-— and `tests/engine_replay/` is a hardware-free `ctest` suite built entirely
-on top of that: DV/HDV formats and scene splitting, multi-pass, preview
-frames, `pin_launch_parse()`, and `pin_check_output()`, all driven only
-through `pin_api.h`. It runs as part of the normal `ctest` invocation above.
-
-## Usage
-
-```bash
-sudo ./build/pincli -o out.dv -b traces/fpga-bitstream-candidate.bin -t 300
-```
-
-| flag | meaning |
-|---|---|
-| `-o`, `--output` | raw DV output path (required) |
-| `-b`, `--bitstream` | FPGA bitstream blob (default `traces/fpga-bitstream-candidate.bin`) |
-| `-t`, `--duration` | stop after N seconds; without it, runs until Ctrl+C |
-| `-h`, `--help` | usage |
-
-`root` (or a udev rule granting access to `2304:0213`) is required to claim the
-interface.
-
-The device needs **~5.5 seconds of bring-up** before the first byte arrives:
-bitstream upload, a 1.5 s FPGA settle, then the 1394 link start-up, finding the
-camera and connecting to its output plug ([docs/startup.md](docs/startup.md)). `-t`
-starts counting after that. A capture window shorter than the bring-up will
-look empty and mislead you.
-
-**The camera must actually be transmitting.** In tape mode with the tape
-stopped, the device produces zero bytes and looks identical to a hardware
-fault. [docs/capture-reliability.md](docs/capture-reliability.md) explains how
-to tell those apart.
-
-### Output
-
-The format is detected from the stream. A DV camera gives a raw DV elementary
-stream (`.dv`); an **HDV camera gives an MPEG-2 transport stream (`.ts`)** —
-name the output accordingly. HDV details, and why its integrity check is
-different, are in [docs/hdv.md](docs/hdv.md).
-
-DV: a raw elementary stream, frame-aligned, playable directly:
-
-```bash
-ffplay out.dv
-ffmpeg -i out.dv -c:v copy -c:a copy out.avi     # rewrap, no re-encode
-```
-
-NTSC and PAL are both handled (10 vs 12 DIF sequences per frame, detected from
-the stream). Audio comes through as two `pcm_s16le` 32 kHz stereo tracks.
-
-### Did it drop anything?
-
-Every run ends with a continuity line based on the IEC 61883 CIP data block
-counter — a counter the *camera* maintains, so it catches loss anywhere between
-the camera's transmitter and your file:
+builds everything (needs MSYS2 UCRT64 and the .NET 10 SDK; see
+[docs/building.md](docs/building.md)) into `build\dist`:
 
 ```
-pincli: continuity: OK — 335515 data blocks, no CIP/DBC discontinuity (1 at stream join, expected)
+build\dist\PinnacleCapture.exe        the GUI
+build\dist\pinnacle-oss-core.dll      the core library
+build\dist\firmware\                  FPGA bitstreams
+build\dist\cli\                       pincli pinanalog pindeck pinlist pinctl
 ```
 
-Cross-check it structurally with an independent tool:
+The device has to be bound to WinUSB, not the vendor driver
+([docs/windows-driver.md](docs/windows-driver.md)). Then either run
+`PinnacleCapture.exe`, or from `build\dist\cli`:
 
-```bash
-python3 tools/dvcheck.py out.dv --duration-seconds 300
+```powershell
+.\pincli.exe -o out.dv -t 300         # DV/HDV capture (.dv, or .ts for HDV)
+.\pinanalog.exe -o out.avi -t 60      # analog capture
+.\pindeck.exe state play wait:5 stop  # deck control
 ```
 
-Note that **the camera emits no timecode in live view** (verified — the SMPTE
-timecode pack is absent and REC DATE/TIME read "no information"), so timecode
-cannot be used to verify continuity here. ffmpeg will print `Detected timecode
-is invalid` once; that is expected and is not a problem with the capture.
+The device needs about 5.5 s of bring-up before the first byte arrives, and the
+camera must actually be transmitting; see [docs/usage.md](docs/usage.md) for how
+to tell a fault from a quiet camera and how to check that nothing was dropped.
 
-### Diagnostics
+## How it is put together
 
-All opt-in; the defaults are the right values.
+```
+PinnacleCapture (WinUI 3)  ──┐
+pinctl                     ──┼──▶  pinnacle-oss-core.dll  (src/api/pin_api.h)
+                             │        └─ session engine (src/engine), file writers (src/sinks)
+pincli, pinanalog, pindeck ──┴──▶  hardware layer (src/core) ──▶ libusb ──▶ device
+```
 
-| variable | effect |
-|---|---|
-| `PINNACLE_PROBE=1` | dump OHCI registers (NodeID, SelfIDCount, IR context state…) after the start sequence |
-| `PINNACLE_QUEUE_DEPTH=<n>` | EP 0x88 transfers in flight (default 32). `1` reproduces the old synchronous loop **and its data loss** |
-| `PINNACLE_STOP_DRAIN=0` | don't drain EP 0x88 during the stop sequence (A/B only — the stop then fails partway) |
-| `PINNACLE_EP84_DRAIN=0` | disable the EP 0x84 status drain (A/B only) |
-| `PINNACLE_DEBUG_EP88=1` | log every EP 0x88 completion's size and arrival time |
-| `PINNACLE_DEBUG_EP84=1` | log every EP 0x84 status record |
-| `PINNACLE_RAW_DUMP=<path>` | dump the raw EP 0x88 stream before reassembly |
-
----
+**The interesting finding:** the FPGA implements a standard OHCI-1394 host
+controller, and EP 0x88 carries its isochronous receive DMA tunnelled over USB.
+The stream is not raw DV: two layers of framing sit on top of the DIF data. Strip
+both and you get a byte-exact DV elementary stream. All endpoints are bulk, so
+there is no isochronous USB at all.
 
 ## Documentation
 
+Everything is indexed in **[docs/README.md](docs/README.md)**. The main pages:
+
 | | |
 |---|---|
-| **[docs/capture-reliability.md](docs/capture-reliability.md)** | **Start here to use it.** Running a capture, telling a device fault from a quiet camera, and proving no data was dropped. |
-| [docs/hdv.md](docs/hdv.md) | HDV over FireWire: what's on the wire, how the `.ts` is produced, and why the DBC check is weak for it. |
-| [docs/startup.md](docs/startup.md) | Every step from plug-in to the first stream byte, and where each value comes from. |
-| [docs/deck-control.md](docs/deck-control.md) | Play/stop/FF/REW over AV/C, and the 1394 transaction layer. |
-| [docs/analog.md](docs/analog.md) | Analog capture: the Capture bitstream, the config-channel opcodes, SAA7113 / AC'97 / capture-block registers, the stream format, and how clocks and A/V sync work. |
-| [docs/analog-notes.md](docs/analog-notes.md) | Earlier notes: the three FPGA bitstreams, the other Marvin models. |
-| [docs/command-channel-findings.md](docs/command-channel-findings.md) | The protocol. Command word format, OHCI register usage, the two layers of EP 0x88 framing, the 1394 connection-management transaction, and what's still open. |
-| [HANDOFF.md](HANDOFF.md) | Overall state of the reverse-engineering effort: what's known about the hardware, what's still missing. |
-| [FEASIBILITY.md](FEASIBILITY.md) | The original plan and phases. |
-| [docs/usb-descriptors.md](docs/usb-descriptors.md) | Full USB descriptor decode. |
-| [docs/linux-capture-setup.md](docs/linux-capture-setup.md) | The usbmon capture rig. |
-| [docs/vm-control.md](docs/vm-control.md) | Driving the Windows VM that runs the vendor driver as a reference. |
-| [docs/capture-tooling.md](docs/capture-tooling.md) | Why the bare-metal Windows USBPcap approach failed. Don't retry it. |
-| [tools/README.md](tools/README.md) | Verification and capture-host scripts. |
-| [traces/README.md](traces/README.md) | What each usbmon trace contains and proves. |
-| [captures/README.md](captures/README.md) | Reference captures made by this driver. |
+| [docs/building.md](docs/building.md) | Build script, output layout, tests, repository layout |
+| [docs/usage.md](docs/usage.md) | Running captures, diagnostics, proving no data was dropped |
+| [docs/hardware.md](docs/hardware.md) | USB descriptors, endpoints, initialisation, what the FPGA is |
+| [docs/protocol.md](docs/protocol.md) | Command word, OHCI access, EP 0x88 framing |
+| [docs/startup.md](docs/startup.md) | Plug-in to first stream byte, step by step |
+| [docs/deck-control.md](docs/deck-control.md) | AV/C deck control |
+| [docs/hdv.md](docs/hdv.md) | HDV capture |
+| [docs/analog.md](docs/analog.md) | Analog capture, other Marvin models, the three bitstreams |
+| [docs/windows-driver.md](docs/windows-driver.md) | Switching the device to WinUSB |
+| [gui/windows/README.md](gui/windows/README.md) | The GUI |
 
-### Layout
+## A note on the FPGA bitstreams
 
-```
-src/core/     pinnacle_device.c   open, bitstream upload, bring-up
-              pinnacle_1394.c     1394 link layer: link start-up, transactions, oPCR, AV/C
-              pinnacle_stream.c   start/stop, queued EP 0x88 read loop
-              dv_reassembler.c    the two framing layers + DIF frame / MPEG2-TS assembly
-              pinnacle_cfg.c      config channel (EP 0x01/0x81): I2C, chip reset, FPGA load
-              pinnacle_analog.c   analog: SAA7113, AC'97, capture block, frame/audio assembly
-              avi_writer.c        OpenDML AVI writer (YUY2 + PCM)
-              protocol_data.h     config-channel sequence still replayed verbatim
-src/cli/      pindeck.c           deck control (play/stop/ff/rew/state/timecode)
-              pincli.c            the capture tool
-              pinanalog.c         analog capture tool
-tools/        dvcheck.py, tscheck.py, ssh helpers, scripts that run on the capture host
-docs/         protocol findings and rig documentation
-```
+`firmware/fpga-ohci.bin` (DV/HDV) and `firmware/fpga-capture.bin` (analog) are
+**Pinnacle's copyright, not ours.** They are static Altera Cyclone EP1C3
+configuration blobs extracted from the vendor driver, and the hardware is inert
+without them. They are included as a pragmatic decision: the device was
+discontinued around 2005, the vendor driver is no longer distributed or
+supported, and without them this repository would be useless to anyone who owns
+the hardware. No claim of ownership is made and no licence is granted by us. If
+the rights holder objects they will be removed and the driver will fall back to
+extracting them from the user's own vendor driver install
+(`scripts/extract-bitstreams.py`). See [firmware/README.md](firmware/README.md).
 
----
-
-## A note on the FPGA bitstream
-
-`traces/fpga-bitstream-candidate.bin` is **Pinnacle's copyright, not ours.**
-It is a static 78,422-byte Altera Cyclone EP1C3 configuration blob (MD5
-`3888c23c9bcc81c88964c45d981a0b68`), extracted from the vendor driver by
-observing what it pushes to the device at init. The hardware is inert without
-it.
-
-It is included here as a pragmatic decision: the device was discontinued around
-2005, the vendor driver is no longer distributed or supported, and without the
-blob this repository is useless to anyone who owns the hardware. No claim of
-ownership is made and no license is granted by us. If the rights holder objects
-it will be removed, and the driver will fall back to extracting it from the
-user's own vendor driver install.
-
-The vendor driver binary (`MarvinBus64.sys`) and installer are **not** included.
+The vendor driver binaries and installer are **not** included.
 
 ## Licence
 
 **GNU Affero General Public License v3.0** ([LICENSE](LICENSE)). If you run a
-modified version of this code as a network service, you must offer its source
-to that service's users.
+modified version of this code as a network service, you must offer its source to
+that service's users.
 
-The FPGA bitstream is **excluded** from that grant — it is not ours to license.
-See the note above.
+The FPGA bitstreams are **excluded** from that grant; they are not ours to
+license. FFmpeg is linked statically under LGPL-2.1+ ([third_party/README.md](third_party/README.md)).

@@ -26,7 +26,7 @@
  *     decode needed.
  *   - DV: libavcodec's dvvideo decoder, one whole reassembled frame in, one
  *     AVFrame out (yuv420p for PAL, yuv411p for NTSC -- dvvideo's own
- *     output format per docs/analog-notes.md and FFmpeg's dv.c).
+ *     output format per docs/analog.md and FFmpeg's dv.c).
  *   - HDV: libavcodec's mpeg2video decoder, fed the video PID's elementary
  *     stream bytes extracted from each picture's TS packets. A GOP-aligned
  *     decode (first request after start/seek needs an I-frame) -- until

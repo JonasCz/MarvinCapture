@@ -226,17 +226,15 @@ static int on_data(const uint8_t *data, size_t len, void *user)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s -o <output> -b <bitstream.bin>\n"
+            "usage: %s -o <output> [-b <bitstream.bin>]\n"
             "\n"
             "  -o, --output <file>      output path (required). Raw DV from a DV\n"
             "                           camera (use .dv), MPEG-2 transport stream\n"
             "                           from an HDV camera (use .ts); the format is\n"
             "                           detected from the stream.\n"
-            "  -b, --bitstream <file>   FPGA bitstream blob, extracted from the\n"
-            "                           user's own vendor driver install/capture\n"
-            "                           (default: traces/fpga-bitstream-candidate.bin\n"
-            "                           relative to the repo root; required if that's\n"
-            "                           not found)\n"
+            "  -b, --bitstream <file>   FPGA bitstream blob (default:\n"
+            "                           firmware/fpga-ohci.bin, relative to the\n"
+            "                           current directory)\n"
             "  -t, --duration <secs>    stop after this many seconds of capture\n"
             "                           (default: until Ctrl+C). Takes the same\n"
             "                           shutdown path as Ctrl+C.\n"
@@ -248,7 +246,7 @@ static void usage(const char *argv0)
 int main(int argc, char **argv)
 {
     const char *output_path = NULL;
-    const char *bitstream_path = "traces/fpga-bitstream-candidate.bin";
+    const char *bitstream_path = "firmware/fpga-ohci.bin";
     long duration_s = 0;
 
     for (int i = 1; i < argc; i++) {

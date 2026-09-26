@@ -24,10 +24,10 @@ if(NOT TARGET pinnacle-oss-core)
     message(FATAL_ERROR "tests/engine_replay needs the pinnacle-oss-core target")
 endif()
 
-set(PIN_TRACES_DIR "${PROJECT_SOURCE_DIR}/traces")
-set(PIN_TRACE_PAL "${PIN_TRACES_DIR}/ep88-sample.bin")           # PAL DV
-set(PIN_TRACE_NTSC "${PIN_TRACES_DIR}/ep88-ntsc-sample.bin")     # NTSC DV
-set(PIN_HDV_CAPTURE "${PROJECT_SOURCE_DIR}/captures/20260925-hdv-5min.ts")
+set(PIN_TRACES_DIR "${PROJECT_SOURCE_DIR}/tests/data")
+set(PIN_TRACE_PAL "${PIN_TRACES_DIR}/ep88-pal.bin")           # PAL DV
+set(PIN_TRACE_NTSC "${PIN_TRACES_DIR}/ep88-ntsc.bin")     # NTSC DV
+set(PIN_HDV_CAPTURE "${PIN_TRACES_DIR}/hdv.ts")
 
 # On Windows, pinnacle-oss-core is a DLL; these test executables live one
 # directory below it (tests/engine_replay/), so the loader won't find it on
@@ -95,7 +95,7 @@ endif()
 
 # Task 3/4: HDV .ts replay and HDV scene split (no spurious cuts). Skips
 # gracefully (exit 0) if the real capture isn't present -- see the test's
-# own header comment and captures/README.md.
+# own header comment and tests/data/README.md.
 pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}")
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

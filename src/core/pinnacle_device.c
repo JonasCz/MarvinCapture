@@ -271,7 +271,7 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
  * 0x81 IN). Distinct from the SAA7113 I2C register writes on this same
  * endpoint pair (those carry a constant 0x4a "slave address" byte) -- these
  * are short firmware handshake packets seen bracketing the bitstream upload
- * in a real cold-boot trace (see docs/command-channel-findings.md). Reply
+ * in a real cold-boot trace (see docs/protocol.md). Reply
  * content isn't currently interpreted, only that the exchange completes. */
 static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
                                           const uint8_t *req, int req_len)

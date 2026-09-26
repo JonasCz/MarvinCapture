@@ -28,12 +28,12 @@ endif()
 
 add_executable(test_dv_rewrap test_dv_rewrap.c)
 target_link_libraries(test_dv_rewrap PRIVATE pinnacle_sinks pinnacle_engine_pure)
-# Uses the developer's own DV traces, which aren't committed (.gitignore).
-if(EXISTS "${PROJECT_SOURCE_DIR}/traces/ep88-sample.bin" AND
-   EXISTS "${PROJECT_SOURCE_DIR}/traces/ep88-ntsc-sample.bin")
+# Uses the small local fixtures in tests/data/, which aren't committed (.gitignore).
+if(EXISTS "${PROJECT_SOURCE_DIR}/tests/data/ep88-pal.bin" AND
+   EXISTS "${PROJECT_SOURCE_DIR}/tests/data/ep88-ntsc.bin")
     add_test(NAME test_dv_rewrap COMMAND test_dv_rewrap
-        "${PROJECT_SOURCE_DIR}/traces/ep88-sample.bin"
-        "${PROJECT_SOURCE_DIR}/traces/ep88-ntsc-sample.bin")
+        "${PROJECT_SOURCE_DIR}/tests/data/ep88-pal.bin"
+        "${PROJECT_SOURCE_DIR}/tests/data/ep88-ntsc.bin")
 endif()
 
 add_executable(test_analog_sinks test_analog_sinks.c)
@@ -46,4 +46,4 @@ add_test(NAME test_analog_sinks COMMAND test_analog_sinks)
 add_executable(test_hdv_rewrap test_hdv_rewrap.c)
 target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
 add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap
-    "${PROJECT_SOURCE_DIR}/captures/20260925-hdv-5min.ts")
+    "${PROJECT_SOURCE_DIR}/tests/data/hdv.ts")

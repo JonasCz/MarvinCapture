@@ -1,23 +1,22 @@
 # --- Vendor binaries -------------------------------------------------------
 # The vendor driver and its installer are Pinnacle's and are NOT redistributed.
-# (The FPGA bitstream is a deliberate exception and IS committed -- see the
-# "A note on the FPGA bitstream" section of README.md.)
+# (The FPGA bitstreams in firmware/ are a deliberate exception -- see
+# firmware/README.md.)
 *.msi
 *.sys
-pinnaclembusb/
 marvin/
+pinnaclembusb/
 
-# --- Large captures and traces ---------------------------------------------
-# usbmon recordings of the vendor driver, raw endpoint dumps, and DV captures.
-# All are the user's own multi-MB..GB recordings; the READMEs describe what
-# each one showed so the findings survive without the files.
+# --- Recordings ------------------------------------------------------------
+# Captured video and USB traces are never committed. tests/data/ holds small
+# local fixtures for the replay tests; see tests/data/README.md.
 *.pcap
 *.pcapng
 *.avi
 *.dv
-captures/*.ts
-traces/ep02-out-payload.bin
-traces/ep88-*.bin
+*.ts
+tests/data/*
+!tests/data/README.md
 
 # --- Build output ----------------------------------------------------------
 build/
@@ -26,7 +25,7 @@ build-*/
 *.a
 *.exe
 
-# --- Vendored FFmpeg (fetched/built by tools/build-ffmpeg.sh) --------------
+# --- Vendored FFmpeg (fetched/built by scripts/build-ffmpeg.sh) ------------
 # Source tarball + extracted tree, and the per-OS/arch build and install
 # directories. None of this is committed; the script re-fetches and
 # re-verifies (sha256) on demand. See third_party/README.md.

@@ -18,14 +18,13 @@
 
 /*
  * Pinnacle 500-USB ("Marvin-Lite") — byte sequences still replayed verbatim
- * from traces/20260922-142720-coldboot-driver-init.pcapng: the config-channel
+ * from a usbmon capture of the vendor driver's cold boot: the config-channel
  * bring-up (EP 0x01) around the FPGA bitstream upload, and the bitstream's
  * chunking.
  *
  * The 1394 start and stop sequences on EP 0x02 used to live here as 232 + 4
  * replayed packets. They are now generated step by step in pinnacle_1394.c
- * and explained in docs/startup.md; git history has the old tables, and
- * tools/seqdecode.py decodes any EP 0x02 trace.
+ * and explained in docs/startup.md; git history has the old tables.
  */
 
 #ifndef PINNACLE_PROTOCOL_DATA_H
@@ -50,7 +49,7 @@ static const unsigned PINNACLE_BITSTREAM_CHUNK_SIZES[] = { 17408, 16384, 16384, 
 #define PINNACLE_BITSTREAM_TOTAL_SIZE 78422
 
 /* 80 bulk-OUT transfers on the low-level config channel (EP 0x01/0x81),
- * captured from traces/20260922-142720-coldboot-driver-init.pcapng, from
+ * captured from the vendor driver's cold boot, from
  * the first byte after SET_INTERFACE selects alt 0 up to (and including)
  * the last one before the FPGA bitstream upload begins. Most of these
  * (the ones with a constant 0x4a second byte) are SAA7113 analog-decoder
@@ -58,7 +57,7 @@ static const unsigned PINNACLE_BITSTREAM_CHUNK_SIZES[] = { 17408, 16384, 16384, 
  * the two 10-byte 0x80-prefixed reads) are unidentified firmware/EEPROM
  * commands. Previously assumed skippable for pure DV capture -- that
  * assumption is unverified and is exactly what this replay tests. See
- * docs/command-channel-findings.md. */
+ * docs/protocol.md. */
 static const pinnacle_pkt_t PINNACLE_CONFIG_PREBITSTREAM_SEQ[] = {
     { .delay_ms = 0, .len = 2, .data = { 0x07, 0x00 } },
     { .delay_ms = 5, .len = 2, .data = { 0x0c, 0x01 } },

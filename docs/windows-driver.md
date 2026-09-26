@@ -1,12 +1,12 @@
 # Windows: switching the 500-USB to WinUSB for development
 
 This machine already has the vendor's **Pinnacle Video Driver** MSI installed
-(`Pinnacle_Video_Driver_64bit.msi`, in the repo root — uninstall entry
+(`Pinnacle_Video_Driver_64bit.msi` — uninstall entry
 `Pinnacle Video Driver 12.1.0.029`, product GUID `{6DE721A5-5E89-4...}`, see
 `driver-status.ps1` output). It owns several driver packages. Only one of them
 touches the actual capture device; the rest are for other Pinnacle hardware
 (Dazzle DVC10x, MovieBox) that also came in the same package. This note is
-concise and command-first; run `tools/windows/driver-status.ps1` any time to
+concise and command-first; run `scripts/driver-status.ps1` any time to
 re-check the state below, it is entirely read-only.
 
 ## 1. What's installed, and what it does
@@ -147,7 +147,7 @@ Two separate risks, both minor here:
 ### What `driver-status.ps1` shows even with the device unplugged
 
 Windows remembers devices it has seen before. Running
-`tools/windows/driver-status.ps1` on this machine — with the 500-USB
+`scripts/driver-status.ps1` on this machine — with the 500-USB
 physically unplugged — still prints two `USB\VID_2304&PID_0213\...` instance
 IDs with `Status: Unknown` (Windows' term for "not currently present, but
 known"). That's expected, not a bug: it's a ghost/ghosted-device entry from a
@@ -165,7 +165,7 @@ the entry is live. If Zadig has never been run, both entries will show
    <https://zadig.akeo.ie/>.
 2. Plug in the Pinnacle 500-USB. Confirm it enumerates as
    `USB\VID_2304&PID_0213` (Device Manager, or
-   `tools/windows/driver-status.ps1`).
+   `scripts/driver-status.ps1`).
 3. Launch Zadig **as Administrator**.
 4. **Options → List All Devices** — check this. Without it, Zadig hides
    devices that already have a driver bound (which this one does, via
@@ -189,7 +189,7 @@ the entry is live. If Zadig has never been run, both entries will show
    generated INF, not the hardware ID it binds to.
 9. Click **Replace Driver** (or **Install Driver** if it shows as unbound).
    Confirm the UAC prompt. This takes 10-30 seconds.
-10. Verify: `tools/windows/driver-status.ps1` should now show `winusb.sys` /
+10. Verify: `scripts/driver-status.ps1` should now show `winusb.sys` /
     `WinUSB` service bound to `USB\VID_2304&PID_0213`, and
     `PinnacleMarvinAVS` should show as not the active driver for that
     instance.
@@ -253,7 +253,7 @@ didn't take, or reverted — rerun `driver-status.ps1` to check.
   reinstalls the vendor driver" failure mode for Zadig-managed devices.
 - This repo: `docs/usb-descriptors.md` (endpoint/transfer-type map),
   `docs/startup.md` (init sequence, confirms single-interface, no
-  host-pushed firmware), `HANDOFF.md` (endpoint roles).
+  host-pushed firmware), `hardware.md` (endpoint roles).
 - This machine, read-only: `pnputil /enum-drivers`, `C:\Windows\INF\oem74.inf`
   /`oem84.inf`/`oem85.inf`/`oem86.inf`/`oem87.inf`, `sc qc`/`sc query`,
   `reg query` on the USB/Media class filter keys, installed-program registry

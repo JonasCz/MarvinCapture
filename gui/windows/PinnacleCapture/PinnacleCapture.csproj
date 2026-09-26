@@ -25,9 +25,9 @@
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
-    <!-- Where pinnacle-oss-core.dll (built by the parallel core/stub workstream) lives.
+    <!-- Where pinnacle-oss-core.dll (built by the top-level CMake build) lives.
          Override with: dotnet build -p:PinnacleCoreDir=C:\path\to\dir -->
-    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\tests\stub\build-stub</PinnacleCoreDir>
+    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\build\core</PinnacleCoreDir>
     <!-- The MinGW-built core needs libwinpthread-1.dll at runtime; copied from here if present. -->
     <PinnacleRuntimeDllDir Condition="'$(PinnacleRuntimeDllDir)' == ''">C:\msys64\ucrt64\bin</PinnacleRuntimeDllDir>
 
@@ -50,10 +50,9 @@
 
   <!--
     Copy pinnacle-oss-core.dll next to the built exe if it exists at build time.
-    This does not fail the build when the DLL is missing (e.g. the parallel
-    stub/core workstream has not produced it yet); the Condition="Exists(...)"
-    just makes the target a no-op in that case, and the wiring is exercised
-    again on every subsequent build once the DLL shows up.
+    This does not fail the build when the DLL is missing (the core has not been
+    built yet); the Condition="Exists(...)" just makes the target a no-op.
+    scripts/build.ps1 builds the core first.
   -->
   <Target Name="CopyPinnacleCore" AfterTargets="Build;Publish">
     <ItemGroup>

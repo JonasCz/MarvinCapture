@@ -19,7 +19,7 @@
 /*
  * ctest: validates dv_audio.c's real SMPTE 314M/IEC 61834 deshuffle
  * sample-for-sample against FFmpeg's own "dv" demuxer, on real captures
- * from captures/ -- not synthetic data. This is the actual correctness
+ * from tests/data/ -- not synthetic data. This is the actual correctness
  * check for the shuffle/expansion dv_audio.h documents as "transcribed
  * from FFmpeg, validated against real captures"; tests/engine/test_dv_audio.c
  * only checks the algorithm is *wired up* correctly (synthetic data at
@@ -41,12 +41,12 @@
  * fraction of skipped frames is asserted small so this still validates
  * virtually the whole file.
  *
- * Traces are the developer's own recordings (captures/, .gitignore'd);
+ * Traces are the developer's own recordings (tests/data/, .gitignore'd);
  * this test exits 0 doing nothing if none are present, like the other
  * trace-dependent tests (test_replay_hdv etc).
  *
- * Coverage today: 48 kHz/16-bit NTSC only -- every .dv file in captures/ is
- * NTSC (see captures/README.md), and none use the 32 kHz/12-bit nonlinear
+ * Coverage today: 48 kHz/16-bit NTSC only -- every .dv file in tests/data/ is
+ * NTSC (see tests/data/README.md), and none use the 32 kHz/12-bit nonlinear
  * mode, so dv_audio.c's 12-bit expansion (dv_audio_12to16()) is NOT
  * validated by this test; see dv_audio.h's file header for what that means.
  */
@@ -182,7 +182,7 @@ static int check_file(const AVInputFormat *dv_fmt, const candidate_t *cand)
     long total = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    /* Every .dv file in captures/ is NTSC (see captures/README.md) --
+    /* Every .dv file in tests/data/ is NTSC (see tests/data/README.md) --
      * unlike pin_session.c's replay_run() (which checks 144000/PAL first
      * and has no other way to tell), try 120000/NTSC first here since a
      * file size that happens to be divisible by both (e.g.
@@ -289,10 +289,7 @@ int main(void)
     }
 
     candidate_t candidates[] = {
-        { "captures/20260922-clean-3s.dv", 0, 1 },
-        { "captures/20260922-verified-16s.dv", 0, 1 },
-        { "captures/20260922-test_clean.dv", 0, 0 }, /* README: "visibly corrupt" */
-        { "captures/20260922-5min-verified.dv", 0, 1 }, /* all 8,967 frames: ~1s, no cap needed */
+        { "tests/data/dv-ntsc.dv", 0, 1 },
     };
     int any_present = 0;
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
@@ -302,7 +299,7 @@ int main(void)
     }
 
     if (!any_present) {
-        printf("test_dv_audio_vs_libavformat: no captures/*.dv present, nothing to validate\n");
+        printf("test_dv_audio_vs_libavformat: no tests/data/dv-ntsc.dv present, nothing to validate\n");
         return 0;
     }
     if (g_failures == 0) {

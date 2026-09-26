@@ -669,7 +669,7 @@ int p1394_avc_cancel(pinnacle_1394_t *l)
  * What MarvinBus64.sys does between selecting alt setting 1 and the first
  * 1394 transaction, as named steps. Each group is sent in one USB transfer,
  * as the vendor driver batches it, with the gaps observed in
- * traces/20260922-142720-coldboot-driver-init.pcapng. Where each value comes
+ * a usbmon capture of the vendor driver's cold boot. Where each value comes
  * from (function addresses, registry defaults) is in docs/startup.md. */
 
 /* FPGA USB-side register 0 (message type 4, index 0). MarvinBus64 keeps a

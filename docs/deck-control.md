@@ -1,23 +1,24 @@
 # Deck control (AV/C over FCP)
 
 **Status (2026-09-25): working.** Tested on a Canon HDV camcorder (company
-ID `0x000085`, 1080i/25 HDV tape) with `build/pindeck`:
+ID `0x000085`, 1080i/25 HDV tape) with `pindeck`:
 
 - Play, Pause, Stop, FF, Rewind, TRANSPORT STATE and TIME CODE all work.
 - Every command is answered on a **single send**, within a few
   milliseconds, and takes effect immediately.
 - That is confirmed independently of the camera's replies by the EP 0x88
   stream: about 3.6 MB/s of HDV while the tape moves, 0 when stopped.
-- Not yet built into `pincli`, and not yet tried with a DV camera.
+- The GUI and `pinctl` use it through the session engine (`pin_deck`);
+  `pincli` does not, and it has not been tried with a DV camera.
 
 The transport lives in the core library:
 [`src/core/pinnacle_1394.c`](../src/core/pinnacle_1394.c) provides
 `p1394_avc()`. It relies on the start-up described in
 [startup.md](startup.md), and the message framing on EP 0x02 / 0x84 is in
-[command-channel-findings.md](command-channel-findings.md).
+[protocol.md](protocol.md).
 
 ```
-$ sudo build/pindeck state play wait:6 timecode pause state ff wait:3 rew stop
+$ pindeck state play wait:6 timecode pause state ff wait:3 rew stop
 device up (5.4 s), camera is node 1
 [  5.652] step state
   <- STABLE          0c 20 c4 60          transport: WIND stop
@@ -54,8 +55,7 @@ The relevant decompile functions:
   `FUN_000354b0` (tcode 9).
 - The IRB table is at VA `0x4c000`.
 
-`tools/fcpdecode.py` decodes this traffic from a usbmon trace, or from
-`pindeck -vv` output.
+`pindeck -vv` prints this traffic.
 
 ## Sending a packet (AT request context)
 
@@ -172,7 +172,7 @@ into those ranges:
 
 ## Tool
 
-`build/pindeck [-b bitstream] [-v|-vv] [-r raw.bin] step...`
+`pindeck [-b bitstream] [-v|-vv] [-r raw.bin] step...`
 
 - It runs the same bring-up as `pincli`, then the steps: `play`, `pause`,
   `stop`, `ff`, `rew`, `state`, `timecode`, `subunits`, `wait:<sec>`,
@@ -185,34 +185,11 @@ into those ranges:
 - `PINNACLE_DEBUG_1394=1|2` logs the link layer. Level 2 adds every EP 0x84
   record and our config ROM.
 
-## Log (including false starts)
+## Open items
 
-1. **Camera not on the bus.** Every FCP write came back `evt_missing_ack`,
-   and SelfIDCount showed one node. The cable was unplugged.
-2. **Nothing completes.** The AT context stuck at run|wake|active. The
-   cause was the 16-byte write-response header.
-3. **Stale replies.** The camera re-sent its answers to the replay's
-   inquiries.
-   - Worked around at first by answering all of them and waiting for quiet.
-   - Removed at the root later, together with the replay.
-4. **"Responses one behind."** Three suspects were tried first:
-   - A USB/FPGA flush problem: poking with register reads and 1394 reads
-     had no effect.
-   - The vendor's constant tlabel.
-   - Block versus quadlet writes.
-
-   None changed anything. A double send was then used as a workaround. The
-   actual cause was the replayed start sequence (see Lessons); it went away
-   when the replay was replaced.
-5. **Also tried, not needed:** vendor-style AT chaining, and response expiry
-   timestamps.
-
-## Next steps
-
-- Wire `p1394_avc()` into `pincli`, so it can start the tape itself
-  (`--play`, stopping at the end). During capture, EP 0x84 is read by the
-  capture event loop, so FCP responses need to be handled from there.
+- Wire `p1394_avc()` into `pincli` (`--play`, stopping at the end). During
+  capture EP 0x84 is read by the capture event loop, so FCP responses need to
+  be handled from there.
 - Try a DV camera.
-- Consider sending the AV/C inquiries Windows sent (UNIT INFO, plug signal
-  format) to detect DV versus HDV, and the camera's capabilities, before
-  capture.
+- Send the AV/C inquiries Windows sent (UNIT INFO, plug signal format) to
+  detect DV versus HDV and the camera's capabilities before capture.

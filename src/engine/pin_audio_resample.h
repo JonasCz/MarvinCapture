@@ -21,7 +21,7 @@
  * stereo s16 PCM, used to bring DV audio (48/44.1/32 kHz) and HDV's decoded
  * mp2 audio to the fixed 48 kHz the monitor ring / meters expect (pin_api.h's
  * pin_monitor_read()). The project's static FFmpeg build has swresample
- * disabled (see tools/build-ffmpeg.sh), so this exists instead of swr_convert.
+ * disabled (see scripts/build-ffmpeg.sh), so this exists instead of swr_convert.
  *
  * Not a high-quality resampler (no anti-aliasing filter -- linear
  * interpolation between the two nearest input samples), which is an

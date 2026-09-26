@@ -53,7 +53,7 @@
  * frame whose header doesn't match any entry ("stype NN is invalid" in the
  * log) yields no audio stream for that one frame even though its video is
  * otherwise fine and gets written normally. This does happen occasionally
- * on real tapes (a handful of frames in the traces/ep88-*.bin samples this
+ * on real tapes (a handful of frames in the tests/data/ep88-*.bin samples this
  * project ships hit it) -- almost certainly genuine header noise on the
  * source tape rather than something this driver introduces, since
  * dv_reassembler already validated the frame's length. The output stays
@@ -173,7 +173,7 @@ static int64_t mem_seek(void *opaque, int64_t offset, int whence)
  * matters because the per-frame demux doesn't reliably hand back exactly
  * one frame's worth: a frame with header noise can yield none (see the
  * file's "Known limitation" comment), and -- observed on
- * traces/ep88-ntsc-sample.bin's 32 kHz footage -- an occasional frame
+ * tests/data/ep88-ntsc.bin's 32 kHz footage -- an occasional frame
  * yields *two* packets on the same stream, together holding roughly twice
  * a normal frame's bytes, apparently a quirk of how libavformat/dv.c
  * segments that particular frame's AAUX data rather than this driver's
@@ -296,7 +296,7 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
      * already-open track's apts silently fell behind the video timeline
      * with no padding -- and every later frame's audio in that track then
      * landed at the wrong offset in the output, a real A/V sync bug (seen
-     * on traces/ep88-sample.bin PAL). Padding here for every established
+     * on tests/data/ep88-pal.bin PAL). Padding here for every established
      * track on every single frame, whether or not this frame's demux
      * mentions it, is what keeps that invariant unconditional. */
     for (int pair = 0; pair < 2 && p->header_written; pair++) {
@@ -330,7 +330,7 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
          * measured to come back from an AVI round-trip in the *wrong* byte
          * count when read back (more silence than was ever written, and
          * misaligned with the next frame's real audio) -- reproducible on
-         * traces/ep88-ntsc-sample.bin's 32 kHz audio, where a 1-sample pad
+         * tests/data/ep88-ntsc.bin's 32 kHz audio, where a 1-sample pad
          * packet immediately preceding a real packet on the same stream is
          * exactly the case that triggered it. Whether that's an
          * interleaving quirk in libavformat/avienc.c's buffering of very

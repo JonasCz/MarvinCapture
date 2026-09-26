@@ -201,14 +201,14 @@ static int parse_hex(const char *s, uint8_t *out, int max)
 static void usage(const char *argv0)
 {
     fprintf(stderr,
-            "usage: %s [-b bitstream] [-r raw.bin] [-v|-vv] step...\n"
+            "usage: %s [-b bitstream (default firmware/fpga-ohci.bin)] [-r raw.bin] [-v|-vv] step...\n"
             "steps: play pause stop ff rew state timecode subunits wait:<sec> raw:<hex> reg:<offset>\n"
             "       e.g.  %s state play wait:5 stop state\n", argv0, argv0);
 }
 
 int main(int argc, char **argv)
 {
-    const char *bitstream = "traces/fpga-bitstream-candidate.bin";
+    const char *bitstream = "firmware/fpga-ohci.bin";
     const char *raw_path = NULL;
     int verbose = 0;
     int first = 1;

@@ -38,7 +38,7 @@
  *     lock knows the file is stale and removes it.
  *   - macOS: the same file scheme, in $TMPDIR (cleared at reboot).
  *
- * See docs/analog-notes.md and the plan for the multi-model background;
+ * See docs/analog.md and the plan for the multi-model background;
  * nothing here is specific to the 500-USB.
  */
 

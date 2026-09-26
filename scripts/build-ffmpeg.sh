@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# tools/build-ffmpeg.sh
+# scripts/build-ffmpeg.sh
 #
 # Downloads, verifies and builds a minimal, static, LGPL-only FFmpeg for
 # pinnacle-oss-core. Only the codecs/muxers/demuxers/parsers/protocol that
@@ -9,8 +9,8 @@
 # Works on MSYS2 UCRT64 (Windows), Linux and macOS.
 #
 # Usage:
-#   tools/build-ffmpeg.sh            # download, verify, configure, build, install
-#   tools/build-ffmpeg.sh --clean    # remove the build/install dirs for this OS/arch first
+#   scripts/build-ffmpeg.sh            # download, verify, configure, build, install
+#   scripts/build-ffmpeg.sh --clean    # remove the build/install dirs for this OS/arch first
 #
 # Output goes to third_party/ffmpeg-<os>-<arch>/ (the install prefix), with
 # sources fetched into third_party/ffmpeg-src/. Neither is committed to git.

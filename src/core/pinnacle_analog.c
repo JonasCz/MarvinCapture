@@ -19,7 +19,7 @@
 /*
  * Analog capture. Every register value here comes from MarvinAVS64.sys
  * (the SAA7113, AC'97 and capture-block objects) and was checked against
- * traces/20260925-154656-analog-plug-virtualdub-preview.pcapng; see
+ * a usbmon capture of the vendor driver in VirtualDub; see
  * docs/analog.md for the function-by-function map.
  */
 

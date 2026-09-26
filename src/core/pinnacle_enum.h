@@ -23,7 +23,7 @@
  *
  * Model support lives in one table (pinnacle_model_table) so adding a
  * future Marvin model is a one-line change here, never something baked
- * into a specific unit's data path -- see docs/analog-notes.md, "Models
+ * into a specific unit's data path -- see docs/analog.md, "Models
  * (from marvinavs64.inf)", for where the PID/name list comes from.
  */
 

@@ -14,12 +14,9 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-# Top-level build. Supersedes src/Makefile (kept working for now, see its
-# header) as the build that also targets Windows: this project is built on
-# Linux (the capture rig) with plain gcc/make today, and on Windows with
-# MSYS2 UCRT64 gcc from here on, since a WinUI 3 GUI is coming and its native
-# core needs to build there too. See docs and HANDOFF.md for the hardware
-# background; this file only wires up the build.
+# Top-level build: the native core (pinnacle-oss-core), the CLIs and the ctest
+# suite. scripts/build.ps1 drives this and then builds the GUI; see
+# docs/building.md.
 
 cmake_minimum_required(VERSION 3.20)
 project(pinnacle-oss C)
@@ -33,7 +30,7 @@ set(CMAKE_C_EXTENSIONS ON)   # gnu11, not c11: strict c11 hides POSIX
                               # declarations (nanosleep, clock_gettime, ...)
                               # on glibc/mingw unless _DEFAULT_SOURCE or
                               # similar is defined; gnu11 defines it for us,
-                              # matching src/Makefile's -std=gnu11.
+                              # matching the -std=gnu11 the project has always used.
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type" FORCE)
@@ -56,8 +53,8 @@ add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
 target_include_directories(pinnacle_core PUBLIC ${CMAKE_SOURCE_DIR}/src/core)
 target_link_libraries(pinnacle_core PUBLIC PkgConfig::LIBUSB Threads::Threads)
 
-# --- CLIs. Kept building (and kept, full stop -- see the plan) as low-level
-# test tools once a session-oriented pinctl exists. ---
+# --- Low-level CLIs: talk to src/core directly (capture, analog, deck
+# control, device list). pinctl (below) is the API-level one. ---
 add_executable(pincli src/cli/pincli.c)
 target_link_libraries(pincli PRIVATE pinnacle_core)
 

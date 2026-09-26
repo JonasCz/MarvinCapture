@@ -26,9 +26,9 @@
  *     timecode to go on -- see pin_session.c's HDV branch of dv_on_unit()
  *     -- so a real, single, uninterrupted recording must stay one file).
  *
- * Skips (prints a message, exits 0) if captures/20260925-hdv-5min.ts isn't
+ * Skips (prints a message, exits 0) if tests/data/hdv.ts isn't
  * present -- it's the user's own recording, gitignored (see
- * captures/README.md). A live capture is ~1 GB; only the first ~30 MB
+ * tests/data/README.md). A live capture is ~1 GB; only the first ~30 MB
  * (a few seconds of 1080i/25 HDV, comfortably under this test's time
  * budget at replay_run_ts()'s ~33 ms-per-picture pacing) is copied into a
  * scratch file and replayed, so this checks "no spurious split over the
@@ -69,7 +69,7 @@ int main(int argc, char **argv)
     CHECK(argc == 2);
     const char *cap_path = argv[1];
     if (!pin_test_file_exists(cap_path)) {
-        printf("SKIP: %s not present (see captures/README.md)\n", cap_path);
+        printf("SKIP: %s not present (see tests/data/README.md)\n", cap_path);
         return 0;
     }
 

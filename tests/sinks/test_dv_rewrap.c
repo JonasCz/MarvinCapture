@@ -17,8 +17,8 @@
  */
 
 /*
- * ctest: feeds a raw EP 0x88 DV trace (traces/ep88-sample.bin = PAL,
- * traces/ep88-ntsc-sample.bin = NTSC with 32 kHz 12-bit audio) through
+ * ctest: feeds a raw EP 0x88 DV trace (tests/data/ep88-pal.bin = PAL,
+ * tests/data/ep88-ntsc.bin = NTSC with 32 kHz 12-bit audio) through
  * dv_reassembler, then through sink_rewrap's DV_AVI and DV_MOV paths, and
  * checks the results by reopening them with libavformat:
  *   - stream count/codec/dimensions/field order/SAR/title

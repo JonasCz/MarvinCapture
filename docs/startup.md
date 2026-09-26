@@ -15,7 +15,7 @@ from Windows. It is now generated step by step in
 - `MarvinBus64.sys`, the vendor's virtual 1394 bus driver. It was decompiled
   with Ghidra; addresses below are Ghidra `FUN_` labels.
 - `MarvinAVS64.sys`, the vendor's USB function driver.
-- The cold-boot trace `traces/20260922-142720-coldboot-driver-init.pcapng`.
+- A usbmon trace of the vendor driver cold-booting the device (not kept in the repo).
 - The OHCI 1.1 and IEEE 1394a / 1212 / IEC 61883-1 specifications.
 
 **Confidence labels:**
@@ -34,7 +34,7 @@ from Windows. It is now generated step by step in
      I2C address `0x4a`; that address is in the code of `MarvinAVS64.sys`,
      which uses `0x48` only for the older 0206 model.
    - Removing the whole sequence stops the device coming up. That was tested
-     earlier: see [command-channel-findings.md](command-channel-findings.md).
+     earlier: see [protocol.md](protocol.md).
    - Two of the exchanges read the device's configuration memory:
 
      | request | reply bytes 4..11 on the development unit | use |
@@ -52,7 +52,7 @@ from Windows. It is now generated step by step in
      different bitstreams (`FUN_0002c280`), and we checked that this one is
      byte-identical to our file.
    - The other two, for analog capture and for render, are described in
-     [analog-notes.md](analog-notes.md).
+     [analog.md](analog.md#background-the-vendor-driver-other-marvin-models-the-three-bitstreams).
 4. **Wait 1.5 s**, then `06 00` → `06 01` (FPGA up).
 5. **Select alt setting 1.**
 
@@ -244,7 +244,7 @@ bitstream upload and the 1.5 s FPGA settle time.
   register may identify the hardware revision; that is worth checking on a
   second unit.
 - The config-channel opcodes other than `80` (read) and `05`/`06`
-  (ready). See [analog-notes.md](analog-notes.md).
+  (ready). See [analog.md](analog.md#background-the-vendor-driver-other-marvin-models-the-three-bitstreams).
 
 ## Verification (2026-09-25, Canon HDV, after a replug)
 

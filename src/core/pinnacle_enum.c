@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <string.h>
 
-/* See docs/analog-notes.md, "Models (from marvinavs64.inf)". Only the PID
+/* See docs/analog.md, "Models (from marvinavs64.inf)". Only the PID
  * -> name/support mapping lives here; nothing about a specific unit
  * (serial, calibration, I2C address, FX2 firmware file, ...) belongs in
  * this table -- those stay wherever the code that needs them already

@@ -102,8 +102,8 @@ typedef struct {
 } pinnacle_analog_t;
 
 /* Brings the device into analog capture mode: powers it up if it is cold,
- * loads the Capture bitstream (capture_bitstream_path, extracted from the
- * user's own driver, see tools/extract-bitstreams.py), selects alt 3,
+ * loads the Capture bitstream (capture_bitstream_path; shipped as
+ * firmware/fpga-capture.bin, see firmware/README.md), selects alt 3,
  * initialises the decoder and the audio codec and applies cfg. dev must be
  * open (pinnacle_open) but needs no pinnacle_init_hardware. */
 pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *dev,

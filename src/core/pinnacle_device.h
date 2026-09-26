@@ -18,7 +18,7 @@
 
 /*
  * Core USB access to the Pinnacle 500-USB ("Marvin-Lite", 2304:0213).
- * See ../../HANDOFF.md for the reverse-engineering background.
+ * See docs/hardware.md for the reverse-engineering background.
  *
  * This header intentionally exposes only device init/teardown. Streaming
  * (start/stop/read) lives in pinnacle_stream.h so a future GUI can link the
@@ -158,13 +158,13 @@ pinnacle_status_t pinnacle_read_guid(pinnacle_device_t *dev, uint32_t *guid_hi, 
 
 /* Replays the config-channel bring-up sequence, the FPGA bitstream upload,
  * and selects the operational alt setting. bitstream_path must point to the
- * raw .rbf blob extracted from the user's own vendor driver install (see
- * traces/README.md) — never redistribute it.
+ * raw .rbf blob (firmware/fpga-ohci.bin; see firmware/README.md for where
+ * it comes from and its licence).
  *
  * The config-channel sequence (which includes the SAA7113 analog-decoder
  * I2C init) turned out to be required even for pure DV capture: skipping it
  * leaves the command channel (EP 0x02) accepting only 2 writes before it
- * NAKs indefinitely. See docs/command-channel-findings.md. */
+ * NAKs indefinitely. See docs/protocol.md. */
 pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bitstream_path);
 
 #ifdef __cplusplus

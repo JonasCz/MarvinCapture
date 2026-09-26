@@ -17,7 +17,7 @@
 # File-output layer: pin_writer (bounded queue + writer thread) and the
 # pin_sink_t implementations (raw passthrough, analog AVI, analog FFV1/MKV,
 # DV/HDV rewrap). Links the minimal static FFmpeg built by
-# tools/build-ffmpeg.sh (see third_party/README.md).
+# scripts/build-ffmpeg.sh (see third_party/README.md).
 
 if(WIN32)
     set(PIN_FFMPEG_OS "windows")
@@ -35,7 +35,7 @@ if(NOT PIN_FFMPEG_ARCH AND CMAKE_SIZEOF_VOID_P EQUAL 8)
     # Some Windows generator/toolchain combinations (seen with MSYS2 UCRT64
     # gcc + Ninja) leave both CMAKE_SYSTEM_PROCESSOR and
     # CMAKE_HOST_SYSTEM_PROCESSOR blank. x86_64 is the only target this
-    # project's tools/build-ffmpeg.sh and CI produce today; override with
+    # project's scripts/build-ffmpeg.sh and CI produce today; override with
     # -DPIN_FFMPEG_PREFIX=... for anything else (e.g. arm64 macOS/Windows).
     set(PIN_FFMPEG_ARCH "x86_64")
 endif()
@@ -51,7 +51,7 @@ endif()
 # the processor variables can come back blank and the cache then held a
 # useless path for good.
 set(PIN_FFMPEG_PREFIX "" CACHE PATH
-    "Prefix of the minimal static FFmpeg (empty: third_party/ffmpeg-<os>-<arch> from tools/build-ffmpeg.sh)")
+    "Prefix of the minimal static FFmpeg (empty: third_party/ffmpeg-<os>-<arch> from scripts/build-ffmpeg.sh)")
 if(NOT PIN_FFMPEG_PREFIX)
     set(PIN_FFMPEG_PREFIX "${CMAKE_SOURCE_DIR}/third_party/ffmpeg-${PIN_FFMPEG_OS}-${PIN_FFMPEG_ARCH}")
 endif()
@@ -59,9 +59,9 @@ endif()
 set(_pin_ffmpeg_pkgconfig "${PIN_FFMPEG_PREFIX}/lib/pkgconfig")
 if(NOT EXISTS "${_pin_ffmpeg_pkgconfig}")
     message(FATAL_ERROR
-        "src/sinks needs the minimal FFmpeg built by tools/build-ffmpeg.sh at "
+        "src/sinks needs the minimal FFmpeg built by scripts/build-ffmpeg.sh at "
         "${PIN_FFMPEG_PREFIX} (looked for ${_pin_ffmpeg_pkgconfig}). Run "
-        "tools/build-ffmpeg.sh, or set -DPIN_FFMPEG_PREFIX=... to an existing build.")
+        "scripts/build-ffmpeg.sh, or set -DPIN_FFMPEG_PREFIX=... to an existing build.")
 endif()
 
 find_package(PkgConfig REQUIRED)

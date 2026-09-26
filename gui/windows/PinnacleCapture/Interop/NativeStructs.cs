@@ -103,7 +103,7 @@ public unsafe struct PinCaptureOpts
     public int Passes;
     public int StartDeck;
     public int KeepRaw;
-    // Appended by the engine workstream (ABI v2; the stub accepts both sizes):
+    // Appended in ABI v2:
     public int RewindFirst;     // "Play and capture": rewind to the start of the tape first
     public uint FirstNumber;    // >= 1: every file is "base-NNNN.ext", counting up per scene from here
 

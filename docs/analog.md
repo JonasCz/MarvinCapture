@@ -6,15 +6,16 @@ AVI with uncompressed YUY2 video and 48 kHz stereo PCM. NTSC, S-video and
 the other colour standards are implemented from the vendor driver's tables
 but have not been tested against a real source yet.
 
-The background notes that led here are in [analog-notes.md](analog-notes.md).
+How the vendor driver, the other Marvin models and the three FPGA
+bitstreams fit together is in the last section.
 
 **Sources**, as before:
 
-- `MarvinAVS64.sys` from the user's own driver install, decompiled with
-  Ghidra on the capture host and never committed. `FUN_xxxxx` names below
-  are Ghidra's, at the addresses of that file.
-- `traces/20260925-154656-analog-plug-virtualdub-preview.pcapng`, a usbmon
-  trace of the vendor driver doing a VirtualDub preview: plug-in, OHCI
+- `MarvinAVS64.sys` from the vendor driver install, decompiled with Ghidra
+  (not in this repo). `FUN_xxxxx` names below are Ghidra's, at the addresses
+  of that file.
+- A usbmon trace of the vendor driver doing a VirtualDub preview (not kept
+  in the repo): plug-in, OHCI
   bitstream, switch to the Capture bitstream, 40 s of PAL preview. usbmon
   lost most of the EP 0x82 video payload (the host's IOMMU merges the
   scatter-gather buffers of big URBs, and usbmon cannot read those), but
@@ -23,9 +24,8 @@ The background notes that led here are in [analog-notes.md](analog-notes.md).
 ## Quick start
 
 ```bash
-python3 tools/extract-bitstreams.py marvin/marvinavs64.sys ~/bitstreams   # once
-sudo ./build/pinanalog -b ~/bitstreams/fpga-capture.bin -o out.avi -t 60
-sudo ./build/pinanalog -b ~/bitstreams/fpga-capture.bin --status        # signal check
+pinanalog -o out.avi -t 60           # uses firmware/fpga-capture.bin
+pinanalog --status                   # signal check
 ```
 
 Options: `-i composite|svideo`, `-s auto|pal|ntsc|pal-m|pal-n|pal-60|ntsc-443|ntsc-j|secam`
@@ -34,8 +34,7 @@ Options: `-i composite|svideo`, `-s auto|pal|ntsc|pal-m|pal-n|pal-60|ntsc-443|nt
 
 The progress line counts **missing**, **truncated** and **audio missing**
 frames. A clean capture shows zeros for all three, and `pinanalog` exits
-with status 4 if any is non-zero. `tools/analogcheck.py` checks a raw dump
-(`--raw FILE`) independently.
+with status 4 if any is non-zero.
 
 ## How analog differs from DV
 
@@ -206,7 +205,7 @@ never stops, and the headers just change from `... 00 00 00 00` to
 
 ## Clocks, frame drops and A/V sync
 
-Measured over 10-40 s runs (`tools/analogcheck.py`) and over the 41 s of
+Measured over 10-40 s runs and over the 41 s of
 the vendor trace, where the numbers were identical:
 
 - Device ticks per video frame: **400,043.55**, with a residual under 1
@@ -293,3 +292,105 @@ e.g. `ffmpeg -i in.avi -vf setfield=tff,bwdif ...` or
 - Audio input level (the codec's line-in gain, reg 0x10) is fixed at 0 dB.
 - Loop-through to the analog outputs (`LoopThrough`) and analog output
   (Render bitstream) are not implemented.
+
+---
+
+## Background: the vendor driver, other Marvin models, the three bitstreams
+
+What turned up in the vendor driver (`MarvinBus64.sys`, `MarvinAVS64.sys`,
+unpacked from the vendor MSI and read in Ghidra; none of that is in this
+repo) while this driver was being written.
+
+**Confidence labels:** **code** = read directly from the vendor driver;
+**inferred** = derived from nearby code plus general knowledge; **guess** =
+plausible, no direct evidence.
+
+### Driver stack
+
+| file | what it is |
+|---|---|
+| `marvinavs64.cab` → **`MarvinAVS64.sys`** | The USB function driver for all Marvin models. It is an AVStream capture filter plus a crossbar filter, it talks to the USB stack itself, and it owns the FPGA bitstream load and (presumably) the config channel. **This is where analog lives.** |
+| `MarvinUsb.ax` | the DirectShow proxy / property pages for it |
+| `marvinbus64.sys` | A virtual 1394 bus (`root\MarvinBus`) layered on top, for the DV/HDV path. It contains no analog, AV/C or I2C code (**code**, grepped exhaustively). |
+| `bender64.sys` / `pclebend64.inf` | Pinnacle 1394 support, not analysed. `\Device\Pcle1394` is referenced by `MarvinAVS64.sys`. |
+| `dvc64.cab` → `em*64.sys` | **Not ours.** An Empia EM2821 driver for the Dazzle DVC100 (`USB\VID_2304&PID_021A`), shipped in the same MSI. |
+
+### Models (from `marvinavs64.inf`)
+
+| PID | internal name | product |
+|---|---|---|
+| 0206 | Marvin-classic | MovieBox Deluxe |
+| 0212 | Marvin-CR | **700-USB** (more inputs and outputs) |
+| 0213 | Marvin-Lite | **500-USB** (this project) |
+| 0223 | Marvin-510 | 510-USB |
+| 0224 | Marvin-710 | 710-USB |
+
+Differences visible in code:
+
+- **Decoder I2C address.** The video decoder is at I2C `0x4a` on 0213 and
+  the later models, and at `0x48` only on 0206 (**code**, in a crossbar
+  object constructor in `MarvinAVS64.sys`).
+- **Chip objects are data-driven.** A per-device capability word selects
+  which chip objects get instantiated. It has three nibbles: decoder type,
+  and two other categories. **code**, structure only; the values were not
+  decoded.
+- **FX2 firmware file per model.** Each model family has its own:
+  `Marvin_000.bix`, `MarvinCR_000.bix`, `MarvinPro_000.bix`, overridable via
+  the registry values `FileMarvinFX2`, `FileMarvinFX2CR` and
+  `FileMarvinFX2Pro` (**code**, `FUN_0002bf8c`).
+  - Our device never has FX2 firmware uploaded, so the 500-USB presumably
+    boots its FX2 from EEPROM. Worth rechecking on other models.
+- **Unit-specific identity** comes from the device's configuration memory,
+  via config-channel reads `80 <index> 08`. Index 3 is the 1394 GUID and
+  index 0 is another 8-byte ID ([startup.md](startup.md)). Anything that
+  identifies a unit, and possibly its revision, should come from there
+  rather than from constants.
+- **PHY ports.** On the 500-USB, `MarvinBus64` disables PHY ports 1 and 2
+  (only port 0 is wired). A 700-USB may wire more; do not assume.
+
+**For future multi-model support:** keep PID-dependent choices in one table
+(decoder I2C address, FX2 firmware, which inputs exist, PHY ports), keyed by
+PID and possibly by the status and ID reads above.
+
+### Three FPGA bitstreams: the key to analog
+
+`MarvinAVS64.sys` (`FUN_0002c280`) loads one of **three different
+78,422-byte bitstreams**, depending on what the device is to do (**code**).
+Each one is embedded in the driver and can be overridden by a file in
+`system32\drivers` named by a registry value.
+
+| mode | embedded at (VA) | MD5 | registry override |
+|---|---|---|---|
+| OHCI (1394, DV/HDV) | `0x4aa70` | `3888c23c…` = **identical to the bitstream pincli uploads** | `FileFloydOHCI` |
+| Render (output to TV / analog out) | `0x5dcd0` | `cacaa36d…` | `FileFloydRender` |
+| Capture (analog in) | `0x70f30` | `280bacc6…` | `FileFloydCapture` |
+
+("Floyd" appears to be the FPGA's name.)
+
+- The Render and Capture blobs differ from the OHCI one in about 41 KB and
+  45 KB respectively, so they are genuinely different designs, not
+  variants.
+- Before any bitstream is loaded, the driver requires the config-channel
+  `05 00` → `05 01` ready reply (**code**).
+- `scripts/extract-bitstreams.py MarvinAVS64.sys outdir/` writes all three
+  from a copy of the vendor driver, checking each MD5. The OHCI and Capture
+  ones ship in `firmware/` (see its README for the licence caveat).
+
+**Consequence:** analog capture is **not** a mode switch inside the running
+DV design. The device is re-initialised with the Capture bitstream. The
+FPGA then presumably exposes a completely different register map and
+stream, and **none of the OHCI/1394 machinery applies**. The "other hardware
+back-end" in MarvinBus64 (register names such as `Isoch rx fw Config` and
+`USB ep flush`) belongs to a different generation of Marvin FPGA, not to
+the analog mode.
+
+### Mode and analog settings in `MarvinAVS64.sys` (registry-backed properties)
+
+| name | what we know |
+|---|---|
+| `CaptureVideoSource`, `CaptureVideoStandard`, `CaptureAudioSource`, `ColorModeCapture` | Named, persisted properties. Not yet traced to bytes on the wire. The INF exposes only one crossbar pin ("Analog Audio In"), so **video input selection (composite / S-video) is most likely a SAA7113 register setting**: register 0x02, input mode AI11..AI24 (**inferred**). |
+| `LoopThrough` / `UseNativeMode` | An analog pass-through switch. It cross-connects the video decoder object to the video encoder object (monitoring on a TV) and matches the encoder's video standard to what the decoder detected (**code**, at vtable-call level). |
+| `VcrMode` | Restored together with the decoder's picture settings. Probably the SAA7113 VCR/"VTR" timing mode for tape sources (**guess**). |
+| `DenyLoading1394BusDriver` | An on/off flag. Probably suppresses the virtual 1394 bus, i.e. forces analog-only use (**guess**). |
+| `MARVIN_VIDEODECODER`, `MARVIN_VIDEOENCODER`, `MARVIN_AC97_AUDIO`, `MARVIN_ASIC_AUDIO`, `MARVIN_PRO_AUDIO` | Keys under which chip-object settings are stored. So there is an AC'97 codec, and/or audio handled in the FPGA ("ASIC"), plus a video encoder for the outputs. |
+| `CaptureAudio*`, `OutputAudioLevel*`, `PlaybackAudioLevel`, `SampleCorrectionNtsc44K`, `MaxPendingCapture*/Render*`, `MinBuffers*TillStart`, `OverrideBlankingArea*` | Audio and streaming tunables. |

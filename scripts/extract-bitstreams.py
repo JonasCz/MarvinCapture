@@ -11,7 +11,7 @@
 driver MarvinAVS64.sys (from Pinnacle_Video_Driver_64bit.msi ->
 Data1.cab -> marvinavs64.cab). Never redistribute the output.
 
-    python3 tools/extract-bitstreams.py MarvinAVS64.sys [outdir]
+    python3 scripts/extract-bitstreams.py MarvinAVS64.sys [outdir]
 
 MarvinAVS64.sys (FUN_0002c280) loads one of three 78,422-byte bitstreams
 depending on what the device is to do:
@@ -21,9 +21,9 @@ depending on what the device is to do:
     capture  analog capture
 
 The offsets below are for the driver version dated 2007-05-09 (the one in
-the MSI in this repo); each blob is checked against a known MD5 so a
+the vendor MSI); each blob is checked against a known MD5 so a
 different version fails loudly instead of producing garbage. See
-docs/analog-notes.md.
+docs/analog.md.
 """
 import hashlib, os, struct, sys
 

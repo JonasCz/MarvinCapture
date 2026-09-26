@@ -49,7 +49,8 @@ static void on_sigint(int sig)
 static void usage(void)
 {
     fprintf(stderr,
-            "usage: pinanalog -b capture-bitstream.bin [options]\n"
+            "usage: pinanalog [options]\n"
+            "  -b FILE                 Capture FPGA bitstream (default firmware/fpga-capture.bin)\n"
             "  -o FILE.avi             write YUY2 + PCM AVI (otherwise just count)\n"
             "  -i composite|svideo     input (default composite)\n"
             "  -s pal|ntsc|pal-m|pal-n|pal-60|ntsc-443|ntsc-j|secam|auto  (default auto)\n"
@@ -109,7 +110,7 @@ static int raw_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
  *
  * The USB thread only copies into this queue; the disk is written from a
  * second thread, so a filesystem stall cannot starve the transfer queue
- * (the lesson from DV capture, docs/capture-reliability.md). The queue holds
+ * (the lesson from DV capture, docs/usage.md). The queue holds
  * about 5 s of video. */
 
 #define QUEUE_ITEMS 256
@@ -220,7 +221,7 @@ static int on_audio(const pinnacle_audio_block_t *b, void *user)
 
 int main(int argc, char **argv)
 {
-    const char *bitstream = NULL, *raw_path = NULL, *out_path = NULL;
+    const char *bitstream = "firmware/fpga-capture.bin", *raw_path = NULL, *out_path = NULL;
     double seconds = 0;
     int status_only = 0, auto_std = 1;
     pinnacle_analog_config_t cfg;

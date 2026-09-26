@@ -24,8 +24,8 @@ if(NOT EXISTS "${EXE}")
     message(FATAL_ERROR "replay_reassembler not found at ${EXE}")
 endif()
 if(NOT EXISTS "${INPUT}")
-    message(FATAL_ERROR "trace sample not found at ${INPUT} -- traces/ep88-*.bin are "
-                         "gitignored (large recordings); see traces/README.md")
+    message(FATAL_ERROR "trace sample not found at ${INPUT} -- tests/data/ep88-*.bin are "
+                         "gitignored (large recordings); see tests/data/README.md")
 endif()
 
 execute_process(
