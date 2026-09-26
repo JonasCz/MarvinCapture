@@ -37,7 +37,8 @@ extern "C" {
 
 typedef struct {
     int scene_split;   /* append -NNNN */
-    unsigned scene_index; /* 1-based when scene_split is set */
+    int always_number; /* append -NNNN even without scene_split */
+    unsigned scene_index; /* 1-based when scene_split / always_number is set */
     unsigned pass;      /* 1 = no "-pass-N" suffix; >=2 adds it */
 } pin_naming_opts_t;
 

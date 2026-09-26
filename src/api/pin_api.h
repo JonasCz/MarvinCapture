@@ -316,6 +316,10 @@ typedef struct {
     int rewind_first;           /* DV/HDV: with start_deck, REWIND to the start of the tape,
                                     wait for BOT, then PLAY, then capture ("Play and capture"
                                     now rewinds first). Appended field, ABI-compatible. */
+    unsigned first_number;      /* 0 = legacy naming (plain "base.ext"; "-NNNN" only with
+                                    scene_split, from 1). >= 1: every file is numbered
+                                    "base-NNNN.ext", starting at this number and counting up
+                                    per scene; the caller picks an unused number. Appended. */
 } pin_capture_opts_t;
 
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);

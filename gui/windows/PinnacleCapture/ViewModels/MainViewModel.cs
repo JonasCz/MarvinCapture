@@ -622,6 +622,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var o = Native.CaptureOptsDefaults();
         bool analog = !IsDvInput;
         o.Path = analog ? AnalogOutputPath : DvOutputPath;
+        o.FirstNumber = NextFileNumber(o.Path);
 
         if (AnalogFormat is not null) o.FormatAnalog = AnalogFormat.Format;
         if (DvSettings.SelectedFormat is not null) o.FormatDv = DvSettings.SelectedFormat.Format;
@@ -639,6 +640,54 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.StartDeck = startDeck ? 1 : 0;
         o.RewindFirst = rewindFirst ? 1 : 0; // "Play and capture": start of tape, then play
         return o;
+    }
+
+    /// <summary>
+    /// Every capture file is "name-NNNN.ext" (scene splitting or not). Returns the
+    /// number after the highest one already used for this name, in any format.
+    /// </summary>
+    private uint NextFileNumber(string path)
+    {
+        try
+        {
+            var dir = System.IO.Path.GetDirectoryName(path);
+            var name = System.IO.Path.GetFileName(path);
+            if (string.IsNullOrEmpty(name))
+            {
+                return 1;
+            }
+            var ext = System.IO.Path.GetExtension(name).TrimStart('.');
+            var known = AnalogFormats.Concat(DvSettings.Formats).Concat(HdvSettings.Formats);
+            if (ext.Length > 0 && known.Any(f => string.Equals(f.Extension, ext, StringComparison.OrdinalIgnoreCase)))
+            {
+                name = System.IO.Path.GetFileNameWithoutExtension(name);
+            }
+            if (string.IsNullOrEmpty(dir))
+            {
+                dir = ".";
+            }
+            if (!System.IO.Directory.Exists(dir))
+            {
+                return 1;
+            }
+            var re = new System.Text.RegularExpressions.Regex(
+                "^" + System.Text.RegularExpressions.Regex.Escape(name) + @"-(\d+)\.[^.]+$",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            uint max = 0;
+            foreach (var f in System.IO.Directory.EnumerateFiles(dir))
+            {
+                var m = re.Match(System.IO.Path.GetFileName(f));
+                if (m.Success && uint.TryParse(m.Groups[1].Value, out var n) && n > max)
+                {
+                    max = n;
+                }
+            }
+            return max + 1;
+        }
+        catch (Exception)
+        {
+            return 1;
+        }
     }
 
     public PinStatus CheckOutput(in PinCaptureOpts o, out PinOutputCheck check)

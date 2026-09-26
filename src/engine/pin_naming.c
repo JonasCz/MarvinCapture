@@ -95,15 +95,16 @@ int pin_naming_build(const char *base_no_ext, const pin_naming_opts_t *opts, con
         return -1;
     if (opts->pass == 0)
         return -1;
-    if (opts->scene_split && opts->scene_index == 0)
+    int numbered = opts->scene_split || opts->always_number;
+    if (numbered && opts->scene_index == 0)
         return -1;
 
     int n;
-    if (opts->pass == 1 && !opts->scene_split) {
+    if (opts->pass == 1 && !numbered) {
         n = snprintf(out, out_size, "%s.%s", base_no_ext, ext);
-    } else if (opts->pass == 1 && opts->scene_split) {
+    } else if (opts->pass == 1 && numbered) {
         n = snprintf(out, out_size, "%s-%04u.%s", base_no_ext, opts->scene_index, ext);
-    } else if (opts->pass != 1 && !opts->scene_split) {
+    } else if (opts->pass != 1 && !numbered) {
         n = snprintf(out, out_size, "%s-pass-%u.%s", base_no_ext, opts->pass, ext);
     } else {
         n = snprintf(out, out_size, "%s-pass-%u-%04u.%s", base_no_ext, opts->pass,

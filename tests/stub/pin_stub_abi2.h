@@ -30,9 +30,10 @@
 #define PIN_OPTS_V1_SIZE     (offsetof(pin_capture_opts_t, keep_raw) + sizeof(int))
 #define PIN_OPTS_REWIND_OFF  PIN_OPTS_V1_SIZE
 #define PIN_OPTS_V2_SIZE     (PIN_OPTS_V1_SIZE + sizeof(int))
+#define PIN_OPTS_V3_SIZE     (PIN_OPTS_V2_SIZE + sizeof(int)) /* + first_number */
 
 static inline int pin_opts_size_ok(uint32_t sz) {
-    return sz == PIN_OPTS_V1_SIZE || sz == PIN_OPTS_V2_SIZE;
+    return sz == PIN_OPTS_V1_SIZE || sz == PIN_OPTS_V2_SIZE || sz == PIN_OPTS_V3_SIZE;
 }
 
 /* rewind_first, or 0 for a v1 caller. */

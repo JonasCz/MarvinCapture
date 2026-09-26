@@ -763,10 +763,16 @@ static void format_ext(pin_format_t f, char *out, size_t out_size)
     out[out_size - 1] = 0;
 }
 
+static unsigned first_scene_number(const pin_session_t *s)
+{
+    return s->capture_opts.first_number ? s->capture_opts.first_number : 1;
+}
+
 static void open_sink_for_scene(pin_session_t *s)
 {
     pin_naming_opts_t nopts = {
         .scene_split = s->capture_opts.scene_split,
+        .always_number = s->capture_opts.first_number != 0,
         .scene_index = s->scene_index,
         .pass = s->pass_index,
     };
@@ -1191,7 +1197,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     format_ext(s->active_format, ext, sizeof(ext));
     pin_naming_strip_extension(s->capture_opts.path, ext, s->naming_base, sizeof(s->naming_base));
     strncpy(s->naming_ext, ext, sizeof(s->naming_ext) - 1);
-    s->scene_index = 1;
+    s->scene_index = first_scene_number(s);
     s->pass_index = 1;
     s->unit_index = 0;
     s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
@@ -1443,7 +1449,7 @@ static void dv_tick(void *user)
                 pin_deck_async_start(&s->deck_async, &s->link, node, PIN_DECK_CMD_PLAY,
                                       pin_session_now());
             s->deck_busy = 1;
-            s->scene_index = 1;
+            s->scene_index = first_scene_number(s);
             open_sink_for_scene(s);
             set_state(s, PIN_STATE_CAPTURING);
             pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
@@ -1833,7 +1839,7 @@ static void replay_handle_eot(pin_session_t *s)
         pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         s->pass_index++;
         s->pass++;
-        s->scene_index = 1;
+        s->scene_index = first_scene_number(s);
         open_sink_for_scene(s);
         s->deck = PIN_DECK_PLAYING;
         s->capture_start_s = pin_session_now();
@@ -2432,11 +2438,13 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
 
     char base[PIN_PATH_MAX];
     pin_naming_strip_extension(o->path, ext, base, sizeof(base));
-    pin_naming_opts_t nopts = { .scene_split = 0, .scene_index = 1, .pass = 1 };
+    pin_naming_opts_t nopts = { .scene_split = 0, .always_number = o->first_number != 0,
+                                .scene_index = o->first_number ? o->first_number : 1, .pass = 1 };
     pin_naming_build(base, &nopts, ext, out->first_path, sizeof(out->first_path));
 
     char first_match[PIN_PATH_MAX];
-    int coll = pin_naming_collides(base, ext, first_match, sizeof(first_match));
+    /* numbered naming: the caller already picked an unused number */
+    int coll = o->first_number ? 0 : pin_naming_collides(base, ext, first_match, sizeof(first_match));
     out->collision = coll > 0;
 
     /* directory to check free space in: dirname(first_path) */
