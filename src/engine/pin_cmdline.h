@@ -67,8 +67,15 @@ typedef enum {
 #define PIN_CMDLINE_STR 512
 
 typedef struct {
-    char device[PIN_CMDLINE_STR];   /* an ID string, or "first" */
+    char device[PIN_CMDLINE_STR];   /* an id string, a serial, "first", or "replay:<basename>" */
     int device_set;
+    /* --device <value> was an existing file: device above was set to
+     * "replay:<basename>" and the full path that basename refers to is
+     * here, for the caller (pin_api.c's pin_launch_parse(), which can reach
+     * pin_session_set_replay_file()) to register as the replay source --
+     * this hardware-free module can't call it itself, see pin_cmdline.c. */
+    int device_is_replay_file;
+    char device_replay_path[PIN_CMDLINE_STR];
 
     pin_cmdline_input_t input;
     int input_set;

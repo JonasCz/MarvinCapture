@@ -298,3 +298,7 @@ int pin_monitor_read(pin_session_t *s, int16_t *out, int max_frames) {
     pthread_mutex_unlock(&s->ring_lock);
     return n;
 }
+
+int pin_monitor_available(pin_session_t *s) {
+    return s && s->monitor_enabled ? 4800 : 0;
+}

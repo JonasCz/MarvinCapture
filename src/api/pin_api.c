@@ -202,16 +202,13 @@ int pin_enumerate(pin_device_info_t *out, int max)
     }
     int total_out = total;
 
-    /* Replay virtual device: PIN_REPLAY=<file>, or settings key
-     * "Replay.file", shows up as one extra "replay:<basename>" entry in
-     * state READY -- see the plan's "Replay/virtual device". */
+    /* Replay virtual device: PIN_REPLAY=<file>, or pin_set_replay_file(),
+     * shows up as one extra "replay:<basename>" entry in state READY -- see
+     * the plan's "Replay/virtual device". */
     const char *replay = getenv("PIN_REPLAY");
-    char settings_replay[PIN_PATH_MAX] = { 0 };
-    if (!replay || !replay[0]) {
-        if (pin_settings_get("replay.file", settings_replay, sizeof(settings_replay)) == PIN_OK &&
-            settings_replay[0])
-            replay = settings_replay;
-    }
+    char global_replay[PIN_PATH_MAX] = { 0 };
+    if ((!replay || !replay[0]) && pin_session_get_replay_file(global_replay, sizeof(global_replay)) == 0)
+        replay = global_replay;
     if (replay && replay[0]) {
         total_out++;
         if (written < max) {
@@ -234,6 +231,12 @@ int pin_enumerate(pin_device_info_t *out, int max)
     }
     return total_out;
 }
+
+void pin_set_replay_file(const char *path) { pin_session_set_replay_file(path); }
+
+int pin_devices_wait(int timeout_ms) { return pin_session_devices_wait(timeout_ms); }
+
+void pin_devices_wake(void) { pin_session_devices_wake(); }
 
 /* ========================================================================
  * sessions
@@ -408,7 +411,9 @@ void pin_format_window_title(const pin_status_snapshot_t *st, const char *device
     char tc[32] = "";
     if (st->timecode[0])
         snprintf(tc, sizeof(tc), "%s ", st->timecode);
-    snprintf(out, cap, "%s%s\xe2\x80\x94 %s", dot, tc, device_name ? device_name : "Pinnacle 500-USB");
+    /* the dash only separates something from the name */
+    snprintf(out, cap, "%s%s%s%s", dot, tc, (dot[0] || tc[0]) ? "\xe2\x80\x94 " : "",
+             device_name ? device_name : "Pinnacle 500-USB");
 }
 
 int pin_poll_event(pin_session_t *s, pin_event_t *out)
@@ -520,6 +525,11 @@ void pin_monitor_enable(pin_session_t *s, int enabled) { pin_session_monitor_ena
 int pin_monitor_read(pin_session_t *s, int16_t *out, int max_frames)
 {
     return pin_session_monitor_read(s, out, max_frames);
+}
+
+int pin_monitor_available(pin_session_t *s)
+{
+    return pin_session_monitor_available(s);
 }
 
 /* ========================================================================
@@ -635,6 +645,8 @@ pin_status_t pin_launch_parse(int argc, const char *const *argv, pin_launch_t *o
     }
 
     strncpy(out->device, opts.device, sizeof(out->device) - 1);
+    if (opts.device_is_replay_file && opts.device_replay_path[0])
+        pin_session_set_replay_file(opts.device_replay_path);
     if (opts.input_set) {
         out->has_input = 1;
         out->input = opts.input == PIN_CMDLINE_INPUT_SVIDEO ? PIN_INPUT_SVIDEO

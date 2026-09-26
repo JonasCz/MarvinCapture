@@ -91,9 +91,9 @@ public partial class App : Application
         try
         {
             uint v = Interop.Native.ApiVersion();
-            if (v != 1)
+            if (v != 2)
             {
-                problem = $"pinnacle-oss-core.dll implements API version {v}, but this app needs version 1.";
+                problem = $"pinnacle-oss-core.dll implements API version {v}, but this app needs version 2.";
             }
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)

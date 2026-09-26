@@ -70,6 +70,32 @@ static int parse_bool_flagword(const char *s, int *out)
     return -1;
 }
 
+/* --device <value>: "first", a device id ("usb:1-8"), a device serial (16
+ * hex chars, matched case-insensitively -- resolved later, against the live
+ * device list, by pin_session.c's resolve_device_id()), or a path to an
+ * existing file. This hardware-free module has no session/replay state of
+ * its own to register a file with, so it only detects the file (a plain
+ * fopen, like every other existing-file check in this codebase) and leaves
+ * opts->device_replay_path for the caller to act on. */
+static void set_device(pin_cmdline_opts_t *opts, const char *value)
+{
+    opts->device_is_replay_file = 0;
+    opts->device_replay_path[0] = '\0';
+    FILE *f = fopen(value, "rb");
+    if (f) {
+        fclose(f);
+        const char *base = value;
+        for (const char *p = value; *p; p++)
+            if (*p == '/' || *p == '\\')
+                base = p + 1;
+        snprintf(opts->device, sizeof(opts->device), "replay:%s", base);
+        snprintf(opts->device_replay_path, sizeof(opts->device_replay_path), "%s", value);
+        opts->device_is_replay_file = 1;
+    } else {
+        snprintf(opts->device, sizeof(opts->device), "%s", value);
+    }
+}
+
 static int parse_uint(const char *s, unsigned *out)
 {
     if (!*s)
@@ -148,7 +174,7 @@ static void load_preset_file(const char *path, pin_cmdline_opts_t *opts)
 
     const char *v;
     if (!opts->device_set && (v = pin_settings_get_string(&s, "Preset", "device", NULL))) {
-        snprintf(opts->device, sizeof(opts->device), "%s", v);
+        set_device(opts, v);
     }
     if (!opts->input_set && (v = pin_settings_get_string(&s, "Preset", "input", NULL))) {
         pin_cmdline_input_t in;
@@ -215,7 +241,7 @@ int pin_cmdline_parse(int argc, char **argv, pin_cmdline_opts_t *opts, char *err
             i++; /* already applied above */
         } else if (strcmp(a, "--device") == 0) {
             NEED_VALUE();
-            snprintf(opts->device, sizeof(opts->device), "%s", val);
+            set_device(opts, val);
             opts->device_set = 1;
             i++;
         } else if (strcmp(a, "--input") == 0) {
@@ -311,7 +337,9 @@ int pin_cmdline_help(char *buf, size_t buf_size)
 {
     static const char *help_text =
         "Presets:\n"
-        "  --device <id|first>      device to use (default: first)\n"
+        "  --device <value>         \"first\", a device id (e.g. usb:1-8), a device\n"
+        "                           serial (16 hex chars), or a path to an existing\n"
+        "                           file to replay (default: first)\n"
         "  --input <dv|svideo|composite>\n"
         "  --output <path>\n"
         "  --format <key>           e.g. dv, dv-avi, dv-mov, hdv-ts, hdv-mov, avi, ffv1-mkv\n"

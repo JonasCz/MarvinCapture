@@ -21,6 +21,7 @@
 #include "pinnacle_lock.h"
 #include "pin_log.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -128,13 +129,23 @@ static pinnacle_enum_state_t classify_openability(libusb_device *dev)
 }
 #endif
 
+/* One enumeration at a time per process, on one long-lived context: a GUI
+ * thread and the pin_devices_wait() watcher may both enumerate, and
+ * concurrent libusb_init()/libusb_exit() churn on Windows crashed inside
+ * libusb. The context is never exited (process lifetime, no device state). */
+static pthread_mutex_t g_enum_mtx = PTHREAD_MUTEX_INITIALIZER;
+static libusb_context *g_enum_ctx;
+
 int pinnacle_enumerate(pinnacle_enum_entry_t *out, int max)
 {
-    libusb_context *ctx = NULL;
-    if (libusb_init(&ctx) != 0) {
+    pthread_mutex_lock(&g_enum_mtx);
+    if (!g_enum_ctx && libusb_init(&g_enum_ctx) != 0) {
+        g_enum_ctx = NULL;
+        pthread_mutex_unlock(&g_enum_mtx);
         pin_logf(PIN_LOG_WARN, "pinnacle_enumerate: libusb_init failed\n");
         return 0;
     }
+    libusb_context *ctx = g_enum_ctx;
 
     libusb_device **list = NULL;
     ssize_t n = libusb_get_device_list(ctx, &list);
@@ -177,6 +188,6 @@ int pinnacle_enumerate(pinnacle_enum_entry_t *out, int max)
 
     if (list)
         libusb_free_device_list(list, 1);
-    libusb_exit(ctx);
+    pthread_mutex_unlock(&g_enum_mtx);
     return count;
 }

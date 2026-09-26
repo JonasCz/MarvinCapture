@@ -69,7 +69,7 @@
 extern "C" {
 #endif
 
-#define PIN_API_VERSION 1
+#define PIN_API_VERSION 2
 
 #define PIN_PATH_MAX 1024 /* bytes of UTF-8, including the terminator */
 #define PIN_NAME_MAX 64
@@ -130,8 +130,32 @@ typedef struct {
 
 /* Lists devices without opening them. Cheap enough to call on every OS
  * device-change notification. Fills up to max entries and returns how many
- * exist (which may exceed max). Each out[i].size must be set by the caller. */
+ * exist (which may exceed max). Each out[i].size must be set by the caller.
+ * Includes the virtual replay device (id "replay:<basename>") whenever the
+ * PIN_REPLAY environment variable or pin_set_replay_file() names a file. */
 PIN_API int pin_enumerate(pin_device_info_t *out, int max);
+
+/* Sets (or, with NULL/"", clears) the process-wide replay source: a file
+ * pin_enumerate() lists as a virtual "replay:<basename>" device and
+ * pin_open() can open by that id (or by the full path). Lets a GUI's "Open
+ * a capture file..." replace the old PIN_REPLAY environment variable /
+ * settings-key mechanism. Not persisted; set again after every restart. */
+PIN_API void pin_set_replay_file(const char *path);
+
+/* Blocks until the device set, or any known device's cross-process lock
+ * state (Ready/Preparing/In use -- see pin_device_info_t.state), may have
+ * changed, so a GUI needs no polling loop. Returns 1 if something may have
+ * changed (re-call pin_enumerate() to see what), 0 on timeout, <0 on error.
+ * Several hotplug events in quick succession (Windows in particular fires
+ * more than one per physical plug) are coalesced into a single return.
+ * Safe to call from one thread at a time per process; a second concurrent
+ * call is not supported. */
+PIN_API int pin_devices_wait(int timeout_ms);
+
+/* Makes a pending/future pin_devices_wait() return 0 (timeout) at once;
+ * for clean shutdown of a thread blocked in it. Safe to call any time,
+ * including with no wait outstanding. */
+PIN_API void pin_devices_wake(void);
 
 /* ---- sessions ---------------------------------------------------------- */
 
@@ -154,7 +178,15 @@ typedef enum {
 } pin_input_t;
 
 /* Takes the device (cross-process lock), starts the worker thread. Does no
- * slow hardware work; call pin_set_input() to bring the device up. */
+ * slow hardware work; call pin_set_input() to bring the device up.
+ *
+ * device_id may be: NULL/"first" (the first ready device, or the PIN_REPLAY
+ * env var / pin_set_replay_file() source if set); a pin_device_info_t.id
+ * exactly as pin_enumerate() reports it (e.g. "usb:1-8"); a device's serial
+ * (pin_device_info_t.serial, 16 hex chars, matched case-insensitively) when
+ * no id matches it literally; "replay:<basename>" for the configured replay
+ * file; or a path to an existing file, which is equivalent to calling
+ * pin_set_replay_file() with it first and then opening it by name. */
 PIN_API pin_status_t pin_open(const char *device_id, pin_session_t **out);
 
 /* Stops any capture (finalising files), releases the device. Blocks until
@@ -457,11 +489,22 @@ PIN_API void pin_yuv_to_rgb_matrix(pin_matrix_t m, int full_range, float out[12]
 /* ---- audio monitoring --------------------------------------------------- */
 
 /* When enabled the core keeps a short ring of 48 kHz 16-bit stereo PCM of
- * what is being captured / previewed. The GUI's audio output pulls from it. */
+ * what is being captured / previewed -- analog line-in, DV (extracted from
+ * the DIF audio blocks) and HDV (the TS's MPEG-1 Layer II audio PID
+ * decoded), all resampled to 48 kHz if the source wasn't already. The
+ * GUI's audio output pulls from it, and can be a dumb pump: the core
+ * itself bounds the ring's latency so a GUI that reads a little slowly
+ * doesn't build up an ever-growing delay -- once the buffered amount
+ * exceeds ~200 ms, the oldest frames are dropped down to ~80 ms before
+ * the next pin_monitor_read() copies out of it. */
 PIN_API void pin_monitor_enable(pin_session_t *s, int enabled);
 
 /* Reads up to max_frames interleaved stereo frames; returns frames read. */
 PIN_API int pin_monitor_read(pin_session_t *s, int16_t *out, int max_frames);
+
+/* Non-blocking. Frames currently buffered (before the latency bound above
+ * would trim them on the next read) -- lets a GUI decide how much to pull. */
+PIN_API int pin_monitor_available(pin_session_t *s);
 
 /* ---- settings ----------------------------------------------------------- */
 

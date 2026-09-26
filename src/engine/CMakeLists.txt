@@ -21,11 +21,13 @@
 
 add_library(pinnacle_engine_pure STATIC
     dv_subcode.c
+    dv_audio.c
     hdv_aux.c
     pin_scene.c
     pin_naming.c
     pin_settings.c
     pin_cmdline.c
+    pin_audio_resample.c
 )
 
 target_include_directories(pinnacle_engine_pure PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -49,11 +51,13 @@ function(pinnacle_engine_test name)
 endfunction()
 
 pinnacle_engine_test(test_dv_subcode)
+pinnacle_engine_test(test_dv_audio)
 pinnacle_engine_test(test_hdv_aux)
 pinnacle_engine_test(test_pin_scene)
 pinnacle_engine_test(test_pin_naming)
 pinnacle_engine_test(test_pin_settings)
 pinnacle_engine_test(test_pin_cmdline)
+pinnacle_engine_test(test_pin_audio_resample)
 
 # pinnacle_engine itself (pin_session/pin_deck/pin_preview) is defined in the
 # top-level CMakeLists.txt, not here: it needs pinnacle_sinks, and

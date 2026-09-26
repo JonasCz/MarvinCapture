@@ -34,7 +34,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(HasSelectedDevice))]
     private DeviceItemViewModel? _selectedDevice;
 
-    [ObservableProperty] private bool _noDevices = true;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DeviceSelectEnabled))]
+    private bool _noDevices = true;
+
+    /// <summary>The device picker: fixed while capturing, and disabled outright when there is nothing to pick.</summary>
+    public bool DeviceSelectEnabled => !IsCapturing && !NoDevices;
 
     public bool HasSelectedDevice => SelectedDevice is not null;
 
@@ -44,7 +49,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle), nameof(CaptureButtonText), nameof(CaptureButtonGlyph),
                               nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled),
-                              nameof(PrimaryDvTitle), nameof(PrimaryDvSubtitle), nameof(PrimaryDvGlyph),
+                              nameof(PrimaryDvTitle), nameof(PrimaryDvHelp), nameof(PrimaryDvGlyph), nameof(DeviceSelectEnabled),
                               nameof(DeckTransportEnabled), nameof(DeckStopEnabled))]
     private bool _isCapturing;
 
@@ -70,9 +75,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>STOP: while capturing (it ends the capture) or whenever the transport is usable.</summary>
     public bool DeckStopEnabled => IsCapturing ? CanStop : PlayAndCaptureEnabled;
 
-    public string PrimaryDvTitle => IsCapturing ? "Stop capture" : "Play and capture";
-    public string PrimaryDvSubtitle => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds, plays and records the tape";
-    public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE768"; // Stop / Play
+    public string PrimaryDvTitle => IsCapturing ? "Stop capture" : "Automatic rewind & capture";
+    public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
+    public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE896"; // Stop / Download
 
     public string CaptureButtonText => IsCapturing ? "Stop capture" : "Capture";
 
@@ -119,6 +124,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnSelectedStandardChanged(StdItem? value)
     {
+        if (value is not null)
+        {
+            SaveSetting("gui.std", ((int)value.Std).ToString(CultureInfo.InvariantCulture));
+        }
         if (value is not null && Session is { IsInvalid: false } && !_loading)
         {
             Report(Native.SetStandard(Session, value.Std), "Set standard");
@@ -129,17 +138,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public ObservableCollection<ControlSliderViewModel> PictureSliders { get; } = new();
 
-    /// <summary>Summary for the collapsed "Picture adjustments" expander.</summary>
-    public string PictureSummary
-    {
-        get
-        {
-            var changed = PictureSliders.Where(sl => sl.Value != sl.Def && !string.IsNullOrEmpty(sl.Label)).ToList();
-            return changed.Count == 0
-                ? "All at default"
-                : string.Join(", ", changed.Select(sl => $"{sl.Label} {sl.Value}"));
-        }
-    }
     public ControlSliderViewModel AudioGain { get; }
 
     public ObservableCollection<FormatItem> AnalogFormats { get; } = new();
@@ -149,6 +147,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private FormatItem? _analogFormat;
 
     [ObservableProperty] private string _analogTitle = "";
+
+    partial void OnAnalogTitleChanged(string value) => SaveSetting("gui.title_analog", value);
     [ObservableProperty] private string _analogOutputPath = "";
 
     public bool AnalogTitleEnabled => AnalogFormat?.SupportsTitle ?? false;
@@ -191,7 +191,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public KindSettingsViewModel DvSettings { get; }
     public KindSettingsViewModel HdvSettings { get; }
 
+    /// <summary>DV / HDV file-options tab. Follows the detected stream; remembered for the next start.</summary>
     [ObservableProperty] private int _selectedKindTabIndex;
+
+    partial void OnSelectedKindTabIndexChanged(int value) =>
+        SaveSetting("gui.last_kind", value.ToString(CultureInfo.InvariantCulture));
 
     [ObservableProperty] private PinDeckState _deckState = PinDeckState.Unknown;
     [ObservableProperty] private bool _isRewChecked;
@@ -217,7 +221,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty] private string _noVideoText = "No device open";
 
-    private readonly IAudioMonitorService _audio = new NullAudioMonitorService();
+    private readonly IAudioMonitorService _audio = new WasapiAudioMonitorService();
 
     public string MuteGlyph => IsMuted ? "\uE74F" : "\uE767";     // Mute / Volume
     public string MuteActionName => IsMuted ? "Unmute" : "Mute";  // what a click does
@@ -231,8 +235,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (Session is { IsInvalid: false })
         {
             // The core only keeps the PCM monitor ring filled while monitoring
-            // is wanted. Actual playback is Phase 10 (IAudioMonitorService).
+            // is wanted; no audio stream is held open while muted.
             Native.MonitorEnable(Session, !value);
+            if (value) _audio.Stop(); else _audio.Start();
         }
     }
 
@@ -293,6 +298,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private double _audioPeakLeft = MeterFloorDb;
     [ObservableProperty] private double _audioPeakRight = MeterFloorDb;
     [ObservableProperty] private string _audioPeakText = "L — R —";
+    [ObservableProperty] private double _audioHoldLeft = MeterFloorDb;
+    [ObservableProperty] private double _audioHoldRight = MeterFloorDb;
+    private readonly PeakHold _holdLeft = new(MeterFloorDb), _holdRight = new(MeterFloorDb);
     [ObservableProperty] private string _windowTitle = "Pinnacle Capture";
     [ObservableProperty] private int _tapePercent = -1;
     [ObservableProperty] private string _lastLogLine = "";
@@ -348,17 +356,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             PictureSliders.Add(new ControlSliderViewModel(c, OnSliderChanged));
         }
         AudioGain = new ControlSliderViewModel(PinControl.AudioGain, OnSliderChanged) { IsDb = true };
-        foreach (var sl in PictureSliders)
-        {
-            sl.PropertyChanged += (_, e) =>
-            {
-                if (e.PropertyName is nameof(ControlSliderViewModel.Value) or nameof(ControlSliderViewModel.Def)
-                    or nameof(ControlSliderViewModel.Label))
-                {
-                    OnPropertyChanged(nameof(PictureSummary));
-                }
-            };
-        }
 
         Standards.Add(new StdItem(PinStd.Auto, "Auto"));
         for (int i = 1; i < (int)PinStd.Count; i++)
@@ -391,6 +388,24 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             Native.SetControl(Session, c, value);
         }
+        SaveSetting($"gui.control_{(int)c}", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    /// <summary>Re-applies the last-used proc-amp / gain values to a freshly opened device.</summary>
+    private void ApplySavedControls()
+    {
+        if (Session is not { IsInvalid: false })
+        {
+            return;
+        }
+        foreach (var slider in PictureSliders.Append(AudioGain))
+        {
+            var saved = LoadSetting($"gui.control_{(int)slider.Control}");
+            if (int.TryParse(saved, NumberStyles.Integer, CultureInfo.InvariantCulture, out var v))
+            {
+                Native.SetControl(Session, slider.Control, v);
+            }
+        }
     }
 
     // ================================================================== enumeration / open
@@ -414,6 +429,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
         }
         NoDevices = Devices.Count == 0;
+        if (Session is null)
+        {
+            NoVideoText = StatusShortText = NoDevices ? "No device connected" : "No device open";
+        }
 
         if (keepId is not null)
         {
@@ -431,7 +450,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         DeviceItemViewModel? pick = null;
         if (!string.IsNullOrEmpty(preferredId) && preferredId != "first")
         {
-            pick = Devices.FirstOrDefault(d => d.Id == preferredId && d.IsUsable);
+            // --device: an id, a serial, or a replay file (the core lists that as "replay:<name>")
+            pick = Devices.FirstOrDefault(d => d.IsUsable && (d.Id == preferredId ||
+                       string.Equals(d.Serial, preferredId, StringComparison.OrdinalIgnoreCase)));
         }
         if (pick is null && preferredId != "first")
         {
@@ -481,11 +502,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         _appliedAspect = null;
         ApplyPreviewAspect();
         Native.MonitorEnable(Session, !IsMuted);
+        var s = Session;
+        _audio.SetSource((buf, max) => Native.MonitorRead(s, buf, max), on => Native.MonitorEnable(s, on));
+        _audio.IsMuted = IsMuted;
+        if (!IsMuted)
+        {
+            _audio.Start();
+        }
         Report(Native.SetInput(Session, SelectedInput), "Prepare device");
         if (SelectedStandard is not null)
         {
             Native.SetStandard(Session, SelectedStandard.Std);
         }
+        ApplySavedControls();
         RefreshControls();
         NoVideoText = "Preparing device…";
         PushOutputHint();
@@ -514,6 +543,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
         _openedDeviceId = null;
+        _audio.Stop();
+        _audio.SetSource(null, null); // never call into a closed session
         Session.Dispose(); // pin_close: blocks until any capture is finalised
         Session = null;
         SessionState = PinState.Closed;
@@ -684,12 +715,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         AudioPeakLeft = Math.Clamp(st.AudioPeakDb0, MeterFloorDb, 0);
         AudioPeakRight = Math.Clamp(st.AudioPeakDb1, MeterFloorDb, 0);
+        AudioHoldLeft = _holdLeft.Push(AudioPeakLeft);
+        AudioHoldRight = _holdRight.Push(AudioPeakRight);
         AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
 
         TapePercent = st.TapePercent;
         if (_lastStreamKind != st.StreamKind)
         {
             _lastStreamKind = st.StreamKind;
+            if (st.StreamKind is PinKind.Dv or PinKind.Hdv)
+            {
+                SelectedKindTabIndex = st.StreamKind == PinKind.Hdv ? 1 : 0;
+            }
             ApplyPreviewAspect();
             PushOutputHint();
         }
@@ -851,6 +888,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveSetting($"gui.passes_{p}", ((int)k.Passes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.idle_{p}", ((int)k.IdleStopMinutes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.aspect_{p}", k.AspectIndex.ToString(CultureInfo.InvariantCulture));
+        SaveSetting($"gui.title_{p}", k.Title);
     }
 
     private static int LoadInt(string key, int fallback) =>
@@ -867,6 +905,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             IsMuted = LoadInt("gui.muted", 1) != 0;
             AnalogAspectIndex = Math.Clamp(LoadInt("gui.aspect_analog", 0), 0, 2);
             AnalogOutputPath = LoadSetting("gui.output_analog", DefaultOutput("analog"));
+            AnalogTitle = LoadSetting("gui.title_analog");
+            SelectedKindTabIndex = Math.Clamp(LoadInt("gui.last_kind", 0), 0, 1);
+            _lastStreamKind = SelectedKindTabIndex == 1 ? PinKind.Hdv : PinKind.Dv;
+            int std = LoadInt("gui.std", (int)PinStd.Auto);
+            SelectedStandard = Standards.FirstOrDefault(x => (int)x.Std == std) ?? Standards[0];
             DvOutputPath = LoadSetting("gui.output_dv", DefaultOutput("tape"));
 
             int fa = LoadInt("gui.format_analog", -1);
@@ -888,6 +931,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 k.Passes = Math.Max(1, LoadInt($"gui.passes_{p}", 1));
                 k.IdleStopMinutes = Math.Max(0, LoadInt($"gui.idle_{p}", 5));
                 k.AspectIndex = Math.Clamp(LoadInt($"gui.aspect_{p}", 0), 0, 2);
+                k.Title = LoadSetting($"gui.title_{p}");
             }
         }
         finally
@@ -973,7 +1017,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         return st;
     }
 
-    public void Dispose() => CloseSession();
+    public void Dispose()
+    {
+        CloseSession();
+        _audio.Dispose();
+    }
 }
 
 public sealed partial class EngineEventArgs : EventArgs
@@ -987,5 +1035,31 @@ public sealed partial class EngineEventArgs : EventArgs
         Kind = kind;
         A = a;
         Text = text;
+    }
+}
+
+/// <summary>Highest value of the last 10 s, for the meters' peak-hold tick.</summary>
+public sealed class PeakHold
+{
+    private static readonly long WindowMs = 10_000;
+    private readonly double _floor;
+    private readonly System.Collections.Generic.Queue<(long T, double V)> _samples = new();
+
+    public PeakHold(double floor) => _floor = floor;
+
+    public double Push(double value)
+    {
+        long now = Environment.TickCount64;
+        _samples.Enqueue((now, value));
+        while (_samples.Count > 0 && now - _samples.Peek().T > WindowMs)
+        {
+            _samples.Dequeue();
+        }
+        double max = _floor;
+        foreach (var (_, v) in _samples)
+        {
+            max = Math.Max(max, v);
+        }
+        return max;
     }
 }

@@ -119,6 +119,37 @@ static void test_help_does_not_crash(void)
     printf("OK: --help handled\n");
 }
 
+/* --device <existing file>: pin_cmdline.c can't itself call the replay
+ * setter (it's hardware-free, no session/replay state -- see
+ * pin_cmdline_opts_t.device_replay_path's comment), so pin_launch_parse()
+ * is what actually calls pin_set_replay_file(); this checks the whole
+ * chain end to end, including that pin_open() can then open the device by
+ * the "replay:<basename>" id pin_launch_parse() put in launch.device. */
+static void test_device_existing_file_becomes_replay(void)
+{
+    const char *path = "pin_launch_parse_test_replay_source.bin";
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL);
+    if (f) { fputc(0, f); fclose(f); }
+
+    const char *argv[] = { "--device", path };
+    pin_launch_t launch;
+    char err[256] = "";
+    CHECK(pin_parse(argv, 2, &launch, err, sizeof(err)) == PIN_OK);
+    char expected[300];
+    snprintf(expected, sizeof(expected), "replay:%s", path);
+    CHECK(strcmp(launch.device, expected) == 0);
+
+    pin_session_t *s = NULL;
+    pin_status_t st = pin_open(launch.device, &s);
+    CHECK(st == PIN_OK);
+    if (s)
+        pin_close(s);
+
+    remove(path);
+    printf("OK: --device <existing file> becomes \"%s\" and opens\n", launch.device);
+}
+
 int main(void)
 {
     test_actions_rewind_capture();
@@ -126,5 +157,6 @@ int main(void)
     test_bad_format();
     test_missing_value();
     test_help_does_not_crash();
+    test_device_existing_file_becomes_replay();
     return 0;
 }

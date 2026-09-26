@@ -65,6 +65,19 @@ public static unsafe partial class Native
         return trimmed;
     }
 
+    [LibraryImport(Lib)]
+    private static partial int pin_devices_wait(int timeoutMs);
+
+    [LibraryImport(Lib)]
+    private static partial void pin_devices_wake();
+
+    /// <summary>Blocks until devices were plugged/unplugged or another process changed a device's
+    /// lock state: 1 = changed, 0 = timeout or woken, &lt;0 = error.</summary>
+    public static int DevicesWait(int timeoutMs) => pin_devices_wait(timeoutMs);
+
+    /// <summary>Makes a pending <see cref="DevicesWait"/> return immediately (shutdown).</summary>
+    public static void DevicesWake() => pin_devices_wake();
+
     // ---- sessions -------------------------------------------------------
 
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
@@ -309,6 +322,10 @@ public static unsafe partial class Native
             return pin_monitor_read(s, p, maxFrames);
         }
     }
+
+    [LibraryImport(Lib)]
+    private static partial int pin_monitor_available(SafeHandle s);
+    public static int MonitorAvailable(SafeHandle s) => pin_monitor_available(s);
 
     // ---- settings ---------------------------------------------------------------------
 

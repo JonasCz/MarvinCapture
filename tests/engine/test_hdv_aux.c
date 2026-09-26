@@ -59,13 +59,13 @@ static void build_pat(uint8_t *pkt, int pmt_pid)
     /* CRC not checked by our parser; leave as zero. */
 }
 
-static void build_pmt(uint8_t *pkt, int pmt_pid, int video_pid, int aux_pid)
+static void build_pmt(uint8_t *pkt, int pmt_pid, int video_pid, int aux_pid, int audio_pid)
 {
     ts_header(pkt, pmt_pid, 1, 0);
     uint8_t *p = pkt + 4;
     p[0] = 0x00; /* pointer_field */
     uint8_t *s = p + 1;
-    int section_length = 9 + 5 + 5 + 4; /* progno+ver+secnum+lastsec+pcr+proginfolen(9) + 2 streams*5 + crc4 */
+    int section_length = 9 + 5 + 5 + 5 + 4; /* progno+ver+secnum+lastsec+pcr+proginfolen(9) + 3 streams*5 + crc4 */
     s[0] = 0x02; /* table_id: PMT */
     s[1] = (uint8_t)(0xB0 | ((section_length >> 8) & 0x0F));
     s[2] = (uint8_t)(section_length & 0xFF);
@@ -78,6 +78,10 @@ static void build_pmt(uint8_t *pkt, int pmt_pid, int video_pid, int aux_pid)
     uint8_t *es = s + 12;
     es[0] = 0x02; /* MPEG2 video */
     put16(es + 1, (uint16_t)(0xE000 | (video_pid & 0x1FFF)));
+    put16(es + 3, 0);
+    es += 5;
+    es[0] = 0x03; /* MPEG-1 Layer II audio */
+    put16(es + 1, (uint16_t)(0xE000 | (audio_pid & 0x1FFF)));
     put16(es + 3, 0);
     es += 5;
     es[0] = 0xA0; /* HDV AUX private stream (best-effort convention) */
@@ -122,13 +126,14 @@ static void test_pat_pmt_discovery(void)
 {
     uint8_t pat[HDV_TS_PACKET_SIZE], pmt[HDV_TS_PACKET_SIZE];
     build_pat(pat, 0x0100);
-    build_pmt(pmt, 0x0100, 0x0200, 0x0811);
+    build_pmt(pmt, 0x0100, 0x0200, 0x0811, 0x0300);
 
     hdv_pid_map_t map;
     memset(&map, 0, sizeof(map));
     map.pmt_pid = -1;
     map.video_pid = -1;
     map.aux_pid = -1;
+    map.audio_pid = -1;
 
     uint8_t packets[2 * HDV_TS_PACKET_SIZE];
     memcpy(packets, pat, HDV_TS_PACKET_SIZE);
@@ -139,6 +144,7 @@ static void test_pat_pmt_discovery(void)
     CHECK(map.pmt_found, "PMT parsed");
     CHECK(map.video_pid == 0x0200, "video PID from PMT");
     CHECK(map.aux_pid == 0x0811, "aux PID from PMT");
+    CHECK(map.audio_pid == 0x0300, "audio PID (stream_type 0x03) from PMT");
 }
 
 static void test_gop_header_decode(void)

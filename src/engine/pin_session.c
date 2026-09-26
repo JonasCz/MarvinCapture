@@ -19,6 +19,7 @@
 #include "pin_session_priv.h"
 #include "pin_session.h"
 #include "dv_subcode.h"
+#include "dv_audio.h"
 #include "hdv_aux.h"
 #include "pin_naming.h"
 #include "pin_settings.h"
@@ -27,10 +28,12 @@
 #include "../core/pin_log.h"
 #include "../sinks/sinks_internal.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> /* strcasecmp */
 #include <time.h>
 
 #if defined(_WIN32)
@@ -221,6 +224,40 @@ pin_status_t pin_session_set_firmware_dir(const char *utf8_dir)
     return PIN_OK;
 }
 
+/* ========================================================================
+ * replay (virtual device) source -- process-global, see pin_api.h's
+ * pin_set_replay_file(). Replaces the old settings key "replay.file";
+ * PIN_REPLAY (used by ctest) is still read directly by every caller and
+ * takes precedence, exactly as before.
+ * ==================================================================== */
+
+static char g_replay_file[PIN_PATH_MAX];
+static pthread_mutex_t g_replay_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+void pin_session_set_replay_file(const char *path)
+{
+    pthread_mutex_lock(&g_replay_mtx);
+    if (!path) {
+        g_replay_file[0] = 0;
+    } else {
+        strncpy(g_replay_file, path, sizeof(g_replay_file) - 1);
+        g_replay_file[sizeof(g_replay_file) - 1] = 0;
+    }
+    pthread_mutex_unlock(&g_replay_mtx);
+}
+
+int pin_session_get_replay_file(char *out, size_t out_size)
+{
+    pthread_mutex_lock(&g_replay_mtx);
+    int have = g_replay_file[0] != 0;
+    if (have) {
+        strncpy(out, g_replay_file, out_size - 1);
+        out[out_size - 1] = 0;
+    }
+    pthread_mutex_unlock(&g_replay_mtx);
+    return have ? 0 : -1;
+}
+
 pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t out_size)
 {
     char dir[PIN_PATH_MAX];
@@ -261,26 +298,73 @@ pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t ou
  * device id resolution (also used by pin_api.c's pin_enumerate)
  * ==================================================================== */
 
+/* "a path to an existing file" (pin_api.h's pin_open()) -- fopen, like
+ * every other existing-file check in this codebase (replay_run(),
+ * pin_settings.c), rather than stat()/S_ISREG, whose portable form differs
+ * enough between MinGW and POSIX to not be worth it here. */
+static int path_is_existing_file(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+        return 0;
+    fclose(f);
+    return 1;
+}
+
+/* Reads a free (or already-ours) device's 1394 GUID as the 16 hex char
+ * serial pin_device_info_t.serial reports, without a persistent cache
+ * (unlike pin_api.c's pin_enumerate(), which is called far more often) --
+ * good enough for the one-shot lookup a pin_open() by serial needs. Returns
+ * 0 and fills serial[17] on success, -1 if the GUID couldn't be read. */
+static int probe_serial_once(const pinnacle_enum_entry_t *e, char *serial)
+{
+    uint32_t ghi = 0, glo = 0;
+    pinnacle_lock_info_t li;
+    if (pinnacle_lock_query(e->id, &li) == PINNACLE_OK && li.held && li.guid_known) {
+        ghi = li.guid_hi; glo = li.guid_lo;
+    } else if (e->state == PINNACLE_ENUM_READY) {
+        pinnacle_lock_t *lk = NULL;
+        if (pinnacle_lock_acquire(e->id, &lk) != PINNACLE_OK)
+            return -1;
+        pinnacle_device_t dev;
+        memset(&dev, 0, sizeof(dev));
+        int got = 0;
+        if (pinnacle_open_by_id(&dev, e->id) == PINNACLE_OK) {
+            got = pinnacle_read_guid(&dev, &ghi, &glo) == PINNACLE_OK;
+            pinnacle_close(&dev);
+        }
+        pinnacle_lock_release(lk);
+        if (!got)
+            return -1;
+    } else {
+        return -1;
+    }
+    snprintf(serial, 17, "%08X%08X", (unsigned)ghi, (unsigned)glo);
+    return 0;
+}
+
+static int looks_like_serial(const char *s)
+{
+    if (strlen(s) != 16)
+        return 0;
+    for (int i = 0; i < 16; i++)
+        if (!isxdigit((unsigned char)s[i]))
+            return 0;
+    return 1;
+}
+
 static int resolve_device_id(const char *want, char *out, size_t out_size)
 {
     if (want && strncmp(want, "replay:", 7) == 0) {
         /* pin_enumerate() lists the replay device as "replay:<file name>"
          * because pin_device_info_t.id is short; map that back to the full
-         * path it was configured with. A full path is used as is. */
+         * path it was configured with (PIN_REPLAY, else the process-global
+         * pin_set_replay_file() source). A full path is used as is. */
         const char *name = want + 7;
         char cfg[PIN_PATH_MAX] = { 0 };
         const char *full = getenv("PIN_REPLAY");
-        if (!full || !full[0]) {
-            /* the same "replay.file" key pin_enumerate() reads */
-            char settings_path[PIN_PATH_MAX];
-            pin_settings_t st;
-            pin_settings_init(&st);
-            if (pin_settings_default_path(settings_path, sizeof(settings_path)) == 0 &&
-                pin_settings_load(&st, settings_path) == 0)
-                strncpy(cfg, pin_settings_get_string(&st, "replay", "file", ""), sizeof(cfg) - 1);
-            pin_settings_free(&st);
+        if ((!full || !full[0]) && pin_session_get_replay_file(cfg, sizeof(cfg)) == 0)
             full = cfg;
-        }
         if (full && full[0]) {
             const char *base = full;
             for (const char *p = full; *p; p++)
@@ -296,6 +380,41 @@ static int resolve_device_id(const char *want, char *out, size_t out_size)
         return 0;
     }
     if (want && want[0] && strcmp(want, "first") != 0) {
+        /* A path to an existing file: adopt it as the replay source (same
+         * as calling pin_set_replay_file() first), per pin_api.h's
+         * pin_open(). Checked before id/serial matching since a file path
+         * would never collide with either ("usb:..." ids and 16-hex-char
+         * serials are never valid file names in this form). */
+        if (path_is_existing_file(want)) {
+            pin_session_set_replay_file(want);
+            snprintf(out, out_size, "replay:%s", want);
+            return 0;
+        }
+
+        pinnacle_enum_entry_t entries[16];
+        int n = pinnacle_enumerate(entries, 16);
+        if (n > 16) n = 16;
+        for (int i = 0; i < n; i++) {
+            if (strcmp(entries[i].id, want) == 0) {
+                strncpy(out, want, out_size - 1);
+                out[out_size - 1] = 0;
+                return 0;
+            }
+        }
+        /* No id matched literally: try want as a serial. */
+        if (looks_like_serial(want)) {
+            for (int i = 0; i < n; i++) {
+                char serial[17];
+                if (probe_serial_once(&entries[i], serial) == 0 && strcasecmp(serial, want) == 0) {
+                    strncpy(out, entries[i].id, out_size - 1);
+                    out[out_size - 1] = 0;
+                    return 0;
+                }
+            }
+        }
+        /* Neither: hand it through unresolved (e.g. an id for a device that
+         * just unplugged) so the later hardware open fails with a clear,
+         * specific error instead of this function guessing. */
         strncpy(out, want, out_size - 1);
         out[out_size - 1] = 0;
         return 0;
@@ -303,6 +422,11 @@ static int resolve_device_id(const char *want, char *out, size_t out_size)
     const char *env_replay = getenv("PIN_REPLAY");
     if (env_replay && env_replay[0]) {
         snprintf(out, out_size, "replay:%s", env_replay);
+        return 0;
+    }
+    char global_replay[PIN_PATH_MAX];
+    if (pin_session_get_replay_file(global_replay, sizeof(global_replay)) == 0) {
+        snprintf(out, out_size, "replay:%s", global_replay);
         return 0;
     }
     pinnacle_enum_entry_t entries[16];
@@ -563,6 +687,84 @@ static void open_sink_for_scene(pin_session_t *s)
 }
 
 /* ========================================================================
+ * audio meters + monitor ring: shared by analog line-in (analog_audio_cb,
+ * below), DV (dv_on_unit(), via dv_audio_extract()) and HDV (dv_on_unit()
+ * via pin_hdv_audio_t's own decode thread and pin_session_feed_monitor_audio()
+ * below) -- interleaved s16 stereo at 48 kHz only; callers resample first
+ * if their source wasn't already 48 kHz (pin_audio_resample.h).
+ * ==================================================================== */
+
+/* Caller must already hold s->mtx (pin_session_lock()) -- true of every
+ * call site in this file (analog_audio_cb() and dv_on_unit() both lock
+ * before doing anything else). */
+static double meter_clock(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec / 1e9;
+}
+
+/* Replay pacing: sleep until *next, then advance it by one frame period.
+ * Deadline based, so decode/write time doesn't slow playback below real
+ * time (live audio monitoring needs the true sample rate); after a pause or
+ * a long stall it resynchronises instead of bursting to catch up. */
+static void pace_frame(double *next, double period)
+{
+    double now = meter_clock();
+    if (*next == 0 || now - *next > 0.5)
+        *next = now;
+    *next += period;
+    double wait = *next - now;
+    if (wait > 0)
+        sleep_ms((int)(wait * 1000.0 + 0.5));
+}
+
+static void feed_audio_locked(pin_session_t *s, const int16_t *pcm, unsigned frames)
+{
+    if (!frames)
+        return;
+    s->audio_meter_t = meter_clock();
+    double sum[2] = { 0, 0 };
+    int peak[2] = { 0, 0 };
+    for (unsigned i = 0; i < frames; i++) {
+        for (int ch = 0; ch < 2; ch++) {
+            int v = pcm[i * 2 + ch];
+            int av = v < 0 ? -v : v; /* int: -32768 has no int16_t magnitude */
+            if (av > peak[ch]) peak[ch] = av;
+            sum[ch] += (double)v * v;
+        }
+    }
+    for (int ch = 0; ch < 2; ch++) {
+        double rms = sqrt(sum[ch] / frames) / 32768.0;
+        double pk = peak[ch] / 32768.0;
+        s->audio_peak_db[ch] = pk > 0 ? (float)(20.0 * log10(pk)) : -144.0f;
+        s->audio_rms_db[ch] = rms > 0 ? (float)(20.0 * log10(rms)) : -144.0f;
+    }
+    if (s->mon_enabled) {
+        pthread_mutex_lock(&s->mon_mtx);
+        for (unsigned i = 0; i < frames && s->mon_buf; i++) {
+            size_t pos = s->mon_head % s->mon_cap_frames;
+            s->mon_buf[pos * 2] = pcm[i * 2];
+            s->mon_buf[pos * 2 + 1] = pcm[i * 2 + 1];
+            s->mon_head++;
+            if (s->mon_fill < s->mon_cap_frames) s->mon_fill++;
+        }
+        pthread_mutex_unlock(&s->mon_mtx);
+    }
+}
+
+/* For callers that don't already hold s->mtx -- today only pin_hdv_audio_t's
+ * own decode thread, via the pin_hdv_audio_feed_cb passed to
+ * pin_hdv_audio_create() in pin_session_open(). */
+static void pin_session_feed_monitor_audio(void *user, const int16_t *pcm, unsigned frames)
+{
+    pin_session_t *s = user;
+    pin_session_lock(s);
+    feed_audio_locked(s, pcm, frames);
+    pin_session_unlock(s);
+}
+
+/* ========================================================================
  * DV/HDV: EP 0x88 -> dv_reassembler; on_unit -> preview / subcode / scene
  * ==================================================================== */
 
@@ -635,6 +837,27 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
 
             pin_previewer_push_dv(s->preview, data, len, is_pal);
 
+            /* Audio (see dv_audio.h for what this is/isn't bit-exact to):
+             * cheap enough to run inline, right here on whatever thread
+             * dv_on_unit() is called from (the USB read loop, or a replay
+             * thread) -- no queue/thread of its own needed, unlike HDV's
+             * mp2 decode below. Only pair 1 (CH1/CH2) feeds the monitor. */
+            dv_audio_pcm_t apcm;
+            if (dv_audio_extract(data, len, &apcm) == 0 && apcm.valid && apcm.pair1_samples > 0) {
+                if (apcm.sample_rate == 48000 || apcm.sample_rate <= 0) {
+                    feed_audio_locked(s, apcm.pair1, (unsigned)apcm.pair1_samples);
+                } else {
+                    int16_t rs_out[DV_AUDIO_MAX_PAIR_SAMPLES * 2];
+                    size_t n = pin_resample_s16_stereo(&s->dv_audio_rs, apcm.pair1,
+                                                        (size_t)apcm.pair1_samples,
+                                                        apcm.sample_rate, rs_out,
+                                                        sizeof(rs_out) / sizeof(rs_out[0]) / 2,
+                                                        48000);
+                    if (n)
+                        feed_audio_locked(s, rs_out, (unsigned)n);
+                }
+            }
+
             if (s->sink && s->capture_opts.scene_split) {
                 if (!s->scene_det_ready) {
                     pin_scene_config_t cfg;
@@ -680,11 +903,17 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
     } else { /* HDV */
         hdv_pid_map_t map;
         memset(&map, 0, sizeof(map));
-        map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1;
+        map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1; map.audio_pid = -1;
         hdv_scan_pat_pmt(data, len / 188, &map);
         int vpid = map.video_pid > 0 ? map.video_pid : -1;
         if (vpid > 0)
             pin_previewer_push_hdv(s->preview, data, len / 188, vpid);
+        /* Off-thread: pin_hdv_audio_t decodes the mp2 audio PID and calls
+         * pin_session_feed_monitor_audio() back (which takes s->mtx itself,
+         * so this push -- a bounded-queue copy, never blocking -- is safe
+         * to make while already holding it here). */
+        if (map.audio_pid > 0)
+            pin_hdv_audio_push(s->hdv_audio, data, len / 188, map.audio_pid);
         hdv_gop_time_t gop;
         int disc = 0;
         memset(&gop, 0, sizeof(gop));
@@ -1158,36 +1387,12 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
     pin_session_t *s = ctx->s;
 
     pin_session_lock(s);
-    /* audio meters: peak + RMS dBFS, stereo interleaved s16 */
-    if (b->samples && !b->silence) {
-        double sum[2] = { 0, 0 };
-        int16_t peak[2] = { 0, 0 };
-        for (unsigned i = 0; i < b->samples; i++) {
-            for (int ch = 0; ch < 2; ch++) {
-                int16_t v = b->pcm[i * 2 + ch];
-                int16_t av = v < 0 ? (int16_t)-v : v;
-                if (av > peak[ch]) peak[ch] = av;
-                sum[ch] += (double)v * v;
-            }
-        }
-        for (int ch = 0; ch < 2; ch++) {
-            double rms = sqrt(sum[ch] / b->samples) / 32768.0;
-            double pk = peak[ch] / 32768.0;
-            s->audio_peak_db[ch] = pk > 0 ? (float)(20.0 * log10(pk)) : -144.0f;
-            s->audio_rms_db[ch] = rms > 0 ? (float)(20.0 * log10(rms)) : -144.0f;
-        }
-    }
-    if (s->mon_enabled && b->samples && !b->silence) {
-        pthread_mutex_lock(&s->mon_mtx);
-        for (unsigned i = 0; i < b->samples && s->mon_buf; i++) {
-            size_t pos = s->mon_head % s->mon_cap_frames;
-            s->mon_buf[pos * 2] = b->pcm[i * 2];
-            s->mon_buf[pos * 2 + 1] = b->pcm[i * 2 + 1];
-            s->mon_head++;
-            if (s->mon_fill < s->mon_cap_frames) s->mon_fill++;
-        }
-        pthread_mutex_unlock(&s->mon_mtx);
-    }
+    /* b->pcm is documented as "16-bit LE stereo, interleaved" raw bytes;
+     * reinterpret as int16_t (valid on every platform this project targets,
+     * all little-endian) rather than the byte-at-a-time reads the inline
+     * version of this code used to do before being factored out. */
+    if (b->samples && !b->silence)
+        feed_audio_locked(s, (const int16_t *)b->pcm, b->samples);
     if (s->writer && b->samples)
         pin_writer_push(s->writer, PIN_UNIT_AUDIO, b->seq, (const uint8_t *)b->pcm,
                          (size_t)b->samples * 4);
@@ -1300,9 +1505,10 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     s->deck = PIN_DECK_PLAYING;
 
     dv_ctx_t ctx = { .s = s };
+    double next_t = 0; /* pace_frame() deadline */
     hdv_pid_map_t map;
     memset(&map, 0, sizeof(map));
-    map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1;
+    map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1; map.audio_pid = -1;
 
     uint8_t *pic = NULL;
     size_t pic_len = 0, pic_cap = 0;
@@ -1320,7 +1526,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
             sleep_ms(2000); /* simulated rewind time, per the plan */
             fseek(f, 0, SEEK_SET);
             pic_len = 0;
-            memset(&map, 0, sizeof(map)); map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1;
+            memset(&map, 0, sizeof(map)); map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1; map.audio_pid = -1;
             pin_session_lock(s);
             s->deck = PIN_DECK_STOPPED;
             pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
@@ -1338,7 +1544,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
             replay_handle_eot(s);
             fseek(f, 0, SEEK_SET);
             pic_len = 0;
-            memset(&map, 0, sizeof(map)); map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1;
+            memset(&map, 0, sizeof(map)); map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1; map.audio_pid = -1;
             continue;
         }
 
@@ -1351,7 +1557,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
             dv_write_cb(pic, pic_len, &ctx);
             dv_on_unit(DV_FORMAT_HDV, pic, pic_len, &ctx);
             pic_len = 0;
-            sleep_ms(33); /* one picture emitted: pace like the DV frame path */
+            pace_frame(&next_t, 1001.0 / 30000.0); /* one picture emitted */
         }
         if (pic_len + sizeof(pkt) > pic_cap) {
             pic_cap = (pic_len + sizeof(pkt)) * 2 + 4096;
@@ -1385,6 +1591,7 @@ static int replay_run(pin_session_t *s)
     fseek(f, 0, SEEK_END);
     long total = ftell(f);
     fseek(f, 0, SEEK_SET);
+    double next_t = 0; /* pace_frame() deadline */
 
     const char *ext = strrchr(path, '.');
     int is_dv_frames = ext && (strcmp(ext, ".dv") == 0);
@@ -1448,9 +1655,12 @@ static int replay_run(pin_session_t *s)
         } else {
             dv_reassembler_feed(&reasm, chunk, n);
         }
-        /* real-time-ish pacing: ~25 fps for frame mode, else a small sleep
-         * so a raw-dump replay doesn't spin a core at full tilt. */
-        sleep_ms(frame_size ? 33 : 5);
+        /* real-time pacing for frame mode (NTSC 29.97 / PAL 25 fps), else a
+         * small sleep so a raw-dump replay doesn't spin a core at full tilt. */
+        if (frame_size)
+            pace_frame(&next_t, frame_size == 144000 ? 1.0 / 25.0 : 1001.0 / 30000.0);
+        else
+            sleep_ms(5);
     }
     free(chunk);
 
@@ -1519,10 +1729,17 @@ static void *worker_main(void *arg)
                     pinnacle_lock_update(s->lock, PINNACLE_LOCK_PREPARING, ghi, glo);
             }
 
-            if (cmd.input == PIN_INPUT_DV)
+            if (cmd.input == PIN_INPUT_DV) {
                 do_run_dv(s);
-            else
+            } else if (s->is_replay) {
+                /* a replay file is DV/HDV; there is no analog hardware to
+                 * bring up (that used to crash inside libusb) */
+                pin_session_lock(s);
+                set_error(s, PIN_ERR_STATE, "The replay device only provides the DV / HDV input");
+                pin_session_unlock(s);
+            } else {
                 do_run_analog(s, cmd.input);
+            }
             /* returning here means the loop was told to stop (new
              * SET_INPUT, or CLOSE): go back to the top and process it. */
             continue;
@@ -1576,6 +1793,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->aspect_override = PIN_ASPECT_AUTO;
     s->tape_percent = -1;
     s->preview = pin_previewer_create();
+    s->hdv_audio = pin_hdv_audio_create(pin_session_feed_monitor_audio, s);
     s->mon_cap_frames = 48000 * 2; /* 2 s at 48 kHz */
     s->mon_buf = calloc(s->mon_cap_frames * 2, sizeof(int16_t));
     pinnacle_analog_config_defaults(&s->analog.cfg);
@@ -1584,6 +1802,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
         pinnacle_status_t pst = pinnacle_lock_acquire(resolved, &s->lock);
         if (pst != PINNACLE_OK) {
             pin_previewer_destroy(s->preview);
+            pin_hdv_audio_destroy(s->hdv_audio);
             free(s->mon_buf);
             pthread_mutex_destroy(&s->mtx);
             free(s);
@@ -1595,6 +1814,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     if (pthread_create(&s->worker_thread, NULL, worker_main, s) != 0) {
         pinnacle_lock_release(s->lock);
         pin_previewer_destroy(s->preview);
+        pin_hdv_audio_destroy(s->hdv_audio);
         free(s->mon_buf);
         pthread_mutex_destroy(&s->mtx);
         free(s);
@@ -1626,6 +1846,7 @@ void pin_session_close(pin_session_t *s)
     if (!s->is_replay)
         pinnacle_close(&s->dev);
     pin_previewer_destroy(s->preview);
+    pin_hdv_audio_destroy(s->hdv_audio);
     free(s->mon_buf);
     pthread_mutex_destroy(&s->mtx);
     pthread_cond_destroy(&s->cmd_posted);
@@ -1906,8 +2127,15 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->bytes_written = s->bytes_written;
     out->writer_backlog = s->writer_backlog; out->writer_backlog_max = s->writer_backlog_max;
     out->idle_s = s->idle_s;
-    memcpy(out->audio_peak_db, s->audio_peak_db, sizeof(out->audio_peak_db));
-    memcpy(out->audio_rms_db, s->audio_rms_db, sizeof(out->audio_rms_db));
+    if (s->audio_meter_t > 0 && meter_clock() - s->audio_meter_t < 0.5) {
+        memcpy(out->audio_peak_db, s->audio_peak_db, sizeof(out->audio_peak_db));
+        memcpy(out->audio_rms_db, s->audio_rms_db, sizeof(out->audio_rms_db));
+    } else {
+        /* no audio yet, or none for half a second (signal lost, stopped):
+         * silence, never a stale or zero-initialised (0 dBFS) level */
+        for (int ch = 0; ch < 2; ch++)
+            out->audio_peak_db[ch] = out->audio_rms_db[ch] = -144.0f;
+    }
 
     /* disk_free_bytes / est_seconds_left / disk_low: from the live capture
      * path while CAPTURING, else from pin_set_output_hint()'s path/format
@@ -1961,10 +2189,23 @@ void pin_session_monitor_enable(pin_session_t *s, int enabled)
     pin_session_unlock(s);
 }
 
+/* Latency bound (pin_api.h's pin_monitor_read()): a GUI audio output can be
+ * a dumb pump because the core itself never lets the ring's backlog grow
+ * past ~200 ms -- once it has, the oldest frames are dropped down to
+ * ~80 ms before the copy below, rather than handing back 200 ms of stale
+ * audio. Applies to every source (analog/DV/HDV all push through the same
+ * ring, see pin_session_push_monitor_audio()). */
+#define PIN_MON_MAX_MS 200
+#define PIN_MON_TARGET_MS 80
+
 int pin_session_monitor_read(pin_session_t *s, int16_t *out, int max_frames)
 {
     if (!s || !out || max_frames <= 0) return 0;
     pthread_mutex_lock(&s->mon_mtx);
+    size_t max_buffered = (size_t)48000 * PIN_MON_MAX_MS / 1000;
+    size_t target_buffered = (size_t)48000 * PIN_MON_TARGET_MS / 1000;
+    if (s->mon_fill > max_buffered)
+        s->mon_fill = target_buffered;
     int n = (int)(s->mon_fill < (size_t)max_frames ? s->mon_fill : (size_t)max_frames);
     size_t start = (s->mon_head + s->mon_cap_frames - s->mon_fill) % s->mon_cap_frames;
     for (int i = 0; i < n; i++) {
@@ -1973,6 +2214,15 @@ int pin_session_monitor_read(pin_session_t *s, int16_t *out, int max_frames)
         out[i * 2 + 1] = s->mon_buf[pos * 2 + 1];
     }
     s->mon_fill -= (size_t)n;
+    pthread_mutex_unlock(&s->mon_mtx);
+    return n;
+}
+
+int pin_session_monitor_available(pin_session_t *s)
+{
+    if (!s) return 0;
+    pthread_mutex_lock(&s->mon_mtx);
+    int n = (int)s->mon_fill;
     pthread_mutex_unlock(&s->mon_mtx);
     return n;
 }

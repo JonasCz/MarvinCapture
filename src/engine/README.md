@@ -44,10 +44,12 @@ behind `pin_api.h`: device open/prepare, capture start/stop, deck control,
 scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
 `dv_on_unit()`'s two branches) and preview decode.
 
-- **Replay (virtual device)**, `PIN_REPLAY=<file>` or the `replay.file`
-  setting: plays a recorded source back through the whole pipeline with no
-  hardware, so the engine (and any GUI built on it) can be developed and
-  tested end to end -- see `pin_session.c`'s `replay_run()`. Its
+- **Replay (virtual device)**, `PIN_REPLAY=<file>` or `pin_set_replay_file()`
+  (also reachable as `--device <path to an existing file>` on any front end
+  built on `pin_cmdline.c`, or by passing that path straight to `pin_open()`):
+  plays a recorded source back through the whole pipeline with no hardware,
+  so the engine (and any GUI built on it) can be developed and tested end to
+  end -- see `pin_session.c`'s `replay_run()`. Its
   `pin_device_info_t.serial` is always the fixed string `"REPLAY"`. Three
   source shapes, picked by extension:
   - `.dv`: a plain sequence of frame-aligned DIF frames (144000 bytes/frame

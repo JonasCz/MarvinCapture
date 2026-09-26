@@ -33,13 +33,13 @@ public sealed partial class MainWindow : Window
 
     private readonly nint _hwnd;
     private readonly DispatcherQueueTimer _statusTimer;
-    private readonly DispatcherQueueTimer _deviceTimer;
+    private Thread? _deviceWatch;
+    private volatile bool _closing;
     private readonly TaskbarProgress _taskbar;
     private readonly SemaphoreSlim _dialogGate = new(1, 1);
 
     private D3DPreview? _preview;
     private string? _openedDeviceId;
-    private bool _deviceDropDownOpen;
     private bool _startupDone;
 
     private bool _allowClose;
@@ -91,10 +91,6 @@ public sealed partial class MainWindow : Window
         _statusTimer.Interval = TimeSpan.FromMilliseconds(100);
         _statusTimer.Tick += (_, _) => OnStatusTick();
 
-        _deviceTimer = DispatcherQueue.CreateTimer();
-        _deviceTimer.Interval = TimeSpan.FromSeconds(2);
-        _deviceTimer.Tick += (_, _) => OnDeviceTick();
-
         VM.PropertyChanged += VM_PropertyChanged;
         VM.EngineEvent += VM_EngineEvent;
 
@@ -109,7 +105,7 @@ public sealed partial class MainWindow : Window
     public static string TitlePlaceholder(bool supported) => supported ? "Title (optional)" : "Title: not supported by this format";
     public static string DevicePlaceholder(bool none) => none ? "No devices found" : "Select a device";
     public static Thickness PlayGlyphNudge(bool capturing) => capturing ? new Thickness(0) : new Thickness(2, 0, 0, 0);
-    public static string DvCaptureName(bool capturing) => capturing ? "Stop capture" : "Capture without deck control";
+    public static string DvCaptureName(bool capturing) => capturing ? "Stop capture" : "Manual capture";
     public static string AnalogCaptureHint(bool capturing) =>
         capturing ? "Finishes the file safely" : "Records the analog input to the file";
 
@@ -261,7 +257,8 @@ public sealed partial class MainWindow : Window
         OpenSelectedIfNeeded();
 
         _statusTimer.Start();
-        UpdateDeviceTimer();
+        SyncKindSelector();
+        StartDeviceWatch();
 
         if (_showHelpOnStart)
         {
@@ -294,7 +291,6 @@ public sealed partial class MainWindow : Window
             _preview?.Wake();
             UpdatePreviewPause();
         }
-        UpdateDeviceTimer();
     }
 
     // ================================================================== command line
@@ -420,28 +416,67 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private void OnDeviceTick()
+    /// <summary>
+    /// Device list updates without polling: a background thread blocks in
+    /// pin_devices_wait (plug/unplug, or another window taking or releasing a
+    /// device) and hands each change to the UI thread.
+    /// </summary>
+    private void StartDeviceWatch()
     {
-        VM.RefreshDevices();
-        OpenSelectedIfNeeded();
-        UpdateDeviceTimer();
+        _deviceWatch = new Thread(() =>
+        {
+            while (!_closing)
+            {
+                int r = Native.DevicesWait(60_000);
+                if (_closing)
+                {
+                    break;
+                }
+                if (r < 0)
+                {
+                    Thread.Sleep(2000); // no notifications available: fall back to a slow rescan
+                }
+                if (r != 0)
+                {
+                    DispatcherQueue.TryEnqueue(OnDevicesChanged);
+                }
+            }
+        })
+        { IsBackground = true, Name = "Device watch" };
+        _deviceWatch.Start();
     }
 
-    /// <summary>
-    /// Enumeration is cheap but not free: it runs every 2 s only while the
-    /// dropdown is open or there is nothing usable open yet (waiting for a
-    /// device to be plugged in / released by another window).
-    /// </summary>
-    private void UpdateDeviceTimer()
+    private void OnDevicesChanged()
     {
-        bool want = _deviceDropDownOpen || VM.Session is null;
-        if (want && !_deviceTimer.IsRunning)
+        if (_closing)
         {
-            _deviceTimer.Start();
+            return;
         }
-        else if (!want && _deviceTimer.IsRunning)
+        VM.RefreshDevices();
+
+        // The open device was unplugged: drop the session (a running capture
+        // ends with an error from the core and is finalised by it).
+        if (_openedDeviceId is not null && !VM.IsCapturing && VM.Devices.All(d => d.Id != _openedDeviceId))
         {
-            _deviceTimer.Stop();
+            VM.CloseSession();
+            _openedDeviceId = null;
+            _preview?.ResetFrameState();
+        }
+        // Nothing open (none connected before, or the previous one went away): take the first usable one.
+        if (VM.SelectedDevice is null || _openedDeviceId is null)
+        {
+            VM.SelectedDevice = VM.PickInitialDevice(null);
+        }
+        OpenSelectedIfNeeded();
+    }
+
+    /// <summary>Selects the DV / HDV options tab that the view model says is current.</summary>
+    private void SyncKindSelector()
+    {
+        int i = Math.Clamp(VM.SelectedKindTabIndex, 0, KindSelector.Items.Count - 1);
+        if (!ReferenceEquals(KindSelector.SelectedItem, KindSelector.Items[i]))
+        {
+            KindSelector.SelectedItem = KindSelector.Items[i];
         }
     }
 
@@ -522,6 +557,9 @@ public sealed partial class MainWindow : Window
             case nameof(MainViewModel.IsCapturing):
                 _dvView.IsEditable = _hdvView.IsEditable = VM.IsIdle;
                 break;
+            case nameof(MainViewModel.SelectedKindTabIndex):
+                SyncKindSelector(); // the detected stream switched DV <-> HDV
+                break;
         }
     }
 
@@ -536,28 +574,7 @@ public sealed partial class MainWindow : Window
 
     // ================================================================== devices
 
-    private void DeviceCombo_DropDownOpened(object sender, object e)
-    {
-        _deviceDropDownOpen = true;
-        VM.RefreshDevices();
-        UpdateDeviceTimer();
-    }
-
-    private void DeviceCombo_DropDownClosed(object sender, object e)
-    {
-        _deviceDropDownOpen = false;
-        UpdateDeviceTimer();
-    }
-
-    private void RefreshDevices_Click(object sender, RoutedEventArgs e)
-    {
-        VM.RefreshDevices();
-        if (VM.SelectedDevice is null)
-        {
-            VM.SelectedDevice = VM.PickInitialDevice(null);
-        }
-        OpenSelectedIfNeeded();
-    }
+    private void DeviceCombo_DropDownOpened(object sender, object e) => VM.RefreshDevices();
 
     // ================================================================== deck
 
@@ -900,7 +917,8 @@ public sealed partial class MainWindow : Window
     {
         SaveWindowGeometry();
         _statusTimer.Stop();
-        _deviceTimer.Stop();
+        _closing = true;
+        Native.DevicesWake();
         _preview?.Dispose();
         _preview = null;
         VM.Dispose(); // pin_close: blocks until any capture is finalised

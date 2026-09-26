@@ -195,15 +195,25 @@ static void parse_aspect(const uint8_t d[4], dv_aspect_t *a)
 
 static void parse_audio(const uint8_t d[4], dv_audio_info_t *a)
 {
-    /* PC3 bits 4-0: STYPE (0 = one stereo pair; 2 = two pairs, the
-     * 4-channel 32 kHz mode); PC4 bits 5-3: SMP, bits 2-0: QU (0 = 16-bit,
-     * 1 = 12-bit nonlinear). The fields FFmpeg's dv_extract_audio_info uses. */
+    /* PC1 bits 5-0: smpls; PC3 bits 4-0: STYPE (0 = one stereo pair; 2 =
+     * two pairs, the 4-channel 32 kHz mode); PC4 bits 5-3: SMP, bits 2-0:
+     * QU (0 = 16-bit, 1 = 12-bit nonlinear). The fields FFmpeg's
+     * dv_extract_audio_info()/dv_extract_audio() use (d[0]=PC1, d[2]=PC3,
+     * d[3]=PC4 here, since d[] is pack+1..+4). */
     static const int freq_table[8] = { 48000, 44100, 32000, 0, 0, 0, 0, 0 };
     int freq_code = (d[3] >> 3) & 0x7;
     int stype = d[2] & 0x1F;
+    int quant = d[3] & 0x7;
     a->sample_rate = freq_table[freq_code];
-    a->channels = (stype == 2) ? 4 : 2;
-    a->bits = ((d[3] & 0x7) == 1) ? 12 : 16;
+    a->stype = stype;
+    a->smpls = d[0] & 0x3F;
+    /* Real-world quirk FFmpeg's dv_extract_audio_info() also matches: some
+     * cameras signal the 4-channel 32 kHz 12-bit mode with STYPE=0 (nominal
+     * 2ch) rather than STYPE=2, distinguishable only because that
+     * combination (12-bit quantisation at 32 kHz) is otherwise meaningless
+     * for a 2ch stream. */
+    a->channels = (stype == 2 || (stype == 0 && quant == 1 && freq_code == 2)) ? 4 : 2;
+    a->bits = (quant == 1) ? 12 : 16;
     a->valid = (a->sample_rate != 0);
 }
 

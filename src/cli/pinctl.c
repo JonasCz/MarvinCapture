@@ -31,6 +31,11 @@
  *   preview-dump <id> -n N -o prefix
  *   monitor <id> [seconds]
  *   actions <id> --actions a,b,c [other pin_launch_parse flags]
+ *   watch
+ *
+ * Device ids (list/status/deck/capture -d/preview-dump/monitor/actions) may
+ * also be a device serial (16 hex chars, case-insensitive) or a path to an
+ * existing file to replay -- see pin_api.h's pin_open().
  */
 
 #include "pin_api.h"
@@ -60,6 +65,7 @@ static void on_sigint(int sig)
     g_stop = 1;
     if (g_stop_session)
         pin_capture_stop(g_stop_session);
+    pin_devices_wake(); /* unblock `pinctl watch`'s pin_devices_wait() promptly */
 }
 
 static const char *dev_state_name(pin_dev_state_t s)
@@ -75,12 +81,12 @@ static const char *dev_state_name(pin_dev_state_t s)
     return "?";
 }
 
-static int cmd_list(void)
+static void print_device_list(void)
 {
     pin_device_info_t devs[16];
     for (int i = 0; i < 16; i++) { memset(&devs[i], 0, sizeof(devs[i])); devs[i].size = sizeof(devs[i]); }
     int n = pin_enumerate(devs, 16);
-    if (n == 0) { printf("No devices found.\n"); return 0; }
+    if (n == 0) { printf("No devices found.\n"); return; }
     int shown = n > 16 ? 16 : n;
     for (int i = 0; i < shown; i++) {
         printf("%-24s %-28s %04x:%04x  %s", devs[i].id, devs[i].name, devs[i].vid, devs[i].pid,
@@ -91,6 +97,36 @@ static int cmd_list(void)
             printf("  serial %s", devs[i].serial);
         printf("\n");
     }
+}
+
+static int cmd_list(void)
+{
+    print_device_list();
+    return 0;
+}
+
+/* Loops pin_devices_wait(), printing the device list on every change --
+ * useful for agent/scripted testing of hotplug without a GUI, and as a
+ * quick manual check that plugging/unplugging the device is actually
+ * noticed (see pin_api.h's pin_devices_wait()). Ctrl-C to stop. */
+static int cmd_watch(void)
+{
+    printf("watching for device changes (Ctrl-C to stop)...\n");
+    print_device_list();
+    while (!g_stop) {
+        int rc = pin_devices_wait(1000);
+        if (g_stop)
+            break;
+        if (rc < 0) {
+            fprintf(stderr, "pinctl: pin_devices_wait failed\n");
+            return 1;
+        }
+        if (rc == 1) {
+            printf("--- device list changed ---\n");
+            print_device_list();
+        }
+    }
+    printf("\n");
     return 0;
 }
 
@@ -390,7 +426,8 @@ static void usage(void)
         "       pinctl deck <id> <play|pause|stop|ff|rew|state|timecode>\n"
         "       pinctl preview-dump <id> [-n N] [-o prefix]\n"
         "       pinctl monitor <id> [seconds]\n"
-        "       pinctl actions <id> --actions a,b,c [pin_launch_parse flags...]\n");
+        "       pinctl actions <id> --actions a,b,c [pin_launch_parse flags...]\n"
+        "       pinctl watch\n");
 }
 
 int main(int argc, char **argv)
@@ -413,6 +450,8 @@ int main(int argc, char **argv)
         return cmd_monitor(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
     if (!strcmp(sub, "actions") && argc >= 3)
         return cmd_actions(argc - 3, argv + 3, argv[2]);
+    if (!strcmp(sub, "watch"))
+        return cmd_watch();
 
     usage();
     return 2;

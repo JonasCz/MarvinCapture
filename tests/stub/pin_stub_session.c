@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <math.h>
+#include <time.h>
 
 /* ==== version / errors ===================================================== */
 
@@ -441,3 +442,20 @@ int pin_poll_event(pin_session_t *s, pin_event_t *out) {
 
 static int g_log_level = 1;
 void pin_set_log_level(int level) { g_log_level = level; (void)g_log_level; }
+
+/* Device-change waiting: the stub's device list never changes, so just
+ * sleep out the timeout (or until woken). */
+static volatile int g_stub_wake;
+
+int pin_devices_wait(int timeout_ms) {
+    for (int t = 0; t < timeout_ms && !g_stub_wake; t += 50) {
+        struct timespec ts = { 0, 50 * 1000000L };
+        nanosleep(&ts, NULL);
+    }
+    g_stub_wake = 0;
+    return 0;
+}
+
+void pin_devices_wake(void) { g_stub_wake = 1; }
+
+void pin_set_replay_file(const char *path) { (void)path; }

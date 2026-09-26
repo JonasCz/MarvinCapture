@@ -100,3 +100,25 @@ pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}")
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.
 pin_engine_replay_test(test_pin_color_matrix)
+
+# dv_audio.c's real SMPTE 314M/IEC 61834 deshuffle, validated sample-for-
+# sample against FFmpeg's own "dv" demuxer on real captures. Links
+# pinnacle_engine_pure directly (for dv_audio_extract()) and pinnacle_sinks
+# (for libavformat/libavcodec, already wired up there) rather than
+# pinnacle-oss-core: dv_audio_extract() isn't part of the public pin_api.h
+# ABI, so it isn't exported from that DLL on Windows.
+if(TARGET pinnacle_sinks AND TARGET pinnacle_engine_pure)
+    add_executable(test_dv_audio_vs_libavformat test_dv_audio_vs_libavformat.c)
+    target_link_libraries(test_dv_audio_vs_libavformat PRIVATE pinnacle_sinks pinnacle_engine_pure)
+    add_test(NAME test_dv_audio_vs_libavformat COMMAND test_dv_audio_vs_libavformat
+        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
+    set_tests_properties(test_dv_audio_vs_libavformat PROPERTIES TIMEOUT 120)
+endif()
+
+# Task: pin_devices_wait()/pin_devices_wake() and pin_set_replay_file()
+# replacing the old settings-key replay mechanism.
+add_executable(test_pin_devices_wait test_pin_devices_wait.c)
+target_link_libraries(test_pin_devices_wait PRIVATE pinnacle-oss-core Threads::Threads)
+add_test(NAME test_pin_devices_wait COMMAND test_pin_devices_wait)
+pin_engine_replay_test_env(test_pin_devices_wait)
+set_tests_properties(test_pin_devices_wait PROPERTIES TIMEOUT 30)

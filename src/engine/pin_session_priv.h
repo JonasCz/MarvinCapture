@@ -41,6 +41,8 @@
 #include "pin_scene.h"
 #include "pin_naming.h"
 #include "pin_preview.h"
+#include "pin_hdv_audio.h"
+#include "pin_audio_resample.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -131,6 +133,7 @@ struct pin_session {
     uint64_t frames, frames_dropped, frames_damaged, lost_blocks, ts_errors;
     uint64_t bytes_written, writer_backlog, writer_backlog_max;
     float audio_peak_db[2], audio_rms_db[2];
+    double audio_meter_t;   /* monotonic seconds of the last metered block; 0 = none yet */
 
     pin_std_t requested_std;
     pin_aspect_t aspect_override;
@@ -182,6 +185,16 @@ struct pin_session {
     size_t mon_fill;           /* frames currently valid */
     int mon_enabled;
     pthread_mutex_t mon_mtx;
+
+    /* DV/HDV audio feeding the meters + monitor ring above (analog feeds
+     * them directly from analog_audio_cb(); see dv_on_unit() for DV/HDV).
+     * DV: dv_audio_extract() is cheap enough to run inline on whatever
+     * thread dv_on_unit() runs on (the USB read loop, or a replay thread),
+     * so it only needs a resampler's persistent state, not a thread of its
+     * own. HDV needs libavcodec's mp2 decoder, which is not cheap enough
+     * for that thread, hence pin_hdv_audio_t's own thread + queue. */
+    pin_resampler_t dv_audio_rs;
+    pin_hdv_audio_t *hdv_audio;
 
     /* events */
 #define PIN_EVQ_CAP 256

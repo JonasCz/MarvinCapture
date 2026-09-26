@@ -110,8 +110,9 @@ const pinnacle_model_t *pinnacle_model_lookup(uint16_t pid);
 void pinnacle_enum_build_id(libusb_device *dev, char *out, size_t out_cap);
 
 /* Lists Marvin-family devices (VID 0x2304, any PID in pinnacle_model_table)
- * present on the bus right now. Uses its own short-lived libusb_context, so
- * it never interferes with a session's own one, and never opens a device
+ * present on the bus right now. Uses its own long-lived libusb_context
+ * (separate from any session's) and is serialised process-wide, so it may be
+ * called from several threads. Never opens a device
  * for longer than a single probe call (Windows, unsupported-vs-no-driver
  * classification only -- see pinnacle_enum.c). Fills up to max entries in
  * out (each left untouched beyond that); returns how many devices exist,

@@ -94,10 +94,16 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
         src/engine/pin_session.c
         src/engine/pin_deck.c
         src/engine/pin_preview.c
+        src/engine/pin_hdv_audio.c
+        src/engine/pin_devices_wait.c
     )
     target_include_directories(pinnacle_engine PUBLIC ${CMAKE_SOURCE_DIR}/src/engine)
     target_link_libraries(pinnacle_engine PUBLIC pinnacle_core pinnacle_sinks
         pinnacle_engine_pure Threads::Threads)
+    if(WIN32)
+        # pin_devices_wait.c: CM_Register_Notification (device hotplug).
+        target_link_libraries(pinnacle_engine PUBLIC cfgmgr32)
+    endif()
     # This target is only ever linked into the pinnacle-oss-core DLL, never
     # a consumer of it, so pin_api.h's functions must not be seen as
     # dllimport here (PIN_API => dllexport) -- see src/api/pin_api.h.

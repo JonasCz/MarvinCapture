@@ -121,6 +121,16 @@ typedef struct {
     int sample_rate;  /* 48000, 44100 or 32000; 0 if unknown */
     int channels;     /* 2, or 4 (two stereo pairs, the 32 kHz 12-bit mode) */
     int bits;         /* 16, or 12 (nonlinear) */
+    int stype;        /* PC3 bits 4-0 (STYPE), raw: 0 = 2ch, 2 = 4ch, else
+                          unsupported/reserved -- dv_audio.c's real-shuffle
+                          extractor needs the raw code, not just .channels,
+                          to reproduce a camera quirk (see its file header). */
+    int smpls;        /* PC1 bits 5-0: samples in this frame, minus the
+                          format's minimum -- SMPTE 314M / IEC 61834, same
+                          field FFmpeg's libavformat/dv.c dv_extract_audio()
+                          calls "smpls". Needed to get the exact per-frame
+                          sample count (dv_audio.c), not used by anything
+                          in this file itself. */
     int valid;
 } dv_audio_info_t;
 

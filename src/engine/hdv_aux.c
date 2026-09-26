@@ -101,6 +101,11 @@ static void pat_pmt_scan_one(const uint8_t *pkt, hdv_pid_map_t *map)
             int es_info_length = ((es[3] & 0x0F) << 8) | es[4];
             if (stream_type == 0x02 && map->video_pid < 0)
                 map->video_pid = es_pid;
+            /* MPEG-1 Layer II (0x03) or MPEG-2 audio (0x04); HDV always uses
+             * MPEG-1 Layer II in practice, but either stream_type decodes
+             * with the same mp2 decoder. */
+            if ((stream_type == 0x03 || stream_type == 0x04) && map->audio_pid < 0)
+                map->audio_pid = es_pid;
             /* Sony/Canon HDV AUX-V/AUX-A private streams are commonly
              * signalled with stream_type 0xA0/0xA1; best-effort, see
              * header comment. */

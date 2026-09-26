@@ -98,6 +98,10 @@ typedef struct {
     int video_pid;     /* -1 if not found; stream_type 0x02 (MPEG2 video) */
     int aux_pid;        /* -1 if not identified from the PMT; caller can fall
                           * back to HDV_AUX_PID_DEFAULT */
+    int audio_pid;      /* -1 if not found; stream_type 0x03 (MPEG-1 Layer II)
+                          * or 0x04 (MPEG-2 audio) -- HDV carries MPEG-1 Layer
+                          * II ("mp2"), decodable by the same fixed-point/
+                          * float mp2 decoder either way. */
 } hdv_pid_map_t;
 
 /* Scans PAT (PID 0) and, once found, the PMT, across as many TS packets as

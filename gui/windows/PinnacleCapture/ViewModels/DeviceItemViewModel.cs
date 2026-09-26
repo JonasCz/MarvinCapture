@@ -25,8 +25,8 @@ public sealed partial class DeviceItemViewModel
 
     public string Serial { get; }
 
-    /// <summary>Short stable id: last 4 hex digits of the 1394 GUID ("…A1B2"), else the USB port id.</summary>
-    public string ShortId => Serial.Length >= 4 ? "\u2026" + Serial[^4..].ToUpperInvariant() : Id;
+    /// <summary>Stable id shown in the list: the full 1394 GUID once known, else the USB port id.</summary>
+    public string ShortId => Serial.Length > 0 ? Serial.ToUpperInvariant() : Id;
 
     public string DisplayName => $"{Name} ({ShortId})";
 
@@ -48,7 +48,7 @@ public sealed partial class DeviceItemViewModel
         PinDevState.Ready => "Ready",
         PinDevState.Preparing => "Preparing…",
         PinDevState.InUse => "In use",
-        PinDevState.OpenHere => "Open",
+        PinDevState.OpenHere => "Ready",
         PinDevState.NoDriver => "Driver missing",
         PinDevState.Unsupported => "Unsupported",
         _ => "Unknown",
@@ -57,11 +57,17 @@ public sealed partial class DeviceItemViewModel
     /// <summary>Semantic colour key consumed by a XAML converter/resource lookup (Success/Caution/Critical/Neutral).</summary>
     public string StatusBrushKey => IsCapturingHere ? "SystemFillColorCriticalBrush" : State switch
     {
-        PinDevState.Ready or PinDevState.OpenHere => "SystemFillColorSuccessBrush",
-        PinDevState.Preparing => "SystemFillColorCautionBrush",
-        PinDevState.InUse or PinDevState.NoDriver or PinDevState.Unsupported => "SystemFillColorCriticalBrush",
+        PinDevState.Ready or PinDevState.OpenHere or PinDevState.InUse => "ControlAltFillColorQuarternaryBrush",
+        PinDevState.Preparing => "SystemFillColorCautionBackgroundBrush",
+        PinDevState.NoDriver or PinDevState.Unsupported => "SystemFillColorCriticalBrush",
         _ => "SystemFillColorNeutralBrush",
     };
+
+    /// <summary>Badge text: grey on the neutral pills, white on the red ones.</summary>
+    public Microsoft.UI.Xaml.Media.Brush? StatusForeground =>
+        Microsoft.UI.Xaml.Application.Current.Resources.TryGetValue(
+            StatusBrushKey == "SystemFillColorCriticalBrush" ? "TextOnAccentFillColorPrimaryBrush" : "TextFillColorSecondaryBrush",
+            out var b) ? b as Microsoft.UI.Xaml.Media.Brush : null;
 
     public DeviceItemViewModel(PinDeviceInfo info, bool capturingHere = false)
     {

@@ -66,11 +66,25 @@ void pin_session_set_aspect(pin_session_t *s, pin_aspect_t aspect);
 
 void pin_session_monitor_enable(pin_session_t *s, int enabled);
 int pin_session_monitor_read(pin_session_t *s, int16_t *out, int max_frames);
+int pin_session_monitor_available(pin_session_t *s);
 
 /* Global (not per-session): firmware directory override, see pin_api.h's
  * pin_set_firmware_dir(). Resolves fpga-ohci.bin / fpga-capture.bin. */
 pin_status_t pin_session_set_firmware_dir(const char *utf8_dir);
 pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t out_size);
+
+/* Global (not per-session): the replay (virtual device) source file, see
+ * pin_api.h's pin_set_replay_file(). NULL/"" clears it. The getter returns
+ * 0 and fills out[] if a file is set (by this call or PIN_REPLAY, which
+ * still wins if both are set, for ctest compatibility), else -1. */
+void pin_session_set_replay_file(const char *path);
+int pin_session_get_replay_file(char *out, size_t out_size);
+
+/* Process-wide device-change wait, see pin_api.h's pin_devices_wait() /
+ * pin_devices_wake(). Platform-specific implementation in
+ * pin_devices_wait_win.c / pin_devices_wait_unix.c. */
+int pin_session_devices_wait(int timeout_ms);
+void pin_session_devices_wake(void);
 
 /* Format/option-rules table (pin_api.h's pin_formats()/pin_format_info()):
  * lives here, not in pin_api.c, since pin_session.c itself needs it (e.g.
