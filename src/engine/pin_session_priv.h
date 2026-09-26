@@ -152,6 +152,7 @@ struct pin_session {
     pin_scene_detector_t scene_det;
     int scene_det_ready;
     unsigned opts_scene_split_window;
+    int hdv_await_gop;       /* HDV capture: nothing written until a GOP (sequence header) arrives */
     int stream_kind_known;   /* first frame/GOP seen: DV-vs-HDV (or analog) is settled */
     int capture_want_start;  /* CAPTURE_START arrived before stream_kind_known, or is
                                  waiting on rewind_before_capture; deferred */

@@ -29,6 +29,7 @@
  *           [--aspect a] [--start-deck] [--rewind-first]
  *   deck <id> <play|pause|stop|ff|rew|state|timecode>
  *   preview-dump <id> -n N -o prefix
+ *   preview-rate <id> [seconds]
  *   monitor <id> [seconds]
  *   actions <id> --actions a,b,c [other pin_launch_parse flags]
  *   watch
@@ -357,6 +358,46 @@ static int cmd_preview_dump(int argc, char **argv, const char *id)
     return written > 0 ? 0 : 1;
 }
 
+static int cmd_preview_rate(const char *id, int seconds)
+{
+    pin_session_t *s = NULL;
+    pin_status_t st = pin_open(id, &s);
+    if (st != PIN_OK) { fprintf(stderr, "pinctl: open failed: %s\n", pin_strerror(st)); return 1; }
+    pin_set_input(s, PIN_INPUT_DV);
+    if (seconds <= 0) seconds = 10;
+
+    uint64_t seq = 0, first_seq = 0;
+    int have_first = 0;
+    double t0 = 0, t_last = 0, worst_gap = 0;
+    long frames = 0;
+    time_t deadline = time(NULL) + seconds + 5; /* +5: bring-up */
+    while (!g_stop && time(NULL) < deadline) {
+        if (pin_preview_wait(s, seq, 500) != 1)
+            continue;
+        pin_frame_t f; memset(&f, 0, sizeof(f)); f.size = sizeof(f);
+        if (pin_preview_lock(s, &f) != PIN_OK)
+            continue;
+        seq = f.seq;
+        pin_preview_unlock(s);
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        double now = ts.tv_sec + ts.tv_nsec / 1e9;
+        if (!have_first) { have_first = 1; first_seq = seq; t0 = now; }
+        else if (now - t_last > worst_gap) worst_gap = now - t_last;
+        t_last = now;
+        frames++;
+        if (now - t0 >= seconds)
+            break;
+    }
+    if (have_first && t_last > t0)
+        printf("preview: %ld frames seen, %llu decoded in %.1f s = %.2f fps decoded, worst gap %.0f ms\n",
+               frames, (unsigned long long)(seq - first_seq), t_last - t0,
+               (double)(seq - first_seq) / (t_last - t0), worst_gap * 1000.0);
+    else
+        printf("preview: no frames\n");
+    pin_close(s);
+    return have_first ? 0 : 1;
+}
+
 static int cmd_monitor(const char *id, int seconds)
 {
     pin_session_t *s = NULL;
@@ -425,6 +466,7 @@ static void usage(void)
         "                      [--rewind-first]\n"
         "       pinctl deck <id> <play|pause|stop|ff|rew|state|timecode>\n"
         "       pinctl preview-dump <id> [-n N] [-o prefix]\n"
+        "       pinctl preview-rate <id> [seconds]\n"
         "       pinctl monitor <id> [seconds]\n"
         "       pinctl actions <id> --actions a,b,c [pin_launch_parse flags...]\n"
         "       pinctl watch\n");
@@ -446,6 +488,8 @@ int main(int argc, char **argv)
         return cmd_deck(argv[2], argv[3]);
     if (!strcmp(sub, "preview-dump") && argc >= 3)
         return cmd_preview_dump(argc - 3, argv + 3, argv[2]);
+    if (!strcmp(sub, "preview-rate") && argc >= 3)
+        return cmd_preview_rate(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
     if (!strcmp(sub, "monitor") && argc >= 3)
         return cmd_monitor(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
     if (!strcmp(sub, "actions") && argc >= 3)

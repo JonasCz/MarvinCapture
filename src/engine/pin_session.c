@@ -900,7 +900,42 @@ static void pin_session_feed_monitor_audio(void *user, const int16_t *pcm, unsig
 typedef struct {
     pin_session_t *s;
     double last_tick_transport_poll;
+    /* HDV PID map, accumulated across pictures: PAT/PMT ride in only some
+     * pictures, so a per-picture scan would leave most of them without a
+     * video PID (no preview, no audio, no GOP timecode). */
+    hdv_pid_map_t hdv_map;
+    int hdv_map_init;
+    const dv_reassembler_t *reasm; /* live reassembler: latest PAT/PMT for the write gate */
 } dv_ctx_t;
+
+/* HDV capture gate: a session's sink opens at an arbitrary picture, but a
+ * transport stream must start on a GOP (sequence header) or decoders reject
+ * the first pictures. Returns 1 if the unit may be written; on the first
+ * pass it also emits the latest PAT/PMT via emit(). */
+static int hdv_write_gate(pin_session_t *s, const dv_ctx_t *ctx, const uint8_t *data, size_t len,
+                          void (*emit)(pin_session_t *, const uint8_t *, size_t))
+{
+    if (!s->hdv_await_gop || !ctx->reasm) /* replays are already cut on GOPs */
+        return 1;
+    static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
+    int found = 0;
+    for (size_t i = 0; i + 4 <= len; i++)
+        if (!memcmp(data + i, seq_hdr, 4)) { found = 1; break; }
+    if (!found)
+        return 0;
+    s->hdv_await_gop = 0;
+    if (ctx->reasm) {
+        if (ctx->reasm->ts_pat_valid) emit(s, ctx->reasm->ts_pat, 188);
+        if (ctx->reasm->ts_pmt_valid) emit(s, ctx->reasm->ts_pmt, 188);
+    }
+    return 1;
+}
+
+static void emit_commit(pin_session_t *s, const uint8_t *d, size_t n) { commit_unit(s, d, n); }
+static void emit_fifo(pin_session_t *s, const uint8_t *d, size_t n)
+{
+    scene_fifo_push(s, d, n, s->scene_frame_counter);
+}
 
 /* Forward decls: defined further down (near handle_inline_commands()), but
  * dv_on_unit()/analog_video_cb() above them need to call in when the
@@ -921,8 +956,11 @@ static int dv_write_cb(const uint8_t *data, size_t len, void *user)
      * whether that single first unit is buffered or committed immediately --
      * never a correctness issue, just which file it lands in. */
     int scene_split_active = s->capture_opts.scene_split;
-    if (!scene_split_active)
+    if (!scene_split_active) {
+        if (s->stream_kind == PIN_KIND_HDV && !hdv_write_gate(s, ctx, data, len, emit_commit))
+            return 0;
         commit_unit(s, data, len);
+    }
     return 0;
 }
 
@@ -1030,10 +1068,15 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             s->frames_damaged++;
         }
     } else { /* HDV */
-        hdv_pid_map_t map;
-        memset(&map, 0, sizeof(map));
-        map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1; map.audio_pid = -1;
-        hdv_scan_pat_pmt(data, len / 188, &map);
+        if (!ctx->hdv_map_init) {
+            memset(&ctx->hdv_map, 0, sizeof(ctx->hdv_map));
+            ctx->hdv_map.pmt_pid = -1; ctx->hdv_map.video_pid = -1;
+            ctx->hdv_map.aux_pid = -1; ctx->hdv_map.audio_pid = -1;
+            ctx->hdv_map_init = 1;
+        }
+        hdv_pid_map_t *map_p = &ctx->hdv_map;
+        hdv_scan_pat_pmt(data, len / 188, map_p);
+        hdv_pid_map_t map = *map_p;
         int vpid = map.video_pid > 0 ? map.video_pid : -1;
         if (vpid > 0)
             pin_previewer_push_hdv(s->preview, data, len / 188, vpid);
@@ -1077,11 +1120,13 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 rec.tc_second = gop.seconds; rec.tc_frame = gop.pictures;
                 rec.tc_drop_frame = gop.drop_frame;
             }
-            scene_fifo_push(s, data, len, s->scene_frame_counter);
-            long cut_idx = 0;
-            if (pin_scene_feed(&s->scene_det, &rec, &cut_idx))
-                scene_cut(s, cut_idx);
-            s->scene_frame_counter++;
+            if (hdv_write_gate(s, ctx, data, len, emit_fifo)) {
+                scene_fifo_push(s, data, len, s->scene_frame_counter);
+                long cut_idx = 0;
+                if (pin_scene_feed(&s->scene_det, &rec, &cut_idx))
+                    scene_cut(s, cut_idx);
+                s->scene_frame_counter++;
+            }
         }
         /* else: already committed directly in dv_write_cb() */
     }
@@ -1122,6 +1167,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->bytes_written = 0;
     s->capture_start_s = pin_session_now();
     s->scene_det_ready = 0;
+    s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
     open_sink_for_scene(s);
     if (s->state != PIN_STATE_ERROR) {
         set_state(s, PIN_STATE_CAPTURING);
@@ -1375,7 +1421,7 @@ static void do_run_dv(pin_session_t *s)
 
     dv_reassembler_t reasm;
     dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = NULL };
-    dv_ctx_t ctx = { .s = s };
+    dv_ctx_t ctx = { .s = s, .reasm = &reasm };
     out.user = &ctx;
     dv_reassembler_init(&reasm, &out);
     s->reasm = reasm; /* kept for status/inspection only */
