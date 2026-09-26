@@ -50,14 +50,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(IsIdle), nameof(CaptureButtonText), nameof(CaptureButtonGlyph),
                               nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled),
                               nameof(PrimaryDvTitle), nameof(PrimaryDvHelp), nameof(PrimaryDvGlyph), nameof(DeviceSelectEnabled),
-                              nameof(DeckTransportEnabled), nameof(DeckStopEnabled))]
+                              nameof(DeckTransportEnabled), nameof(DeckStopEnabled), nameof(DvAutoCaptureEnabled))]
     private bool _isCapturing;
 
     public bool IsIdle => !IsCapturing;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled), nameof(CanStop),
-                              nameof(DeckTransportEnabled), nameof(DeckStopEnabled))]
+                              nameof(DeckTransportEnabled), nameof(DeckStopEnabled), nameof(DvAutoCaptureEnabled))]
     private PinState _sessionState = PinState.Closed;
 
     /// <summary>Stop is possible while writing (or between passes); not while already finalising.</summary>
@@ -69,11 +69,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Only for "capture without starting the tape", which is hidden while capturing.</summary>
     public bool PlayAndCaptureEnabled => !IsCapturing && SessionState == PinState.Ready;
 
-    /// <summary>REW / PLAY / FF: only while idle and READY (same rule as the capture buttons).</summary>
-    public bool DeckTransportEnabled => PlayAndCaptureEnabled;
+    /// <summary>False only when the core knows for sure that no camera is on the FireWire bus.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DeckTransportEnabled), nameof(DeckStopEnabled), nameof(DvAutoCaptureEnabled))]
+    private bool _deckAvailable = true;
+
+    /// <summary>REW / PLAY / FF: only while idle and READY (same rule as the capture buttons), and with a camera to talk to.</summary>
+    public bool DeckTransportEnabled => PlayAndCaptureEnabled && DeckAvailable;
 
     /// <summary>STOP: while capturing (it ends the capture) or whenever the transport is usable.</summary>
-    public bool DeckStopEnabled => IsCapturing ? CanStop : PlayAndCaptureEnabled;
+    public bool DeckStopEnabled => IsCapturing ? CanStop : PlayAndCaptureEnabled && DeckAvailable;
+
+    /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera; Stop capture always works.</summary>
+    public bool DvAutoCaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready && DeckAvailable;
 
     public string PrimaryDvTitle => IsCapturing ? "Stop capture" : "Automatic rewind & capture";
     public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
@@ -220,6 +228,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private bool _previewHasVideo;
 
     [ObservableProperty] private string _noVideoText = "No device open";
+
+    /// <summary>Progress bar in the preview pane while the device is being prepared.</summary>
+    [ObservableProperty] private bool _progressVisible;
+    [ObservableProperty] private bool _progressIndeterminate = true;
+    [ObservableProperty] private double _progressValue;
 
     private readonly IAudioMonitorService _audio = new WasapiAudioMonitorService();
 
@@ -701,9 +714,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         else
         {
-            StatusShortText = string.IsNullOrEmpty(file) || !IsCapturingState(st.State)
+            StatusShortText = st.State == PinState.Preparing && st.Detail.Length > 0
+                ? "Preparing: " + st.Detail
+                : string.IsNullOrEmpty(file) || !IsCapturingState(st.State)
                 ? SessionStateText
-                : SessionStateText + "  \u00B7  " + file;
+                : SessionStateText +"  \u00B7  " + file;
         }
         Timecode = string.IsNullOrEmpty(st.Timecode) ? "--:--:--:--" : st.Timecode;
         SignalLocked = st.Signal != 0;
@@ -740,12 +755,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         ApplyDeckStatus(st.Deck, st.DeckBusy != 0);
 
+        // One place says why there is no picture: the core's own sentence (bring-up step,
+        // "no camera found", "no signal on the composite input", ...).
         NoVideoText = st.State switch
         {
-            PinState.Preparing => "Preparing device…",
+            PinState.Preparing => st.Detail.Length > 0 ? st.Detail : "Preparing device…",
             PinState.Error => string.IsNullOrEmpty(st.ErrorText) ? "Device error" : st.ErrorText,
-            _ => IsDvInput ? "No camera or deck signal" : "No video signal",
+            _ => st.Detail.Length > 0 ? st.Detail : IsDvInput ? "No camera or deck signal" : "No video signal",
         };
+        ProgressVisible = st.State == PinState.Preparing;
+        ProgressIndeterminate = st.ProgressPercent < 0;
+        ProgressValue = Math.Max(0, st.ProgressPercent);
+
+        // Deck buttons have nothing to talk to without a camera (analog inputs report -1).
+        DeckAvailable = !IsDvInput || st.CameraPresent != 0;
 
         WindowTitle = Native.FormatWindowTitle(in st, SelectedDevice?.DisplayName ?? DefaultDeviceName);
     }

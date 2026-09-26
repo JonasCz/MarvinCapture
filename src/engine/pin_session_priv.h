@@ -138,6 +138,25 @@ struct pin_session {
     pin_std_t requested_std;
     pin_aspect_t aspect_override;
 
+    /* what the session is doing / waiting for, for pin_status_snapshot_t.detail */
+    char step_text[PIN_TEXT_MAX]; /* current bring-up step (PREPARING, or re-scanning) */
+    int progress_pct;             /* of that step, or -1 */
+    double prepare_start_s;       /* when PREPARING began (progress bar runs on elapsed time) */
+    int camera_present;           /* DV/HDV: 1 answered on the bus, 0 none, -1 n/a or unknown */
+    int reconnecting;             /* DV/HDV: re-scanning the bus after a topology change */
+    int dv_rescan;                /* DV/HDV: worker should leave the read loop and re-scan */
+    double stream_start_s;        /* DV/HDV: when the current bus pass began */
+    int dv_rescan_retries;        /* camera on the bus but silent: bounded re-scans */
+    /* analog picture controls and line-in gain as the user set them. Applied by
+     * the worker thread only (do_run_analog / analog_tick): the command channel
+     * is one request/reply pipe, so concurrent I2C from a UI thread can swap
+     * replies with the worker's own. They also survive an input switch. */
+    pinnacle_picture_t want_picture;
+    int want_gain_db10;
+    int ctl_dirty_picture, ctl_dirty_gain;
+    int analog_restart;           /* analog: the standard changed; restart video at the target */
+    pinnacle_std_t analog_target_std;
+
     /* capture pipeline (only valid while CAPTURING) */
     pin_capture_opts_t capture_opts;
     pinnacle_analog_t analog;

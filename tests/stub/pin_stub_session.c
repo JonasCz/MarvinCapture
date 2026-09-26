@@ -341,6 +341,8 @@ pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out) {
     memset(out, 0, caller_size);
     out->size = caller_size;
     out->state = s->state;
+    out->camera_present = 1;
+    out->progress_percent = -1;
     out->last_error = s->last_error;
     strncpy(out->error_text, s->error_text, sizeof(out->error_text) - 1);
     out->input = s->input;

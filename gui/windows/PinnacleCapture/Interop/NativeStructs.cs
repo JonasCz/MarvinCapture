@@ -192,7 +192,13 @@ public unsafe struct PinStatusSnapshot
     public double EstSecondsLeft;   // capture time left at the chosen format's rate; < 0 = unknown
     public int DiskLow;             // < 1 h or < 50 GB left
 
+    // Appended later (still ABI-compatible): what the core is doing / waiting for.
+    public fixed byte DetailBuf[PinLimits.TextMax];
+    public int ProgressPercent;     // of the current PREPARING step, or -1
+    public int CameraPresent;       // DV/HDV: 1 a camera answered, 0 none, -1 n/a or not known yet
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
+    public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }
     public string RecDatetime { get { fixed (byte* p = RecDatetimeBuf) return Utf8Fixed.Get(p, 32); } }
     public string CurrentFile { get { fixed (byte* p = CurrentFileBuf) return Utf8Fixed.Get(p, PinLimits.PathMax); } }

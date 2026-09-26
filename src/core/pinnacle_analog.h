@@ -138,7 +138,7 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
 /* --- assembled capture ---------------------------------------------------
  *
  * Both streams carry the same 12-byte header,
- *     ff 00 <counter u16 LE> <device time u32 LE> 00 00 00 00
+ *     ff 00 <counter u16 LE> <device time u64 LE>
  * and both counters start at 1 when capture starts. Audio packet N holds
  * the samples captured during video frame N. The device time is a ~10 MHz
  * clock of the device's own; the frame rate is the source's (the SAA7113
@@ -156,7 +156,7 @@ typedef struct {
     unsigned width, height;
     uint32_t index;          /* position in the output, from 0 */
     uint16_t seq;            /* device frame counter */
-    uint32_t device_time;
+    uint64_t device_time;
     int repeated;            /* stand-in for a frame that never arrived */
     size_t received;         /* bytes that arrived; below width*height*2 = truncated */
 } pinnacle_video_frame_t;
@@ -165,7 +165,7 @@ typedef struct {
     const uint8_t *pcm;      /* 16-bit LE stereo, interleaved */
     unsigned samples;        /* sample frames (4 bytes each) */
     uint16_t seq;
-    uint32_t device_time;
+    uint64_t device_time;
     int silence;             /* stand-in for a packet that never arrived */
 } pinnacle_audio_block_t;
 

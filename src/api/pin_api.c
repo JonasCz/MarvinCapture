@@ -396,6 +396,8 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
                  (unsigned long long)st->frames_dropped);
     } else if (st->state == PIN_STATE_ERROR) {
         snprintf(out, cap, "Error: %s", st->error_text);
+    } else if (st->state == PIN_STATE_PREPARING && st->detail[0]) {
+        snprintf(out, cap, "Preparing: %s", st->detail);
     } else {
         snprintf(out, cap, "%s%s%s%s", state_name(st->state), deck, tc,
                  st->signal ? "" : "  (no signal)");

@@ -107,12 +107,25 @@ typedef struct {
     int have_guid;
     uint32_t guid_hi, guid_lo;  /* the 1394 EUI-64 our node publishes */
     uint8_t id0[8];             /* the block at index 0; meaning unknown */
+    /* Optional bring-up progress: step is a short sentence, percent 0..100 or
+     * -1 when the step has no measurable length. Called from the thread that
+     * runs the bring-up. Survives pinnacle_open*(), which clears the rest, only
+     * if set after it. */
+    void (*progress)(void *user, const char *step, int percent);
+    void *progress_user;
     /* set by pinnacle_stream_start */
     uint16_t camera_node;      /* 0xffc0 | node number, 0 if none found */
+    int node_count;            /* nodes on the 1394 bus, us included (0 = not scanned) */
     int iso_channel;           /* channel IR context 0 listens on */
     int pcr_connected;         /* we hold a point-to-point connection on oPCR[0] */
     pinnacle_tuning_t tuning;  /* PINNACLE_* knobs; defaulted by pinnacle_open() */
 } pinnacle_device_t;
+
+static inline void pinnacle_progress(const pinnacle_device_t *dev, const char *step, int percent)
+{
+    if (dev && dev->progress)
+        dev->progress(dev->progress_user, step, percent);
+}
 
 /* Finds and opens the device, claims the vendor-class interface. Does not
  * touch alt settings or upload anything yet — call pinnacle_init_hardware

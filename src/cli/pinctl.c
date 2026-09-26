@@ -30,7 +30,7 @@
  *   deck <id> <play|pause|stop|ff|rew|state|timecode>
  *   preview-dump <id> -n N -o prefix
  *   preview-rate <id> [seconds]
- *   monitor <id> [seconds]
+ *   monitor <id> [seconds] [T:in=dv|svideo|composite] [T:std=pal|ntsc|...]
  *   actions <id> --actions a,b,c [other pin_launch_parse flags]
  *   watch
  *
@@ -398,18 +398,59 @@ static int cmd_preview_rate(const char *id, int seconds)
     return have_first ? 0 : 1;
 }
 
-static int cmd_monitor(const char *id, int seconds)
+/* monitor <id> [seconds] [step...]: prints the status once per 0.5 s. Steps
+ * are applied at their time: "T:in=dv|svideo|composite" or "T:std=auto|pal|
+ * ntsc|...". With no in= step at 0 the session stays unprepared (as the GUI
+ * would before the first pin_set_input). */
+typedef struct { double at; int is_input; int value; int done; } mon_step_t;
+
+static int cmd_monitor(const char *id, int argc, char **argv)
 {
+    int seconds = argc >= 1 ? atoi(argv[0]) : 0;
+    mon_step_t steps[16]; int nsteps = 0;
+    static const char *const stds[] = { "auto", "pal", "ntsc", "pal-m", "pal-n", "pal-60",
+                                        "ntsc-443", "ntsc-j", "secam" };
+    for (int i = 1; i < argc && nsteps < 16; i++) {
+        char *colon = strchr(argv[i], ':');
+        if (!colon) continue;
+        mon_step_t *m = &steps[nsteps];
+        memset(m, 0, sizeof(*m));
+        m->at = atof(argv[i]);
+        const char *what = colon + 1;
+        if (!strncmp(what, "in=", 3)) {
+            m->is_input = 1;
+            m->value = !strcmp(what + 3, "dv") ? PIN_INPUT_DV
+                     : !strcmp(what + 3, "svideo") ? PIN_INPUT_SVIDEO : PIN_INPUT_COMPOSITE;
+        } else if (!strncmp(what, "std=", 4)) {
+            m->value = 0;
+            for (int k = 0; k < 9; k++)
+                if (!strcmp(what + 4, stds[k])) m->value = k;
+        } else continue;
+        nsteps++;
+    }
     pin_session_t *s = NULL;
     pin_status_t st = pin_open(id, &s);
     if (st != PIN_OK) { fprintf(stderr, "pinctl: open failed: %s\n", pin_strerror(st)); return 1; }
-    time_t deadline = time(NULL) + (seconds > 0 ? seconds : 3600);
-    while (!g_stop && time(NULL) < deadline) {
+    struct timespec ts0; clock_gettime(CLOCK_MONOTONIC, &ts0);
+    double t0 = ts0.tv_sec + ts0.tv_nsec / 1e9, tend = seconds > 0 ? seconds : 3600;
+    while (!g_stop) {
+        struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts);
+        double t = ts.tv_sec + ts.tv_nsec / 1e9 - t0;
+        if (t >= tend) break;
+        for (int i = 0; i < nsteps; i++) {
+            if (steps[i].done || t < steps[i].at) continue;
+            steps[i].done = 1;
+            printf("[%5.1f] -> %s %d\n", t, steps[i].is_input ? "set_input" : "set_standard", steps[i].value);
+            if (steps[i].is_input) pin_set_input(s, (pin_input_t)steps[i].value);
+            else pin_set_standard(s, (pin_std_t)steps[i].value);
+        }
         pin_status_snapshot_t snap; memset(&snap, 0, sizeof(snap)); snap.size = sizeof(snap);
         pin_get_status(s, &snap);
         char line[512];
         pin_format_status_line(&snap, line, sizeof(line));
-        printf("%s\n", line);
+        printf("[%5.1f] %s | sig=%d cam=%d %dx%d std=%d kind=%d frames=%llu | %s\n", t, line, snap.signal,
+               snap.camera_present, snap.width, snap.height, (int)snap.detected_std,
+               (int)snap.stream_kind, (unsigned long long)snap.frames, snap.detail);
         pin_event_t ev;
         while (pin_poll_event(s, &ev))
             printf("  event kind=%d a=%d text=%s\n", ev.kind, ev.a, ev.text);
@@ -467,7 +508,7 @@ static void usage(void)
         "       pinctl deck <id> <play|pause|stop|ff|rew|state|timecode>\n"
         "       pinctl preview-dump <id> [-n N] [-o prefix]\n"
         "       pinctl preview-rate <id> [seconds]\n"
-        "       pinctl monitor <id> [seconds]\n"
+        "       pinctl monitor <id> [seconds] [T:in=dv|svideo|composite] [T:std=pal|ntsc]\n"
         "       pinctl actions <id> --actions a,b,c [pin_launch_parse flags...]\n"
         "       pinctl watch\n");
 }
@@ -491,7 +532,7 @@ int main(int argc, char **argv)
     if (!strcmp(sub, "preview-rate") && argc >= 3)
         return cmd_preview_rate(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
     if (!strcmp(sub, "monitor") && argc >= 3)
-        return cmd_monitor(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
+        return cmd_monitor(argv[2], argc - 3, argv + 3);
     if (!strcmp(sub, "actions") && argc >= 3)
         return cmd_actions(argc - 3, argv + 3, argv[2]);
     if (!strcmp(sub, "watch"))

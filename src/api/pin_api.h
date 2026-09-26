@@ -398,6 +398,21 @@ typedef struct {
     uint64_t disk_free_bytes;
     double est_seconds_left;
     int disk_low;               /* free space/time is getting low (< 1 hour or < 50 GB) */
+
+    /* Appended fields, ABI-compatible.
+     * detail: one line saying what the session is doing or waiting for, in
+     * plain English -- the current bring-up step while PREPARING ("Uploading
+     * FPGA firmware (42%)"), and the reason there is no picture while READY
+     * without a signal ("No camera found ..."). Empty when there is nothing
+     * to say. Shown in the preview pane and the status bar by every GUI.
+     * progress_percent: 0..100 for the current PREPARING step if it has a
+     * measurable length, else -1.
+     * camera_present: DV / HDV input only -- 1 a camera answered on the 1394
+     * bus, 0 none did (the deck controls have nothing to talk to), -1 not
+     * applicable (analog input) or not known yet. */
+    char detail[PIN_TEXT_MAX];
+    int progress_percent;
+    int camera_present;
 } pin_status_snapshot_t;
 
 /* Non-blocking. */

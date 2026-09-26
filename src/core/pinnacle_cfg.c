@@ -138,7 +138,9 @@ pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path)
         goto out;
     }
 
+    pinnacle_progress(dev, "Uploading FPGA firmware", 0);
     for (size_t off = 0; off < len; off += FPGA_CHUNK) {
+        pinnacle_progress(dev, "Uploading FPGA firmware", (int)(off * 100 / len));
         int chunk = (int)(len - off < FPGA_CHUNK ? len - off : FPGA_CHUNK), n = 0;
         int rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CMD_OUT, buf + off, chunk, &n,
                                        CFG_TIMEOUT_MS);
@@ -153,6 +155,7 @@ pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path)
     /* The vendor driver sleeps 10 ms here, but its traces show ~1 s between
      * the last bitstream byte and "06 00"; pinnacle_device.c found that
      * asking too early wedges the DV design. Keep the long wait. */
+    pinnacle_progress(dev, "Waiting for the FPGA to start up", -1);
     sleep_ms(1100);
 
     st = pinnacle_cfg_op(dev, 0x06, 0x00, &ready);

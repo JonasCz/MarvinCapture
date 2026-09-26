@@ -68,6 +68,7 @@ typedef struct {
     uint16_t at_status_addr;
     int at_evt;                /* -1 until the xferStatus writeback arrives */
     int reg_seq;
+    int reg_seq_before;        /* reg_seq when p1394_reg_read_begin() sent its request */
     uint32_t reg_addr, reg_val;
     int vreg_seq;              /* type-5 (vendor register) read replies */
     uint32_t vreg_val;
@@ -102,6 +103,15 @@ int p1394_reg_write(pinnacle_1394_t *l, uint16_t ohci_off, uint32_t val);
 int p1394_reg_read(pinnacle_1394_t *l, uint16_t ohci_off, uint32_t *val);
 
 /* Stops the AT request context and waits for it to go idle. */
+/* OHCI SelfIDCount: selfIDGeneration (23:16) changes with every bus reset, so
+ * a change of this register means the bus topology may have changed. */
+#define P1394_OHCI_SELF_ID_COUNT 0x068
+
+/* Non-blocking OHCI register read for use while a read loop owns EP 0x84
+ * (it feeds the reply to p1394_parse_ep84): _begin sends the request, _poll
+ * returns 1 and fills *val once the reply has arrived, else 0. */
+int p1394_reg_read_begin(pinnacle_1394_t *l, uint16_t off);
+int p1394_reg_read_poll(pinnacle_1394_t *l, uint16_t off, uint32_t *val);
 int p1394_at_reset(pinnacle_1394_t *l);
 
 /* Reads NodeID and SelfIDCount into local_node / node_count. Waits (up to

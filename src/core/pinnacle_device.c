@@ -245,6 +245,7 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
 
     pinnacle_status_t status = PINNACLE_OK;
     size_t offset = 0;
+    pinnacle_progress(dev, "Uploading FPGA firmware", 0);
     for (unsigned i = 0; i < PINNACLE_BITSTREAM_CHUNK_COUNT; i++) {
         unsigned chunk_len = PINNACLE_BITSTREAM_CHUNK_SIZES[i];
         int transferred = 0;
@@ -258,6 +259,8 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
             break;
         }
         offset += chunk_len;
+        pinnacle_progress(dev, "Uploading FPGA firmware",
+                          (int)(offset * 100 / PINNACLE_BITSTREAM_TOTAL_SIZE));
     }
 
     free(buf);
@@ -366,6 +369,7 @@ static pinnacle_status_t config_replay_seq(pinnacle_device_t *dev,
 pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bitstream_path)
 {
     dev->have_guid = 0;
+    pinnacle_progress(dev, "Resetting the device and reading its identity", -1);
     int rc = libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
                                                PINNACLE_ALT_SETTING_IDLE);
     if (rc != 0)
@@ -395,8 +399,10 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
      * right after a fresh physical replug, consistent with the FX2's
      * small OUT-endpoint buffer filling because the FPGA-side consumer
      * wasn't booted yet. */
+    pinnacle_progress(dev, "Waiting for the FPGA to start up", -1);
     sleep_ms(1500);
 
+    pinnacle_progress(dev, "Finishing FPGA start-up", -1);
     /* "06 00" -> "06 01" exchange on the config channel right after the
      * bitstream upload, before switching to the operational alt setting --
      * the second half of the fix described above. */

@@ -281,6 +281,22 @@ int p1394_reg_read(pinnacle_1394_t *l, uint16_t off, uint32_t *val)
     return -1;
 }
 
+int p1394_reg_read_begin(pinnacle_1394_t *l, uint16_t off)
+{
+    uint8_t pkt[8] = { 0 };
+    put32(pkt, (MSG_REG_READ << 28) | MSG_REPLY | (1u << 20) | (OHCI_BASE + off));
+    l->reg_seq_before = l->reg_seq;
+    return p1394_send(l, pkt, 8);
+}
+
+int p1394_reg_read_poll(pinnacle_1394_t *l, uint16_t off, uint32_t *val)
+{
+    if (l->reg_seq == l->reg_seq_before || l->reg_addr != OHCI_BASE + off)
+        return 0;
+    *val = l->reg_val;
+    return 1;
+}
+
 int p1394_at_reset(pinnacle_1394_t *l)
 {
     uint32_t v = 0;

@@ -195,18 +195,22 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
     dev->pcr_connected = 0;
     dev->iso_channel = 63;
 
+    pinnacle_progress(dev, "Starting the FireWire (1394) link", -1);
     if (p1394_link_init(&link) != 0) {
         pin_logf(PIN_LOG_ERROR, "pinnacle: 1394 link initialisation failed\n");
         return PINNACLE_ERR_USB_TRANSFER;
     }
+    dev->node_count = link.node_count;
     pin_logf(PIN_LOG_INFO, "pinnacle: 1394 bus has %d node(s), we are node %u\n",
             link.node_count, link.local_node & 0x3f);
 
+    pinnacle_progress(dev, "Looking for a camera on the FireWire bus", -1);
     if (p1394_find_camera(&link, &dev->camera_node, &ompr) != 0) {
         dev->camera_node = 0;
-        pin_logf(PIN_LOG_WARN, "pinnacle: no camera answered on the 1394 bus; listening on "
+        pin_logf(PIN_LOG_INFO, "pinnacle: no camera answered on the 1394 bus; listening on "
                         "broadcast channel 63 anyway\n");
-    } else if (p1394_connect(&link, dev->camera_node, &opcr) == 0) {
+    } else if (pinnacle_progress(dev, "Connecting to the camera", -1),
+               p1394_connect(&link, dev->camera_node, &opcr) == 0) {
         dev->pcr_connected = 1;
         dev->iso_channel = (int)((opcr >> 16) & 0x3f);
         pin_logf(PIN_LOG_INFO, "pinnacle: camera is node %u (oMPR 0x%08x); connected to oPCR[0] "
@@ -221,6 +225,7 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
                 dev->camera_node & 0x3f, opcr, dev->iso_channel);
     }
 
+    pinnacle_progress(dev, "Starting video reception", -1);
     if (p1394_ir_start(&link, (unsigned)dev->iso_channel) != 0)
         return PINNACLE_ERR_USB_TRANSFER;
 
@@ -275,7 +280,7 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
                 if (link.verbose)
                     pin_logf(PIN_LOG_DEBUG, "pinnacle: released oPCR[0], now 0x%08x\n", opcr);
             } else
-                pin_logf(PIN_LOG_WARN, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
+                pin_logf(PIN_LOG_INFO, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
                         opcr);
         }
     }

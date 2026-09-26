@@ -137,8 +137,22 @@ int pin_session_poll_event(pin_session_t *s, pin_event_t *out)
     return 1;
 }
 
+/* How long a bring-up took last time, per input kind (DV, analog): the
+ * progress bar is elapsed time over this, since the steps differ too much in
+ * length (and mostly have no measurable size) for a per-step percentage. */
+static double g_prepare_expected_s[2] = { 7.0, 4.0 };
+
 static void set_state(pin_session_t *s, pin_state_t st)
 {
+    int kind = s->input == PIN_INPUT_DV ? 0 : 1;
+    if (st == PIN_STATE_PREPARING && s->state != PIN_STATE_PREPARING) {
+        s->prepare_start_s = pin_session_now();
+    } else if (s->state == PIN_STATE_PREPARING && st == PIN_STATE_READY && s->prepare_start_s > 0) {
+        double took = pin_session_now() - s->prepare_start_s;
+        if (took > 0.5 && took < 60)
+            g_prepare_expected_s[kind] = took;
+        s->prepare_start_s = 0;
+    }
     s->state = st;
     if (s->lock) {
         pinnacle_lock_state_t ls = PINNACLE_LOCK_READY;
@@ -158,6 +172,17 @@ static void set_error(pin_session_t *s, pin_status_t err, const char *msg)
     s->error_text[sizeof(s->error_text) - 1] = 0;
     set_state(s, PIN_STATE_ERROR);
     pin_session_push_event(s, PIN_EVT_ERROR, (int32_t)err, s->error_text);
+}
+
+/* Bring-up progress from the core (pinnacle_device_t.progress). */
+static void session_progress(void *user, const char *step, int percent)
+{
+    pin_session_t *s = user;
+    pin_session_lock(s);
+    strncpy(s->step_text, step, sizeof(s->step_text) - 1);
+    s->step_text[sizeof(s->step_text) - 1] = 0;
+    s->progress_pct = percent;
+    pin_session_unlock(s);
 }
 
 /* ========================================================================
@@ -905,6 +930,12 @@ typedef struct {
      * video PID (no preview, no audio, no GOP timecode). */
     hdv_pid_map_t hdv_map;
     int hdv_map_init;
+    /* 1394 bus watch (dv_tick): async read of OHCI SelfIDCount, whose
+     * generation field changes with every bus reset */
+    int bus_pending;
+    double bus_poll_s;
+    uint32_t bus_sig;
+    int bus_sig_valid;
     const dv_reassembler_t *reasm; /* live reassembler: latest PAT/PMT for the write gate */
 } dv_ctx_t;
 
@@ -1280,6 +1311,54 @@ static void dv_tick(void *user)
     }
 
     pin_session_lock(s);
+    double tnow = pin_session_now();
+
+    /* "signal" for DV/HDV means data arrived recently */
+    if (s->signal && tnow - s->last_data_s > 1.0) {
+        s->signal = 0;
+        pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
+    }
+
+    /* Bus watch: a camera switched on or off (or a cable moved) resets the
+     * bus. Not while capturing: that finishes on its own idle rules. */
+    if (s->state == PIN_STATE_READY && !s->dv_rescan) {
+        int rescan = 0;
+        if (ctx->bus_pending) {
+            uint32_t v;
+            if (p1394_reg_read_poll(&s->link, P1394_OHCI_SELF_ID_COUNT, &v)) {
+                ctx->bus_pending = 0;
+                if (!ctx->bus_sig_valid) {
+                    ctx->bus_sig = v;
+                    ctx->bus_sig_valid = 1;
+                } else if (v != ctx->bus_sig) {
+                    s->dv_rescan_retries = 0;
+                    rescan = 1;
+                }
+            } else if (tnow - ctx->bus_poll_s > 1.0) {
+                ctx->bus_pending = 0;
+            }
+        } else if (tnow - ctx->bus_poll_s >= 0.5) {
+            ctx->bus_poll_s = tnow;
+            ctx->bus_pending = 1;
+            p1394_reg_read_begin(&s->link, P1394_OHCI_SELF_ID_COUNT);
+        }
+        /* another node is on the bus but did not answer: it was probably
+         * still starting up when we looked. Look again a few times. */
+        if (!rescan && !s->dev.camera_node && s->dev.node_count > 1 &&
+            s->dv_rescan_retries < 5 && tnow - s->stream_start_s > 2.0) {
+            s->dv_rescan_retries++;
+            rescan = 1;
+        }
+        if (rescan) {
+            s->dv_rescan = 1;
+            s->reconnecting = 1;
+            s->loop_stop = 1;
+            snprintf(s->step_text, sizeof(s->step_text),
+                     "The FireWire bus changed; looking for the camera again");
+            s->progress_pct = -1;
+        }
+    }
+
     if (s->deck_busy) {
         pin_deck_async_status_t st = pin_deck_async_poll(&s->deck_async, pin_session_now());
         if (st == PIN_DECK_ASYNC_DONE || st == PIN_DECK_ASYNC_FAILED) {
@@ -1408,37 +1487,74 @@ static void do_run_dv(pin_session_t *s)
     }
     pinnacle_lock_update(s->lock, PINNACLE_LOCK_READY, s->dev.guid_hi, s->dev.guid_lo);
 
-    pst = pinnacle_stream_start(&s->dev);
-    if (pst != PINNACLE_OK) {
-        set_error(s, PIN_ERR_USB, NULL);
+    /* switched away while we were bringing the device up: don't start a stream */
+    pin_session_lock(s);
+    int abandoned = s->cmd.pending || s->worker_stop;
+    pin_session_unlock(s);
+    if (abandoned)
         return;
+
+    /* One pass per look at the 1394 bus. A change of topology (camera
+     * switched on or off, cable moved) sends us round again: the link is
+     * re-initialised, the camera looked for and connected afresh. */
+    for (int first = 1;; first = 0) {
+        pst = pinnacle_stream_start(&s->dev);
+        if (pst != PINNACLE_OK) {
+            set_error(s, PIN_ERR_USB, NULL);
+            return;
+        }
+        pin_session_lock(s);
+        s->camera_present = s->dev.camera_node ? 1 : 0;
+        if (!s->camera_present) {
+            s->deck = PIN_DECK_UNKNOWN;
+            s->tape_percent = -1;
+            s->deck_busy = 0;
+        }
+        s->reconnecting = 0;
+        s->dv_rescan = 0;
+        s->step_text[0] = 0;
+        if (!s->camera_present) {
+            s->timecode[0] = 0;
+            s->rec_datetime[0] = 0;
+        }
+        pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
+        pin_session_unlock(s);
+
+        p1394_init(&s->link, &s->dev);
+        if (first) {
+            pin_session_lock(s);
+            set_state(s, PIN_STATE_READY);
+            pin_session_unlock(s);
+        }
+
+        dv_reassembler_t reasm;
+        dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = NULL };
+        dv_ctx_t ctx = { .s = s, .reasm = &reasm };
+        out.user = &ctx;
+        dv_reassembler_init(&reasm, &out);
+        s->reasm = reasm; /* kept for status/inspection only */
+
+        s->loop_stop = 0;
+        s->last_data_s = pin_session_now();
+        s->stream_start_s = s->last_data_s;
+        pinnacle_stream_read_loop_ex(&s->dev, dv_reassembler_feed_cb_shim,
+                                      &reasm, &s->loop_stop, &s->link, dv_tick, &ctx);
+
+        if (s->sink) {
+            dv_flush_pending(s);
+            if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
+            s->sink->close(s->sink);
+            s->sink = NULL;
+        }
+        dv_reassembler_finish(&reasm);
+        pin_session_lock(s);
+        /* a pending SET_INPUT / CLOSE wins over a re-scan */
+        int rescan = s->dv_rescan && !s->worker_stop && !s->cmd.pending;
+        pin_session_unlock(s);
+        pinnacle_stream_stop(&s->dev);
+        if (!rescan)
+            break;
     }
-    if (!s->dev.camera_node)
-        pin_session_push_event(s, PIN_EVT_LOG, PIN_LOG_WARN, "no camera found on the 1394 bus");
-
-    p1394_init(&s->link, &s->dev);
-    set_state(s, PIN_STATE_READY);
-
-    dv_reassembler_t reasm;
-    dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = NULL };
-    dv_ctx_t ctx = { .s = s, .reasm = &reasm };
-    out.user = &ctx;
-    dv_reassembler_init(&reasm, &out);
-    s->reasm = reasm; /* kept for status/inspection only */
-
-    s->loop_stop = 0;
-    s->last_data_s = pin_session_now();
-    pinnacle_stream_read_loop_ex(&s->dev, dv_reassembler_feed_cb_shim,
-                                  &reasm, &s->loop_stop, &s->link, dv_tick, &ctx);
-
-    if (s->sink) {
-        dv_flush_pending(s);
-        if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-        s->sink->close(s->sink);
-        s->sink = NULL;
-    }
-    dv_reassembler_finish(&reasm);
-    pinnacle_stream_stop(&s->dev);
 }
 
 /* ========================================================================
@@ -1449,6 +1565,7 @@ typedef struct {
     pin_session_t *s;
     uint32_t video_index;
     double last_status_s;   /* analog_tick(): last decoder status poll */
+    int auto_mismatch;      /* consecutive polls whose 50/60 Hz differs from the configured standard */
 } analog_ctx_t;
 
 static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
@@ -1496,6 +1613,14 @@ static int analog_tick(void *user)
     double now = pin_session_now();
 
     pin_session_lock(s);
+    if (s->ctl_dirty_picture) {
+        s->ctl_dirty_picture = 0;
+        pinnacle_analog_set_picture(&s->analog, &s->want_picture);
+    }
+    if (s->ctl_dirty_gain) {
+        s->ctl_dirty_gain = 0;
+        pinnacle_analog_set_audio_gain(&s->analog, s->want_gain_db10);
+    }
     /* The input's kind and geometry are known from the moment the decoder
      * is up, signal or not, so a capture can start (and wait) without one. */
     if (!s->stream_kind_known) {
@@ -1523,6 +1648,23 @@ static int analog_tick(void *user)
                 }
                 s->detected_std = s->is_60hz ? PIN_STD_NTSC : PIN_STD_PAL;
             }
+
+            /* Put the decoder and the frame geometry on the standard the
+             * user chose, or (Auto) the one the source turns out to have;
+             * do_run_analog() restarts the video at that standard. */
+            pinnacle_std_t want = s->analog.cfg.standard;
+            if (s->requested_std != PIN_STD_AUTO) {
+                want = (pinnacle_std_t)(s->requested_std - 1);
+            } else if (ast.locked && ast.is_60hz != pinnacle_std_is_60hz(want)) {
+                if (++ctx->auto_mismatch >= 3)
+                    want = ast.is_60hz ? PINNACLE_STD_NTSC : PINNACLE_STD_PAL;
+            } else {
+                ctx->auto_mismatch = 0;
+            }
+            if (want != s->analog.cfg.standard && s->state == PIN_STATE_READY) {
+                s->analog_restart = 1;
+                s->analog_target_std = want;
+            }
         }
     }
     if (s->requested_std != PIN_STD_AUTO) {
@@ -1537,6 +1679,13 @@ static int analog_tick(void *user)
         s->idle_s = now - s->last_data_s;
     if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
         s->elapsed_s = now - s->capture_start_s;
+    if (s->writer) {
+        pin_writer_stats_t wst;
+        pin_writer_get_stats(s->writer, &wst);
+        s->writer_backlog = wst.backlog_bytes;
+        s->writer_backlog_max = wst.backlog_high_water;
+        s->bytes_written = wst.bytes_pushed;
+    }
     int should_stop = s->state == PIN_STATE_CAPTURING && s->capture_opts.idle_stop_minutes > 0 &&
                       now - s->last_data_s > s->capture_opts.idle_stop_minutes * 60.0;
     pin_session_unlock(s);
@@ -1545,6 +1694,8 @@ static int analog_tick(void *user)
         s->loop_stop = 1;
         return 1;
     }
+    if (s->analog_restart)
+        return 1;
     if (should_stop) {
         pin_session_lock(s);
         if (s->sink) {
@@ -1589,6 +1740,11 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
     pinnacle_analog_config_t cfg;
     pinnacle_analog_config_defaults(&cfg);
     cfg.input = input == PIN_INPUT_SVIDEO ? PINNACLE_INPUT_SVIDEO : PINNACLE_INPUT_COMPOSITE;
+    pin_session_lock(s);
+    cfg.picture = s->want_picture;
+    s->ctl_dirty_picture = 0;
+    s->ctl_dirty_gain = 1; /* the gain goes on after pinnacle_analog_start() resets it */
+    pin_session_unlock(s);
     if (s->requested_std != PIN_STD_AUTO)
         cfg.standard = (pinnacle_std_t)(s->requested_std - 1); /* enums line up 1:1, see pin_std_t */
 
@@ -1618,7 +1774,34 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
      * (every frame -> cheap I2C status byte read, ~25-30 Hz) rather than a
      * separate loop here, since pinnacle_analog_capture_loop() owns the USB
      * event loop for as long as this input stays selected. */
-    pinnacle_analog_capture_loop(&s->analog, &sink, &stats, &s->loop_stop);
+    for (;;) {
+        pinnacle_analog_capture_loop(&s->analog, &sink, &stats, &s->loop_stop);
+        pin_session_lock(s);
+        int restart = s->analog_restart && !s->loop_stop && !s->worker_stop && !s->cmd.pending;
+        pinnacle_std_t target = s->analog_target_std;
+        s->analog_restart = 0;
+        pin_session_unlock(s);
+        if (!restart)
+            break;
+        /* new standard: geometry and audio packet size are fixed at start */
+        pinnacle_analog_stop(&s->analog);
+        pinnacle_analog_set_standard(&s->analog, target);
+        pin_session_lock(s);
+        s->width = (int)s->analog.width;
+        s->height = (int)s->analog.height;
+        s->is_60hz = pinnacle_std_is_60hz(target);
+        s->detected_std = (pin_std_t)(target + 1);
+        pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
+        pin_session_unlock(s);
+        ctx.auto_mismatch = 0;
+        s->ctl_dirty_gain = 1;
+        if (pinnacle_analog_start(&s->analog) != PINNACLE_OK) {
+            pin_session_lock(s);
+            set_error(s, PIN_ERR_USB, NULL);
+            pin_session_unlock(s);
+            break;
+        }
+    }
 
     if (s->sink) {
         if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
@@ -1682,6 +1865,7 @@ static void replay_handle_eot(pin_session_t *s)
 static int replay_run_ts(pin_session_t *s, FILE *f)
 {
     p1394_init(&s->link, &s->dev);
+    s->camera_present = 1;
     set_state(s, PIN_STATE_READY);
     s->deck = PIN_DECK_PLAYING;
 
@@ -1781,6 +1965,7 @@ static int replay_run(pin_session_t *s)
         return replay_run_ts(s, f); /* closes f itself */
 
     p1394_init(&s->link, &s->dev); /* unused fields only; no real 1394 for replay */
+    s->camera_present = 1;
     set_state(s, PIN_STATE_READY);
     s->deck = PIN_DECK_PLAYING;
 
@@ -1889,6 +2074,14 @@ static void *worker_main(void *arg)
             pthread_cond_broadcast(&s->cmd_idle);
             s->input = cmd.input;
             s->stream_kind_known = 0;
+            s->signal = 0;
+            s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
+            s->camera_present = -1;
+            s->reconnecting = 0;
+            s->dv_rescan = 0;
+            s->analog_restart = 0;
+            strncpy(s->step_text, "Preparing the device", sizeof(s->step_text) - 1);
+            s->progress_pct = -1;
             s->capture_want_start = 0;
             s->rewind_before_capture = 0;
             set_state(s, PIN_STATE_PREPARING);
@@ -1908,6 +2101,11 @@ static void *worker_main(void *arg)
                 uint32_t ghi, glo;
                 if (pinnacle_read_guid(&s->dev, &ghi, &glo) == PINNACLE_OK)
                     pinnacle_lock_update(s->lock, PINNACLE_LOCK_PREPARING, ghi, glo);
+            }
+
+            if (!s->is_replay) {
+                s->dev.progress = session_progress;
+                s->dev.progress_user = s;
             }
 
             if (cmd.input == PIN_INPUT_DV) {
@@ -1973,11 +2171,14 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->requested_std = PIN_STD_AUTO;
     s->aspect_override = PIN_ASPECT_AUTO;
     s->tape_percent = -1;
+    s->camera_present = -1;
+    s->progress_pct = -1;
     s->preview = pin_previewer_create();
     s->hdv_audio = pin_hdv_audio_create(pin_session_feed_monitor_audio, s);
     s->mon_cap_frames = 48000 * 2; /* 2 s at 48 kHz */
     s->mon_buf = calloc(s->mon_cap_frames * 2, sizeof(int16_t));
     pinnacle_analog_config_defaults(&s->analog.cfg);
+    pinnacle_picture_defaults(&s->want_picture);
 
     if (!s->is_replay) {
         pinnacle_status_t pst = pinnacle_lock_acquire(resolved, &s->lock);
@@ -2042,6 +2243,19 @@ pin_status_t pin_session_set_input(pin_session_t *s, pin_input_t input)
     if (!s) return PIN_ERR_ARG;
     pin_session_lock(s);
     if (s->state == PIN_STATE_CAPTURING) { pin_session_unlock(s); return PIN_ERR_STATE; }
+    /* Say so at once: stopping the running input can take a moment, and until
+     * then the status would keep describing the old one. */
+    s->input = input;
+    if (s->state != PIN_STATE_PREPARING)
+        set_state(s, PIN_STATE_PREPARING);
+    snprintf(s->step_text, sizeof(s->step_text), "Stopping the current input");
+    s->progress_pct = -1;
+    s->signal = 0;
+    s->camera_present = -1;
+    s->deck = PIN_DECK_UNKNOWN;
+    s->deck_busy = 0;
+    s->tape_percent = -1;
+    s->timecode[0] = 0;
     pin_session_unlock(s);
     s->loop_stop = 1;
     pin_cmd_t cmd = { .kind = PIN_CMD_SET_INPUT, .input = input };
@@ -2052,7 +2266,13 @@ pin_status_t pin_session_set_input(pin_session_t *s, pin_input_t input)
 pin_status_t pin_session_set_standard(pin_session_t *s, pin_std_t std)
 {
     if (!s) return PIN_ERR_ARG;
+    if ((unsigned)std >= PIN_STD_COUNT) return PIN_ERR_ARG;
     pin_session_lock(s);
+    /* the frame geometry of a running capture cannot change */
+    if (s->state == PIN_STATE_CAPTURING || s->state == PIN_STATE_STOPPING) {
+        pin_session_unlock(s);
+        return PIN_ERR_STATE;
+    }
     s->requested_std = std;
     pin_session_unlock(s);
     return PIN_OK;
@@ -2076,16 +2296,19 @@ pin_status_t pin_session_get_control(pin_session_t *s, pin_control_t c, pin_cont
     out->min = tbl[c].min; out->max = tbl[c].max; out->step = tbl[c].step; out->def = tbl[c].def;
     pin_session_lock(s);
     switch (c) {
-    case PIN_CTL_BRIGHTNESS: out->value = s->analog.cfg.picture.brightness; break;
-    case PIN_CTL_CONTRAST:   out->value = s->analog.cfg.picture.contrast; break;
-    case PIN_CTL_SATURATION: out->value = s->analog.cfg.picture.saturation; break;
-    case PIN_CTL_HUE:        out->value = s->analog.cfg.picture.hue; break;
-    case PIN_CTL_SHARPNESS:  out->value = s->analog.cfg.picture.sharpness; break;
+    case PIN_CTL_BRIGHTNESS: out->value = s->want_picture.brightness; break;
+    case PIN_CTL_CONTRAST:   out->value = s->want_picture.contrast; break;
+    case PIN_CTL_SATURATION: out->value = s->want_picture.saturation; break;
+    case PIN_CTL_HUE:        out->value = s->want_picture.hue; break;
+    case PIN_CTL_SHARPNESS:  out->value = s->want_picture.sharpness; break;
+    case PIN_CTL_AUDIO_GAIN: out->value = s->want_gain_db10; break;
     default: out->value = tbl[c].def; break;
     }
+    /* hue only exists for NTSC: the chosen standard, or with Auto the detected one */
     out->enabled = (c != PIN_CTL_HUE) || (s->requested_std == PIN_STD_NTSC ||
                                            s->requested_std == PIN_STD_NTSC_443 ||
-                                           s->requested_std == PIN_STD_NTSC_J);
+                                           s->requested_std == PIN_STD_NTSC_J ||
+                                           (s->requested_std == PIN_STD_AUTO && s->is_60hz));
     pin_session_unlock(s);
     return PIN_OK;
 }
@@ -2094,7 +2317,7 @@ pin_status_t pin_session_set_control(pin_session_t *s, pin_control_t c, int32_t 
 {
     if (!s) return PIN_ERR_ARG;
     pin_session_lock(s);
-    pinnacle_picture_t p = s->analog.cfg.picture;
+    pinnacle_picture_t p = s->want_picture;
     switch (c) {
     case PIN_CTL_BRIGHTNESS: p.brightness = value; break;
     case PIN_CTL_CONTRAST:   p.contrast = value; break;
@@ -2102,15 +2325,14 @@ pin_status_t pin_session_set_control(pin_session_t *s, pin_control_t c, int32_t 
     case PIN_CTL_HUE:        p.hue = value; break;
     case PIN_CTL_SHARPNESS:  p.sharpness = value; break;
     case PIN_CTL_AUDIO_GAIN:
-        if (s->analog.dev)
-            pinnacle_analog_set_audio_gain(&s->analog, value);
+        s->want_gain_db10 = value;
+        s->ctl_dirty_gain = 1;
         pin_session_unlock(s);
         return PIN_OK;
     default: pin_session_unlock(s); return PIN_ERR_ARG;
     }
-    s->analog.cfg.picture = p;
-    if (s->analog.dev) /* applied live between sink callbacks by pinnacle_analog.c */
-        pinnacle_analog_set_picture(&s->analog, &p);
+    s->want_picture = p;
+    s->ctl_dirty_picture = 1; /* the worker applies it (analog_tick) */
     pin_session_unlock(s);
     return PIN_OK;
 }
@@ -2308,6 +2530,27 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->bytes_written = s->bytes_written;
     out->writer_backlog = s->writer_backlog; out->writer_backlog_max = s->writer_backlog_max;
     out->idle_s = s->idle_s;
+    out->camera_present = s->camera_present;
+    out->progress_percent = -1;
+    if (s->state == PIN_STATE_PREPARING) {
+        snprintf(out->detail, sizeof(out->detail), "%s", s->step_text[0] ? s->step_text : "Preparing the device");
+        double expect = g_prepare_expected_s[s->input == PIN_INPUT_DV ? 0 : 1];
+        double frac = s->prepare_start_s > 0 ? (pin_session_now() - s->prepare_start_s) / expect : 0;
+        out->progress_percent = frac < 0 ? 0 : frac > 0.99 ? 99 : (int)(frac * 100);
+    } else if (s->reconnecting) {
+        snprintf(out->detail, sizeof(out->detail), "%s", s->step_text);
+    } else if (s->state == PIN_STATE_READY && !s->signal) {
+        if (s->input == PIN_INPUT_DV) {
+            snprintf(out->detail, sizeof(out->detail), "%s",
+                     s->camera_present == 0
+                         ? "No camera found. Connect a DV or HDV camera to the FireWire port and switch it on."
+                         : "The camera is connected but is not sending video. Put it in camera mode, or press Play on the deck.");
+        } else {
+            snprintf(out->detail, sizeof(out->detail),
+                     "No video signal on the %s input. Check the cable and that the source is running.",
+                     s->input == PIN_INPUT_SVIDEO ? "S-Video" : "composite");
+        }
+    }
     if (s->audio_meter_t > 0 && meter_clock() - s->audio_meter_t < 0.5) {
         memcpy(out->audio_peak_db, s->audio_peak_db, sizeof(out->audio_peak_db));
         memcpy(out->audio_rms_db, s->audio_rms_db, sizeof(out->audio_rms_db));

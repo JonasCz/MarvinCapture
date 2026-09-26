@@ -174,8 +174,17 @@ follows (`pinnacle_analog.c`, `ac97_init`):
 Both endpoints use the same 12-byte header:
 
 ```
-ff 00 <counter u16 LE> <device time u32 LE> 00 00 00 00
+ff 00 <counter u16 LE> <device time u64 LE>
 ```
+
+The time is a 64-bit count of ~10 MHz ticks, zeroed when the capture block is
+reset. Its upper four bytes are 00 for the first 2^32 ticks, which is **429.5 s**
+(10,737 frames); after that byte 8 becomes 01 and counting continues. A parser
+that insists on 00 there loses every video header at that point (audio, which
+only checks `ff 00`, carries on), and the capture silently ends up with
+audio and no video. Found with a raw dump of a 520 s capture: the device
+never stops, and the headers just change from `... 00 00 00 00` to
+`... 01 00 00 00`.
 
 - **Video, EP 0x82**: one header, then one frame as **YUYV 4:2:2**,
   720 x 576 x 2 = 829,440 bytes, sent **field by field**: all 288 lines of

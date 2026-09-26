@@ -339,11 +339,15 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
     /* "06 00" answers 01 while some bitstream is running. A cold device
      * first needs the power-up sequence before its loader answers "05". */
     uint8_t up = 0;
+    pinnacle_progress(dev, "Checking the device", -1);
     pinnacle_status_t st = pinnacle_cfg_op(dev, 0x06, 0x00, &up);
     if (st != PINNACLE_OK)
         return st;
-    if (up != 0x01 && (st = power_up(a)) != PINNACLE_OK)
-        return st;
+    if (up != 0x01) {
+        pinnacle_progress(dev, "Powering up the device", -1);
+        if ((st = power_up(a)) != PINNACLE_OK)
+            return st;
+    }
 
     if ((st = pinnacle_fpga_load(dev, capture_bitstream_path)) != PINNACLE_OK)
         return st;
@@ -355,6 +359,7 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
      * the settings. Reg 0x11 bit 3 (OEYC) enables the decoder's pixel
      * output bus towards the FPGA; the vendor turns it on here. */
     a->saa09 = 0x01;
+    pinnacle_progress(dev, "Initialising the video decoder", -1);
     if ((st = saa_write_table(a, saa7113_init, sizeof(saa7113_init) / sizeof(saa7113_init[0]))) !=
         PINNACLE_OK)
         return st;
@@ -365,6 +370,7 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
         return st;
 
     /* Capture block and codec, in the vendor's order. */
+    pinnacle_progress(dev, "Initialising the audio codec", -1);
     if ((st = cap_reset(a)) != PINNACLE_OK ||
         (st = cap_write(a, CAP_FORMAT, 0x00)) != PINNACLE_OK ||
         (st = cap_write(a, CAP_CONTROL, 0x00)) != PINNACLE_OK ||
@@ -690,7 +696,7 @@ typedef struct {
     size_t frame_bytes, received;
     int in_frame, have_frame;
     uint16_t seq, last_vseq;
-    uint32_t vtime;
+    uint64_t vtime;
     uint32_t index;
     int have_aseq;
     uint16_t next_aseq;
@@ -702,6 +708,17 @@ typedef struct {
     int draining;
     struct timespec drain_start;
 } assembler_t;
+
+/* The device time in a packet header: a 64-bit little-endian count of ~10 MHz
+ * ticks in bytes 4..11. Bytes 8..11 stay zero for the first 2^32 ticks
+ * (429.5 s after the capture block was reset) and then count on. */
+static uint64_t header_time(const uint8_t *d)
+{
+    uint64_t t = 0;
+    for (int i = 7; i >= 0; i--)
+        t = t << 8 | d[4 + i];
+    return t;
+}
 
 static void start_draining(assembler_t *s)
 {
@@ -717,7 +734,7 @@ static int audio_caught_up(const assembler_t *s)
     return !s->have_frame || (uint16_t)(s->next_aseq - s->last_vseq - 1) < 0x8000;
 }
 
-static int emit_frame(assembler_t *s, uint16_t seq, uint32_t t, int repeated, size_t received)
+static int emit_frame(assembler_t *s, uint16_t seq, uint64_t t, int repeated, size_t received)
 {
     pinnacle_video_frame_t f = {
         .yuyv = s->frame, .width = s->a->width, .height = s->a->height,
@@ -729,7 +746,7 @@ static int emit_frame(assembler_t *s, uint16_t seq, uint32_t t, int repeated, si
 }
 
 static int emit_audio(assembler_t *s, const uint8_t *pcm, unsigned samples, uint16_t seq,
-                      uint32_t t, int silence)
+                      uint64_t t, int silence)
 {
     pinnacle_audio_block_t b = {
         .pcm = pcm, .samples = samples, .seq = seq, .device_time = t, .silence = silence,
@@ -788,8 +805,10 @@ static void weave(assembler_t *s, const uint8_t *d, size_t n)
 static int on_video(assembler_t *s, const uint8_t *d, size_t n)
 {
     size_t wire = n;
-    int header = n >= PACKET_HEADER && d[0] == 0xff && d[1] == 0x00 && !d[8] && !d[9] &&
-                 !d[10] && !d[11];
+    /* Pixel data cannot look like a header: 0xff never occurs in ITU-R BT.656
+     * pixel values. Nothing else in the header is checked: the time field
+     * is a 64-bit counter and its upper half is not always zero. */
+    int header = n >= PACKET_HEADER && d[0] == 0xff && d[1] == 0x00;
     int r = 0;
 
     /* A header while a frame is open: that frame ended without its short
@@ -799,8 +818,7 @@ static int on_video(assembler_t *s, const uint8_t *d, size_t n)
         return r;
     if (header) {
         s->seq = (uint16_t)(d[2] | d[3] << 8);
-        s->vtime = (uint32_t)d[4] | (uint32_t)d[5] << 8 | (uint32_t)d[6] << 16 |
-                   (uint32_t)d[7] << 24;
+        s->vtime = header_time(d);
         s->in_frame = 1;
         s->received = 0;
         d += PACKET_HEADER;
@@ -824,8 +842,7 @@ static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
     if (n < PACKET_HEADER || d[0] != 0xff || d[1] != 0x00 || !s->have_aseq)
         return 0;   /* audio before the first video frame has nothing to pair with */
     uint16_t seq = (uint16_t)(d[2] | d[3] << 8);
-    uint32_t t = (uint32_t)d[4] | (uint32_t)d[5] << 8 | (uint32_t)d[6] << 16 |
-                 (uint32_t)d[7] << 24;
+    uint64_t t = header_time(d);
     uint16_t gap = (uint16_t)(seq - s->next_aseq);
     int r = 0;
 
@@ -846,6 +863,7 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
 {
     assembler_t *s = user;
     int r = 0;
+
 
     if (s->ext_stop && *s->ext_stop)
         start_draining(s);
