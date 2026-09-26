@@ -75,12 +75,9 @@ typedef struct {
     /* pinnacle_stream.c (DV/HDV) */
     int debug_1394;             /* PINNACLE_DEBUG_1394: p1394 verbose level (0/1/2) */
     int probe_registers;        /* PINNACLE_PROBE=1: probe OHCI registers after stream start */
-    int stop_drain;             /* PINNACLE_STOP_DRAIN: keep EP 0x88 drained during stop (default on) */
     int debug_ep88;             /* PINNACLE_DEBUG_EP88=1: log every EP 0x88 completion */
     const char *raw_dump_path;  /* PINNACLE_RAW_DUMP: also write raw EP 0x88 bytes here, or NULL */
-    unsigned queue_depth;       /* PINNACLE_QUEUE_DEPTH: EP 0x88 transfer queue depth, 0 = default */
     int debug_ep84;             /* PINNACLE_DEBUG_EP84=1: log every EP 0x84 record */
-    int ep84_drain;             /* PINNACLE_EP84_DRAIN: keep EP 0x84 drained while streaming (default on) */
 
     /* pinnacle_analog.c */
     unsigned video_queue;       /* PINNACLE_VIDEO_QUEUE: video transfer queue depth, 0 = default */

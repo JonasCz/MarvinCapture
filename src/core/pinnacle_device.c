@@ -32,12 +32,9 @@ void pinnacle_tuning_defaults(pinnacle_tuning_t *t)
     memset(t, 0, sizeof(*t));
     t->debug_1394 = 0;
     t->probe_registers = 0;
-    t->stop_drain = 1;      /* PINNACLE_STOP_DRAIN=0 turns this off */
     t->debug_ep88 = 0;
     t->raw_dump_path = NULL;
-    t->queue_depth = 0;     /* 0 = use DV_QUEUE_DEPTH */
     t->debug_ep84 = 0;
-    t->ep84_drain = 1;      /* PINNACLE_EP84_DRAIN=0 turns this off */
     t->video_queue = 0;     /* 0 = use VIDEO_QUEUE */
     t->video_xfer = 0;      /* 0 = use VIDEO_XFER */
     t->debug_analog = 0;
@@ -51,18 +48,12 @@ void pinnacle_tuning_from_env(pinnacle_tuning_t *t)
         t->debug_1394 = atoi(e);
     if ((e = getenv("PINNACLE_PROBE")))
         t->probe_registers = (e[0] == '1');
-    if ((e = getenv("PINNACLE_STOP_DRAIN")))
-        t->stop_drain = !(e[0] == '0');
     if ((e = getenv("PINNACLE_DEBUG_EP88")))
         t->debug_ep88 = (e[0] == '1');
     if ((e = getenv("PINNACLE_RAW_DUMP")))
         t->raw_dump_path = e;
-    if ((e = getenv("PINNACLE_QUEUE_DEPTH")))
-        t->queue_depth = (unsigned)strtoul(e, NULL, 10);
     if ((e = getenv("PINNACLE_DEBUG_EP84")))
         t->debug_ep84 = (e[0] == '1');
-    if ((e = getenv("PINNACLE_EP84_DRAIN")))
-        t->ep84_drain = !(e[0] == '0');
     if ((e = getenv("PINNACLE_VIDEO_QUEUE")))
         t->video_queue = (unsigned)atoi(e);
     if ((e = getenv("PINNACLE_VIDEO_XFER")))

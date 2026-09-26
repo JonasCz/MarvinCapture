@@ -167,9 +167,6 @@ All opt-in environment variables; the defaults are the right values.
 | variable | effect |
 |---|---|
 | `PINNACLE_PROBE=1` | dump the OHCI registers above after the start sequence |
-| `PINNACLE_QUEUE_DEPTH=<n>` | EP 0x88 transfers in flight (default 256, max 256). `1` reproduces the old synchronous loop **and its data loss** (A/B only) |
-| `PINNACLE_STOP_DRAIN=0` | don't drain EP 0x88 during the stop sequence; the stop then fails on packet 3 of 4 (A/B only) |
-| `PINNACLE_EP84_DRAIN=0` | disable the EP 0x84 status drain (A/B only) |
 | `PINNACLE_DEBUG_EP88=1` | log every EP 0x88 completion: size, delivery time, libusb completion time and callbacks over 1 ms. Not for loss testing: the log runs on the USB thread and adds its own stalls |
 | `PINNACLE_DEBUG_EP84=1` | log every EP 0x84 record with its arrival time |
 | `PINNACLE_RAW_DUMP=<path>` | write the raw EP 0x88 byte stream to a file before reassembly. This is also the input format of the replay device below |

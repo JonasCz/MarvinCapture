@@ -242,20 +242,10 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
     drain_replies(dev, 50);
 
     /* Keep EP 0x88 moving throughout — see the comment above. Data keeps
-     * arriving until IR0 is out of "run".
-     *
-     * This was off by default for a while: the first time the sequence ran
-     * to completion, the following captures all got zero bytes, and only a
-     * physical replug brought it back. That now looks like it was not the
-     * device wedging at all — a camera that isn't transmitting produces
-     * exactly the same symptom (zero bytes on EP 0x88, device otherwise
-     * healthy and answering register reads), and we had no way to tell the
-     * two apart until the not-ready check and the register probe went in.
-     * Set PINNACLE_STOP_DRAIN=0 to get the old truncated-stop behaviour. */
-    int want_drain = dev->tuning.stop_drain;
+     * arriving until IR0 is out of "run". */
     struct dv_drain drain;
     pthread_t drain_thread;
-    int drain_started = want_drain && dv_drain_start(&drain, &drain_thread, dev);
+    int drain_started = dv_drain_start(&drain, &drain_thread, dev);
 
     pinnacle_status_t status = PINNACLE_OK;
     pinnacle_1394_t link;
@@ -350,7 +340,7 @@ static void LIBUSB_CALL dv_xfer_cb(struct libusb_transfer *xfer)
  * exactly this. Leaving them unread lets the FX2's IN buffer fill, which is
  * one way to stop the command processor accepting writes. One transfer,
  * resubmitted forever, costs nothing.
- * PINNACLE_DEBUG_EP84=1 logs each record; PINNACLE_EP84_DRAIN=0 disables it. */
+ * PINNACLE_DEBUG_EP84=1 logs each record. */
 struct ep84_state {
     unsigned char buf[512];
     volatile int active;
@@ -419,13 +409,7 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
     const char *raw_dump_path = dev->tuning.raw_dump_path;
     FILE *raw_dump = raw_dump_path ? fopen(raw_dump_path, "wb") : NULL;
 
-    /* PINNACLE_QUEUE_DEPTH exists to A/B the queue against the old
-     * one-transfer-at-a-time behaviour (depth 1 reproduces it). */
-    unsigned depth = dev->tuning.queue_depth ? dev->tuning.queue_depth : DV_QUEUE_DEPTH;
-    if (depth < 1)
-        depth = 1;
-    if (depth > DV_QUEUE_DEPTH)
-        depth = DV_QUEUE_DEPTH;
+    unsigned depth = DV_QUEUE_DEPTH;
 
     struct rx_slot slots[DV_QUEUE_DEPTH];
     memset(slots, 0, sizeof(slots));
@@ -468,16 +452,15 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
     if (submitted == 0)
         status = PINNACLE_ERR_USB_TRANSFER;
 
-    /* EP 0x84 drain, on this same event loop. Forced on when link is given:
-     * async AV/C (p1394_avc_begin/poll) has nothing to poll without it. */
-    int drain_enabled = dev->tuning.ep84_drain || link != NULL;
+    /* EP 0x84 drain, on this same event loop (async AV/C, p1394_avc_begin/poll,
+     * has nothing to poll without it). */
     struct ep84_state ep84;
     memset(&ep84, 0, sizeof(ep84));
     ep84.log = dev->tuning.debug_ep84;
     ep84.t0 = t0;
     ep84.link = link;
     struct libusb_transfer *ep84_xfer = NULL;
-    if (drain_enabled) {
+    {
         ep84_xfer = libusb_alloc_transfer(0);
         if (ep84_xfer) {
             libusb_fill_bulk_transfer(ep84_xfer, dev->handle, PINNACLE_EP_CMD_IN,

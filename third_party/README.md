@@ -26,6 +26,23 @@ the GUI, not in the core).
   for the static libs), pthreads on Linux/macOS. The FFV1 encoder uses
   slice threading (`slices=16`, `thread_count` set by the caller).
 
+### Where the source comes from
+
+Only the *installed* static libraries (`third_party/ffmpeg-<os>-<arch>/`) are
+needed to build `pinnacle-oss-core`. The FFmpeg source is **not** kept in the
+repo or needed afterwards; `scripts/build-ffmpeg.sh` downloads it on demand:
+
+- Tarball: <https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz> (release list and
+  signatures at <https://ffmpeg.org/download.html>)
+- sha256: `7138d28c96d9d3e3af4ee3d8cad72741f8ffb40da90c1112235dea3ecd3178a3`
+- It is unpacked to `third_party/ffmpeg-src/`, built out of tree in
+  `third_party/ffmpeg-<os>-<arch>-build/`, and both can be deleted once the
+  install directory exists. `scripts/build.ps1` runs the script automatically
+  if the install directory is missing.
+- To use a different FFmpeg, edit `FFMPEG_VERSION` and `FFMPEG_SHA256` at the
+  top of the script, or point CMake at an existing build with
+  `-DPIN_FFMPEG_PREFIX=<prefix>`.
+
 ### Rebuilding
 
 ```sh
