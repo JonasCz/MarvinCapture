@@ -395,7 +395,9 @@
                                 <StackPanel Spacing="12">
                                     <Grid>
                                         <TextBlock Text="Tape" Style="{StaticResource CardHeaderStyle}" />
+                                        <!-- Fixed width fits the longest state ("Camera recording …"), so the text never shifts. -->
                                         <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" HorizontalAlignment="Right"
+                                                   Width="120" TextAlignment="Left" TextTrimming="CharacterEllipsis"
                                                    Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                                     </Grid>
@@ -532,6 +534,7 @@
                                 Visibility="{x:Bind VM.IsDvInput, Mode=OneWay}">
                         <FontIcon Glyph="&#xEC58;" Style="{StaticResource StatusIconStyle}" />
                         <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                                   Width="120" TextAlignment="Left" TextTrimming="CharacterEllipsis"
                                    AutomationProperties.Name="{x:Bind local:MainWindow.Label('Deck', VM.DeckStateText), Mode=OneWay}" />
                     </StackPanel>
                     <StackPanel Style="{StaticResource StatusItemStyle}">
