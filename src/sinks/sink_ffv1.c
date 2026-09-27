@@ -374,9 +374,23 @@ static pin_status_t ffv1_write_audio(pin_sink_t *s, const int16_t *pcm, size_t f
      * Duration values (audio track's timestamps carrying on from a
      * previous, unrelated capture in the same process instead of starting
      * at 0), even though every actual sample written was correct. */
-    pkt->pts = pkt->dts = p->apts;
+    int64_t start = p->apts;
     p->apts += (int64_t)frames;
+
+    /* pts/duration are computed above in plain sample counts (the stream's
+     * *nominal* time_base, 1/audio_rate, set in ffv1_open()) and must be
+     * rescaled into p->ast->time_base as it stands *now* -- avformat_write_
+     * header() is free to renormalise a stream's declared time_base once
+     * the header is written (matroska does this for PCM audio), and this
+     * mirrors encode_one()'s identical av_packet_rescale_ts() call for
+     * video just below. Skipping this for audio is exactly what silently
+     * turned every packet's sample-count pts into a millisecond count,
+     * inflating the muxed Duration by a factor of audio_rate/1000 (48x at
+     * 48 kHz) while every actual sample on disk stayed correct. */
+    pkt->pts = start;
+    pkt->dts = start;
     pkt->duration = (int64_t)frames;
+    av_packet_rescale_ts(pkt, (AVRational){ 1, p->ast->codecpar->sample_rate }, p->ast->time_base);
 
     pthread_mutex_lock(&p->mux_lock);
     int rc = av_interleaved_write_frame(p->fmt, pkt);
