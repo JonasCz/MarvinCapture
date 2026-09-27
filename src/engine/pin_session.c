@@ -1396,7 +1396,17 @@ static void dv_tick(void *user)
         pin_writer_get_stats(s->writer, &wst);
         s->writer_backlog = wst.backlog_bytes;
         s->writer_backlog_max = wst.backlog_high_water;
-        s->bytes_written = wst.bytes_pushed;
+        /* wst.bytes_pushed is raw, pre-encode bytes queued to the writer --
+         * for sink_ffv1 that's uncompressed YUYV+PCM, many times the actual
+         * FFV1-compressed file size. Prefer the sink's own count of bytes
+         * actually written to disk when it tracks one. */
+        if (s->sink && s->sink->get_status) {
+            pin_sink_status_t sst;
+            s->sink->get_status(s->sink, &sst);
+            s->bytes_written = sst.bytes_written;
+        } else {
+            s->bytes_written = wst.bytes_pushed;
+        }
         s->frames_dropped += 0; /* writer overflow already counted separately if needed */
     }
 
@@ -1695,7 +1705,16 @@ static int analog_tick(void *user)
         pin_writer_get_stats(s->writer, &wst);
         s->writer_backlog = wst.backlog_bytes;
         s->writer_backlog_max = wst.backlog_high_water;
-        s->bytes_written = wst.bytes_pushed;
+        /* See the analog tick handler's identical comment above sst: prefer
+         * the sink's actual on-disk byte count over the writer's raw,
+         * pre-encode push count. */
+        if (s->sink && s->sink->get_status) {
+            pin_sink_status_t sst;
+            s->sink->get_status(s->sink, &sst);
+            s->bytes_written = sst.bytes_written;
+        } else {
+            s->bytes_written = wst.bytes_pushed;
+        }
     }
     int should_stop = s->state == PIN_STATE_CAPTURING &&
                       ((s->capture_opts.idle_stop_minutes > 0 &&

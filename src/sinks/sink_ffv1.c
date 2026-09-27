@@ -69,6 +69,7 @@ typedef struct {
 
     int width, height;
     int audio_channels;
+    int64_t vpts, apts;   /* per-instance timelines -- see write_video/write_audio */
 
     /* bounded frame queue -> encoder thread */
     AVFrame *queue[QUEUE_DEPTH];
@@ -127,6 +128,7 @@ static void encode_one(ffv1_priv_t *p, AVFrame *frame)
         }
         av_packet_rescale_ts(pkt, p->venc->time_base, p->vst->time_base);
         pkt->stream_index = p->vst->index;
+        size_t pkt_size = (size_t)pkt->size;
         pthread_mutex_lock(&p->mux_lock);
         rc = av_interleaved_write_frame(p->fmt, pkt);
         pthread_mutex_unlock(&p->mux_lock);
@@ -138,6 +140,7 @@ static void encode_one(ffv1_priv_t *p, AVFrame *frame)
         }
         pthread_mutex_lock(&p->st_lock);
         p->st.units_written++;
+        p->st.bytes_written += pkt_size;
         pthread_mutex_unlock(&p->st_lock);
     }
 }
@@ -325,9 +328,12 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
         }
     }
 
-    static int64_t pts;   /* not thread-shared: write_video is only called
-                            * from the single pin_writer consumer thread */
-    f->pts = pts++;
+    /* p->vpts (not a function-local static): write_video is only called
+     * from the single pin_writer consumer thread, but a `static` counter
+     * here would persist for the process's whole life and leak into the
+     * next capture's sink instance, offsetting its timestamps by whatever
+     * the previous capture (in this same running GUI process) left behind. */
+    f->pts = p->vpts++;
 
     pthread_mutex_lock(&p->qlock);
     if (p->qcount == QUEUE_DEPTH) {
@@ -363,9 +369,13 @@ static pin_status_t ffv1_write_audio(pin_sink_t *s, const int16_t *pcm, size_t f
     memcpy(pkt->data, pcm, len);
     pkt->stream_index = p->ast->index;
 
-    static int64_t apts;
-    pkt->pts = pkt->dts = apts;
-    apts += (int64_t)frames;
+    /* Per-instance, see f->pts's comment in ffv1_write_video above -- a
+     * `static` counter here is exactly what produced absurd Matroska
+     * Duration values (audio track's timestamps carrying on from a
+     * previous, unrelated capture in the same process instead of starting
+     * at 0), even though every actual sample written was correct. */
+    pkt->pts = pkt->dts = p->apts;
+    p->apts += (int64_t)frames;
     pkt->duration = (int64_t)frames;
 
     pthread_mutex_lock(&p->mux_lock);
