@@ -199,6 +199,9 @@ public unsafe struct PinStatusSnapshot
     public int ProgressPercent;     // of the current PREPARING step, or -1
     public int CameraPresent;       // DV/HDV: 1 a camera answered, 0 none, -1 n/a or not known yet
 
+    // Appended later: frames/audio blocks the disk writer's queue had to refuse.
+    public ulong WriteDropped;
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }

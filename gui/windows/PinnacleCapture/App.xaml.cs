@@ -22,6 +22,7 @@ public partial class App : Application
     public App()
     {
         InstallCrashLogging();
+        ConsoleOutput.Init();
         InitializeComponent();
     }
 
@@ -74,6 +75,7 @@ public partial class App : Application
         try
         {
             var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ({source}, terminating={terminating}) {ex}\n";
+            ConsoleOutput.Write($"{source}: {ex}");
             File.AppendAllText(CrashLogPath, line);
         }
         catch

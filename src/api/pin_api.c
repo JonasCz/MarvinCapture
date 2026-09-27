@@ -393,7 +393,7 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
         double mb = st->bytes_written / (1024.0 * 1024.0);
         snprintf(out, cap, "REC%s%s  pass %d/%d  scene %d  %.1f MB  %.0f s  drops %llu",
                  tc, deck, st->pass, st->passes, st->scene, mb, st->elapsed_s,
-                 (unsigned long long)st->frames_dropped);
+                 (unsigned long long)(st->frames_dropped + st->write_dropped));
     } else if (st->state == PIN_STATE_ERROR) {
         snprintf(out, cap, "Error: %s", st->error_text);
     } else if (st->state == PIN_STATE_PREPARING && st->detail[0]) {

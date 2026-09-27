@@ -86,29 +86,32 @@ void pin_session_unlock(pin_session_t *s) { pthread_mutex_unlock(&s->mtx); }
  * event queue
  * ==================================================================== */
 
-void pin_session_push_event(pin_session_t *s, pin_event_kind_t kind, int32_t a, const char *text)
+/* Process-wide events (s == NULL): the core's log lines, which pin_log
+ * routes here through pin_api.c's sink whether or not a session is open. */
+static pin_event_t g_evq[PIN_EVQ_CAP];
+static unsigned g_evq_head, g_evq_count;
+static pthread_mutex_t g_evq_mtx = PTHREAD_MUTEX_INITIALIZER;
+
+static void evq_push(pin_event_t *q, unsigned *head, unsigned *count, pthread_mutex_t *mtx,
+                     pin_event_kind_t kind, int32_t a, const char *text)
 {
-    if (!s)
-        return; /* process-wide events go through pin_log's sink in pin_api.c instead */
-    pthread_mutex_lock(&s->evq_mtx);
-    if (s->evq_count == PIN_EVQ_CAP) {
+    pthread_mutex_lock(mtx);
+    if (*count == PIN_EVQ_CAP) {
         /* drop the oldest LOG event if any, else the oldest event of any kind */
-        unsigned victim = s->evq_head;
-        int found = 0;
-        for (unsigned i = 0; i < s->evq_count; i++) {
-            unsigned idx = (s->evq_head + i) % PIN_EVQ_CAP;
-            if (s->evq[idx].kind == PIN_EVT_LOG) { victim = idx; found = 1; break; }
+        unsigned victim = *head;
+        for (unsigned i = 0; i < *count; i++) {
+            unsigned idx = (*head + i) % PIN_EVQ_CAP;
+            if (q[idx].kind == PIN_EVT_LOG) { victim = idx; break; }
         }
-        (void)found;
-        if (victim != s->evq_head) {
+        if (victim != *head) {
             /* shift the slot at `victim` out by swapping it to head, then advance head */
-            s->evq[victim] = s->evq[s->evq_head];
+            q[victim] = q[*head];
         }
-        s->evq_head = (s->evq_head + 1) % PIN_EVQ_CAP;
-        s->evq_count--;
+        *head = (*head + 1) % PIN_EVQ_CAP;
+        (*count)--;
     }
-    unsigned tail = (s->evq_head + s->evq_count) % PIN_EVQ_CAP;
-    pin_event_t *e = &s->evq[tail];
+    unsigned tail = (*head + *count) % PIN_EVQ_CAP;
+    pin_event_t *e = &q[tail];
     e->size = sizeof(*e);
     e->kind = kind;
     e->a = a;
@@ -117,24 +120,38 @@ void pin_session_push_event(pin_session_t *s, pin_event_kind_t kind, int32_t a, 
         strncpy(e->text, text, sizeof(e->text) - 1);
         e->text[sizeof(e->text) - 1] = 0;
     }
-    s->evq_count++;
-    pthread_mutex_unlock(&s->evq_mtx);
+    (*count)++;
+    pthread_mutex_unlock(mtx);
+}
+
+static int evq_poll(pin_event_t *q, unsigned *head, unsigned *count, pthread_mutex_t *mtx,
+                    pin_event_t *out)
+{
+    pthread_mutex_lock(mtx);
+    if (*count == 0) {
+        pthread_mutex_unlock(mtx);
+        return 0;
+    }
+    *out = q[*head];
+    *head = (*head + 1) % PIN_EVQ_CAP;
+    (*count)--;
+    pthread_mutex_unlock(mtx);
+    return 1;
+}
+
+void pin_session_push_event(pin_session_t *s, pin_event_kind_t kind, int32_t a, const char *text)
+{
+    if (!s)
+        evq_push(g_evq, &g_evq_head, &g_evq_count, &g_evq_mtx, kind, a, text);
+    else
+        evq_push(s->evq, &s->evq_head, &s->evq_count, &s->evq_mtx, kind, a, text);
 }
 
 int pin_session_poll_event(pin_session_t *s, pin_event_t *out)
 {
     if (!s)
-        return 0;
-    pthread_mutex_lock(&s->evq_mtx);
-    if (s->evq_count == 0) {
-        pthread_mutex_unlock(&s->evq_mtx);
-        return 0;
-    }
-    *out = s->evq[s->evq_head];
-    s->evq_head = (s->evq_head + 1) % PIN_EVQ_CAP;
-    s->evq_count--;
-    pthread_mutex_unlock(&s->evq_mtx);
-    return 1;
+        return evq_poll(g_evq, &g_evq_head, &g_evq_count, &g_evq_mtx, out);
+    return evq_poll(s->evq, &s->evq_head, &s->evq_count, &s->evq_mtx, out);
 }
 
 /* How long a bring-up took last time, per input kind (DV, analog): the
@@ -614,7 +631,8 @@ static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len)
 {
     if (!s->writer)
         return;
-    pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len);
+    if (!pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len))
+        s->write_dropped++;
 }
 
 /* Pushes one unit into the FIFO, evicting (and committing) the oldest once
@@ -1201,6 +1219,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->pass_index = 1;
     s->unit_index = 0;
     s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
+    s->write_dropped = 0;
     s->bytes_written = 0;
     s->capture_start_s = pin_session_now();
     s->scene_det_ready = 0;
@@ -1407,7 +1426,6 @@ static void dv_tick(void *user)
         } else {
             s->bytes_written = wst.bytes_pushed;
         }
-        s->frames_dropped += 0; /* writer overflow already counted separately if needed */
     }
 
     /* idle-stop / duration-stop / EOT multi-pass handling. Both idle-stop and
@@ -1587,7 +1605,29 @@ typedef struct {
     uint32_t video_index;
     double last_status_s;   /* analog_tick(): last decoder status poll */
     int auto_mismatch;      /* consecutive polls whose 50/60 Hz differs from the configured standard */
+    /* TEMPORARY diagnostic hook (see PINNACLE_ANALOG_DIAG_LOG in do_run_analog):
+     * one CSV row per emitted video frame, keyed by f->index -- the same
+     * 0-based position the frame lands at in the output file -- so an
+     * external analysis of the output can be correlated back to exactly
+     * what the assembler/USB layer saw for that frame. Remove once the
+     * frame-accuracy investigation is done. */
+    FILE *diag;
+    int diag_have_prev;
+    uint16_t diag_last_seq;
+    uint64_t diag_last_time, diag_last_hash;
+    double diag_expected_ticks;
 } analog_ctx_t;
+
+/* TEMPORARY: see analog_ctx_t.diag above. */
+static uint64_t diag_fnv1a64(const uint8_t *d, size_t n)
+{
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < n; i++) {
+        h ^= d[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
 
 static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
 {
@@ -1605,8 +1645,8 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
     s->dar_den = asp == PIN_ASPECT_16_9 ? 9 : 3;
 
     s->frames++;
-    if (f->repeated) s->frames_dropped++;
-    if (f->received < (size_t)f->width * f->height * 2) s->frames_damaged++;
+    if (f->repeated) s->frames_dropped++;                  /* not in the output */
+    if (f->repeated && f->received) s->frames_damaged++;   /* ...because it arrived short */
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
     if (s->capture_start_s > 0)
@@ -1614,9 +1654,36 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
 
     pin_previewer_push_analog(s->preview, f->yuyv, f->width, f->height, !s->is_60hz);
 
-    if (s->writer)
-        pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
-                         (size_t)f->width * f->height * 2);
+    if (s->writer && !pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
+                                      (size_t)f->width * f->height * 2))
+        s->write_dropped++;
+
+    /* TEMPORARY diagnostic: see analog_ctx_t.diag. Hash the full frame and
+     * cross-check seq/device_time against the previous frame, independent
+     * of the assembler's own repair accounting, so a post-hoc analysis of
+     * the output file (e.g. QR/LTC frame numbers) can tell a genuine
+     * upstream (signal-level) repeat from a driver-side one. */
+    if (ctx->diag) {
+        size_t full = (size_t)f->width * f->height * 2;
+        uint64_t hash = diag_fnv1a64(f->yuyv, full);
+        uint16_t dseq = 0;
+        int64_t dtime = 0;
+        int content_dup = 0;
+        if (ctx->diag_have_prev) {
+            dseq = (uint16_t)(f->seq - ctx->diag_last_seq);
+            dtime = (int64_t)(f->device_time - ctx->diag_last_time);
+            content_dup = hash == ctx->diag_last_hash;
+        }
+        fprintf(ctx->diag, "%u,%u,%llu,%d,%zu,%u,%d,%lld,%d,%016llx\n", f->index, f->seq,
+                (unsigned long long)f->device_time, f->repeated, f->received, dseq,
+                ctx->diag_have_prev, (long long)dtime, content_dup, (unsigned long long)hash);
+        if ((f->index & 0xff) == 0)
+            fflush(ctx->diag);
+        ctx->diag_last_seq = f->seq;
+        ctx->diag_last_time = f->device_time;
+        ctx->diag_last_hash = hash;
+        ctx->diag_have_prev = 1;
+    }
 
     if (kind_newly_known)
         maybe_begin_capture(s, 0); /* analog has no deck/camera_node */
@@ -1755,9 +1822,10 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
      * version of this code used to do before being factored out. */
     if (b->samples && !b->silence)
         feed_audio_locked(s, (const int16_t *)b->pcm, b->samples);
-    if (s->writer && b->samples)
-        pin_writer_push(s->writer, PIN_UNIT_AUDIO, b->seq, (const uint8_t *)b->pcm,
-                         (size_t)b->samples * 4);
+    if (s->writer && b->samples &&
+        !pin_writer_push(s->writer, PIN_UNIT_AUDIO, b->seq, (const uint8_t *)b->pcm,
+                         (size_t)b->samples * 4))
+        s->write_dropped++;
     pin_session_unlock(s);
     return 0;
 }
@@ -1796,6 +1864,16 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
     set_state(s, PIN_STATE_READY);
 
     analog_ctx_t ctx = { .s = s };
+    /* TEMPORARY: see analog_ctx_t.diag. Set PINNACLE_ANALOG_DIAG_LOG to a
+     * path to get a per-frame CSV (index,seq,device_time,repeated,received,
+     * dseq,have_prev,dtime,content_dup,hash) alongside the capture. */
+    const char *diag_path = getenv("PINNACLE_ANALOG_DIAG_LOG");
+    if (diag_path && (ctx.diag = fopen(diag_path, "w")) != NULL) {
+        fprintf(ctx.diag, "index,seq,device_time,repeated,received,dseq,have_prev,dtime,"
+                          "content_dup,hash\n");
+        pin_logf(PIN_LOG_INFO, "pinnacle: analog diagnostic log: %s\n", diag_path);
+    }
+    ctx.diag_expected_ticks = pinnacle_std_is_60hz(cfg.standard) ? (10e6 * 1001.0 / 30000.0) : 400000.0;
     pinnacle_capture_sink_t sink = { .video = analog_video_cb, .audio = analog_audio_cb,
                                      .tick = analog_tick, .user = &ctx };
     pinnacle_capture_stats_t stats;
@@ -1842,6 +1920,8 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
         s->sink = NULL;
     }
     pinnacle_analog_stop(&s->analog);
+    if (ctx.diag)
+        fclose(ctx.diag); /* TEMPORARY: see analog_ctx_t.diag */
 }
 
 /* ========================================================================
@@ -2109,6 +2189,7 @@ static void *worker_main(void *arg)
             s->stream_kind_known = 0;
             s->signal = 0;
             s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
+            s->write_dropped = 0;
             s->camera_present = -1;
             s->reconnecting = 0;
             s->dv_rescan = 0;
@@ -2565,6 +2646,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->bytes_written = s->bytes_written;
     out->writer_backlog = s->writer_backlog; out->writer_backlog_max = s->writer_backlog_max;
     out->idle_s = s->idle_s;
+    out->write_dropped = s->write_dropped;
     out->camera_present = s->camera_present;
     out->progress_percent = -1;
     if (s->state == PIN_STATE_PREPARING) {

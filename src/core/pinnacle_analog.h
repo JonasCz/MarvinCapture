@@ -147,9 +147,9 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
  *
  * The capture loop keeps the output timeline intact whatever the USB side
  * does: a frame that never arrived is replaced by a repeat of the previous
- * one (and its audio by silence), a frame that arrived short keeps the
- * previous frame's pixels below the point where data stopped. Every such
- * repair is counted, so a capture can prove it had none. */
+ * one (and its audio by silence), and so is a frame that arrived short
+ * (its audio did arrive and is kept). Every such repair is counted, so a
+ * capture can prove it had none. */
 
 typedef struct {
     const uint8_t *yuyv;     /* width * height * 2 bytes, YUYV 4:2:2, both fields interleaved */
@@ -157,8 +157,8 @@ typedef struct {
     uint32_t index;          /* position in the output, from 0 */
     uint16_t seq;            /* device frame counter */
     uint64_t device_time;
-    int repeated;            /* stand-in for a frame that never arrived */
-    size_t received;         /* bytes that arrived; below width*height*2 = truncated */
+    int repeated;            /* the previous frame again: this one never arrived, or arrived short */
+    size_t received;         /* bytes that arrived: 0 never arrived, below width*height*2 short */
 } pinnacle_video_frame_t;
 
 typedef struct {
@@ -178,20 +178,25 @@ typedef struct {
     unsigned long resyncs;         /* video data outside a frame, discarded */
 } pinnacle_capture_stats_t;
 
+/* All three callbacks run on one delivery thread of the capture loop's own,
+ * never on the thread that services USB, so they may take their time (up
+ * to about a second of video is buffered between the two) and may do
+ * control transfers on the device. */
 typedef struct {
     /* Called in output order. The buffers are only valid during the call. */
     int (*video)(const pinnacle_video_frame_t *f, void *user);
     int (*audio)(const pinnacle_audio_block_t *b, void *user);
     void *user;
-    /* Optional. Called on every pass of the loop, at least every 50 ms, even
-     * when nothing arrives -- with no input signal the decoder sends no
+    /* Optional. Called about every 20 ms between the others, even when
+     * nothing arrives -- with no input signal the decoder sends no
      * frames at all, so work that must keep happening (commands, signal
      * polling, idle timeouts) can't live in video(). Non-zero stops. */
     int (*tick)(void *user);
 } pinnacle_capture_sink_t;
 
-/* Runs pinnacle_analog_read_loop with the assembler in between. Either
- * callback returning non-zero stops the loop. */
+/* Runs pinnacle_analog_read_loop with the assembler in between. Any
+ * callback returning non-zero stops the loop; what was already queued is
+ * still delivered before this returns. */
 pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
                                                const pinnacle_capture_sink_t *sink,
                                                pinnacle_capture_stats_t *stats,

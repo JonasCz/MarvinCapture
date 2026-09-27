@@ -27,10 +27,16 @@
 #include "pinnacle_cfg.h"
 #include "pin_log.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#if defined(_WIN32)
+#include <windows.h>
+#include <avrt.h>
+#endif
 
 #define SAA7113_ADDR 0x4a
 #define CAPTURE_ADDR 0xf0
@@ -507,7 +513,15 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
  * So it is per-transfer cost on the host side, not queue depth; usbfs
  * turns anything over 16 KiB into a scatter-gather list, and big buffers
  * need several TRBs. 512 x 8 KiB keeps 200 ms queued.
- * PINNACLE_VIDEO_XFER / PINNACLE_VIDEO_QUEUE override both for testing. */
+ * PINNACLE_VIDEO_XFER / PINNACLE_VIDEO_QUEUE override both for testing.
+ *
+ * On Windows, WinUSB by default hands a pipe's reads to the host controller
+ * one at a time, however many are queued: each completion goes back up
+ * through WinUSB before the next read is armed, and a late DPC there leaves
+ * the endpoint with nothing to receive into. Its RAW_IO policy passes the
+ * reads straight down, so the whole queue is armed at the controller. It
+ * needs whole-packet transfers, which ours are. PINNACLE_NO_RAW_IO=1 turns
+ * it off for comparison. */
 #define VIDEO_QUEUE_MAX 1024
 #define VIDEO_QUEUE 512
 #define VIDEO_XFER (8u * 1024)
@@ -607,6 +621,64 @@ static void queue_free(struct queue *q, pinnacle_device_t *dev)
     memset(q, 0, sizeof(*q));
 }
 
+/* Turns WinUSB's RAW_IO on (or back off) for one IN endpoint; see VIDEO_XFER
+ * above. Returns 1 if it is now on. Elsewhere libusb reports it unsupported
+ * and nothing changes. */
+static int set_raw_io(pinnacle_device_t *dev, uint8_t ep, unsigned bytes, int enable)
+{
+#if LIBUSB_API_VERSION >= 0x0100010C
+    if (enable) {
+        if (libusb_endpoint_supports_raw_io(dev->handle, ep) != 1)
+            return 0;
+        int max = libusb_get_max_raw_io_transfer_size(dev->handle, ep);
+        if (max > 0 && bytes > (unsigned)max)
+            return 0;
+    }
+    return libusb_endpoint_set_raw_io(dev->handle, ep, enable) == 0 && enable;
+#else
+    (void)dev; (void)ep; (void)bytes; (void)enable;
+    return 0;
+#endif
+}
+
+/* The thread that runs the USB event loop also reaps and resubmits every
+ * transfer, so give it priority over the encoder threads and the GUI. On
+ * Windows that is MMCSS's "Capture" class (the scheduler boosts the thread
+ * but still reserves some CPU for everything else); failing that, HIGHEST. */
+typedef struct {
+#if defined(_WIN32)
+    HANDLE mmcss;
+    int old_priority;
+#endif
+    int raised;
+} thread_boost_t;
+
+static void thread_boost(thread_boost_t *b)
+{
+    memset(b, 0, sizeof(*b));
+#if defined(_WIN32)
+    DWORD task = 0;
+    b->mmcss = AvSetMmThreadCharacteristicsW(L"Capture", &task);
+    if (b->mmcss) {
+        b->raised = 1;
+        return;
+    }
+    b->old_priority = GetThreadPriority(GetCurrentThread());
+    b->raised = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0;
+#endif
+}
+
+static void thread_unboost(thread_boost_t *b)
+{
+#if defined(_WIN32)
+    if (b->mmcss)
+        AvRevertMmThreadCharacteristics(b->mmcss);
+    else if (b->raised)
+        SetThreadPriority(GetCurrentThread(), b->old_priority);
+#endif
+    b->raised = 0;
+}
+
 pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analog_raw_cb cb,
                                             void *user, volatile int *stop_flag)
 {
@@ -623,6 +695,18 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
         vdepth = VIDEO_QUEUE;
     if (vbytes < 512 || vbytes % 512)
         vbytes = VIDEO_XFER;
+
+    /* Before anything is queued: WinUSB only changes the policy on an idle pipe. */
+    int raw_video = 0, raw_audio = 0;
+    if (!dev->tuning.no_raw_io) {
+        raw_video = set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 1);
+        raw_audio = set_raw_io(dev, PINNACLE_EP_AUDIO_IN, audio_bytes, 1);
+    }
+    thread_boost_t boost;
+    thread_boost(&boost);
+    pin_logf(PIN_LOG_INFO, "pinnacle: analog read loop: %u x %u B, RAW_IO video %s audio %s, "
+             "thread priority %s\n", vdepth, vbytes, raw_video ? "on" : "off",
+             raw_audio ? "on" : "off", boost.raised ? "raised" : "normal");
 
     if (!vq || !aq || queue_init(vq, dev, PINNACLE_EP_VIDEO_IN, vdepth, vbytes) != 0 ||
         queue_init(aq, dev, PINNACLE_EP_AUDIO_IN, AUDIO_QUEUE, audio_bytes) != 0) {
@@ -683,16 +767,191 @@ out:
         queue_free(aq, dev);
         free(aq);
     }
+    if (raw_video)
+        set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 0);
+    if (raw_audio)
+        set_raw_io(dev, PINNACLE_EP_AUDIO_IN, audio_bytes, 0);
+    thread_unboost(&boost);
     return status;
+}
+
+/* --- delivery ------------------------------------------------------------ */
+
+/* The USB thread only reassembles; finished frames and audio blocks are
+ * copied into these rings and a thread of their own hands them to the sink.
+ * Nothing the sink does (preview, file writes, opening or closing a file,
+ * I2C polls in tick) can then hold up the resubmission of transfers. If the
+ * sink falls a whole ring behind, the USB thread does wait for it: dropping
+ * there would just move the loss, and a second of stall means something is
+ * badly wrong downstream anyway. */
+#define DELIVER_FRAMES 30
+#define DELIVER_AUDIO 64
+#define DELIVER_ITEMS (DELIVER_FRAMES + DELIVER_AUDIO)
+#define TICK_MS 20
+
+typedef struct {
+    int video;
+    pinnacle_video_frame_t v;
+    pinnacle_audio_block_t a;
+} deliver_item_t;
+
+typedef struct {
+    const pinnacle_capture_sink_t *sink;
+    pthread_t thread;
+    int started;
+    pthread_mutex_t lock;
+    pthread_cond_t wake, space;
+    deliver_item_t items[DELIVER_ITEMS];
+    /* monotonic counts; slot = count % ring size. Frames and audio blocks
+     * are consumed in the order they went in, so each pool is a ring too. */
+    unsigned long ihead, itail, vhead, vtail, ahead, atail;
+    uint8_t *vbuf[DELIVER_FRAMES];
+    uint8_t *abuf[DELIVER_AUDIO];
+    int closing;
+    volatile int stop;           /* a sink callback returned non-zero */
+} deliver_t;
+
+static double mono_ms(void)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+}
+
+static void *deliver_thread(void *arg)
+{
+    deliver_t *d = arg;
+    const pinnacle_capture_sink_t *k = d->sink;
+    double last_tick = mono_ms();
+
+    pthread_mutex_lock(&d->lock);
+    for (;;) {
+        if (d->ihead != d->itail) {
+            deliver_item_t it = d->items[d->ihead % DELIVER_ITEMS];
+            pthread_mutex_unlock(&d->lock);
+            int r = it.video ? (k->video ? k->video(&it.v, k->user) : 0)
+                             : (k->audio ? k->audio(&it.a, k->user) : 0);
+            pthread_mutex_lock(&d->lock);
+            d->ihead++;
+            if (it.video)
+                d->vhead++;
+            else
+                d->ahead++;
+            if (r)
+                d->stop = 1;
+            pthread_cond_signal(&d->space);
+        } else if (d->closing) {
+            break;
+        }
+
+        double now = mono_ms();
+        if (!d->closing && k->tick && now - last_tick >= TICK_MS) {
+            last_tick = now;
+            pthread_mutex_unlock(&d->lock);
+            int r = k->tick(k->user);
+            pthread_mutex_lock(&d->lock);
+            if (r)
+                d->stop = 1;
+        } else if (d->ihead == d->itail && !d->closing) {
+            struct timespec ts;
+            clock_gettime(CLOCK_REALTIME, &ts);
+            ts.tv_nsec += TICK_MS * 1000000L;
+            if (ts.tv_nsec >= 1000000000L) {
+                ts.tv_sec++;
+                ts.tv_nsec -= 1000000000L;
+            }
+            pthread_cond_timedwait(&d->wake, &d->lock, &ts);
+        }
+    }
+    pthread_mutex_unlock(&d->lock);
+    return NULL;
+}
+
+static void deliver_free(deliver_t *d)
+{
+    for (int i = 0; i < DELIVER_FRAMES; i++)
+        free(d->vbuf[i]);
+    for (int i = 0; i < DELIVER_AUDIO; i++)
+        free(d->abuf[i]);
+    if (d->started) {
+        pthread_mutex_destroy(&d->lock);
+        pthread_cond_destroy(&d->wake);
+        pthread_cond_destroy(&d->space);
+    }
+}
+
+static int deliver_start(deliver_t *d, const pinnacle_capture_sink_t *sink, size_t frame_bytes,
+                         size_t audio_bytes)
+{
+    memset(d, 0, sizeof(*d));
+    d->sink = sink;
+    for (int i = 0; i < DELIVER_FRAMES; i++)
+        if (!(d->vbuf[i] = malloc(frame_bytes)))
+            goto fail;
+    for (int i = 0; i < DELIVER_AUDIO; i++)
+        if (!(d->abuf[i] = malloc(audio_bytes)))
+            goto fail;
+    pthread_mutex_init(&d->lock, NULL);
+    pthread_cond_init(&d->wake, NULL);
+    pthread_cond_init(&d->space, NULL);
+    d->started = 1;
+    if (pthread_create(&d->thread, NULL, deliver_thread, d) != 0)
+        goto fail;
+    return 0;
+fail:
+    deliver_free(d);
+    return -1;
+}
+
+/* Delivers everything still queued, then stops the thread. */
+static void deliver_stop(deliver_t *d)
+{
+    pthread_mutex_lock(&d->lock);
+    d->closing = 1;
+    pthread_cond_signal(&d->wake);
+    pthread_mutex_unlock(&d->lock);
+    pthread_join(d->thread, NULL);
+    deliver_free(d);
+}
+
+/* Returns a free buffer for the next frame (video) or audio block, waiting
+ * for the delivery thread if its ring is full. */
+static uint8_t *deliver_reserve(deliver_t *d, int video)
+{
+    pthread_mutex_lock(&d->lock);
+    if (video)
+        while (d->vtail - d->vhead == DELIVER_FRAMES)
+            pthread_cond_wait(&d->space, &d->lock);
+    else
+        while (d->atail - d->ahead == DELIVER_AUDIO)
+            pthread_cond_wait(&d->space, &d->lock);
+    pthread_mutex_unlock(&d->lock);
+    return video ? d->vbuf[d->vtail % DELIVER_FRAMES] : d->abuf[d->atail % DELIVER_AUDIO];
+}
+
+/* Queues the item whose buffer deliver_reserve() just returned. */
+static int deliver_commit(deliver_t *d, const deliver_item_t *it)
+{
+    pthread_mutex_lock(&d->lock);
+    d->items[d->itail % DELIVER_ITEMS] = *it;
+    d->itail++;
+    if (it->video)
+        d->vtail++;
+    else
+        d->atail++;
+    pthread_cond_signal(&d->wake);
+    pthread_mutex_unlock(&d->lock);
+    return d->stop;
 }
 
 /* --- assembler ----------------------------------------------------------- */
 
 typedef struct {
     pinnacle_analog_t *a;
-    const pinnacle_capture_sink_t *sink;
+    deliver_t *dl;
     pinnacle_capture_stats_t *st;
-    uint8_t *frame;              /* persistent: a short frame keeps the old tail */
+    uint8_t *frame;              /* being received; rows not yet written are stale */
+    uint8_t *last_good;          /* last fully-received frame, to repeat for a lost one */
     size_t frame_bytes, received;
     int in_frame, have_frame;
     uint16_t seq, last_vseq;
@@ -734,32 +993,40 @@ static int audio_caught_up(const assembler_t *s)
     return !s->have_frame || (uint16_t)(s->next_aseq - s->last_vseq - 1) < 0x8000;
 }
 
-static int emit_frame(assembler_t *s, uint16_t seq, uint64_t t, int repeated, size_t received)
+static int emit_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
+                      int repeated, size_t received)
 {
-    pinnacle_video_frame_t f = {
-        .yuyv = s->frame, .width = s->a->width, .height = s->a->height,
-        .index = s->index++, .seq = seq, .device_time = t,
-        .repeated = repeated, .received = received,
+    uint8_t *buf = deliver_reserve(s->dl, 1);
+    memcpy(buf, yuyv, s->frame_bytes);
+    deliver_item_t it = {
+        .video = 1,
+        .v = { .yuyv = buf, .width = s->a->width, .height = s->a->height,
+               .index = s->index++, .seq = seq, .device_time = t,
+               .repeated = repeated, .received = received },
     };
     s->st->frames++;
-    return s->sink->video ? s->sink->video(&f, s->sink->user) : 0;
+    return deliver_commit(s->dl, &it);
 }
 
 static int emit_audio(assembler_t *s, const uint8_t *pcm, unsigned samples, uint16_t seq,
                       uint64_t t, int silence)
 {
-    pinnacle_audio_block_t b = {
-        .pcm = pcm, .samples = samples, .seq = seq, .device_time = t, .silence = silence,
+    uint8_t *buf = deliver_reserve(s->dl, 0);
+    memcpy(buf, pcm, (size_t)samples * 4);
+    deliver_item_t it = {
+        .video = 0,
+        .a = { .pcm = buf, .samples = samples, .seq = seq, .device_time = t, .silence = silence },
     };
     s->st->audio_blocks++;
-    return s->sink->audio ? s->sink->audio(&b, s->sink->user) : 0;
+    return deliver_commit(s->dl, &it);
 }
 
 static int finish_frame(assembler_t *s)
 {
     int r = 0;
     s->in_frame = 0;
-    if (s->received < s->frame_bytes)
+    int truncated = s->received < s->frame_bytes;
+    if (truncated)
         s->st->frames_truncated++;
     if (s->have_frame) {
         uint16_t gap = (uint16_t)(s->seq - s->last_vseq - 1);
@@ -767,7 +1034,7 @@ static int finish_frame(assembler_t *s)
         if (gap > 0 && gap < 250) {
             s->st->frames_missing += gap;
             for (uint16_t i = 1; i <= gap && !r; i++)
-                r = emit_frame(s, (uint16_t)(s->last_vseq + i), 0, 1, 0);
+                r = emit_frame(s, s->last_good, (uint16_t)(s->last_vseq + i), 0, 1, 0);
         }
     }
     if (!s->have_aseq) {
@@ -777,7 +1044,22 @@ static int finish_frame(assembler_t *s)
     }
     s->have_frame = 1;
     s->last_vseq = s->seq;
-    return r ? r : emit_frame(s, s->seq, s->vtime, 0, s->received);
+    if (r)
+        return r;
+    if (truncated) {
+        /* The rows a short frame never reached still hold an older
+         * frame's pixels, so showing it would comb two different frames
+         * together. Repeat the last full frame instead, the same as a
+         * frame the counter skipped. */
+        return emit_frame(s, s->last_good, s->seq, s->vtime, 1, s->received);
+    }
+    /* This one is complete: it becomes the frame to repeat, and the old
+     * one's buffer takes the next frame (which overwrites all of it, or
+     * arrives short and is not shown). */
+    uint8_t *done = s->frame;
+    s->frame = s->last_good;
+    s->last_good = done;
+    return emit_frame(s, done, s->seq, s->vtime, 0, s->received);
 }
 
 /* The device sends a frame as two fields, one after the other: all lines
@@ -864,15 +1146,14 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
     assembler_t *s = user;
     int r = 0;
 
-
-    if (s->ext_stop && *s->ext_stop)
+    /* ep 0: one pass of the loop with nothing new; the sink's tick runs on
+     * the delivery thread, which reports a stop through dl->stop. */
+    if ((s->ext_stop && *s->ext_stop) || s->dl->stop)
         start_draining(s);
     if (ep == PINNACLE_EP_VIDEO_IN && !s->draining)
         r = on_video(s, data, len);
     else if (ep == PINNACLE_EP_AUDIO_IN)
         r = on_audio(s, data, len);
-    else if (ep == 0 && !s->draining && s->sink->tick)
-        r = s->sink->tick(s->sink->user);
     if (r)
         start_draining(s);
     if (!s->draining)
@@ -904,27 +1185,38 @@ pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
     memset(&s, 0, sizeof(s));
     memset(stats, 0, sizeof(*stats));
     s.a = a;
-    s.sink = sink;
     s.st = stats;
     s.spp = a->audio_samples_per_packet;
     s.frame_bytes = (size_t)a->width * a->height * 2;
     s.frame = malloc(s.frame_bytes);
+    s.last_good = malloc(s.frame_bytes);
     s.silence = calloc(s.spp, 4);
-    if (!s.frame || !s.silence) {
+    deliver_t *dl = malloc(sizeof(*dl));
+    /* an audio block is never bigger than the transfer it came in */
+    size_t audio_bytes = (s.spp * 4 + PACKET_HEADER + 511) & ~(size_t)511;
+    if (!s.frame || !s.last_good || !s.silence || !dl ||
+        deliver_start(dl, sink, s.frame_bytes, audio_bytes) != 0) {
         free(s.frame);
+        free(s.last_good);
         free(s.silence);
+        free(dl);
         return PINNACLE_ERR_USB_TRANSFER;
     }
+    s.dl = dl;
     /* Black, in case the very first frame arrives short. */
     for (size_t i = 0; i < s.frame_bytes; i += 2) {
         s.frame[i] = 0x10;
         s.frame[i + 1] = 0x80;
     }
+    memcpy(s.last_good, s.frame, s.frame_bytes);
     /* The assembler watches stop_flag itself, so it can drain first. */
     s.ext_stop = stop_flag;
     volatile int never = 0;
     pinnacle_status_t st = pinnacle_analog_read_loop(a, assembler_cb, &s, &never);
+    deliver_stop(dl);
+    free(dl);
     free(s.frame);
+    free(s.last_good);
     free(s.silence);
     return st;
 }

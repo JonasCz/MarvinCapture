@@ -60,6 +60,8 @@ void pinnacle_tuning_from_env(pinnacle_tuning_t *t)
         t->video_xfer = (unsigned)atoi(e);
     if ((e = getenv("PINNACLE_DEBUG_ANALOG")))
         t->debug_analog = (e[0] == '1');
+    if ((e = getenv("PINNACLE_NO_RAW_IO")))
+        t->no_raw_io = (e[0] == '1');
 }
 
 static void sleep_ms(unsigned ms)

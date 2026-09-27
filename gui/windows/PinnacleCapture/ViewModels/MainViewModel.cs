@@ -733,13 +733,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public void Tick()
     {
+        // The core's own log lines (process-wide, session or not). Only the
+        // console sees these: some warnings are routine retries, not worth a
+        // banner. The session's events below go to both.
+        while (Native.PollProcessEvent(out var pe))
+        {
+            ConsoleOutput.WriteEvent(in pe);
+        }
+
         if (Session is not { IsInvalid: false })
         {
-            // Nothing open: still surface process-wide log events.
-            while (Native.PollProcessEvent(out var pe))
-            {
-                HandleEvent(in pe);
-            }
             return;
         }
 
@@ -787,7 +790,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SignalLocked = st.Signal != 0;
         SignalLockText = SignalLocked ? "Signal locked" : "No signal";
         FramesText = $"{st.Frames:N0} frames";
-        DroppedText = $"{st.FramesDropped:N0} dropped";
+        DroppedText = $"{st.FramesDropped + st.WriteDropped:N0} dropped";
         FileSizeText = HumanSize(st.BytesWritten);
         ElapsedText = TimeSpan.FromSeconds(Math.Max(0, st.ElapsedS)).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
 
@@ -853,6 +856,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private void HandleEvent(in PinEvent evt)
     {
+        ConsoleOutput.WriteEvent(in evt);
         switch (evt.Kind)
         {
             case PinEventKind.Log:

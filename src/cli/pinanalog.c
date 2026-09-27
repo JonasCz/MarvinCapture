@@ -58,7 +58,10 @@ static void usage(void)
             "  --brightness 0..255  --contrast 0..127  --saturation 0..127\n"
             "  --hue -128..127  --sharpness 0..3  --tv-mode (no VCR timing)\n"
             "  --status                print the decoder status and exit\n"
-            "  --raw FILE              dump raw EP 0x82/0x86 completions instead\n");
+            "  --raw FILE              dump raw EP 0x82/0x86 completions instead\n"
+            "  --diag                  cross-check every frame's seq/device_time/content\n"
+            "                          against the previous one, independent of the\n"
+            "                          assembler's own repair accounting\n");
 }
 
 static int parse_std(const char *s, pinnacle_std_t *out)
@@ -133,7 +136,27 @@ typedef struct {
     double t0, deadline, last_report;
     pinnacle_capture_stats_t *stats;
     unsigned long blocked;
+    /* diagnostics: cross-check seq/device_time/content against each other,
+     * independent of the assembler's own gap accounting. */
+    int diag, diag_have_prev;
+    uint16_t diag_last_seq;
+    uint64_t diag_last_time, diag_last_hash;
+    double diag_expected_ticks;
+    unsigned long diag_anomalies;
 } writer_t;
+
+/* Cheap whole-buffer hash so two frames with byte-identical pixel content
+ * (a real duplicate) can be told apart from two frames that merely both
+ * failed to advance the sequence counter. */
+static uint64_t fnv1a64(const uint8_t *d, size_t n)
+{
+    uint64_t h = 1469598103934665603ULL;
+    for (size_t i = 0; i < n; i++) {
+        h ^= d[i];
+        h *= 1099511628211ULL;
+    }
+    return h;
+}
 
 static void *writer_main(void *arg)
 {
@@ -199,12 +222,40 @@ static int on_video(const pinnacle_video_frame_t *f, void *user)
 {
     writer_t *w = user;
     size_t full = (size_t)f->width * f->height * 2;
-    if (!f->repeated && f->received < full)
-        fprintf(stderr, "\npinanalog: frame %u at %.2f s arrived short: %zu of %zu bytes\n",
-                f->index, now_s() - w->t0, f->received, full);
+    if (f->repeated && f->received)
+        fprintf(stderr, "\npinanalog: frame %u at %.2f s arrived short (%zu of %zu bytes), "
+                "repeating the previous one\n", f->index, now_s() - w->t0, f->received, full);
     else if (f->repeated)
         fprintf(stderr, "\npinanalog: frame %u at %.2f s never arrived, repeating the previous one\n",
                 f->index, now_s() - w->t0);
+
+    if (w->diag && !f->repeated) {
+        uint64_t hash = fnv1a64(f->yuyv, full);
+        if (w->diag_have_prev) {
+            uint16_t dseq = (uint16_t)(f->seq - w->diag_last_seq);
+            int64_t dtime = (int64_t)(f->device_time - w->diag_last_time);
+            int seq_ok = dseq == 1;
+            int time_ok = dtime > (int64_t)(w->diag_expected_ticks * 0.5) &&
+                          dtime < (int64_t)(w->diag_expected_ticks * 1.5);
+            int content_dup = hash == w->diag_last_hash;
+            if (!seq_ok || !time_ok || content_dup) {
+                w->diag_anomalies++;
+                fprintf(stderr,
+                        "\npinanalog: DIAG frame %u at %.2f s: seq %u->%u (d=%u)%s, "
+                        "device_time %llu->%llu (d=%lld, expected ~%.0f)%s%s\n",
+                        f->index, now_s() - w->t0, w->diag_last_seq, f->seq, dseq,
+                        seq_ok ? "" : " ANOMALY", (unsigned long long)w->diag_last_time,
+                        (unsigned long long)f->device_time, (long long)dtime,
+                        w->diag_expected_ticks, time_ok ? "" : " ANOMALY",
+                        content_dup ? " CONTENT-IDENTICAL-TO-PREVIOUS" : "");
+            }
+        }
+        w->diag_last_seq = f->seq;
+        w->diag_last_time = f->device_time;
+        w->diag_last_hash = hash;
+        w->diag_have_prev = 1;
+    }
+
     if (w->avi && writer_push(w, 1, f->yuyv, full) != 0)
         return 1;
     report(w, 0);
@@ -223,7 +274,7 @@ int main(int argc, char **argv)
 {
     const char *bitstream = "firmware/fpga-capture.bin", *raw_path = NULL, *out_path = NULL;
     double seconds = 0;
-    int status_only = 0, auto_std = 1;
+    int status_only = 0, auto_std = 1, diag = 0;
     pinnacle_analog_config_t cfg;
     pinnacle_analog_config_defaults(&cfg);
 
@@ -278,6 +329,8 @@ int main(int argc, char **argv)
             cfg.vcr_mode = 0;
         } else if (strcmp(arg, "--status") == 0) {
             status_only = 1;
+        } else if (strcmp(arg, "--diag") == 0) {
+            diag = 1;
         } else {
             usage();
             return 2;
@@ -371,6 +424,8 @@ int main(int argc, char **argv)
         pthread_cond_init(&w->wake, NULL);
         w->stats = &stats;
         int is60 = pinnacle_std_is_60hz(a.cfg.standard);
+        w->diag = diag;
+        w->diag_expected_ticks = is60 ? (10e6 * 1001.0 / 30000.0) : 400000.0;
         if (out_path) {
             w->avi = avi_open(out_path, a.width, a.height, is60 ? 30000 : 25, is60 ? 1001 : 1,
                               4, 3, 48000, 2);
@@ -401,6 +456,9 @@ int main(int argc, char **argv)
             if (w->blocked)
                 fprintf(stderr, "pinanalog: WARNING: the disk fell behind %lu times\n",
                         w->blocked);
+            if (w->diag)
+                fprintf(stderr, "pinanalog: DIAG %lu anomalies over %lu frames checked\n",
+                        w->diag_anomalies, stats.frames);
             if (stats.frames_missing || stats.frames_truncated || stats.audio_missing)
                 rc = rc ? rc : 4;
         }

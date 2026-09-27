@@ -52,6 +52,10 @@ file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
 target_include_directories(pinnacle_core PUBLIC ${CMAKE_SOURCE_DIR}/src/core)
 target_link_libraries(pinnacle_core PUBLIC PkgConfig::LIBUSB Threads::Threads)
+if(WIN32)
+    # MMCSS, for the analog read loop's thread priority
+    target_link_libraries(pinnacle_core PUBLIC avrt)
+endif()
 
 # --- Low-level CLIs: talk to src/core directly (capture, analog, deck
 # control, device list). pinctl (below) is the API-level one. ---

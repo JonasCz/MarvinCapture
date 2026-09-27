@@ -335,19 +335,14 @@ static double measure_ffv1_fps(void)
     double t0 = now_s();
     for (int i = 0; i < N; i++) {
         fill_noise_frame(yuyv, &seed);
-        s->write_video(s, yuyv, (size_t)W * H * 2);   /* not CHECKed: drops under
-                                                        * this unpaced loop are
-                                                        * expected and fine --
-                                                        * this pass only times
-                                                        * throughput */
+        /* unpaced: write_video() waits whenever the encoder falls behind */
+        CHECK(s->write_video(s, yuyv, (size_t)W * H * 2) == PIN_OK);
     }
     free(yuyv);
     CHECK(s->close(s) == PIN_OK);   /* blocks until the encoder drains */
     double elapsed = now_s() - t0;
 
-    /* Re-open to see how many of the N pushed frames actually got encoded
-     * (some may have been dropped if the encoder fell behind the tight
-     * synthetic loop above -- see sink_ffv1.c's queue-drop path). */
+    /* Re-open: every one of the N frames must be in the file. */
     AVFormatContext *fc = NULL;
     CHECK(avformat_open_input(&fc, "test_analog_fps.mkv", NULL, NULL) >= 0);
     CHECK(avformat_find_stream_info(fc, NULL) >= 0);
@@ -368,7 +363,7 @@ static double measure_ffv1_fps(void)
     double fps = elapsed > 0 ? vframes / elapsed : 0;
     printf("  %lld of %d frames encoded in %.3f s -> %.1f fps (%dx%d yuv422p, level3, "
            "slices16, slicecrc1)\n", (long long)vframes, N, elapsed, fps, W, H);
-    CHECK(vframes > 0);
+    CHECK(vframes == N);
     CHECK(elapsed > 0);
     return fps;
 }

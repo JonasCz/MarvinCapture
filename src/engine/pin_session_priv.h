@@ -132,6 +132,7 @@ struct pin_session {
     double elapsed_s, idle_s;
     uint64_t frames, frames_dropped, frames_damaged, lost_blocks, ts_errors;
     uint64_t bytes_written, writer_backlog, writer_backlog_max;
+    uint64_t write_dropped;     /* units the writer queue refused, see pin_status_snapshot_t */
     float audio_peak_db[2], audio_rms_db[2];
     double audio_meter_t;   /* monotonic seconds of the last metered block; 0 = none yet */
 

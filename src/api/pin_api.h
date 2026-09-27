@@ -387,8 +387,8 @@ typedef struct {
     char current_file[PIN_PATH_MAX];
     double elapsed_s;
     uint64_t frames;
-    uint64_t frames_dropped;    /* never arrived (analog: repeated in the output) */
-    uint64_t frames_damaged;    /* analog: truncated; DV: sequences zero-padded */
+    uint64_t frames_dropped;    /* not in the output (analog: the previous frame repeated) */
+    uint64_t frames_damaged;    /* analog: the dropped frames that arrived short; DV: sequences zero-padded */
     uint64_t lost_blocks;       /* DV/HDV: CIP data blocks lost in transit */
     uint64_t ts_errors;         /* HDV: continuity errors */
     uint64_t bytes_written;
@@ -421,6 +421,11 @@ typedef struct {
     char detail[PIN_TEXT_MAX];
     int progress_percent;
     int camera_present;
+
+    /* Appended fields, ABI-compatible. Video frames and audio blocks that
+     * arrived but never reached the file because the disk writer's queue
+     * was full (or the file had already failed). Always 0 in a good capture. */
+    uint64_t write_dropped;
 } pin_status_snapshot_t;
 
 /* Non-blocking. */

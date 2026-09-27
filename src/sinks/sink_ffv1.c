@@ -22,15 +22,15 @@
  * libavcodec.
  *
  * The pin_writer consumer thread (see pin_writer.h) calls write_video()
- * once per captured YUYV frame; that thread must not stall waiting for a
- * slow FFV1 encode (falling behind here must not make pin_writer start
- * dropping *capture* data upstream of the sink). So write_video() only
- * converts YUYV -> planar YUV422P (a cheap deinterleave, no scaling maths)
- * and hands the plane off to a small bounded queue; a dedicated encoder
- * thread does the actual avcodec_send_frame/receive_packet + mux write.
- * If that queue is full the frame is dropped and counted as
- * st.encoder_behind, exactly like pin_writer's own overflow handling one
- * layer up.
+ * once per captured YUYV frame. write_video() only converts YUYV -> planar
+ * YUV422P (a cheap deinterleave, no scaling maths) and hands the plane off
+ * to a small bounded queue; a dedicated encoder thread does the actual
+ * avcodec_send_frame/receive_packet + mux write. If that queue is full,
+ * write_video() waits for room (and sets st.encoder_behind): the writer
+ * thread may block, that is what pin_writer's much larger ring in front of
+ * it is for, and only if that fills too is anything dropped (and counted
+ * there). Dropping here instead would lose a frame while that ring sat
+ * nearly empty.
  *
  * Audio needs no such encode step (pcm_s16le is a repack, not a codec), so
  * write_audio() muxes directly from the caller's thread; av_mux_lock
@@ -60,6 +60,7 @@
 #endif
 
 #define QUEUE_DEPTH 8
+#define FFV1_SLICES 16
 
 typedef struct {
     AVFormatContext *fmt;
@@ -227,9 +228,13 @@ static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_pa
     p->venc->field_order = AV_FIELD_TT;              /* analog capture: top field first */
 
     av_opt_set_int(p->venc->priv_data, "level", 3, 0);
-    av_opt_set_int(p->venc->priv_data, "slices", 16, 0);
+    av_opt_set_int(p->venc->priv_data, "slices", FFV1_SLICES, 0);
     av_opt_set_int(p->venc->priv_data, "slicecrc", 1, 0);
+    /* Slice threading runs one slice per thread, so more threads than
+     * slices would only sit idle. */
     int threads = cpu_count() - 1;
+    if (threads > FFV1_SLICES)
+        threads = FFV1_SLICES;
     if (threads < 2)
         threads = 2;
     p->venc->thread_count = threads;
@@ -337,14 +342,11 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
 
     pthread_mutex_lock(&p->qlock);
     if (p->qcount == QUEUE_DEPTH) {
-        pthread_mutex_unlock(&p->qlock);
-        av_frame_free(&f);
-        pin_logf(PIN_LOG_WARN, "sink_ffv1: encoder falling behind, dropped a frame\n");
         pthread_mutex_lock(&p->st_lock);
         p->st.encoder_behind = 1;
-        p->st.units_damaged++;
         pthread_mutex_unlock(&p->st_lock);
-        return PIN_OK;
+        while (p->qcount == QUEUE_DEPTH)
+            pthread_cond_wait(&p->qspace, &p->qlock);
     }
     p->queue[p->qtail] = f;
     p->qtail = (p->qtail + 1) % QUEUE_DEPTH;
