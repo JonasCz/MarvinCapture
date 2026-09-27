@@ -112,6 +112,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     # a consumer of it, so pin_api.h's functions must not be seen as
     # dllimport here (PIN_API => dllexport) -- see src/api/pin_api.h.
     target_compile_definitions(pinnacle_engine PUBLIC PIN_BUILDING_LIBRARY)
+
+    # pin_api.c: the engine calls back into it (pin_strerror)
+    add_executable(test_pin_event_queue tests/engine/test_pin_event_queue.c src/api/pin_api.c)
+    target_link_libraries(test_pin_event_queue PRIVATE pinnacle_engine)
+    add_test(NAME test_pin_event_queue COMMAND test_pin_event_queue)
 endif()
 
 # --- Public API: the pinnacle-oss-core shared library (pin_api.c, a thin

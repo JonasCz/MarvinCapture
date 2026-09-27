@@ -103,9 +103,12 @@ static void evq_push(pin_event_t *q, unsigned *head, unsigned *count, pthread_mu
             unsigned idx = (*head + i) % PIN_EVQ_CAP;
             if (q[idx].kind == PIN_EVT_LOG) { victim = idx; break; }
         }
-        if (victim != *head) {
-            /* shift the slot at `victim` out by swapping it to head, then advance head */
-            q[victim] = q[*head];
+        /* Close the gap: everything older than the victim moves up one
+         * slot, keeping its order, and the freed head slot is dropped. */
+        for (unsigned i = victim; i != *head; ) {
+            unsigned prev = (i + PIN_EVQ_CAP - 1) % PIN_EVQ_CAP;
+            q[i] = q[prev];
+            i = prev;
         }
         *head = (*head + 1) % PIN_EVQ_CAP;
         (*count)--;
