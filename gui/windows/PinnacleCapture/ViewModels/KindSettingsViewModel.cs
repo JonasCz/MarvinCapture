@@ -48,6 +48,7 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     [ObservableProperty] private string _title = "";
     [ObservableProperty] private bool _splitIntoScenes;
     [ObservableProperty] private double _idleStopMinutes = 5;
+    [ObservableProperty] private double _maxDurationMinutes;
     [ObservableProperty] private double _passes = 1;
 
     /// <summary>Aspect override for this kind (PinAspect order: Auto, 4:3, 16:9).</summary>

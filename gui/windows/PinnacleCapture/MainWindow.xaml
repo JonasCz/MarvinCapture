@@ -231,6 +231,31 @@
                                              IsEnabled="{x:Bind local:MainWindow.Both(VM.AnalogTitleEnabled, VM.IsIdle), Mode=OneWay}"
                                              AutomationProperties.Name="Analog title"
                                              AutomationProperties.HelpText="Stored as the title metadata of the file" />
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <NumberBox
+                                            Header="Stop after no signal (min)"
+                                            Minimum="0" Maximum="600" SmallChange="1" LargeChange="5"
+                                            SpinButtonPlacementMode="Compact"
+                                            Value="{x:Bind VM.AnalogIdleStopMinutes, Mode=TwoWay}"
+                                            IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
+                                            AutomationProperties.Name="Stop analog capture after this many minutes without signal"
+                                            AutomationProperties.HelpText="Stops the capture after this many minutes without signal. 0 disables it (never stops automatically)."
+                                            ToolTipService.ToolTip="Stops the capture after this many minutes without signal. 0 disables it (never stops automatically)." />
+                                        <NumberBox
+                                            Grid.Column="1"
+                                            Header="Stop after (min)"
+                                            Minimum="0" Maximum="600" SmallChange="1" LargeChange="5"
+                                            SpinButtonPlacementMode="Compact"
+                                            Value="{x:Bind VM.AnalogMaxDurationMinutes, Mode=TwoWay}"
+                                            IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
+                                            AutomationProperties.Name="Stop analog capture after this many minutes, regardless of signal"
+                                            AutomationProperties.HelpText="Stops the capture after this many minutes, whether or not signal is present. 0 disables it (never stops automatically)."
+                                            ToolTipService.ToolTip="Stops the capture after this many minutes, whether or not signal is present. 0 disables it (never stops automatically)." />
+                                    </Grid>
                                 </StackPanel>
                             </Border>
 

@@ -159,6 +159,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnAnalogTitleChanged(string value) => SaveSetting("gui.title_analog", value);
     [ObservableProperty] private string _analogOutputPath = "";
 
+    /// <summary>Stop after this long without signal; 0 = never. Analog's own setting
+    /// (a lost RCA/S-Video signal isn't detected the same way as a DV/HDV dropout).</summary>
+    [ObservableProperty] private double _analogIdleStopMinutes = 5;
+
+    partial void OnAnalogIdleStopMinutesChanged(double value) =>
+        SaveSetting("gui.idle_analog", ((int)value).ToString(CultureInfo.InvariantCulture));
+
+    /// <summary>Stop after this long of capture time, signal or not; 0 = never.</summary>
+    [ObservableProperty] private double _analogMaxDurationMinutes;
+
+    partial void OnAnalogMaxDurationMinutesChanged(double value) =>
+        SaveSetting("gui.duration_analog", ((int)value).ToString(CultureInfo.InvariantCulture));
+
     public bool AnalogTitleEnabled => AnalogFormat?.SupportsTitle ?? false;
 
     partial void OnAnalogFormatChanged(FormatItem? value)
@@ -635,7 +648,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.Title = analog ? (AnalogTitleEnabled ? AnalogTitle : "") : (kind.TitleEnabled ? kind.Title : "");
         o.Aspect = ActiveAspect;
         o.SceneSplit = !analog && kind.SplitIntoScenes && kind.SplitEnabled ? 1 : 0;
-        o.IdleStopMinutes = (int)Math.Max(0, analog ? DvSettings.IdleStopMinutes : kind.IdleStopMinutes);
+        o.IdleStopMinutes = (int)Math.Max(0, analog ? AnalogIdleStopMinutes : kind.IdleStopMinutes);
+        o.MaxDurationMinutes = (int)Math.Max(0, analog ? AnalogMaxDurationMinutes : kind.MaxDurationMinutes);
         o.Passes = analog ? 1 : (int)Math.Max(1, kind.Passes);
         o.StartDeck = startDeck ? 1 : 0;
         o.RewindFirst = rewindFirst ? 1 : 0; // "Play and capture": start of tape, then play
@@ -959,6 +973,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveSetting($"gui.split_{p}", k.SplitIntoScenes ? "1" : "0");
         SaveSetting($"gui.passes_{p}", ((int)k.Passes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.idle_{p}", ((int)k.IdleStopMinutes).ToString(CultureInfo.InvariantCulture));
+        SaveSetting($"gui.duration_{p}", ((int)k.MaxDurationMinutes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.aspect_{p}", k.AspectIndex.ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.title_{p}", k.Title);
     }
@@ -978,6 +993,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             AnalogAspectIndex = Math.Clamp(LoadInt("gui.aspect_analog", 0), 0, 2);
             AnalogOutputPath = LoadSetting("gui.output_analog", DefaultOutput("analog"));
             AnalogTitle = LoadSetting("gui.title_analog");
+            AnalogIdleStopMinutes = Math.Max(0, LoadInt("gui.idle_analog", 5));
+            AnalogMaxDurationMinutes = Math.Max(0, LoadInt("gui.duration_analog", 0));
             SelectedKindTabIndex = Math.Clamp(LoadInt("gui.last_kind", 0), 0, 1);
             _lastStreamKind = SelectedKindTabIndex == 1 ? PinKind.Hdv : PinKind.Dv;
             int std = LoadInt("gui.std", (int)PinStd.Auto);
@@ -1002,6 +1019,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 k.SplitIntoScenes = LoadInt($"gui.split_{p}", 0) != 0;
                 k.Passes = Math.Max(1, LoadInt($"gui.passes_{p}", 1));
                 k.IdleStopMinutes = Math.Max(0, LoadInt($"gui.idle_{p}", 5));
+                k.MaxDurationMinutes = Math.Max(0, LoadInt($"gui.duration_{p}", 0));
                 k.AspectIndex = Math.Clamp(LoadInt($"gui.aspect_{p}", 0), 0, 2);
                 k.Title = LoadSetting($"gui.title_{p}");
             }
@@ -1068,7 +1086,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         if (fields.HasFlag(PinOptFields.Idle))
         {
-            DvSettings.IdleStopMinutes = HdvSettings.IdleStopMinutes = Math.Max(0, c.IdleStopMinutes);
+            if (analog) AnalogIdleStopMinutes = Math.Max(0, c.IdleStopMinutes);
+            else DvSettings.IdleStopMinutes = HdvSettings.IdleStopMinutes = Math.Max(0, c.IdleStopMinutes);
         }
         if (fields.HasFlag(PinOptFields.Aspect))
         {

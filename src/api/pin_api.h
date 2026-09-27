@@ -320,6 +320,10 @@ typedef struct {
                                     scene_split, from 1). >= 1: every file is numbered
                                     "base-NNNN.ext", starting at this number and counting up
                                     per scene; the caller picks an unused number. Appended. */
+    int max_duration_minutes;   /* stop after this long of capture time, signal/data or not;
+                                    0 = never. DV/HDV: applies across all passes (cuts a pass
+                                    short rather than rewinding for the next one). Appended
+                                    field, ABI-compatible. */
 } pin_capture_opts_t;
 
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);

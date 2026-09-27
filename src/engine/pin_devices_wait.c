@@ -34,8 +34,10 @@
  *   - Every ~500 ms, a cheap fingerprint of the lock records
  *     (pinnacle_lock_query(): state/owner) of the devices seen by the last
  *     enumeration -- no USB access at all. The USB device list itself is
- *     only re-read after a hotplug event, or every 2 s when libusb has no
- *     hotplug capability (the rescan-compare fallback).
+ *     only re-read after a hotplug event, or every 2 s as a safety-net
+ *     rescan (Windows: in case CM_Register_Notification never fires for an
+ *     arrival, e.g. no device was present when it was registered; POSIX:
+ *     always, when libusb has no hotplug capability).
  *
  * pin_devices_wake() is a distinct signal (not a "device list changed"
  * bump): it only unblocks a pending wait, which then reports 0 (timeout),
@@ -47,6 +49,7 @@
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pinnacle_device.h" /* PINNACLE_VID, POSIX hotplug filter */
+#include "../core/pin_log.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -172,10 +175,11 @@ static void register_os_hotplug(void)
     HCMNOTIFICATION notify = NULL;
     /* Registered once, lazily, and never unregistered -- kept for the
      * process lifetime, per pin_api.h's pin_devices_wait() doc comment.
-     * A failure here just means this process falls back to the ~500 ms
-     * fingerprint poll below for hotplug too (still correct, just not as
-     * prompt). */
-    CM_Register_Notification(&filter, NULL, cm_notify_cb, &notify);
+     * A failure here still leaves the loop's periodic rescan (below) as a
+     * fallback, so hotplug is slower but not silently broken. */
+    CONFIGRET cr = CM_Register_Notification(&filter, NULL, cm_notify_cb, &notify);
+    if (cr != CR_SUCCESS)
+        pin_logf(PIN_LOG_WARN, "pin_devices_wait: CM_Register_Notification failed (0x%lx)\n", (unsigned long)cr);
 #else
     int rc = libusb_init(NULL);
     if (rc == 0 && libusb_has_capability(LIBUSB_CAP_HAS_HOTPLUG)) {
@@ -194,9 +198,7 @@ static void *watcher_main(void *arg)
     register_os_hotplug();
     rescan_devices();
     uint64_t last_fp = device_fingerprint();
-#if !defined(_WIN32)
     int polls = 0;
-#endif
 
     for (;;) {
         int rescan = 0;
@@ -204,7 +206,11 @@ static void *watcher_main(void *arg)
         /* Windows delivers hotplug via the CM callback (any thread); wait
          * up to 500 ms for one, or just fall through to the fingerprint
          * poll (also covers lock-state changes CM_Register_Notification
-         * knows nothing about). */
+         * knows nothing about). A periodic rescan every ~2 s is still
+         * forced below, the same as the POSIX no-hotplug-capability path,
+         * so a missed or never-registered CM notification (e.g. arrival
+         * while the app started with no device present) doesn't leave
+         * g_known stale for the rest of the process's life. */
         pthread_mutex_lock(&g_mtx);
         struct timespec deadline;
         clock_gettime(CLOCK_REALTIME, &deadline);
@@ -223,6 +229,8 @@ static void *watcher_main(void *arg)
             pthread_mutex_unlock(&g_mtx);
             rescan = 1;
         }
+        if ((++polls % 4) == 0)
+            rescan = 1; /* safety-net rescan every ~2 s regardless of CM notifications */
 #else
         if (g_hotplug_has_cap) {
             struct timeval tv = { 0, 500000 };

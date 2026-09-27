@@ -64,22 +64,34 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <NumberBox
-                Header="Stop after no data (min)"
+                Header="Stop after no signal (min)"
                 Minimum="0" Maximum="600" SmallChange="1" LargeChange="5"
                 SpinButtonPlacementMode="Compact"
                 Value="{x:Bind ViewModel.IdleStopMinutes, Mode=TwoWay}"
                 IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
-                AutomationProperties.Name="Stop when no data for this many minutes"
-                AutomationProperties.HelpText="0 means never stop automatically." />
+                AutomationProperties.Name="Stop when no signal for this many minutes"
+                AutomationProperties.HelpText="Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)."
+                ToolTipService.ToolTip="Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)." />
             <NumberBox
                 Grid.Column="1"
-                Header="Capture passes"
-                Minimum="1" Maximum="20" SmallChange="1"
+                Header="Stop after (min)"
+                Minimum="0" Maximum="600" SmallChange="1" LargeChange="5"
                 SpinButtonPlacementMode="Compact"
-                Value="{x:Bind ViewModel.Passes, Mode=TwoWay}"
-                IsEnabled="{x:Bind Both(ViewModel.PassesEnabled, IsEditable), Mode=OneWay}"
-                AutomationProperties.Name="Capture passes"
-                AutomationProperties.HelpText="1 captures the tape once. More passes rewind to the start of the tape and capture it again." />
+                Value="{x:Bind ViewModel.MaxDurationMinutes, Mode=TwoWay}"
+                IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
+                AutomationProperties.Name="Stop this many minutes into the pass, regardless of signal"
+                AutomationProperties.HelpText="Ends the pass after this many minutes of capture, whether or not signal is present. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)."
+                ToolTipService.ToolTip="Ends the pass after this many minutes of capture, whether or not signal is present. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)." />
         </Grid>
+
+        <NumberBox
+            Header="Capture passes"
+            HorizontalAlignment="Left" Width="140"
+            Minimum="1" Maximum="20" SmallChange="1"
+            SpinButtonPlacementMode="Compact"
+            Value="{x:Bind ViewModel.Passes, Mode=TwoWay}"
+            IsEnabled="{x:Bind Both(ViewModel.PassesEnabled, IsEditable), Mode=OneWay}"
+            AutomationProperties.Name="Capture passes"
+            AutomationProperties.HelpText="1 captures the tape once. More passes rewind to the start of the tape and capture it again." />
     </StackPanel>
 </UserControl>

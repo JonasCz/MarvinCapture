@@ -1400,9 +1400,14 @@ static void dv_tick(void *user)
         s->frames_dropped += 0; /* writer overflow already counted separately if needed */
     }
 
-    /* idle-stop / EOT multi-pass handling */
-    if (s->state == PIN_STATE_CAPTURING && s->capture_opts.idle_stop_minutes > 0 &&
-        s->idle_s > s->capture_opts.idle_stop_minutes * 60.0) {
+    /* idle-stop / duration-stop / EOT multi-pass handling. Both idle-stop and
+     * duration-stop just end the *current pass* early -- with passes left,
+     * that means rewind and start the next one, same as an EOT would. */
+    int duration_stop = s->capture_opts.max_duration_minutes > 0 &&
+                         s->elapsed_s > s->capture_opts.max_duration_minutes * 60.0;
+    if (s->state == PIN_STATE_CAPTURING &&
+        ((s->capture_opts.idle_stop_minutes > 0 && s->idle_s > s->capture_opts.idle_stop_minutes * 60.0) ||
+         duration_stop)) {
         if (s->pass < s->passes) {
             /* end this pass, rewind, next pass */
             if (s->sink) {
@@ -1692,8 +1697,11 @@ static int analog_tick(void *user)
         s->writer_backlog_max = wst.backlog_high_water;
         s->bytes_written = wst.bytes_pushed;
     }
-    int should_stop = s->state == PIN_STATE_CAPTURING && s->capture_opts.idle_stop_minutes > 0 &&
-                      now - s->last_data_s > s->capture_opts.idle_stop_minutes * 60.0;
+    int should_stop = s->state == PIN_STATE_CAPTURING &&
+                      ((s->capture_opts.idle_stop_minutes > 0 &&
+                        now - s->last_data_s > s->capture_opts.idle_stop_minutes * 60.0) ||
+                       (s->capture_opts.max_duration_minutes > 0 &&
+                        s->elapsed_s > s->capture_opts.max_duration_minutes * 60.0));
     pin_session_unlock(s);
 
     if (handle_inline_commands(s, 0)) {

@@ -372,9 +372,28 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
      * without it, the two status reads bracketing the bitstream upload (see
      * below) come back "not ready" and the command channel (EP 0x02) accepts
      * only 2 writes before NAKing every subsequent one indefinitely. With it,
-     * both come back "ready" and the full command sequence goes through. */
-    pinnacle_status_t ready = config_replay_seq(dev, PINNACLE_CONFIG_PREBITSTREAM_SEQ,
-                                                 PINNACLE_CONFIG_PREBITSTREAM_SEQ_COUNT);
+     * both come back "ready" and the full command sequence goes through.
+     *
+     * Right after a fresh physical replug, this status read can still come
+     * back "not ready" for real (the FX2/FPGA hasn't finished its own
+     * power-up) rather than because the sequence above was skipped -- this
+     * is the same class of post-replug settling the 1.5 s wait below and
+     * docs/startup.md's step 2 already document, just before the sequence
+     * instead of after the bitstream. Retry with backoff instead of failing
+     * the whole open on the first check. */
+    static const unsigned prebitstream_retry_delays_ms[] = { 300, 600, 1200 };
+    pinnacle_status_t ready;
+    for (unsigned attempt = 0; ; attempt++) {
+        ready = config_replay_seq(dev, PINNACLE_CONFIG_PREBITSTREAM_SEQ,
+                                   PINNACLE_CONFIG_PREBITSTREAM_SEQ_COUNT);
+        if (ready == PINNACLE_OK ||
+            attempt >= sizeof(prebitstream_retry_delays_ms) / sizeof(prebitstream_retry_delays_ms[0]))
+            break;
+        pin_logf(PIN_LOG_WARN,
+                "pinnacle: prebitstream handshake not ready yet, retrying in %u ms "
+                "(settling after a fresh replug)\n", prebitstream_retry_delays_ms[attempt]);
+        sleep_ms(prebitstream_retry_delays_ms[attempt]);
+    }
     if (ready != PINNACLE_OK)
         return ready;
 

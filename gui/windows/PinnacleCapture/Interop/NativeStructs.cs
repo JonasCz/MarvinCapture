@@ -106,6 +106,7 @@ public unsafe struct PinCaptureOpts
     // Appended in ABI v2:
     public int RewindFirst;     // "Play and capture": rewind to the start of the tape first
     public uint FirstNumber;    // >= 1: every file is "base-NNNN.ext", counting up per scene from here
+    public int MaxDurationMinutes; // stop after this long of capture time, signal/data or not; 0 = never
 
     public string Path
     {
