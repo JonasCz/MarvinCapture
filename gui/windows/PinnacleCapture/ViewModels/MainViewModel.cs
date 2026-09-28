@@ -366,13 +366,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         KindTabs.Add(DvSettings);
         KindTabs.Add(HdvSettings);
 
+        // Set the backing field, not the property: OnAnalogFormatChanged would save the
+        // default over gui.format_analog before LoadSettings gets to read it.
         foreach (var f in Native.Formats(PinKind.Analog))
         {
             var item = new FormatItem(f);
             AnalogFormats.Add(item);
-            if (item.IsDefault || AnalogFormat is null)
+            if (item.IsDefault || _analogFormat is null)
             {
-                AnalogFormat = item;
+                _analogFormat = item;
             }
         }
 
