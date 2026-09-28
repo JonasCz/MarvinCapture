@@ -169,7 +169,8 @@ static void register_os_hotplug(void)
     CM_NOTIFY_FILTER filter;
     memset(&filter, 0, sizeof(filter));
     filter.cbSize = sizeof(filter);
-    filter.Flags = CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES;
+    /* No CM_NOTIFY_FILTER_FLAG_ALL_INTERFACE_CLASSES: with it ClassGuid
+     * must be zero, and a set one fails with CR_INVALID_DATA (0x1f). */
     filter.FilterType = CM_NOTIFY_FILTER_TYPE_DEVICEINTERFACE;
     filter.u.DeviceInterface.ClassGuid = GUID_DEVINTERFACE_USB_DEVICE;
     HCMNOTIFICATION notify = NULL;

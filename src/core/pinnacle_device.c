@@ -37,7 +37,6 @@ void pinnacle_tuning_defaults(pinnacle_tuning_t *t)
     t->debug_ep84 = 0;
     t->video_queue = 0;     /* 0 = use VIDEO_QUEUE */
     t->video_xfer = 0;      /* 0 = use VIDEO_XFER */
-    t->debug_analog = 0;
 }
 
 void pinnacle_tuning_from_env(pinnacle_tuning_t *t)
@@ -58,8 +57,6 @@ void pinnacle_tuning_from_env(pinnacle_tuning_t *t)
         t->video_queue = (unsigned)atoi(e);
     if ((e = getenv("PINNACLE_VIDEO_XFER")))
         t->video_xfer = (unsigned)atoi(e);
-    if ((e = getenv("PINNACLE_DEBUG_ANALOG")))
-        t->debug_analog = (e[0] == '1');
 }
 
 static void sleep_ms(unsigned ms)

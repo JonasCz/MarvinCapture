@@ -229,9 +229,12 @@ What that means:
    show it. `pinnacle_analog_capture_loop` keeps the output timeline whole:
    - A missing frame becomes a repeat of the previous one, and its audio
      becomes 1920 samples of silence.
-   - A short frame keeps the previous frame's pixels below the point where
-     its data stopped.
-   Every repair is counted. The file therefore always has exactly one
+   - A short frame is replaced by the previous complete frame, whole.
+     Patching only the lines that did not arrive mixed two pictures in one
+     frame, and since the fields are sent one after the other, a frame cut
+     short in its second field came out combed.
+   Every repair is counted, and the GUI adds both kinds to its "dropped"
+   count. The file therefore always has exactly one
    frame and 1920 samples per source frame, and a player at 25 fps plays
    it back in sync.
 
@@ -268,8 +271,74 @@ Default: 512 transfers of 8 KiB (200 ms queued). A 3-minute capture with
 that setting had 4,500 frames with 0 missing, 0 truncated and 0 audio
 gaps, and the 3.7 GB AVI (4 RIFF segments) decodes without an error. usbfs turns anything over
 16 KiB into a scatter-gather list, and large buffers need several TRBs; the
-per-transfer cost of those seems to be what opens the gaps. A second
-thread writes the file, so disk stalls never reach the USB thread.
+per-transfer cost of those seems to be what opens the gaps.
+
+## Keeping the USB thread on time
+
+The transfer size fixes most of it on Linux. Windows needed three more
+things, all in `pinnacle_analog.c`:
+
+- **WinUSB RAW_IO.** By default WinUSB hands a pipe's reads to the host
+  controller one at a time, however many are queued: each completion goes
+  back up through WinUSB before the next read is armed, so one late DPC
+  leaves the endpoint with nothing to receive into, and the FPGA cuts the
+  frame short. With the RAW_IO policy the reads go straight down and the
+  whole queue is armed at the controller. It needs whole-packet transfers
+  (ours are) and an idle pipe, so it is set before the first submit, on
+  both endpoints. libusb has it since 1.0.30
+  (`libusb_endpoint_set_raw_io`); it is always on, and the read loop logs
+  `RAW_IO video on audio on` at start.
+- **A high-priority USB thread.** The thread running the libusb event loop
+  joins MMCSS's "Capture" class (`AvSetMmThreadCharacteristicsW`; failing
+  that, `THREAD_PRIORITY_HIGHEST`), so the encoder threads and the GUI
+  cannot starve it. The log says `thread priority raised`.
+- **Nothing else on that thread.** It only reaps, reassembles and resubmits.
+  Finished frames and audio blocks are copied into a ring (30 frames, 64
+  audio blocks, about 1 s) and a delivery thread calls the sink from
+  there: preview, the file writer, decoder status polls over I2C and file
+  close on stop all used to run on the USB thread. If the ring fills, the
+  USB thread waits rather than dropping, so a sink that is slow for more
+  than a second shows up as short frames, and is counted. The file itself
+  is written by yet another thread (`pin_writer`, 64 MB), and the FFV1
+  encoder applies backpressure instead of dropping.
+
+Result, 65 minutes of a QR-numbered PAL test disc over S-video (Windows 10,
+FFV1 to MKV, method below):
+
+| | undecodable | missing | duplicate |
+|---|---|---|---|
+| before | 8 | 12 | 4 |
+| after | **0** | **0** | **0** of 90,000 |
+
+Audio: no gaps either time, and the A/V offset stayed at -14.8 ms for the
+whole hour (before: average -15.5 ms, peaks of -55 ms). The three changes
+and the whole-frame repeat above went in together, so this does not say
+how much each one contributes.
+
+## Checking a capture frame by frame
+
+The counters show what the driver repaired, not what reached the file. To
+check the file itself, play a test source whose every frame carries its
+number as a QR code, capture it, then decode every frame of the output and
+check that each number is there exactly once and in order. The QR numbers
+do not line up with file frame indices (the disc has a lead-in), only
+their sequence matters.
+
+Hooks used for the investigation and since removed, in case a problem
+comes back:
+
+- **Per-frame log** from the video callback (`analog_video_cb` in
+  `pin_session.c`): one CSV row per frame with `index, seq, device_time,
+  repeated, received` and a 64-bit FNV-1a hash of the whole YUYV frame.
+  Match rows to output frames by hash (preview frames before recording
+  are logged too, so indices are offset), then a bad frame in the file
+  can be traced to what the USB side saw: `seq` must step by 1,
+  `device_time` by ~400,044 ticks (PAL) or ~333,667 (NTSC), and two
+  consecutive equal hashes mean the source itself repeated a frame.
+- **USB loop health** in `pinnacle_analog_read_loop`: once a second, the
+  fewest video transfers still in flight and the longest gap between two
+  passes of the loop. A queue that never drains while frames still arrive
+  short means per-transfer cost, not depth.
 
 ## Output file
 

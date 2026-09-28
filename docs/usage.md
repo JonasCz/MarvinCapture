@@ -170,7 +170,11 @@ All opt-in environment variables; the defaults are the right values.
 | `PINNACLE_DEBUG_EP88=1` | log every EP 0x88 completion: size, delivery time, libusb completion time and callbacks over 1 ms. Not for loss testing: the log runs on the USB thread and adds its own stalls |
 | `PINNACLE_DEBUG_EP84=1` | log every EP 0x84 record with its arrival time |
 | `PINNACLE_RAW_DUMP=<path>` | write the raw EP 0x88 byte stream to a file before reassembly. This is also the input format of the replay device below |
-| `PINNACLE_DEBUG_1394`, `PINNACLE_DEBUG_ANALOG`, `PINNACLE_VIDEO_QUEUE`, `PINNACLE_VIDEO_XFER` | 1394 / analog debug logging and the analog USB queue depth and transfer size |
+| `PINNACLE_DEBUG_1394`, `PINNACLE_VIDEO_QUEUE`, `PINNACLE_VIDEO_XFER` | 1394 debug logging, and the analog USB queue depth and transfer size |
+
+These are read by the CLIs and by the capture engine (so the GUI honours
+them too). Started from a console, the GUI also prints its log there;
+`PINNACLE_LOG_LEVEL=0` adds the core's debug lines.
 
 ## Two traps
 

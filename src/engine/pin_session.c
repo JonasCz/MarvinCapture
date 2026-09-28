@@ -1608,29 +1608,7 @@ typedef struct {
     uint32_t video_index;
     double last_status_s;   /* analog_tick(): last decoder status poll */
     int auto_mismatch;      /* consecutive polls whose 50/60 Hz differs from the configured standard */
-    /* TEMPORARY diagnostic hook (see PINNACLE_ANALOG_DIAG_LOG in do_run_analog):
-     * one CSV row per emitted video frame, keyed by f->index -- the same
-     * 0-based position the frame lands at in the output file -- so an
-     * external analysis of the output can be correlated back to exactly
-     * what the assembler/USB layer saw for that frame. Remove once the
-     * frame-accuracy investigation is done. */
-    FILE *diag;
-    int diag_have_prev;
-    uint16_t diag_last_seq;
-    uint64_t diag_last_time, diag_last_hash;
-    double diag_expected_ticks;
 } analog_ctx_t;
-
-/* TEMPORARY: see analog_ctx_t.diag above. */
-static uint64_t diag_fnv1a64(const uint8_t *d, size_t n)
-{
-    uint64_t h = 1469598103934665603ULL;
-    for (size_t i = 0; i < n; i++) {
-        h ^= d[i];
-        h *= 1099511628211ULL;
-    }
-    return h;
-}
 
 static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
 {
@@ -1660,33 +1638,6 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
     if (s->writer && !pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
                                       (size_t)f->width * f->height * 2))
         s->write_dropped++;
-
-    /* TEMPORARY diagnostic: see analog_ctx_t.diag. Hash the full frame and
-     * cross-check seq/device_time against the previous frame, independent
-     * of the assembler's own repair accounting, so a post-hoc analysis of
-     * the output file (e.g. QR/LTC frame numbers) can tell a genuine
-     * upstream (signal-level) repeat from a driver-side one. */
-    if (ctx->diag) {
-        size_t full = (size_t)f->width * f->height * 2;
-        uint64_t hash = diag_fnv1a64(f->yuyv, full);
-        uint16_t dseq = 0;
-        int64_t dtime = 0;
-        int content_dup = 0;
-        if (ctx->diag_have_prev) {
-            dseq = (uint16_t)(f->seq - ctx->diag_last_seq);
-            dtime = (int64_t)(f->device_time - ctx->diag_last_time);
-            content_dup = hash == ctx->diag_last_hash;
-        }
-        fprintf(ctx->diag, "%u,%u,%llu,%d,%zu,%u,%d,%lld,%d,%016llx\n", f->index, f->seq,
-                (unsigned long long)f->device_time, f->repeated, f->received, dseq,
-                ctx->diag_have_prev, (long long)dtime, content_dup, (unsigned long long)hash);
-        if ((f->index & 0xff) == 0)
-            fflush(ctx->diag);
-        ctx->diag_last_seq = f->seq;
-        ctx->diag_last_time = f->device_time;
-        ctx->diag_last_hash = hash;
-        ctx->diag_have_prev = 1;
-    }
 
     if (kind_newly_known)
         maybe_begin_capture(s, 0); /* analog has no deck/camera_node */
@@ -1867,16 +1818,6 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
     set_state(s, PIN_STATE_READY);
 
     analog_ctx_t ctx = { .s = s };
-    /* TEMPORARY: see analog_ctx_t.diag. Set PINNACLE_ANALOG_DIAG_LOG to a
-     * path to get a per-frame CSV (index,seq,device_time,repeated,received,
-     * dseq,have_prev,dtime,content_dup,hash) alongside the capture. */
-    const char *diag_path = getenv("PINNACLE_ANALOG_DIAG_LOG");
-    if (diag_path && (ctx.diag = fopen(diag_path, "w")) != NULL) {
-        fprintf(ctx.diag, "index,seq,device_time,repeated,received,dseq,have_prev,dtime,"
-                          "content_dup,hash\n");
-        pin_logf(PIN_LOG_INFO, "pinnacle: analog diagnostic log: %s\n", diag_path);
-    }
-    ctx.diag_expected_ticks = pinnacle_std_is_60hz(cfg.standard) ? (10e6 * 1001.0 / 30000.0) : 400000.0;
     pinnacle_capture_sink_t sink = { .video = analog_video_cb, .audio = analog_audio_cb,
                                      .tick = analog_tick, .user = &ctx };
     pinnacle_capture_stats_t stats;
@@ -1923,8 +1864,6 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
         s->sink = NULL;
     }
     pinnacle_analog_stop(&s->analog);
-    if (ctx.diag)
-        fclose(ctx.diag); /* TEMPORARY: see analog_ctx_t.diag */
 }
 
 /* ========================================================================

@@ -710,40 +710,16 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
         goto out;
     }
 
-    /* PINNACLE_DEBUG_ANALOG=1: once a second, the fewest video transfers
-     * that were still queued in the kernel and the longest time between two
-     * passes of this loop. */
-    int debug = dev->tuning.debug_analog;
-    struct timespec tprev, tnow, trep;
-    clock_gettime(CLOCK_MONOTONIC, &tprev);
-    trep = tprev;
-    unsigned min_inflight = vdepth;
-    double max_gap = 0;
-
+    /* To see whether the host is keeping up, count the transfers still in
+     * flight (!vq->slots[i].done) after each pass and time the passes; log
+     * the minimum and the longest gap once a second. A queue that never
+     * drains while frames still arrive short means per-transfer cost, not
+     * depth (see VIDEO_XFER); docs/analog.md has the method. */
     while (!*stop_flag) {
         struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };
         if (libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL) != 0) {
             status = PINNACLE_ERR_USB_TRANSFER;
             break;
-        }
-        if (debug) {
-            unsigned inflight = 0;
-            for (unsigned i = 0; i < vq->depth; i++)
-                inflight += !vq->slots[i].done;
-            if (inflight < min_inflight)
-                min_inflight = inflight;
-            clock_gettime(CLOCK_MONOTONIC, &tnow);
-            double gap = (tnow.tv_sec - tprev.tv_sec) * 1e3 + (tnow.tv_nsec - tprev.tv_nsec) / 1e6;
-            if (gap > max_gap)
-                max_gap = gap;
-            tprev = tnow;
-            if (tnow.tv_sec - trep.tv_sec >= 1) {
-                pin_logf(PIN_LOG_DEBUG, "\n[analog] min in flight %u/%u, max loop gap %.1f ms\n",
-                        min_inflight, vq->depth, max_gap);
-                min_inflight = vq->depth;
-                max_gap = 0;
-                trep = tnow;
-            }
         }
         int rv = queue_poll(vq, cb, user, 0);
         int ra = rv == 0 ? queue_poll(aq, cb, user, 0) : 0;
