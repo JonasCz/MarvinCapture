@@ -1,10 +1,11 @@
 # Analog capture (composite / S-video)
 
-Status as of **2026-09-25**: PAL composite capture works with `pinanalog`,
-from a cold device or switched over from DV without a replug. Output is an
-AVI with uncompressed YUY2 video and 48 kHz stereo PCM. NTSC, S-video and
-the other colour standards are implemented from the vendor driver's tables
-but have not been tested against a real source yet.
+Status as of **2026-09-28**: PAL (composite and S-video) and NTSC
+(composite) capture work, from a cold device or switched over from DV
+without a replug. Output is an AVI with uncompressed YUY2 video and 48 kHz
+stereo PCM, or FFV1 in MKV from the GUI. NTSC S-video and the other colour
+standards are implemented from the vendor driver's tables but have not been
+tested against a real source yet.
 
 How the vendor driver, the other Marvin models and the three FPGA
 bitstreams fit together is in the last section.
@@ -197,11 +198,23 @@ never stops, and the headers just change from `... 00 00 00 00` to
   frame ends with a short USB packet (829,452 is not a multiple of 512).
   Black is `10 80`. Pixel data never contains `ff` (BT.656 reserves it), so
   a header cannot be confused with pixels.
-- **Audio, EP 0x86**: one packet per transfer, 1920 stereo 16-bit LE
-  samples after the header.
-- Both counters start at 1 on RUN. Audio packet N holds the samples taken
-  during video frame N: its timestamp is 680 ticks (68 us) after the
-  frame's, every time.
+- **Audio, EP 0x86**: one packet per transfer, stereo 16-bit LE samples
+  after the header, as many as registers 6/7 ask for (1920 for PAL, 1600
+  for NTSC).
+- **NTSC video** is the same at 720 x 480 (691,200 bytes, 240 lines per
+  field), and the first field sent is again the top one: on a camera
+  picture the other weave has 64% more line-to-line difference. Line 0 of
+  the first field is black (the half line).
+- Both counters start at 1 on RUN. The audio header's counter is not a
+  packet counter: it is the number of the video frame in which the
+  packet's first sample was taken, and the timestamp is that sample's.
+  With PAL that is one packet per frame, packet N at 680 ticks (68 us)
+  into frame N, every time. With NTSC a frame has 1601.6 samples
+  (48000 x 1001 / 30000) and a packet 1600, so the packets move 333 ticks
+  earlier in the frame each time, and about once every 1000 frames (and
+  at the very start) two packets carry the same counter. Lost audio is
+  therefore found by the timestamps: the next packet is due 1600 samples'
+  worth of ticks after the last, give or take a few hundred.
 
 ## Clocks, frame drops and A/V sync
 
@@ -227,8 +240,9 @@ What that means:
    no resampling is needed on our side.
 3. **The only way to lose sync is to lose packets**, and both counters
    show it. `pinnacle_analog_capture_loop` keeps the output timeline whole:
-   - A missing frame becomes a repeat of the previous one, and its audio
-     becomes 1920 samples of silence.
+   - A missing frame becomes a repeat of the previous one. A missing
+     audio packet (a gap in the audio timestamps) becomes a packet of
+     silence.
    - A short frame is replaced by the previous complete frame, whole.
      Patching only the lines that did not arrive mixed two pictures in one
      frame, and since the fields are sent one after the other, a frame cut
@@ -236,7 +250,9 @@ What that means:
    Every repair is counted, and the GUI adds both kinds to its "dropped"
    count. The file therefore always has exactly one
    frame and 1920 samples per source frame, and a player at 25 fps plays
-   it back in sync.
+   it back in sync. NTSC is the same at 1601.6 samples per frame (measured:
+   1601.599); only the last packet can run up to 33 ms past the last
+   frame, however long the capture.
 
 What the tool does not do is retime to a wall clock. That is deliberate:
 inserting or dropping frames to match the host's clock would create the
@@ -352,10 +368,10 @@ e.g. `ffmpeg -i in.avi -vf setfield=tff,bwdif ...` or
 
 ## Not done yet
 
-- NTSC, S-video and the other standards are untested. NTSC's audio packet
-  size is a guess (1600 samples; the vendor computes it in `FUN_000335c4`
-  from fields we did not trace). Since audio is counted in samples, not
-  packets, a different size only changes latency.
+- NTSC S-video, PAL-M/N, PAL-60, NTSC-4.43/J and SECAM are untested. The
+  vendor's NTSC audio packet size is unknown (it computes it in
+  `FUN_000335c4` from fields we did not trace); ours is 1600 samples. Any
+  size works, since audio is kept as a sample stream.
 - Hardware downscaling (reg 0 bits 7/2/1) and single-field capture (bits
   4:3) are decoded but not exposed.
 - Audio input level (the codec's line-in gain, reg 0x10) is fixed at 0 dB.

@@ -45,10 +45,9 @@
  * this test exits 0 doing nothing if none are present, like the other
  * trace-dependent tests (test_replay_hdv etc).
  *
- * Coverage today: 48 kHz/16-bit NTSC only -- every .dv file in tests/data/ is
- * NTSC (see tests/data/README.md), and none use the 32 kHz/12-bit nonlinear
- * mode, so dv_audio.c's 12-bit expansion (dv_audio_12to16()) is NOT
- * validated by this test; see dv_audio.h's file header for what that means.
+ * Coverage today: NTSC only (see tests/data/README.md), 48 kHz/16-bit
+ * (dv-ntsc.dv) and 32 kHz/12-bit nonlinear (dv-ntsc-32k.dv, which covers
+ * dv_audio_12to16()). No PAL audio.
  */
 
 #include "dv_audio.h"
@@ -290,6 +289,7 @@ int main(void)
 
     candidate_t candidates[] = {
         { "tests/data/dv-ntsc.dv", 0, 1 },
+        { "tests/data/dv-ntsc-32k.dv", 0, 1 },
     };
     int any_present = 0;
     for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {

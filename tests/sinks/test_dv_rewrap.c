@@ -344,17 +344,16 @@ static void run_one(const char *trace_path, const char *tag)
                (long long)avi_asamples, (long long)mov_asamples);
         CHECK_EQ_I(avi_asamples, mov_asamples);
 
-        /* A/V duration match, exact: sink_rewrap.c caps and pads every
-         * frame's audio (both linear-rate and the 32 kHz nonlinear mode
-         * alike) to land exactly on this cumulative target -- see its
-         * rewrap_dv_extract_audio() -- so the total must equal it exactly,
-         * regardless of audio mode and regardless of damaged units
-         * elsewhere in the capture (this check runs before the
-         * damaged-unit early-return below, so it covers NTSC too, not just
-         * PAL). */
+        /* A/V duration match: sink_rewrap.c keeps every track within half
+         * a frame of the video timeline (pin_dv_audio_fit()), whatever the
+         * audio mode and whatever damaged units the capture has (this
+         * check runs before the damaged-unit early-return below, so it
+         * covers NTSC too, not just PAL). */
         int64_t want_total = av_rescale((int64_t)valid_frames, (int64_t)arate * params.fps_den,
                                         params.fps_num);
-        CHECK_EQ_I(avi_asamples, want_total);
+        int64_t one_frame = av_rescale(1, (int64_t)arate * params.fps_den, params.fps_num);
+        int64_t off_by = avi_asamples - want_total;
+        CHECK(off_by <= one_frame / 2 && -off_by <= one_frame / 2);
         if (arate != 48000 && arate != 44100)
             printf("  32 kHz nonlinear mode: %lld samples, exactly %lld valid frames' worth\n",
                    (long long)avi_asamples, (long long)valid_frames);
@@ -390,9 +389,9 @@ static void run_one(const char *trace_path, const char *tag)
          * where this independent re-demux also finds too little audio for
          * that frame's span; see sink_rewrap.c's rewrap_dv_extract_audio()
          * comment for why that can happen and why it's not data loss this
-         * test should fail on). Every frame's slice boundary is the exact
-         * cumulative target both the sink and this loop compute the same
-         * way, so alignment never drifts even across a padded frame. */
+         * test should fail on). Both the sink and this loop place each
+         * frame's slice with pin_dv_audio_fit(), so alignment never drifts
+         * even across a padded frame. */
         AVFormatContext *afc = NULL;
         CHECK(avformat_open_input(&afc, avi_path, NULL, NULL) >= 0);
         CHECK(avformat_find_stream_info(afc, NULL) >= 0);
@@ -422,14 +421,16 @@ static void run_one(const char *trace_path, const char *tag)
 
             int64_t target_after = av_rescale((int64_t)vi + 1, (int64_t)arate * params.fps_den,
                                               params.fps_num);
-            int64_t need = target_after - cumulative;
 
             int16_t *frame_pcm = NULL;
             int frame_ch = achan;
             int64_t avail = demux_one_frame_pair1(frames.frames[fi], frames.lens[fi], &frame_pcm,
                                                   &frame_ch);
+            int64_t take, pad;
+            pin_dv_audio_fit(cumulative, avail, target_after, one_frame, &take, &pad);
+            int64_t need = take + pad;
 
-            if (avail >= need && need > 0) {
+            if (pad == 0 && need > 0) {
                 int mm = memcmp(frame_pcm, (const uint8_t *)avi_pcm + (size_t)cumulative * achan * 2,
                             (size_t)need * achan * 2);
                 if (mm) {

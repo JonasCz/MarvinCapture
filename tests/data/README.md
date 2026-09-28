@@ -9,6 +9,7 @@ rest of the suite runs as normal.
 | `ep88-pal.bin` | First 2 MiB of a raw EP 0x88 dump, PAL DV (colour bars) | reassembler baseline, `test_replay_*`, `test_pin_check_output`, `test_dv_rewrap` |
 | `ep88-ntsc.bin` | First 2 MiB of a raw EP 0x88 dump, NTSC DV, 32 kHz 12-bit audio | reassembler baseline, `test_dv_rewrap` |
 | `dv-ntsc.dv` | 20 frames of a reassembled NTSC DV file, 48 kHz 16-bit audio | `test_dv_audio_vs_libavformat` |
+| `dv-ntsc-32k.dv` | 150 frames of a camera's NTSC DV, 32 kHz 12-bit audio, 4 channels | `test_dv_audio_vs_libavformat` |
 | `hdv.ts` | First 16,000 TS packets of an HDV capture (1440x1080 25p MPEG-2 + MP2) | `test_replay_hdv`, `test_hdv_rewrap` |
 
 Make your own with `pincli` (`.dv`/`.ts`) or, for the raw `ep88-*.bin` dumps,

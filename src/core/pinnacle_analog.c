@@ -59,6 +59,7 @@
 
 #define AUDIO_RATE 48000
 #define PACKET_HEADER 12
+#define DEVICE_HZ 10000000u   /* the packet headers' clock, nominally */
 
 static void sleep_ms(unsigned ms)
 {
@@ -293,9 +294,10 @@ static void apply_geometry(pinnacle_analog_t *a)
     int is60 = pinnacle_std_is_60hz(a->cfg.standard);
     a->width = 720;
     a->height = is60 ? 480 : 576;
-    /* One packet per frame at 25 fps. For 60 Hz the vendor's size is still
-     * unknown; 1600 samples is 1/30 s. Audio is counted by samples, not
-     * packets, downstream, so the choice only affects latency. */
+    /* One packet per frame at 25 fps. A 29.97 fps frame has 1601.6 samples,
+     * which no packet size matches, so at 60 Hz the packets drift against
+     * the frames (see on_audio()). 1600 samples is 1/30 s; the vendor's
+     * choice is unknown, and only latency depends on it. */
     a->audio_samples_per_packet = is60 ? 1600 : AUDIO_RATE / 25;
 }
 
@@ -927,16 +929,20 @@ typedef struct {
     size_t frame_bytes, received;
     int in_frame, have_frame;
     uint16_t seq, last_vseq;
-    uint64_t vtime;
+    uint64_t vtime, last_vtime;
     uint32_t index;
-    int have_aseq;
-    uint16_t next_aseq;
+    /* Audio starts with the first frame. A packet's counter is the video
+     * frame it began in, so gaps are found by device time instead. */
+    int have_audio_start;
+    uint16_t first_vseq;
+    uint64_t next_atime;         /* device time the next audio packet should carry */
+    uint64_t packet_ticks, frame_ticks;
     uint8_t *silence;
     unsigned spp;
     /* Stopping: no more video, but wait (briefly) for the audio of the
      * frames already delivered, so both streams end together. */
     volatile int *ext_stop;
-    int draining;
+    int draining, audio_done;
     struct timespec drain_start;
 } assembler_t;
 
@@ -962,7 +968,7 @@ static void start_draining(assembler_t *s)
 /* Audio for every delivered frame is out (or nothing was delivered). */
 static int audio_caught_up(const assembler_t *s)
 {
-    return !s->have_frame || (uint16_t)(s->next_aseq - s->last_vseq - 1) < 0x8000;
+    return !s->have_frame || s->audio_done;
 }
 
 static int emit_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
@@ -1009,13 +1015,9 @@ static int finish_frame(assembler_t *s)
                 r = emit_frame(s, s->last_good, (uint16_t)(s->last_vseq + i), 0, 1, 0);
         }
     }
-    if (!s->have_aseq) {
-        /* Audio packet N belongs to video frame N: start both at this frame. */
-        s->next_aseq = s->seq;
-        s->have_aseq = 1;
-    }
     s->have_frame = 1;
     s->last_vseq = s->seq;
+    s->last_vtime = s->vtime;
     if (r)
         return r;
     if (truncated) {
@@ -1074,6 +1076,12 @@ static int on_video(assembler_t *s, const uint8_t *d, size_t n)
         s->seq = (uint16_t)(d[2] | d[3] << 8);
         s->vtime = header_time(d);
         s->in_frame = 1;
+        if (!s->have_audio_start) {
+            /* Every frame that starts is delivered, so audio starts here. */
+            s->have_audio_start = 1;
+            s->first_vseq = s->seq;
+            s->next_atime = s->vtime;
+        }
         s->received = 0;
         d += PACKET_HEADER;
         n -= PACKET_HEADER;
@@ -1091,26 +1099,39 @@ static int on_video(assembler_t *s, const uint8_t *d, size_t n)
     return r;
 }
 
+/* An audio packet's counter is the video frame its first sample was taken
+ * in, and its time is that sample's. At 25 fps that is one packet per frame
+ * (packet N at 680 ticks into frame N). At 29.97 fps a frame has 1601.6
+ * samples and a packet 1600, so the packets gain on the frames and about
+ * once every 1000 frames two carry the same counter. The counter therefore
+ * cannot show a lost packet; the device time can: the next packet is due
+ * packet_ticks after this one, within a few hundred ticks. */
 static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
 {
-    if (n < PACKET_HEADER || d[0] != 0xff || d[1] != 0x00 || !s->have_aseq)
+    if (n < PACKET_HEADER || d[0] != 0xff || d[1] != 0x00 || !s->have_audio_start)
         return 0;   /* audio before the first video frame has nothing to pair with */
     uint16_t seq = (uint16_t)(d[2] | d[3] << 8);
     uint64_t t = header_time(d);
-    uint16_t gap = (uint16_t)(seq - s->next_aseq);
     int r = 0;
 
-    if (gap >= 0x8000)
+    if ((uint16_t)(seq - s->first_vseq) >= 0x8000)
         return 0;   /* older than where output started */
-    if (s->draining && (uint16_t)(seq - s->last_vseq - 1) < 0x8000)
-        return 0;   /* its frame was not delivered */
-    if (gap < 250) {
-        s->st->audio_missing += gap;
-        for (uint16_t i = 0; i < gap && !r; i++)
-            r = emit_audio(s, s->silence, s->spp, (uint16_t)(s->next_aseq + i), 0, 1);
+    if (s->draining && (uint16_t)(seq - s->last_vseq - 1) < 0x8000) {
+        s->audio_done = 1;   /* past the last delivered frame */
+        return 0;
     }
-    s->next_aseq = (uint16_t)(seq + 1);
-    return r ? r : emit_audio(s, d + PACKET_HEADER, (unsigned)((n - PACKET_HEADER) / 4), seq, t, 0);
+    if (t > s->next_atime) {
+        uint64_t lost = (t - s->next_atime + s->packet_ticks / 2) / s->packet_ticks;
+        /* Anything but a short gap means the clock restarted. */
+        if (lost < 250) {
+            s->st->audio_missing += (unsigned long)lost;
+            for (uint64_t i = 0; i < lost && !r; i++)
+                r = emit_audio(s, s->silence, s->spp, seq, 0, 1);
+        }
+    }
+    unsigned samples = (unsigned)((n - PACKET_HEADER) / 4);
+    s->next_atime = t + s->packet_ticks * samples / s->spp;
+    return r ? r : emit_audio(s, d + PACKET_HEADER, samples, seq, t, 0);
 }
 
 static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
@@ -1139,11 +1160,13 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
               (now.tv_nsec - s->drain_start.tv_nsec) / 1000000;
     if (ms < 300)
         return 0;
-    /* The audio never came: pad, so the streams still end together. */
-    while (!audio_caught_up(s)) {
+    /* The audio never came: pad up to the end of the last frame, so the
+     * streams still end together. */
+    uint64_t end = s->last_vtime + s->frame_ticks;
+    for (int i = 0; i < 250 && s->next_atime + s->packet_ticks / 2 <= end; i++) {
         s->st->audio_missing++;
-        emit_audio(s, s->silence, s->spp, s->next_aseq, 0, 1);
-        s->next_aseq++;
+        emit_audio(s, s->silence, s->spp, s->last_vseq, 0, 1);
+        s->next_atime += s->packet_ticks;
     }
     return 1;
 }
@@ -1159,6 +1182,11 @@ pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
     s.a = a;
     s.st = stats;
     s.spp = a->audio_samples_per_packet;
+    /* In ticks of the device's ~10 MHz clock; it runs about 100 ppm fast,
+     * far inside the tolerance on_audio() needs. */
+    s.packet_ticks = (uint64_t)s.spp * DEVICE_HZ / AUDIO_RATE;
+    s.frame_ticks = pinnacle_std_is_60hz(a->cfg.standard) ? (uint64_t)DEVICE_HZ * 1001 / 30000
+                                                          : DEVICE_HZ / 25;
     s.frame_bytes = (size_t)a->width * a->height * 2;
     s.frame = malloc(s.frame_bytes);
     s.last_good = malloc(s.frame_bytes);

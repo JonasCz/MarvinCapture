@@ -38,6 +38,26 @@ pin_sink_t *sink_rewrap_create(pin_format_t format); /* DV_AVI, DV_MOV, HDV_MOV,
 void pin_sink_sar_for(pin_kind_t kind, int is_pal, pin_aspect_t aspect, int width,
                       int *sar_num, int *sar_den);
 
+/* sink_rewrap.c's per-frame DV audio rule, shared with its test. A track
+ * that has written apts samples is handed avail more for the frame whose
+ * end is target_after samples into the file. DV frames carry a varying
+ * number of samples (1067 or 1068 at 32 kHz / 29.97 fps, 1600 or 1602 at
+ * 48 kHz), so every sample is kept while the track stays within half a
+ * frame of the video. Only beyond that (a frame whose audio did not demux,
+ * or the demuxer returning two frames' worth) is it trimmed or padded back
+ * onto the video timeline. frame is the samples in one frame. */
+static inline void pin_dv_audio_fit(int64_t apts, int64_t avail, int64_t target_after,
+                                    int64_t frame, int64_t *take, int64_t *pad)
+{
+    int64_t tol = frame / 2;
+    *take = avail;
+    *pad = 0;
+    if (apts + avail > target_after + tol)
+        *take = target_after > apts ? target_after - apts : 0;
+    else if (apts + avail < target_after - tol)
+        *pad = target_after - (apts + avail);
+}
+
 #ifdef __cplusplus
 }
 #endif

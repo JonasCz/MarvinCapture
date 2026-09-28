@@ -35,12 +35,10 @@
  * real captures -- see tests/engine_replay/test_dv_audio_vs_libavformat.c
  * -- for every trace this project has to hand: all of tests/data/dv-ntsc.dv
  * (9,557 real frames, ~10.2 million 16-bit stereo samples), exact match,
- * 0 mismatches, including the full 5-minute/8,967-frame capture. All of
- * those are 48 kHz/16-bit/2-channel/NTSC; no PAL or 32 kHz/12-bit-nonlinear
- * real capture was available, so dv_audio_12to16()'s expansion, while
- * transcribed from the same reference, is unverified against real tape --
- * see that test's own header comment for exactly what was and wasn't
- * checked, and re-run it if/when a 12-bit or PAL sample turns up.
+ * 0 mismatches, including the full 5-minute/8,967-frame capture; and
+ * tests/data/dv-ntsc-32k.dv, a camera's 32 kHz/12-bit nonlinear 4-channel
+ * recording (150 frames, pair 1), also exact, which covers
+ * dv_audio_12to16(). No PAL audio has been checked this way yet.
  *
  * What this does *not* implement (the coordinator confirmed neither is
  * needed for this driver): 50 Mbit/s profiles (DVCPRO50, n_difchan > 1) and

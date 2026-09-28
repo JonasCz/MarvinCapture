@@ -166,11 +166,15 @@ static int64_t mem_seek(void *opaque, int64_t offset, int whence)
  * re-muxes its audio into our output's audio stream(s) (created lazily,
  * one per pair -- see audio_track_t above).
  *
- * Every pair's contribution is capped to *exactly* this one video frame's
- * sample span on the output timeline -- computed as target_after(vpts+1)
- * minus the pair's own running apts, not a fixed "rate/fps" constant, so
- * drop-frame rates (29.97 etc.) never accumulate rounding drift. This
- * matters because the per-frame demux doesn't reliably hand back exactly
+ * Every pair keeps all the samples each frame carries while it stays within
+ * half a frame of the video timeline -- target_after(vpts+1), not a fixed
+ * "rate/fps" constant, so drop-frame rates (29.97 etc.) never accumulate
+ * rounding drift; pin_dv_audio_fit() has the rule. Capping each frame to
+ * its exact share instead dropped a sample in one frame and inserted a
+ * zero in another wherever the camera's 1067/1068 (32 kHz NTSC) pattern
+ * was out of phase with ours -- about half of all samples on a real
+ * camera. Correcting beyond half a frame matters because the per-frame
+ * demux doesn't reliably hand back exactly
  * one frame's worth: a frame with header noise can yield none (see the
  * file's "Known limitation" comment), and -- observed on
  * tests/data/ep88-ntsc.bin's 32 kHz footage -- an occasional frame
@@ -181,9 +185,8 @@ static int64_t mem_seek(void *opaque, int64_t offset, int whence)
  * DV frame, 120000/144000 bytes, so it cannot itself contain two frames'
  * worth of tape). Short: pad with silence, here, so the deficit never
  * carries forward. Long: truncate the excess, here, for the same reason.
- * Either way every pair's apts lands on the video timeline after every
- * single frame, which is what keeps A/V sync exact end to end regardless
- * of what any one frame's demux happens to return. */
+ * Either way every pair's apts stays within half a frame of the video
+ * timeline, end to end, whatever any one frame's demux returns. */
 static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *data, size_t len)
 {
     const AVInputFormat *dv_fmt = av_find_input_format("dv");
@@ -317,11 +320,10 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
 
         int64_t target_after = av_rescale(p->vpts + 1, (int64_t)rate * p->params.fps_den,
                                           p->params.fps_num);
-        int64_t need = target_after - tr->apts;
-        if (need < 0)
-            need = 0;
-        int64_t take = avail_samples < need ? avail_samples : need;
-        int64_t pad = need - take;
+        int64_t frame = av_rescale(1, (int64_t)rate * p->params.fps_den, p->params.fps_num);
+        int64_t take, pad;
+        pin_dv_audio_fit(tr->apts, avail_samples, target_after, frame, &take, &pad);
+        int64_t need = take + pad;
 
         /* One packet per frame per track -- real bytes (if any) followed by
          * zero-fill (if any) in the same buffer -- rather than up to two

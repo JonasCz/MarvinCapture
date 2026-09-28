@@ -139,11 +139,13 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
  *
  * Both streams carry the same 12-byte header,
  *     ff 00 <counter u16 LE> <device time u64 LE>
- * and both counters start at 1 when capture starts. Audio packet N holds
- * the samples captured during video frame N. The device time is a ~10 MHz
- * clock of the device's own; the frame rate is the source's (the SAA7113
- * locks to the input) and the audio clock is locked to it: exactly 1920
- * samples per PAL frame. See docs/analog.md, "Clocks".
+ * and both counters start at 1 when capture starts. An audio packet's
+ * counter is the video frame its first sample was taken in: at 25 fps
+ * packet N is frame N's audio, at 29.97 fps the packets drift through the
+ * frames. The device time is a ~10 MHz clock of the device's own; the frame
+ * rate is the source's (the SAA7113 locks to the input) and the audio clock
+ * is locked to it: exactly 1920 samples per PAL frame, 1601.6 per NTSC
+ * frame. See docs/analog.md, "Clocks".
  *
  * The capture loop keeps the output timeline intact whatever the USB side
  * does: a frame that never arrived is replaced by a repeat of the previous
@@ -174,7 +176,7 @@ typedef struct {
     unsigned long frames_missing;  /* counter gaps, filled with repeats */
     unsigned long frames_truncated;
     unsigned long audio_blocks;
-    unsigned long audio_missing;   /* counter gaps, filled with silence */
+    unsigned long audio_missing;   /* packets lost (device-time gaps), filled with silence */
     unsigned long resyncs;         /* video data outside a frame, discarded */
 } pinnacle_capture_stats_t;
 

@@ -823,6 +823,9 @@ static void open_sink_for_scene(pin_session_t *s)
 
     int is_pal = s->detected_std != PIN_STD_NTSC && s->detected_std != PIN_STD_NTSC_443 &&
                  s->detected_std != PIN_STD_NTSC_J;
+    /* Analog: "PAL" here means 625/50, which PAL-M and PAL-60 are not. */
+    if (s->stream_kind == PIN_KIND_ANALOG)
+        is_pal = !pinnacle_std_is_60hz(s->analog.cfg.standard);
     if (s->stream_kind == PIN_KIND_ANALOG) {
         params.width = (int)s->analog.width;
         params.height = (int)s->analog.height;
@@ -1809,6 +1812,25 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
         return;
     }
     pinnacle_lock_update(s->lock, PINNACLE_LOCK_READY, s->dev.guid_hi, s->dev.guid_lo);
+
+    /* Auto: start on the source's own 50/60 Hz rather than the PAL default.
+     * analog_tick() only switches while READY, so a capture started before
+     * its re-check would keep the wrong geometry. The decoder needs a
+     * moment to lock after the input is selected. */
+    if (s->requested_std == PIN_STD_AUTO) {
+        pinnacle_analog_status_t ast = { 0 };
+        for (int i = 0; i < 20; i++) {
+            if (pinnacle_analog_get_status(&s->analog, &ast) == PINNACLE_OK && ast.locked)
+                break;
+            sleep_ms(50);
+        }
+        if (ast.locked && ast.is_60hz != pinnacle_std_is_60hz(s->analog.cfg.standard))
+            pinnacle_analog_set_standard(&s->analog, ast.is_60hz ? PINNACLE_STD_NTSC : PINNACLE_STD_PAL);
+        pin_session_lock(s);
+        s->is_60hz = pinnacle_std_is_60hz(s->analog.cfg.standard);
+        s->detected_std = s->is_60hz ? PIN_STD_NTSC : PIN_STD_PAL;
+        pin_session_unlock(s);
+    }
 
     pst = pinnacle_analog_start(&s->analog);
     if (pst != PINNACLE_OK) {
