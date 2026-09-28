@@ -520,8 +520,7 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
  * through WinUSB before the next read is armed, and a late DPC there leaves
  * the endpoint with nothing to receive into. Its RAW_IO policy passes the
  * reads straight down, so the whole queue is armed at the controller. It
- * needs whole-packet transfers, which ours are. PINNACLE_NO_RAW_IO=1 turns
- * it off for comparison. */
+ * needs whole-packet transfers, which ours are. */
 #define VIDEO_QUEUE_MAX 1024
 #define VIDEO_QUEUE 512
 #define VIDEO_XFER (8u * 1024)
@@ -697,11 +696,8 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
         vbytes = VIDEO_XFER;
 
     /* Before anything is queued: WinUSB only changes the policy on an idle pipe. */
-    int raw_video = 0, raw_audio = 0;
-    if (!dev->tuning.no_raw_io) {
-        raw_video = set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 1);
-        raw_audio = set_raw_io(dev, PINNACLE_EP_AUDIO_IN, audio_bytes, 1);
-    }
+    int raw_video = set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 1);
+    int raw_audio = set_raw_io(dev, PINNACLE_EP_AUDIO_IN, audio_bytes, 1);
     thread_boost_t boost;
     thread_boost(&boost);
     pin_logf(PIN_LOG_INFO, "pinnacle: analog read loop: %u x %u B, RAW_IO video %s audio %s, "

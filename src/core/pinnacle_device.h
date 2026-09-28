@@ -83,7 +83,6 @@ typedef struct {
     unsigned video_queue;       /* PINNACLE_VIDEO_QUEUE: video transfer queue depth, 0 = default */
     unsigned video_xfer;        /* PINNACLE_VIDEO_XFER: video transfer size, 0 = default */
     int debug_analog;           /* PINNACLE_DEBUG_ANALOG=1: log queue-depth/loop-gap stats */
-    int no_raw_io;              /* PINNACLE_NO_RAW_IO=1: leave WinUSB's RAW_IO policy off */
 } pinnacle_tuning_t;
 
 /* Fills *t with the same defaults the core used to fall back to when an env

@@ -2212,6 +2212,8 @@ static void *worker_main(void *arg)
                     pin_session_unlock(s);
                     continue;
                 }
+                /* The same PINNACLE_* debug/tuning env vars the CLIs honour. */
+                pinnacle_tuning_from_env(&s->dev.tuning);
                 /* Publish the unit's GUID in the lock record straight away,
                  * so other windows can label it; the analog bring-up never
                  * reads it on its own. */
