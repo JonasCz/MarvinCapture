@@ -273,6 +273,12 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
         av_channel_layout_copy(&tr->ast->codecpar->ch_layout, &src->codecpar->ch_layout);
         tr->ast->codecpar->bits_per_coded_sample = 16;
         tr->ast->codecpar->block_align = (int)(tr->ast->codecpar->ch_layout.nb_channels * 2);
+        /* The AVI muxer derives the audio strh dwRate from bit_rate (falling back
+         * to 8 * sample_rate when it is 0), so without this dwScale/dwRate come
+         * out 4x too slow for stereo and players such as VLC show the file 4x
+         * (or 2x for mono) too long. */
+        tr->ast->codecpar->bit_rate = (int64_t)tr->ast->codecpar->sample_rate * 16 *
+                                      tr->ast->codecpar->ch_layout.nb_channels;
         tr->ast->time_base = (AVRational){ 1, src->codecpar->sample_rate };
         pin_logf(PIN_LOG_INFO, "sink_rewrap: DV audio pair %d: %d Hz, %d ch (from the dv "
                                 "demuxer)%s\n", pair + 1, src->codecpar->sample_rate,
