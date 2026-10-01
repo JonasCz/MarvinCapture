@@ -57,7 +57,7 @@
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
             <NumberBox
-                Header="Stop after no signal (min)"
+                Header="Stop no signal (min)"
                 Minimum="0" Maximum="600" SmallChange="1" LargeChange="5"
                 SpinButtonPlacementMode="Compact"
                 Value="{x:Bind ViewModel.IdleStopMinutes, Mode=TwoWay}"
