@@ -151,13 +151,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<FormatItem> AnalogFormats { get; } = new();
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(AnalogTitleEnabled))]
     private FormatItem? _analogFormat;
 
-    [ObservableProperty] private string _analogTitle = "";
+    /// <summary>File base name; also embedded as the title when the format supports one.</summary>
+    [ObservableProperty] private string _analogName = "";
+    [ObservableProperty] private string _analogOutputDir = "";
 
-    partial void OnAnalogTitleChanged(string value) => SaveSetting("gui.title_analog", value);
-    [ObservableProperty] private string _analogOutputPath = "";
+    public string AnalogOutputPath => CombinePath(AnalogOutputDir, AnalogName);
+
+    partial void OnAnalogNameChanged(string value) => OnAnalogOutputChanged("gui.name_analog", value);
+    partial void OnAnalogOutputDirChanged(string value) => OnAnalogOutputChanged("gui.dir_analog", value);
+
+    private void OnAnalogOutputChanged(string key, string value)
+    {
+        SaveSetting(key, value);
+        OnPropertyChanged(nameof(AnalogOutputPath));
+        PushOutputHint();
+    }
+
+    private static string CombinePath(string dir, string name) =>
+        string.IsNullOrWhiteSpace(name) ? "" : string.IsNullOrWhiteSpace(dir) ? name : System.IO.Path.Combine(dir, name);
+
+    private static void SplitPath(string path, out string dir, out string name)
+    {
+        dir = System.IO.Path.GetDirectoryName(path) ?? "";
+        name = System.IO.Path.GetFileName(path);
+    }
 
     /// <summary>Stop after this long without signal; 0 = never. Analog's own setting
     /// (a lost RCA/S-Video signal isn't detected the same way as a DV/HDV dropout).</summary>
@@ -172,20 +191,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnAnalogMaxDurationMinutesChanged(double value) =>
         SaveSetting("gui.duration_analog", ((int)value).ToString(CultureInfo.InvariantCulture));
 
-    public bool AnalogTitleEnabled => AnalogFormat?.SupportsTitle ?? false;
-
     partial void OnAnalogFormatChanged(FormatItem? value)
     {
         if (value is not null)
         {
             SaveSetting("gui.format_analog", ((int)value.Format).ToString(CultureInfo.InvariantCulture));
         }
-        PushOutputHint();
-    }
-
-    partial void OnAnalogOutputPathChanged(string value)
-    {
-        SaveSetting("gui.output_analog", value);
         PushOutputHint();
     }
 
@@ -200,11 +211,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // ================================================================== DV / HDV
 
-    [ObservableProperty] private string _dvOutputPath = "";
+    /// <summary>File base name for DV and HDV; also embedded as the title when the format supports one.</summary>
+    [ObservableProperty] private string _dvName = "";
+    [ObservableProperty] private string _dvOutputDir = "";
 
-    partial void OnDvOutputPathChanged(string value)
+    public string DvOutputPath => CombinePath(DvOutputDir, DvName);
+
+    partial void OnDvNameChanged(string value) => OnDvOutputChanged("gui.name_dv", value);
+    partial void OnDvOutputDirChanged(string value) => OnDvOutputChanged("gui.dir_dv", value);
+
+    private void OnDvOutputChanged(string key, string value)
     {
-        SaveSetting("gui.output_dv", value);
+        SaveSetting(key, value);
+        OnPropertyChanged(nameof(DvOutputPath));
         PushOutputHint();
     }
 
@@ -647,7 +666,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // are scalar in pin_capture_opts_t come from the tab matching what is
         // actually arriving right now.
         var kind = _lastStreamKind == PinKind.Hdv ? HdvSettings : DvSettings;
-        o.Title = analog ? (AnalogTitleEnabled ? AnalogTitle : "") : (kind.TitleEnabled ? kind.Title : "");
+        o.Title = analog ? (AnalogFormat?.SupportsTitle == true ? AnalogName : "") : (kind.TitleEnabled ? DvName : "");
         o.Aspect = ActiveAspect;
         o.SceneSplit = !analog && kind.SplitIntoScenes && kind.SplitEnabled ? 1 : 0;
         o.IdleStopMinutes = (int)Math.Max(0, analog ? AnalogIdleStopMinutes : kind.IdleStopMinutes);
@@ -981,7 +1000,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveSetting($"gui.idle_{p}", ((int)k.IdleStopMinutes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.duration_{p}", ((int)k.MaxDurationMinutes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.aspect_{p}", k.AspectIndex.ToString(CultureInfo.InvariantCulture));
-        SaveSetting($"gui.title_{p}", k.Title);
     }
 
     private static int LoadInt(string key, int fallback) =>
@@ -997,15 +1015,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             // speakers next to the source's microphone is a feedback loop.
             IsMuted = LoadInt("gui.muted", 1) != 0;
             AnalogAspectIndex = Math.Clamp(LoadInt("gui.aspect_analog", 0), 0, 2);
-            AnalogOutputPath = LoadSetting("gui.output_analog", DefaultOutput("analog"));
-            AnalogTitle = LoadSetting("gui.title_analog");
+            LoadOutput("analog", "analog", out var analogDir, out var analogName);
+            AnalogOutputDir = analogDir;
+            AnalogName = analogName;
             AnalogIdleStopMinutes = Math.Max(0, LoadInt("gui.idle_analog", 5));
             AnalogMaxDurationMinutes = Math.Max(0, LoadInt("gui.duration_analog", 0));
             SelectedKindTabIndex = Math.Clamp(LoadInt("gui.last_kind", 0), 0, 1);
             _lastStreamKind = SelectedKindTabIndex == 1 ? PinKind.Hdv : PinKind.Dv;
             int std = LoadInt("gui.std", (int)PinStd.Auto);
             SelectedStandard = Standards.FirstOrDefault(x => (int)x.Std == std) ?? Standards[0];
-            DvOutputPath = LoadSetting("gui.output_dv", DefaultOutput("tape"));
+            LoadOutput("dv", "tape", out var dvDir, out var dvName);
+            DvOutputDir = dvDir;
+            DvName = dvName;
 
             int fa = LoadInt("gui.format_analog", -1);
             var af = AnalogFormats.FirstOrDefault(f => (int)f.Format == fa);
@@ -1027,7 +1048,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 k.IdleStopMinutes = Math.Max(0, LoadInt($"gui.idle_{p}", 5));
                 k.MaxDurationMinutes = Math.Max(0, LoadInt($"gui.duration_{p}", 0));
                 k.AspectIndex = Math.Clamp(LoadInt($"gui.aspect_{p}", 0), 0, 2);
-                k.Title = LoadSetting($"gui.title_{p}");
             }
         }
         finally
@@ -1036,8 +1056,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private static string DefaultOutput(string baseName) =>
-        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyVideos), baseName);
+    /// <summary>Loads the directory and name; falls back to the old single-path setting, then the defaults.</summary>
+    private static void LoadOutput(string key, string defaultName, out string dir, out string name)
+    {
+        dir = LoadSetting($"gui.dir_{key}");
+        name = LoadSetting($"gui.name_{key}");
+        if (dir.Length == 0 && name.Length == 0)
+        {
+            var legacy = LoadSetting($"gui.output_{key}");
+            if (legacy.Length > 0)
+            {
+                SplitPath(legacy, out dir, out name);
+            }
+        }
+        if (dir.Length == 0)
+        {
+            dir = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);
+        }
+        if (name.Length == 0)
+        {
+            name = defaultName;
+        }
+    }
 
     // ================================================================== launch options
 
@@ -1067,7 +1107,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         bool analog = !IsDvInput;
         if (fields.HasFlag(PinOptFields.Path))
         {
-            if (analog) AnalogOutputPath = c.Path; else DvOutputPath = c.Path;
+            SplitPath(c.Path, out var dir, out var name);
+            if (analog)
+            {
+                AnalogOutputDir = dir;
+                AnalogName = name;
+            }
+            else
+            {
+                DvOutputDir = dir;
+                DvName = name;
+            }
         }
         if (fields.HasFlag(PinOptFields.Format))
         {
@@ -1075,12 +1125,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             if (af is not null) AnalogFormat = af;
             DvSettings.ApplyFormat(c.FormatDv);
             HdvSettings.ApplyFormat(c.FormatHdv);
-        }
-        if (fields.HasFlag(PinOptFields.Title))
-        {
-            AnalogTitle = c.Title;
-            DvSettings.Title = c.Title;
-            HdvSettings.Title = c.Title;
         }
         if (fields.HasFlag(PinOptFields.Split))
         {

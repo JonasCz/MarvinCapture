@@ -102,7 +102,6 @@ public sealed partial class MainWindow : Window
 
     public static Visibility Collapsed(bool value) => value ? Visibility.Collapsed : Visibility.Visible;
     public static bool Both(bool a, bool b) => a && b;
-    public static string TitlePlaceholder(bool supported) => supported ? "Title (optional)" : "Title: not supported by this format";
     public static string DevicePlaceholder(bool none) => none ? "No devices found" : "Select a device";
     public static Thickness PlayGlyphNudge(bool capturing) => capturing ? new Thickness(0) : new Thickness(2, 0, 0, 0);
     public static string DvCaptureName(bool capturing) => capturing ? "Stop capture" : "Manual capture";
@@ -689,84 +688,34 @@ public sealed partial class MainWindow : Window
     private async void Browse_Click(object sender, RoutedEventArgs e)
     {
         bool analog = (string)((FrameworkElement)sender).Tag == "analog";
-        var picker = new FileSavePicker();
+        var picker = new FolderPicker();
         WinRT.Interop.InitializeWithWindow.Initialize(picker, _hwnd);
         picker.SuggestedStartLocation = PickerLocationId.VideosLibrary;
+        picker.FileTypeFilter.Add("*");
 
-        var current = analog ? VM.AnalogOutputPath : VM.DvOutputPath;
-        picker.SuggestedFileName = string.IsNullOrWhiteSpace(current)
-            ? (analog ? "analog" : "tape")
-            : Path.GetFileNameWithoutExtension(current);
-
-        if (analog)
-        {
-            foreach (var f in VM.AnalogFormats)
-            {
-                AddChoice(picker, f);
-            }
-        }
-        else
-        {
-            foreach (var f in VM.DvSettings.Formats.Concat(VM.HdvSettings.Formats))
-            {
-                AddChoice(picker, f);
-            }
-        }
-
-        Windows.Storage.StorageFile? file;
+        Windows.Storage.StorageFolder? folder;
         try
         {
-            file = await picker.PickSaveFileAsync();
+            folder = await picker.PickSingleFolderAsync();
         }
         catch (Exception ex)
         {
-            VM.ShowInfo("Could not open the file dialog", ex.Message, 3);
+            VM.ShowInfo("Could not open the folder dialog", ex.Message, 3);
             return;
         }
-        if (file is null)
+        if (folder is null)
         {
             return;
         }
 
-        // The Windows save picker creates an empty placeholder file. The core
-        // treats that as a name collision, so remove it again if it is the
-        // fresh 0-byte file the picker just made (never touches real data).
-        try
-        {
-            var fi = new FileInfo(file.Path);
-            if (fi.Exists && fi.Length == 0 && DateTime.UtcNow - fi.CreationTimeUtc < TimeSpan.FromSeconds(30))
-            {
-                fi.Delete();
-            }
-        }
-        catch (IOException)
-        {
-        }
-        catch (UnauthorizedAccessException)
-        {
-        }
-
-        // Store the base name: the extension follows whichever format is chosen
-        // (and DV vs HDV is only known once the stream arrives).
-        var chosen = Path.Combine(Path.GetDirectoryName(file.Path) ?? "", Path.GetFileNameWithoutExtension(file.Path));
         if (analog)
         {
-            VM.AnalogOutputPath = chosen;
+            VM.AnalogOutputDir = folder.Path;
         }
         else
         {
-            VM.DvOutputPath = chosen;
+            VM.DvOutputDir = folder.Path;
         }
-    }
-
-    private static void AddChoice(FileSavePicker picker, FormatItem f)
-    {
-        var ext = "." + f.Extension;
-        if (string.IsNullOrEmpty(f.Extension) || picker.FileTypeChoices.ContainsKey(f.Label))
-        {
-            return;
-        }
-        picker.FileTypeChoices.Add(f.Label, new[] { ext });
     }
 
     // ================================================================== menu

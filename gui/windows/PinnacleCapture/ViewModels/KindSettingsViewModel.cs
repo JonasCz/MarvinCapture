@@ -45,7 +45,6 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(TitleEnabled), nameof(SplitEnabled), nameof(PassesEnabled))]
     private FormatItem? _selectedFormat;
 
-    [ObservableProperty] private string _title = "";
     [ObservableProperty] private bool _splitIntoScenes;
     [ObservableProperty] private double _idleStopMinutes = 5;
     [ObservableProperty] private double _maxDurationMinutes;

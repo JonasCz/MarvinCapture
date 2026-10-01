@@ -188,14 +188,14 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBox Text="{x:Bind VM.AnalogOutputPath, Mode=TwoWay}"
-                                                 PlaceholderText="Output file"
+                                        <TextBox Text="{x:Bind VM.AnalogName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 PlaceholderText="Name and title"
                                                  IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
-                                                 AutomationProperties.Name="Analog output file"
-                                                 AutomationProperties.HelpText="Base name; the extension follows the format" />
+                                                 AutomationProperties.Name="Analog name and title"
+                                                 AutomationProperties.HelpText="File name (the extension follows the format), also stored as the title metadata of the file" />
                                         <Button Grid.Column="1" VerticalAlignment="Stretch" Width="40" Padding="0" Tag="analog" Click="Browse_Click"
                                                 IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
-                                                AutomationProperties.Name="Browse for analog output file" ToolTipService.ToolTip="Browse">
+                                                AutomationProperties.Name="Choose analog output folder" ToolTipService.ToolTip="{x:Bind VM.AnalogOutputDir, Mode=OneWay}">
                                             <FontIcon Glyph="&#xED25;" FontSize="14" />
                                         </Button>
                                     </Grid>
@@ -225,12 +225,6 @@
                                             <ComboBoxItem Content="16:9" />
                                         </ComboBox>
                                     </Grid>
-                                    <TextBox
-                                             PlaceholderText="{x:Bind local:MainWindow.TitlePlaceholder(VM.AnalogTitleEnabled), Mode=OneWay}"
-                                             Text="{x:Bind VM.AnalogTitle, Mode=TwoWay}"
-                                             IsEnabled="{x:Bind local:MainWindow.Both(VM.AnalogTitleEnabled, VM.IsIdle), Mode=OneWay}"
-                                             AutomationProperties.Name="Analog title"
-                                             AutomationProperties.HelpText="Stored as the title metadata of the file" />
                                     <Grid ColumnSpacing="8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
@@ -401,14 +395,14 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
-                                        <TextBox Text="{x:Bind VM.DvOutputPath, Mode=TwoWay}"
-                                                 PlaceholderText="Output file"
+                                        <TextBox Text="{x:Bind VM.DvName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                 PlaceholderText="Name and title"
                                                  IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
-                                                 AutomationProperties.Name="DV output file"
-                                                 AutomationProperties.HelpText="Base name for DV and HDV; scenes and passes get numbered suffixes" />
+                                                 AutomationProperties.Name="DV name and title"
+                                                 AutomationProperties.HelpText="File name for DV and HDV (scenes and passes get numbered suffixes), also stored as the title metadata of the file" />
                                         <Button Grid.Column="1" VerticalAlignment="Stretch" Width="40" Padding="0" Tag="dv" Click="Browse_Click"
                                                 IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
-                                                AutomationProperties.Name="Browse for DV output file" ToolTipService.ToolTip="Browse">
+                                                AutomationProperties.Name="Choose DV output folder" ToolTipService.ToolTip="{x:Bind VM.DvOutputDir, Mode=OneWay}">
                                             <FontIcon Glyph="&#xED25;" FontSize="14" />
                                         </Button>
                                     </Grid>

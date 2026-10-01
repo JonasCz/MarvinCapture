@@ -25,11 +25,8 @@ public sealed partial class KindSettingsView : UserControl
     }
 
     public string FormatAutomationName => $"{ViewModel.TabHeader} format";
-    public string TitleAutomationName => $"{ViewModel.TabHeader} title";
     public string AspectAutomationName => $"{ViewModel.TabHeader} aspect ratio";
 
     public bool Both(bool a, bool b) => a && b;
 
-    public string TitlePlaceholder(bool supported) =>
-        supported ? "Title (optional)" : "Title: not supported by this format";
 }

@@ -45,13 +45,6 @@
             </ComboBox>
         </Grid>
 
-        <TextBox
-            PlaceholderText="{x:Bind TitlePlaceholder(ViewModel.TitleEnabled), Mode=OneWay}"
-            Text="{x:Bind ViewModel.Title, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-            IsEnabled="{x:Bind Both(ViewModel.TitleEnabled, IsEditable), Mode=OneWay}"
-            AutomationProperties.Name="{x:Bind TitleAutomationName}"
-            AutomationProperties.HelpText="Stored as the title metadata of the file. Not available for raw .dv or .ts files." />
-
         <CheckBox
             Content="Split into scenes"
             IsChecked="{x:Bind ViewModel.SplitIntoScenes, Mode=TwoWay}"
