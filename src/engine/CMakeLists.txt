@@ -23,6 +23,8 @@ add_library(pinnacle_engine_pure STATIC
     dv_subcode.c
     dv_audio.c
     hdv_aux.c
+    dv_error.c
+    hdv_error.c
     pin_scene.c
     pin_split.c
     pin_naming.c
@@ -60,6 +62,11 @@ pinnacle_engine_test(test_pin_naming)
 pinnacle_engine_test(test_pin_settings)
 pinnacle_engine_test(test_pin_cmdline)
 pinnacle_engine_test(test_pin_audio_resample)
+pinnacle_engine_test(test_dv_error)
+pinnacle_engine_test(test_hdv_error)
+foreach(t test_dv_error test_hdv_error)
+    target_compile_definitions(${t} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/data")
+endforeach()
 
 # pinnacle_engine itself (pin_session/pin_deck/pin_preview) is defined in the
 # top-level CMakeLists.txt, not here: it needs pinnacle_sinks, and

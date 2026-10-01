@@ -102,6 +102,15 @@ int main(int argc, char **argv)
     pin_test_sleep_ms(2500); /* a couple of seconds of frames at ~30 fps pacing */
     CHECK(pin_capture_stop(s) == PIN_OK);
     pin_test_wait_state(s, PIN_STATE_READY, -1, 3000, &snap);
+    printf("DV stats: frames=%llu error=%llu dropped=%llu clip=%llu/%llu\n",
+           (unsigned long long)snap.frames, (unsigned long long)snap.frames_error,
+           (unsigned long long)snap.frames_dropped, (unsigned long long)snap.clip_frames,
+           (unsigned long long)snap.clip_frames_error);
+    /* The ep88 dump is a raw bus capture that joined a running stream, so its
+     * frames carry real losses (shifted DIF blocks): only check the counters
+     * are consistent here; clean-frame behaviour is in test_dv_error. */
+    CHECK(snap.frames > 0 && snap.frames_error <= snap.frames && snap.frames_dropped <= snap.frames_error);
+    CHECK(snap.clip_frames == snap.frames);
     pin_close(s);
 
     /* 3. Every whole frame the capture wrote must appear as a frame-aligned

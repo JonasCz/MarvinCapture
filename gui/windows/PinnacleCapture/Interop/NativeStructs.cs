@@ -207,6 +207,17 @@ public unsafe struct PinStatusSnapshot
     public double IdleStopRemainingS;   // the no-signal timeout (counts down while there is no signal)
     public double DurationRemainingS;   // the total capture time limit
 
+    // Appended later: frame error statistics (see pin_api.h for what counts as an error).
+    // Frames / FramesDropped / FramesError are the totals (since capture start, or session start
+    // while not capturing); the Clip* ones restart with every output file.
+    public ulong FramesError;
+    public ulong ClipFrames;
+    public ulong ClipFramesError;
+    public ulong ClipFramesDropped;
+    public ulong ErrVideoBlocks;
+    public ulong ErrAudioBlocks;
+    public ulong ErrMissingBlocks;
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }

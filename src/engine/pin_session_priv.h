@@ -134,6 +134,13 @@ struct pin_session {
     uint64_t frames, frames_dropped, frames_damaged, lost_blocks, ts_errors;
     uint64_t bytes_written, writer_backlog, writer_backlog_max;
     uint64_t write_dropped;     /* units the writer queue refused, see pin_status_snapshot_t */
+    /* error stats (see dv_error.h / hdv_error.h): total = since capture start
+     * (or session start while not capturing), clip = since the current file
+     * opened. frames / frames_dropped above are the totals' other two. */
+    uint64_t frames_error;
+    uint64_t clip_frames, clip_frames_error, clip_frames_dropped;
+    uint64_t err_video_blocks, err_audio_blocks, err_missing_blocks;
+    int hdv_err_reset;          /* restart the HDV continuity tracking at the next unit */
     float audio_peak_db[2], audio_rms_db[2];
     float audio_peak_acc[2]; /* linear peak since the last status read (valid if audio_peak_acc_n) */
     int audio_peak_acc_n;    /* blocks metered since the last status read */

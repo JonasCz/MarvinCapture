@@ -110,6 +110,13 @@ int main(int argc, char **argv)
     }
     CHECK(snap.state == PIN_STATE_READY);
     CHECK(snap.frames > 0);
+    /* error stats: a clean recording has no damaged pictures, and the single
+     * file's clip counters equal the totals */
+    printf("HDV stats: frames=%llu error=%llu clip=%llu/%llu\n", (unsigned long long)snap.frames,
+           (unsigned long long)snap.frames_error, (unsigned long long)snap.clip_frames,
+           (unsigned long long)snap.clip_frames_error);
+    CHECK(snap.frames_error == 0);
+    CHECK(snap.clip_frames > 0 && snap.clip_frames <= snap.frames);
     pin_close(s);
 
     CHECK(pin_test_file_exists("hdv_replay_out-0001.ts"));

@@ -21,6 +21,8 @@
 #include "dv_subcode.h"
 #include "dv_audio.h"
 #include "hdv_aux.h"
+#include "dv_error.h"
+#include "hdv_error.h"
 #include "pin_naming.h"
 #include "pin_settings.h"
 #include "../core/pinnacle_enum.h"
@@ -837,6 +839,26 @@ static unsigned first_scene_number(const pin_session_t *s)
     return s->capture_opts.first_number ? s->capture_opts.first_number : 1;
 }
 
+/* Zeroes the capture-total counters (a capture or input switch begins). */
+static void reset_frame_counters(pin_session_t *s)
+{
+    s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
+    s->write_dropped = 0;
+    s->frames_error = 0;
+    s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = 0;
+    s->err_video_blocks = s->err_audio_blocks = s->err_missing_blocks = 0;
+    s->hdv_err_reset = 1;
+}
+
+/* One video unit (DV frame / HDV picture / analog frame) arrived. Caller holds the lock. */
+static void count_frame(pin_session_t *s, int err, int dropped)
+{
+    s->frames++;
+    s->clip_frames++;
+    if (err) { s->frames_error++; s->clip_frames_error++; }
+    if (dropped) { s->frames_dropped++; s->clip_frames_dropped++; }
+}
+
 static void open_sink_for_scene(pin_session_t *s)
 {
     pin_naming_opts_t nopts = {
@@ -916,6 +938,9 @@ static void open_sink_for_scene(pin_session_t *s)
     s->writer = pin_writer_start(0, writer_consume, s);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
     pin_split_new_file(&s->split);
+    /* the clip counters restart with every file (frames still held back by a
+     * pending split were counted into the previous clip: at most ~1 s) */
+    s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = 0;
     pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, path);
 }
 
@@ -1020,6 +1045,7 @@ typedef struct {
     uint32_t bus_sig;
     int bus_sig_valid;
     const dv_reassembler_t *reasm; /* live reassembler: latest PAT/PMT for the write gate */
+    hdv_err_state_t hdv_err;       /* continuity / reference tracking for the error stats */
 } dv_ctx_t;
 
 /* HDV capture gate: a session's sink opens at an arbitrary picture, but a
@@ -1114,7 +1140,13 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 snprintf(s->rec_datetime, sizeof(s->rec_datetime), "%04d-%02d-%02d %02d:%02d:%02d",
                          info.rec_date.year, info.rec_date.month, info.rec_date.day,
                          info.rec_time.hour, info.rec_time.minute, info.rec_time.second);
-            s->frames++;
+            dv_frame_errors_t derr;
+            if (dv_error_analyze(data, len, &derr) != 0)
+                memset(&derr, 0, sizeof(derr));
+            count_frame(s, derr.frame_error, derr.frame_dropped);
+            s->err_video_blocks += derr.video_err + derr.video_concealed;
+            s->err_audio_blocks += derr.audio_err + derr.audio_mute;
+            s->err_missing_blocks += derr.missing_blocks;
 
             pin_previewer_push_dv(s->preview, data, len, is_pal);
 
@@ -1180,6 +1212,7 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             }
         } else {
             s->frames_damaged++;
+            count_frame(s, 1, 1);
         }
     } else { /* HDV */
         if (!ctx->hdv_map_init) {
@@ -1208,7 +1241,18 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                      gop.hours, gop.minutes, gop.seconds, gop.drop_frame ? ';' : ':', gop.pictures);
         }
         s->ts_errors += hdv_ts_discontinuity_count(data, len / 188);
-        s->frames++;
+        {
+            /* a stream break (rewind, pause, no-signal gap) is not a loss: restart the tracking */
+            if (s->hdv_err_reset || pin_session_now() - s->last_data_s > 1.0) {
+                hdv_error_init(&ctx->hdv_err);
+                s->hdv_err_reset = 0;
+            }
+            hdv_unit_errors_t herr;
+            hdv_error_analyze(&ctx->hdv_err, data, len / 188, vpid, &herr);
+            count_frame(s, herr.frame_error, 0);
+            s->err_video_blocks += herr.video_damaged || herr.tainted;
+            s->err_missing_blocks += herr.cc_errors + herr.tei + herr.sync_lost;
+        }
         s->width = 1440; s->height = 1080; s->dar_num = 16; s->dar_den = 9;
         s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
 
@@ -1305,8 +1349,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->scene_index = first_scene_number(s);
     s->pass_index = 1;
     s->unit_index = 0;
-    s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
-    s->write_dropped = 0;
+    reset_frame_counters(s);
     s->bytes_written = 0;
     s->capture_start_s = pin_session_now();
     s->capture_prev_s = 0;
@@ -1776,8 +1819,7 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
     s->dar_num = asp == PIN_ASPECT_16_9 ? 16 : 4;
     s->dar_den = asp == PIN_ASPECT_16_9 ? 9 : 3;
 
-    s->frames++;
-    if (f->repeated) s->frames_dropped++;                  /* not in the output */
+    count_frame(s, f->repeated, f->repeated);              /* a repeated frame is a dropped one */
     if (f->repeated && f->received) s->frames_damaged++;   /* ...because it arrived short */
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
@@ -2300,8 +2342,7 @@ static void *worker_main(void *arg)
             s->input = cmd.input;
             s->stream_kind_known = 0;
             s->signal = 0;
-            s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
-            s->write_dropped = 0;
+            reset_frame_counters(s);
             s->camera_present = -1;
             s->reconnecting = 0;
             s->dv_rescan = 0;
@@ -2769,6 +2810,13 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->writer_backlog = s->writer_backlog; out->writer_backlog_max = s->writer_backlog_max;
     out->idle_s = s->idle_s;
     out->write_dropped = s->write_dropped;
+    out->frames_error = s->frames_error;
+    out->clip_frames = s->clip_frames;
+    out->clip_frames_error = s->clip_frames_error;
+    out->clip_frames_dropped = s->clip_frames_dropped;
+    out->err_video_blocks = s->err_video_blocks;
+    out->err_audio_blocks = s->err_audio_blocks;
+    out->err_missing_blocks = s->err_missing_blocks;
     out->idle_stop_remaining_s = -1;
     out->duration_remaining_s = -1;
     if (s->state == PIN_STATE_CAPTURING) {

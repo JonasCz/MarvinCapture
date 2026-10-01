@@ -163,6 +163,38 @@ the frame count with the wall-clock duration.
 For analog, `pinanalog`'s progress line counts missing, truncated and audio-missing
 frames; a clean run shows zeros and exit status 0 ([analog.md](analog.md)).
 
+### Frames with error (live counters)
+
+The status snapshot (`pin_get_status`, see `pin_api.h`) carries error counters
+next to the frame counts, as a total (since the capture started, or since the
+session started while not capturing) and for the current clip (restarts with
+every output file): `frames`/`frames_error`/`frames_dropped` and
+`clip_frames`/`clip_frames_error`/`clip_frames_dropped`. A frame counts as "with
+error" when:
+
+- **DV**: a DIF block is missing or its ID does not match its position (a lost
+  sequence is zero-padded, so it shows up here), a video block has a non-zero
+  STA status nibble (7/15 = error, 2/4/6/10/12/14 = concealed by the camera),
+  an audio block holds the constant error fill (0x8000 and vendor values), the
+  first channel pair is partially all-zero (a Sony deck mutes by writing zeros;
+  an all-zero or unused pair is silence, not an error), or ~every video block
+  is STA 14 (a Samsung camera that re-encoded the frame). A frame with >= 90 %
+  of its blocks missing is also "dropped".
+- **HDV**: transport_error_indicator, a continuity-counter gap on any PID, a
+  video PES that does not start properly or has no picture header. A B or P
+  picture that depends on a damaged I/P picture of the same GOP counts as damaged
+  too (a damaged I/P damages the P pictures after it up to the next I, and the
+  B pictures that use it). An audio-only gap marks that picture but does not
+  spread. A stream break (rewind, pause) restarts the tracking instead of
+  counting as loss.
+- **Analog**: a repeated (dropped) frame.
+
+Verified against the repo's fixtures only (clean camera frames report zero
+errors, injected damage is detected); the live-camera behaviour of the quirk
+heuristics is untested here. The clip counters count a unit when it arrives, so
+frames held back by a pending split lookahead (about a second) land in the
+previous clip.
+
 ### The USB thread must never wait on the disk
 
 Found while chasing sporadic single holes in HDV captures; it applies equally

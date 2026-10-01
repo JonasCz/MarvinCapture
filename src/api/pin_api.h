@@ -438,6 +438,36 @@ typedef struct {
      *   over all passes. */
     double idle_stop_remaining_s;
     double duration_remaining_s;
+
+    /* Appended fields, ABI-compatible. Frame error statistics. `frames`,
+     * `frames_dropped` and frames_error are the TOTAL: since the capture
+     * started, or since the session started (or the input was switched) while
+     * not capturing. The clip_* ones are the same for the current output file:
+     * they restart whenever a file is opened (capture start, scene split, new
+     * pass); while not capturing they equal the total.
+     * A frame is "with error" if any of these hit it:
+     *   DV:     a DIF block missing/garbled (a lost sequence is zero-padded by
+     *           the reassembler), a video block with a non-zero STA error /
+     *           concealment status, an audio block carrying the error fill, a
+     *           partially muted audio channel pair (Sony deck quirk), a camera
+     *           that re-encoded the whole frame (STA 14, Samsung quirk);
+     *   HDV:    transport_error_indicator, a continuity gap, a missing PES /
+     *           picture header; and any B / P picture that depends on a
+     *           damaged I / P picture of the same GOP;
+     *   analog: a repeated (dropped) frame.
+     * frames_dropped: DV frames with >= 90 % of their blocks missing, analog
+     * repeated frames; HDV has no frame-level drop notion (always 0).
+     * err_*_blocks: running totals behind the verdicts (DV: video blocks with
+     * STA != 0, audio blocks bad or muted, blocks missing; HDV: damaged
+     * pictures in err_video_blocks, TEI + continuity gaps + sync losses in
+     * err_missing_blocks). */
+    uint64_t frames_error;
+    uint64_t clip_frames;
+    uint64_t clip_frames_error;
+    uint64_t clip_frames_dropped;
+    uint64_t err_video_blocks;
+    uint64_t err_audio_blocks;
+    uint64_t err_missing_blocks;
 } pin_status_snapshot_t;
 
 /* Non-blocking. */

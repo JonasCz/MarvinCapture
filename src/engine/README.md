@@ -17,6 +17,13 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   TS discontinuity_indicator detection, and a best-effort scan of the HDV
   AUX private stream for DV-style date/time/timecode packs.
 
+- **`dv_error.[ch]`**, **`hdv_error.[ch]`** — per-frame / per-picture error
+  classification behind the "frames with error" counters (dvrescue-style DV
+  STA / audio-fill / missing-block checks with camera quirks from dvmerge;
+  HDV TS error indicator, continuity gaps, PES/picture header checks and
+  damage propagation through the GOP). Tests: `test_dv_error`,
+  `test_hdv_error` (synthetic frames plus the `tests/data` fixtures).
+
 - **`pin_scene.[ch]`** — dvgrab-style scene-split detector: feeds one
   frame/GOP of metadata at a time, debounces a break over N consecutive
   frames before confirming it, and reports the true first anomalous frame
