@@ -468,6 +468,23 @@ typedef struct {
     uint64_t err_video_blocks;
     uint64_t err_audio_blocks;
     uint64_t err_missing_blocks;
+
+    /* Appended fields, ABI-compatible. Sizes and the time-left estimate.
+     * bytes_written above is the CURRENT file; clip_bytes_written is the same
+     * value under a clearer name and total_bytes_written adds the files this
+     * capture already finished (0 before the first capture; stays at the last
+     * capture's total until the next one starts).
+     * est_seconds_left (and disk_free_bytes) refer to the output volume;
+     * hours left = est_seconds_left / 3600. It uses est_bytes_per_hour:
+     * est_rate_source 0 = built-in nominal rate (DV and HDV 13 GB/h, analog AVI
+     * computed from the picture size, FFV1 30 GB/h), 1 = FFV1 rate learned from
+     * an earlier capture (settings key core.ffv1_bytes_per_hour, the average of
+     * the last 10 minutes of that capture), 2 = measured on the running
+     * capture over the last 10 minutes (once >= 10 s of data exist). */
+    uint64_t clip_bytes_written;
+    uint64_t total_bytes_written;
+    double est_bytes_per_hour;
+    int est_rate_source;
 } pin_status_snapshot_t;
 
 /* Non-blocking. */

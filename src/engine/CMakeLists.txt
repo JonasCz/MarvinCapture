@@ -25,6 +25,7 @@ add_library(pinnacle_engine_pure STATIC
     hdv_aux.c
     dv_error.c
     hdv_error.c
+    pin_estimate.c
     pin_scene.c
     pin_split.c
     pin_naming.c
@@ -64,6 +65,7 @@ pinnacle_engine_test(test_pin_cmdline)
 pinnacle_engine_test(test_pin_audio_resample)
 pinnacle_engine_test(test_dv_error)
 pinnacle_engine_test(test_hdv_error)
+pinnacle_engine_test(test_pin_estimate)
 foreach(t test_dv_error test_hdv_error)
     target_compile_definitions(${t} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/data")
 endforeach()

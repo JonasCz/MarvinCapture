@@ -195,6 +195,22 @@ heuristics is untested here. The clip counters count a unit when it arrives, so
 frames held back by a pending split lookahead (about a second) land in the
 previous clip.
 
+### Sizes and time left (live)
+
+The same status snapshot reports `clip_bytes_written` (the current file),
+`total_bytes_written` (every file of this capture), `disk_free_bytes` and
+`est_seconds_left` (free space / data rate; divide by 3600 for hours). The rate
+is, in order: the **measured** rate of the running capture (average of the last
+10 minutes, from 10 s of data on), for analog FFV1 the rate **learned** from the
+previous capture, else the **nominal** one: DV and HDV 13 GB/h (about 25 Mbit/s),
+analog AVI from what the core writes (YUY2 720x576 at 25 fps or 720x480 at
+29.97 fps plus 48 kHz 16-bit stereo, about 21 MB/s), FFV1 30 GB/h.
+`est_rate_source` says which (0 / 1 / 2) and `est_bytes_per_hour` is the rate.
+An FFV1 capture saves its 10-minute average every minute and when it ends as
+`ffv1_bytes_per_hour` in the `[core]` section of the settings file
+(`core.ffv1_bytes_per_hour` for `pin_settings_get/set`); implausible values
+(< 1 GB/h, > 300 GB/h) are ignored.
+
 ### The USB thread must never wait on the disk
 
 Found while chasing sporadic single holes in HDV captures; it applies equally

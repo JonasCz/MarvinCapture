@@ -40,6 +40,7 @@
 #include "pin_deck.h"
 #include "pin_scene.h"
 #include "pin_split.h"
+#include "pin_estimate.h"
 #include "pin_naming.h"
 #include "pin_preview.h"
 #include "pin_hdv_audio.h"
@@ -140,6 +141,11 @@ struct pin_session {
     uint64_t frames_error;
     uint64_t clip_frames, clip_frames_error, clip_frames_dropped;
     uint64_t err_video_blocks, err_audio_blocks, err_missing_blocks;
+    uint64_t bytes_closed;      /* bytes of this capture's finished files (bytes_written is the open one) */
+    pin_rate_window_t rate_win; /* last 10 minutes of (time, total bytes) for the measured rate */
+    double rate_saved_s;        /* when the FFV1 rate was last saved to the settings */
+    double ffv1_learned_bph;    /* core.ffv1_bytes_per_hour, 0 = none */
+    int ffv1_learned_loaded;
     int hdv_err_reset;          /* restart the HDV continuity tracking at the next unit */
     float audio_peak_db[2], audio_rms_db[2];
     float audio_peak_acc[2]; /* linear peak since the last status read (valid if audio_peak_acc_n) */

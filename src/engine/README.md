@@ -24,6 +24,12 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   damage propagation through the GOP). Tests: `test_dv_error`,
   `test_hdv_error` (synthetic frames plus the `tests/data` fixtures).
 
+- **`pin_estimate.[ch]`** — capture size estimates: default data rates (DV and
+  HDV 13 GB/h, analog AVI computed from the picture size, FFV1 30 GB/h), the
+  FFV1 rate learned from the last 10 minutes of a capture
+  (`core.ffv1_bytes_per_hour` in the core settings) and the rolling window that
+  measures the live rate. Test: `test_pin_estimate`.
+
 - **`pin_scene.[ch]`** — dvgrab-style scene-split detector: feeds one
   frame/GOP of metadata at a time, debounces a break over N consecutive
   frames before confirming it, and reports the true first anomalous frame

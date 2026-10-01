@@ -119,6 +119,7 @@ int main(int argc, char **argv)
     unsigned char *cap = read_whole_file("dv_baseline_test_cap.dv", &cap_len);
     CHECK(cap_len > 0);
     CHECK(cap_len % frame_size == 0);
+    CHECK(snap.total_bytes_written == (unsigned long long)cap_len);
     long n_cap_frames = cap_len / frame_size;
     long n_base_frames = baseline_len / frame_size;
     printf("capture: %ld bytes, %ld frame(s)\n", cap_len, n_cap_frames);

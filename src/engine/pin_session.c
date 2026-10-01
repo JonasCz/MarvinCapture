@@ -23,6 +23,7 @@
 #include "hdv_aux.h"
 #include "dv_error.h"
 #include "hdv_error.h"
+#include "pin_estimate.h"
 #include "pin_naming.h"
 #include "pin_settings.h"
 #include "../core/pinnacle_enum.h"
@@ -164,6 +165,8 @@ int pin_session_poll_event(pin_session_t *s, pin_event_t *out)
  * length (and mostly have no measurable size) for a per-step percentage. */
 static double g_prepare_expected_s[2] = { 7.0, 4.0 };
 
+static void rate_persist(pin_session_t *s);
+
 static void set_state(pin_session_t *s, pin_state_t st)
 {
     int kind = s->input == PIN_INPUT_DV ? 0 : 1;
@@ -175,6 +178,9 @@ static void set_state(pin_session_t *s, pin_state_t st)
             g_prepare_expected_s[kind] = took;
         s->prepare_start_s = 0;
     }
+    if (s->state == PIN_STATE_CAPTURING && st != PIN_STATE_CAPTURING &&
+        s->stream_kind == PIN_KIND_ANALOG && s->active_format == PIN_FMT_ANALOG_FFV1_MKV)
+        rate_persist(s);
     s->state = st;
     if (s->lock) {
         pinnacle_lock_state_t ls = PINNACLE_LOCK_READY;
@@ -643,6 +649,64 @@ static void writer_commit(void *user, const uint8_t *data, size_t len)
 
 static void open_sink_for_scene(pin_session_t *s);
 
+/* Saves the FFV1 rate of the running capture (average of the last 10 minutes)
+ * into the core settings as core.ffv1_bytes_per_hour, when it has run long
+ * enough (30 s) to mean something. */
+static void rate_persist(pin_session_t *s)
+{
+    double bps = pin_rate_bytes_per_s(&s->rate_win, 30.0);
+    if (bps <= 0) return;
+    char path[PIN_PATH_MAX];
+    if (pin_settings_default_path(path, sizeof(path)) != 0) return;
+    if (pin_est_store_ffv1(path, bps * 3600.0) == 0)
+        s->ffv1_learned_bph = bps * 3600.0;
+}
+
+/* The learned FFV1 rate, read from the settings once per session. */
+static double learned_ffv1_bph(pin_session_t *s)
+{
+    if (!s->ffv1_learned_loaded) {
+        s->ffv1_learned_loaded = 1;
+        char path[PIN_PATH_MAX];
+        if (pin_settings_default_path(path, sizeof(path)) == 0)
+            s->ffv1_learned_bph = pin_est_load_ffv1(path);
+    }
+    return s->ffv1_learned_bph;
+}
+
+/* Closes the current sink, first adding what it wrote to the capture's byte
+ * total (bytes_written in the status is per file, total_bytes_written sums the
+ * closed files plus the open one). The writer must already be stopped. */
+static void close_sink_counted(pin_session_t *s)
+{
+    if (!s->sink) return;
+    pin_sink_status_t sst;
+    memset(&sst, 0, sizeof(sst));
+    if (s->sink->get_status) {
+        s->sink->get_status(s->sink, &sst);
+        s->bytes_closed += sst.bytes_written;
+    } else {
+        s->bytes_closed += s->bytes_written;
+    }
+    s->sink->close(s->sink);
+}
+
+/* Feeds the 10-minute rate window (measured bytes/s) and, once a minute, saves
+ * an FFV1 capture's rate as the next estimate. Caller holds the lock, capture
+ * running. */
+static void rate_sample(pin_session_t *s)
+{
+    if (s->state != PIN_STATE_CAPTURING || s->capture_start_s <= 0)
+        return;
+    double now = pin_session_now();
+    pin_rate_add(&s->rate_win, now, s->bytes_closed + s->bytes_written);
+    if (s->stream_kind == PIN_KIND_ANALOG && s->active_format == PIN_FMT_ANALOG_FFV1_MKV &&
+        now - s->rate_saved_s > 60.0) {
+        s->rate_saved_s = now;
+        rate_persist(s);
+    }
+}
+
 /* The content split commits: close the current file, open the next. Called
  * by the split lookahead (pin_split.h) once the new segment is long and big
  * enough to deserve its own file. */
@@ -650,7 +714,7 @@ static void split_do(void *user)
 {
     pin_session_t *s = user;
     if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-    if (s->sink) { s->sink->close(s->sink); s->sink = NULL; }
+    if (s->sink) { close_sink_counted(s); s->sink = NULL; }
     s->scene_index++;
     open_sink_for_scene(s);
     pin_session_push_event(s, PIN_EVT_SCENE, (int32_t)s->scene_index, NULL);
@@ -931,7 +995,7 @@ static void open_sink_for_scene(pin_session_t *s)
     pin_status_t st = s->sink->open(s->sink, path, &params);
     if (st != PIN_OK) {
         set_error(s, st, "failed to open output");
-        s->sink->close(s->sink);
+        s->sink->close(s->sink); /* never opened: nothing to count */
         s->sink = NULL;
         return;
     }
@@ -1351,6 +1415,9 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->unit_index = 0;
     reset_frame_counters(s);
     s->bytes_written = 0;
+    s->bytes_closed = 0;
+    pin_rate_reset(&s->rate_win);
+    s->rate_saved_s = pin_session_now();
     s->capture_start_s = pin_session_now();
     s->capture_prev_s = 0;
     /* the no-signal timer counts from here, not from the last data before a rewind */
@@ -1436,7 +1503,7 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         if (s->sink) {
             dv_flush_pending(s);
             if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-            s->sink->close(s->sink);
+            close_sink_counted(s);
             s->sink = NULL;
             pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         }
@@ -1455,7 +1522,7 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
             if (s->sink) {
                 dv_flush_pending(s);
                 if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-                s->sink->close(s->sink);
+                close_sink_counted(s);
                 s->sink = NULL;
                 pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
             }
@@ -1611,6 +1678,7 @@ static void dv_tick(void *user)
         } else {
             s->bytes_written = wst.bytes_pushed;
         }
+        rate_sample(s);
     }
 
     /* No-signal stop (idle_stop_minutes) and total-time stop (max_duration_minutes).
@@ -1630,7 +1698,7 @@ static void dv_tick(void *user)
             if (s->sink) {
                 dv_flush_pending(s);
                 if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-                s->sink->close(s->sink);
+                close_sink_counted(s);
                 s->sink = NULL;
                 pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
             }
@@ -1646,7 +1714,7 @@ static void dv_tick(void *user)
             if (s->sink) {
                 dv_flush_pending(s);
                 if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-                s->sink->close(s->sink);
+                close_sink_counted(s);
                 s->sink = NULL;
                 pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
             }
@@ -1779,7 +1847,7 @@ static void do_run_dv(pin_session_t *s)
         if (s->sink) {
             dv_flush_pending(s);
             if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-            s->sink->close(s->sink);
+            close_sink_counted(s);
             s->sink = NULL;
         }
         dv_reassembler_finish(&reasm);
@@ -1929,6 +1997,7 @@ static int analog_tick(void *user)
         } else {
             s->bytes_written = wst.bytes_pushed;
         }
+        rate_sample(s);
     }
     int should_stop = s->state == PIN_STATE_CAPTURING &&
                       ((s->capture_opts.idle_stop_minutes > 0 &&
@@ -1947,7 +2016,7 @@ static int analog_tick(void *user)
         pin_session_lock(s);
         if (s->sink) {
             if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-            s->sink->close(s->sink);
+            close_sink_counted(s);
             s->sink = NULL;
             pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         }
@@ -2072,7 +2141,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
 
     if (s->sink) {
         if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-        s->sink->close(s->sink);
+        close_sink_counted(s);
         s->sink = NULL;
     }
     pinnacle_analog_stop(&s->analog);
@@ -2095,7 +2164,7 @@ static void replay_handle_eot(pin_session_t *s)
     if (s->sink && s->pass < s->passes) {
         dv_flush_pending(s);
         if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-        s->sink->close(s->sink);
+        close_sink_counted(s);
         s->sink = NULL;
         pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         s->pass_index++;
@@ -2109,7 +2178,7 @@ static void replay_handle_eot(pin_session_t *s)
         /* last pass: stop, same as PIN_CMD_CAPTURE_STOP */
         dv_flush_pending(s);
         if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-        s->sink->close(s->sink);
+        close_sink_counted(s);
         s->sink = NULL;
         pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         set_state(s, PIN_STATE_READY);
@@ -2205,7 +2274,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     if (s->sink) {
         dv_flush_pending(s);
         if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-        s->sink->close(s->sink);
+        close_sink_counted(s);
         s->sink = NULL;
     }
     fclose(f);
@@ -2300,7 +2369,7 @@ static int replay_run(pin_session_t *s)
     if (s->sink) {
         dv_flush_pending(s);
         if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-        s->sink->close(s->sink);
+        close_sink_counted(s);
         s->sink = NULL;
     }
     dv_reassembler_finish(&reasm);
@@ -2493,7 +2562,7 @@ void pin_session_close(pin_session_t *s)
     if (s->worker_started)
         pthread_join(s->worker_thread, NULL);
 
-    if (s->sink) { if (s->writer) pin_writer_stop(s->writer); s->sink->close(s->sink); }
+    if (s->sink) { if (s->writer) pin_writer_stop(s->writer); close_sink_counted(s); }
     scene_fifo_clear(s);
     pin_split_free(&s->split);
     pinnacle_lock_release(s->lock);
@@ -2678,15 +2747,14 @@ static int fat32_and_free(const char *path, uint64_t *free_bytes, int *fat32)
  * estimated at ~40% of that. Used both by pin_session_check_output() (a
  * one-off estimate for a hypothetical capture) and by the live
  * disk_free_bytes/est_seconds_left in pin_session_get_status(). */
-static double nominal_bytes_per_second(pin_kind_t kind, pin_format_t fmt)
+static double nominal_bytes_per_second(pin_session_t *s, pin_kind_t kind, pin_format_t fmt,
+                                       double measured_bps, int *source)
 {
-    if (kind == PIN_KIND_HDV)
-        return 3300000.0;
-    if (kind == PIN_KIND_ANALOG) {
-        double uncompressed = 20900000.0;
-        return fmt == PIN_FMT_ANALOG_FFV1_MKV ? uncompressed * 0.40 : uncompressed;
-    }
-    return 3600000.0; /* DV */
+    pin_est_kind_t k = kind == PIN_KIND_HDV ? PIN_EST_HDV
+                       : kind == PIN_KIND_ANALOG
+                             ? (fmt == PIN_FMT_ANALOG_FFV1_MKV ? PIN_EST_ANALOG_FFV1 : PIN_EST_ANALOG_AVI)
+                             : PIN_EST_DV;
+    return pin_est_rate(k, s->width, s->height, s->is_60hz, learned_ffv1_bph(s), measured_bps, source);
 }
 
 pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t *o,
@@ -2730,7 +2798,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     out->free_bytes = free_bytes;
     out->low_space = pin_output_space_low(free_bytes);
 
-    double bytes_per_s = nominal_bytes_per_second(kind, fmt);
+    double bytes_per_s = nominal_bytes_per_second(s, kind, fmt, 0, NULL);
     out->minutes_left = bytes_per_s > 0 ? (uint64_t)(free_bytes / bytes_per_s / 60.0) : 0;
 
     out->message[0] = 0;
@@ -2810,6 +2878,8 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->writer_backlog = s->writer_backlog; out->writer_backlog_max = s->writer_backlog_max;
     out->idle_s = s->idle_s;
     out->write_dropped = s->write_dropped;
+    out->clip_bytes_written = s->bytes_written;
+    out->total_bytes_written = s->bytes_closed + (s->sink ? s->bytes_written : 0);
     out->frames_error = s->frames_error;
     out->clip_frames = s->clip_frames;
     out->clip_frames_error = s->clip_frames_error;
@@ -2899,8 +2969,12 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         int fat32_unused = 0;
         fat32_and_free(dir, &free_bytes, &fat32_unused);
         out->disk_free_bytes = free_bytes;
-        double rate = nominal_bytes_per_second(hint_kind, hint_fmt);
-        out->est_seconds_left = rate > 0 ? (double)free_bytes / rate : 0.0;
+        int src = 0;
+        double measured = s->state == PIN_STATE_CAPTURING ? pin_rate_bytes_per_s(&s->rate_win, 10.0) : -1;
+        double rate = nominal_bytes_per_second(s, hint_kind, hint_fmt, measured, &src);
+        out->est_bytes_per_hour = rate * 3600.0;
+        out->est_rate_source = src;
+        out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
         out->disk_low = out->est_seconds_left < 3600.0 || free_bytes < (50ull << 30);
     }
     pin_session_unlock(s);

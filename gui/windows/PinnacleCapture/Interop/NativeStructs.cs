@@ -218,6 +218,12 @@ public unsafe struct PinStatusSnapshot
     public ulong ErrAudioBlocks;
     public ulong ErrMissingBlocks;
 
+    // Appended later: sizes and the time-left estimate (see pin_api.h for the rate sources).
+    public ulong ClipBytesWritten;
+    public ulong TotalBytesWritten;
+    public double EstBytesPerHour;
+    public int EstRateSource;       // 0 nominal, 1 learned FFV1 rate, 2 measured
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }

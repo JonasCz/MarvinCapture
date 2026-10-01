@@ -140,6 +140,8 @@ static long file_size(const char *path)
  * whole (short) synthetic trace once through, then waits for the
  * single-pass replay to auto-stop at EOT (see replay_handle_eot() in
  * pin_session.c). */
+static unsigned long long g_total_bytes; /* total_bytes_written after the last run */
+
 static void run_split_capture(const char *trace_path, const char *out_base)
 {
     pin_session_t *s = pin_test_open_replay(trace_path);
@@ -160,6 +162,7 @@ static void run_split_capture(const char *trace_path, const char *out_base)
      * generous headroom, then wait for the single pass to auto-stop. */
     pin_test_wait_state(s, PIN_STATE_READY, PIN_STATE_ERROR, 10000, &snap);
     CHECK(snap.state == PIN_STATE_READY);
+    g_total_bytes = snap.total_bytes_written;
     pin_capture_stop(s); /* no-op if already stopped */
     pin_close(s);
 }
@@ -176,6 +179,8 @@ int main(void)
     long f1 = file_size("scene_jump_out-0001.dv");
     long f2 = file_size("scene_jump_out-0002.dv");
     long f1_frames = f1 / FRAME_SIZE, f2_frames = f2 / FRAME_SIZE;
+    /* the status total adds up every file of the capture */
+    CHECK(g_total_bytes == (unsigned long long)(f1 + f2));
     printf("jump split: file1 %ld bytes (%ld frames), file2 %ld bytes (%ld frames)\n",
            f1, f1_frames, f2, f2_frames);
     /* The replay worker can start streaming its very first frame before the
