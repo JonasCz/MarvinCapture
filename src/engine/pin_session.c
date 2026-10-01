@@ -1545,7 +1545,7 @@ static void do_run_dv(pin_session_t *s)
     for (int first = 1;; first = 0) {
         pst = pinnacle_stream_start(&s->dev);
         if (pst != PINNACLE_OK) {
-            set_error(s, PIN_ERR_USB, NULL);
+            set_error(s, PIN_ERR_USB, s->dev.fail_detail[0] ? s->dev.fail_detail : NULL);
             return;
         }
         pin_session_lock(s);

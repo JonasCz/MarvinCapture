@@ -219,8 +219,10 @@ int p1394_pump(pinnacle_1394_t *l, unsigned timeout_ms)
                                   timeout_ms);
     if (rc == LIBUSB_ERROR_TIMEOUT)
         return 0;
-    if (rc != 0)
+    if (rc != 0) {
+        l->last_usb_rc = rc;
         return -1;
+    }
     if (l->verbose > 1) {
         /* One line, not a sequence of formats: same reasoning as ep84_cb in
          * pinnacle_stream.c -- interleaved partial writes are unparseable. */
@@ -242,6 +244,7 @@ int p1394_send(pinnacle_1394_t *l, const uint8_t *msg, int len)
     int n = 0;
     int rc = libusb_bulk_transfer(l->dev->handle, PINNACLE_EP_CMD_OUT, (uint8_t *)msg, len, &n, 2000);
     if (rc != 0 || n != len) {
+        l->last_usb_rc = rc ? rc : LIBUSB_ERROR_IO;
         pin_logf(PIN_LOG_ERROR, "p1394: EP 0x02 write failed: %s (%d/%d)\n", libusb_error_name(rc), n, len);
         return -1;
     }
@@ -929,6 +932,7 @@ int p1394_link_init(pinnacle_1394_t *l)
     /* FPGA USB side. MarvinBus64 first writes register 0 with its default
      * and then with 0 (its shadow being initialised); leaving both out made
      * no difference, and register 0 gets its value further down. */
+    l->step = "reading the device status";
     if (vendor_read(l, 0, &v) == 0 && l->verbose)
         pin_logf(PIN_LOG_DEBUG, "p1394: vendor status 0x%08x\n", v);
     /* index 1 is computed from the registry value LengthOfIsochBuffer
@@ -937,6 +941,7 @@ int p1394_link_init(pinnacle_1394_t *l)
      * difference to HDV capture, kept for parity. */
     if (vendor_write(l, 1, 0xfe01, 1) != 0) return -1;
 
+    l->step = "setting up the FPGA extension registers";
     /* Extension bank: literal constants in FUN_0002cd00, meaning unknown.
      * Required: without them the link init fails. */
     b_ext(&m, 0x040, 0);           if (b_send(l, &m, 14) != 0) return -1;
@@ -944,11 +949,13 @@ int p1394_link_init(pinnacle_1394_t *l)
     b_ext(&m, 0x004, 6);           if (b_send(l, &m, 16) != 0) return -1;
     b_ext(&m, 0x00c, 0x2008);      if (b_send(l, &m, 16) != 0) return -1;
 
+    l->step = "resetting the OHCI link controller";
     /* OHCI soft reset, then link power status on */
     b_reg(&m, OHCI_HC_SET, HC_SOFT_RESET);  if (b_send(l, &m, 16) != 0) return -1;
     b_ext(&m, 0x040, 0);                    if (b_send(l, &m, 46) != 0) return -1;
     b_reg(&m, OHCI_HC_SET, HC_LPS);         if (b_send(l, &m, 16) != 0) return -1;
 
+    l->step = "programming the link controller";
     /* the 13-entry init table of FUN_0002cd00 */
     b_reg(&m, OHCI_LINK_CLEAR, 0xffffffffu);
     b_reg(&m, OHCI_ASYNC_FILTER_HI_CLEAR, 0xffffffffu);
@@ -976,6 +983,7 @@ int p1394_link_init(pinnacle_1394_t *l)
     if (b_send(l, &m, 14) != 0) return -1;
     p1394_reg_read(l, OHCI_ATRETRIES, &v);
 
+    l->step = "configuring the FireWire PHY";
     /* PHY register 4: set Contender (bit 6). Link-active (bit 7) reads back
      * already set (0x80 -> 0xc0 in every trace). */
     sleep_ms(4);
@@ -993,10 +1001,12 @@ int p1394_link_init(pinnacle_1394_t *l)
 
     if (vendor_write(l, 0, USBCFG_DEFAULT, 16) != 0) return -1;
 
+    l->step = "starting the async receive contexts";
     /* receive contexts: AR request -> RAM 0x3000, AR response -> 0x5000 */
     if (ar_start(l, 0x1100, RAM_AR_REQ_LO, OHCI_ARREQ_CMDPTR, OHCI_ARREQ_SET) != 0) return -1;
     if (ar_start(l, 0x1140, RAM_AR_RSP_LO, OHCI_ARRSP_CMDPTR, OHCI_ARRSP_SET) != 0) return -1;
 
+    l->step = "writing the configuration ROM";
     /* Our configuration ROM, built around the GUID read from the device.
      * MarvinBus64 (FUN_0002c770) first mirrors the GUID, byte-swapped, into
      * the extension bank. */
@@ -1036,6 +1046,7 @@ int p1394_link_init(pinnacle_1394_t *l)
      * answers (op-table entry 2, FUN_0002b5a0), a ~40 ms settle delay.
      * Leaving it out made no difference. */
 
+    l->step = "resetting the FireWire bus";
     /* PHY register 1: initiate bus reset (IBR, bit 6), gap count 63 */
     sleep_ms(4);
     if (phy_read(l, 1, &phy) != 0)
@@ -1047,6 +1058,7 @@ int p1394_link_init(pinnacle_1394_t *l)
     b_reg(&m, OHCI_ATRSP_CLEAR, CTX_RUN);
     if (b_send(l, &m, 2) != 0) return -1;
     sleep_ms(12);
+    l->step = "waiting for the FireWire bus to come up (no valid node ID)";
     if (p1394_read_topology(l) != 0)
         return -1;
     b_reg(&m, OHCI_INT_EVENT_CLEAR, INT_BUS_RESET);
@@ -1116,6 +1128,7 @@ int p1394_disconnect(pinnacle_1394_t *l, uint16_t node, uint32_t *opcr)
 int p1394_ir_start(pinnacle_1394_t *l, unsigned channel)
 {
     struct batch m = { .n = 0 };
+    l->step = "starting isochronous receive";
     if (vendor_write(l, 0, USBCFG_DEFAULT, 0) != 0)    /* isochronous-to-USB on */
         return -1;
     b_reg(&m, OHCI_IR0_MATCH, 0x20000000u);            /* tag1 = CIP */

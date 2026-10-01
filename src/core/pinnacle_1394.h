@@ -63,6 +63,8 @@ typedef struct {
     uint16_t local_node;       /* 0xffc0 | our node number, from NodeID */
     int node_count;            /* from SelfIDCount */
     unsigned next_tl;
+    const char *step;          /* what p1394_link_init()/p1394_ir_start() was doing; for error reports */
+    int last_usb_rc;           /* last libusb error seen by p1394_send/p1394_pump (0 = none) */
 
     /* filled in by p1394_pump() */
     uint16_t at_status_addr;

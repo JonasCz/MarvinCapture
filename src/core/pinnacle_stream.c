@@ -175,6 +175,21 @@ static void probe_registers(pinnacle_device_t *dev)
     dv_drain_join(&drain, drain_thread, drain_started);
 }
 
+/* Records, for the user, which bring-up step failed and why. */
+static void stream_fail(pinnacle_device_t *dev, const pinnacle_1394_t *l, const char *what)
+{
+    const char *step = l->step ? l->step : "starting";
+    if (l->last_usb_rc)
+        snprintf(dev->fail_detail, sizeof(dev->fail_detail),
+                 "%s while %s: USB transfer error (%s). Is the deck's FireWire cable seated, "
+                 "and the deck on?", what, step, libusb_error_name(l->last_usb_rc));
+    else
+        snprintf(dev->fail_detail, sizeof(dev->fail_detail),
+                 "%s while %s. Check the FireWire cable and that the deck is on; the deck's "
+                 "FireWire port may be faulty.", what, step);
+    pin_logf(PIN_LOG_ERROR, "pinnacle: %s\n", dev->fail_detail);
+}
+
 /* Link up, find the camera, connect to its output plug, and start
  * isochronous receive on the channel the plug reports. Every step is
  * explained in docs/startup.md.
@@ -226,8 +241,10 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
     }
 
     pinnacle_progress(dev, "Starting video reception", -1);
-    if (p1394_ir_start(&link, (unsigned)dev->iso_channel) != 0)
+    if (p1394_ir_start(&link, (unsigned)dev->iso_channel) != 0) {
+        stream_fail(dev, &link, "FireWire receive start failed");
         return PINNACLE_ERR_USB_TRANSFER;
+    }
 
     if (dev->tuning.probe_registers)
         probe_registers(dev);

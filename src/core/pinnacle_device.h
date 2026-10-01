@@ -114,6 +114,7 @@ typedef struct {
     int node_count;            /* nodes on the 1394 bus, us included (0 = not scanned) */
     int iso_channel;           /* channel IR context 0 listens on */
     int pcr_connected;         /* we hold a point-to-point connection on oPCR[0] */
+    char fail_detail[200];     /* why the last pinnacle_stream_start failed, for the user */
     pinnacle_tuning_t tuning;  /* PINNACLE_* knobs; defaulted by pinnacle_open() */
 } pinnacle_device_t;
 
