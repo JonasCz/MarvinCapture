@@ -428,13 +428,13 @@
                                         </Grid.ColumnDefinitions>
                                         <ToggleButton Style="{StaticResource DeckButtonStyle}" Tag="Rew" Click="Deck_Click"
                                                       IsChecked="{x:Bind VM.IsRewChecked, Mode=OneWay}"
-                                                      IsEnabled="{x:Bind VM.DeckTransportEnabled, Mode=OneWay}"
+                                                      IsEnabled="{x:Bind VM.DeckRewEnabled, Mode=OneWay}"
                                                       AutomationProperties.Name="Rewind" ToolTipService.ToolTip="Rewind">
                                             <FontIcon Glyph="&#xEB9E;" FontSize="16" />
                                         </ToggleButton>
                                         <ToggleButton Grid.Column="1" Style="{StaticResource DeckButtonStyle}" Tag="Play" Click="Deck_Click"
                                                       IsChecked="{x:Bind VM.IsPlayChecked, Mode=OneWay}"
-                                                      IsEnabled="{x:Bind VM.DeckTransportEnabled, Mode=OneWay}"
+                                                      IsEnabled="{x:Bind VM.DeckPlayEnabled, Mode=OneWay}"
                                                       AutomationProperties.Name="Play" ToolTipService.ToolTip="Play">
                                             <FontIcon Glyph="&#xE768;" FontSize="16" />
                                         </ToggleButton>
@@ -442,13 +442,12 @@
                                                       IsChecked="{x:Bind VM.IsStopChecked, Mode=OneWay}"
                                                       IsEnabled="{x:Bind VM.DeckStopEnabled, Mode=OneWay}"
                                                       AutomationProperties.Name="Stop"
-                                                      AutomationProperties.HelpText="While capturing, finishes the file first and then stops the deck"
                                                       ToolTipService.ToolTip="Stop">
                                             <FontIcon Glyph="&#xE71A;" FontSize="16" />
                                         </ToggleButton>
                                         <ToggleButton Grid.Column="3" Style="{StaticResource DeckButtonStyle}" Tag="Ff" Click="Deck_Click"
                                                       IsChecked="{x:Bind VM.IsFfChecked, Mode=OneWay}"
-                                                      IsEnabled="{x:Bind VM.DeckTransportEnabled, Mode=OneWay}"
+                                                      IsEnabled="{x:Bind VM.DeckFfEnabled, Mode=OneWay}"
                                                       AutomationProperties.Name="Fast forward" ToolTipService.ToolTip="Fast forward">
                                             <FontIcon Glyph="&#xEB9D;" FontSize="16" />
                                         </ToggleButton>
@@ -458,20 +457,20 @@
                                     <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="16,8"
                                             Click="Capture_Click"
                                             IsEnabled="{x:Bind VM.PlayAndCaptureEnabled, Mode=OneWay}"
-                                            AutomationProperties.Name="Manual capture"
-                                            AutomationProperties.HelpText="Records whatever the camera or deck is already sending, without controlling it">
+                                            AutomationProperties.Name="{x:Bind VM.ManualCaptureTitle, Mode=OneWay}"
+                                            AutomationProperties.HelpText="{x:Bind VM.ManualCaptureHelp, Mode=OneWay}">
                                         <Grid ColumnSpacing="14">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="44" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
-                                            <FontIcon Glyph="&#xE896;" FontSize="16" HorizontalAlignment="Center" />
-                                            <TextBlock Grid.Column="1" Text="Manual capture" VerticalAlignment="Center" />
+                                            <FontIcon Glyph="{x:Bind VM.ManualCaptureGlyph, Mode=OneWay}" FontSize="16" HorizontalAlignment="Center" />
+                                            <TextBlock Grid.Column="1" Text="{x:Bind VM.ManualCaptureTitle, Mode=OneWay}" VerticalAlignment="Center" />
                                         </Grid>
                                     </Button>
 
                                     <!-- primary action (last): rewind, play, record. Same size as Manual capture,
-                                         accent coloured. Turns into "Stop capture" in place. -->
+                                         accent coloured. Turns into "Stop capture & stop tape" in place. -->
                                     <Button x:Name="PlayAndCaptureButton" Style="{StaticResource AccentButtonStyle}"
                                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                             Padding="16,8" Click="PlayAndCapture_Click"

@@ -104,7 +104,6 @@ public sealed partial class MainWindow : Window
     public static bool Both(bool a, bool b) => a && b;
     public static string DevicePlaceholder(bool none) => none ? "No devices found" : "Select a device";
     public static Thickness PlayGlyphNudge(bool capturing) => capturing ? new Thickness(0) : new Thickness(2, 0, 0, 0);
-    public static string DvCaptureName(bool capturing) => capturing ? "Stop capture" : "Manual capture";
     public static string AnalogCaptureHint(bool capturing) =>
         capturing ? "Finishes the file safely" : "Records the analog input to the file";
 

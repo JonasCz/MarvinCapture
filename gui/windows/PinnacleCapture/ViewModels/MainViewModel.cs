@@ -50,14 +50,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(IsIdle), nameof(CaptureButtonText), nameof(CaptureButtonGlyph),
                               nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled),
                               nameof(PrimaryDvTitle), nameof(PrimaryDvHelp), nameof(PrimaryDvGlyph), nameof(DeviceSelectEnabled),
-                              nameof(DeckTransportEnabled), nameof(DeckStopEnabled), nameof(DvAutoCaptureEnabled))]
+                              nameof(ManualCaptureTitle), nameof(ManualCaptureHelp), nameof(ManualCaptureGlyph),
+                              nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private bool _isCapturing;
 
     public bool IsIdle => !IsCapturing;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled), nameof(CanStop),
-                              nameof(DeckTransportEnabled), nameof(DeckStopEnabled), nameof(DvAutoCaptureEnabled))]
+                              nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private PinState _sessionState = PinState.Closed;
 
     /// <summary>Stop is possible while writing (or between passes); not while already finalising.</summary>
@@ -66,24 +67,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>The Capture/Stop button (analog) and the Play-and-capture/Stop button (DV).</summary>
     public bool CaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready;
 
-    /// <summary>Only for "capture without starting the tape", which is hidden while capturing.</summary>
-    public bool PlayAndCaptureEnabled => !IsCapturing && SessionState == PinState.Ready;
+    /// <summary>Idle: start a capture without touching the tape. Capturing (started that way): stop it and leave the tape alone.</summary>
+    public bool PlayAndCaptureEnabled => IsCapturing ? CanStop && !_captureWithDeck : SessionState == PinState.Ready;
+
+    /// <summary>True when the running capture was started by "Automatic rewind &amp; capture" (the core stops the deck when it ends).</summary>
+    private bool _captureWithDeck;
+
+    public string ManualCaptureTitle => IsCapturing ? "Stop capture & continue tape" : "Manual capture";
+    public string ManualCaptureHelp => IsCapturing
+        ? "Stops the capture and leaves the tape as it is"
+        : "Records whatever the camera or deck is already sending, without controlling it";
+    public string ManualCaptureGlyph => IsCapturing ? "" : ""; // Stop / Download
 
     /// <summary>False only when the core knows for sure that no camera is on the FireWire bus.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(DeckTransportEnabled), nameof(DeckStopEnabled), nameof(DvAutoCaptureEnabled))]
+    [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private bool _deckAvailable = true;
 
-    /// <summary>REW / PLAY / FF: only while idle and READY (same rule as the capture buttons), and with a camera to talk to.</summary>
-    public bool DeckTransportEnabled => PlayAndCaptureEnabled && DeckAvailable;
+    /// <summary>The deck buttons are usable only while idle and READY with a camera to talk to; never while capturing.</summary>
+    private bool DeckControlsUsable => !IsCapturing && SessionState == PinState.Ready && DeckAvailable && DeckState != PinDeckState.NoTape;
 
-    /// <summary>STOP: while capturing (it ends the capture) or whenever the transport is usable.</summary>
-    public bool DeckStopEnabled => IsCapturing ? CanStop : PlayAndCaptureEnabled && DeckAvailable;
+    /// <summary>Each button is disabled when the deck is already doing what it would ask for.</summary>
+    public bool DeckRewEnabled => DeckControlsUsable && DeckState != PinDeckState.Rewinding;
+    public bool DeckPlayEnabled => DeckControlsUsable && DeckState is not (PinDeckState.Playing or PinDeckState.Recording);
+    public bool DeckStopEnabled => DeckControlsUsable && DeckState != PinDeckState.Stopped;
+    public bool DeckFfEnabled => DeckControlsUsable && DeckState != PinDeckState.FastForward;
 
-    /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera; Stop capture always works.</summary>
-    public bool DvAutoCaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready && DeckAvailable;
+    /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (started that way) it stops the capture and the tape.</summary>
+    public bool DvAutoCaptureEnabled => IsCapturing ? CanStop && _captureWithDeck : SessionState == PinState.Ready && DeckAvailable;
 
-    public string PrimaryDvTitle => IsCapturing ? "Stop capture" : "Automatic rewind & capture";
+    public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" : "Automatic rewind & capture";
     public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
     public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE896"; // Stop / Download
 
@@ -237,7 +250,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedKindTabIndexChanged(int value) =>
         SaveSetting("gui.last_kind", value.ToString(CultureInfo.InvariantCulture));
 
-    [ObservableProperty] private PinDeckState _deckState = PinDeckState.Unknown;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled))]
+    private PinDeckState _deckState = PinDeckState.Unknown;
     [ObservableProperty] private bool _isRewChecked;
     [ObservableProperty] private bool _isPlayChecked;
     [ObservableProperty] private bool _isStopChecked;
@@ -610,9 +625,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             return;
         }
-        if (IsCapturing && cmd != PinDeckCmd.Stop)
+        if (IsCapturing)
         {
-            return; // also disabled in the view; core would refuse anyway
+            return; // the deck buttons are disabled during capture
         }
         Report(Native.Deck(Session, cmd), "Deck command");
     }
@@ -738,6 +753,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             return PinStatus.ErrState;
         }
         var st = Native.CaptureStart(Session, in o, overwrite);
+        if (st == PinStatus.Ok)
+        {
+            _captureWithDeck = o.StartDeck != 0;
+            OnPropertyChanged(nameof(PlayAndCaptureEnabled));
+            OnPropertyChanged(nameof(DvAutoCaptureEnabled));
+        }
         Report(st, "Start capture");
         return st;
     }
