@@ -165,6 +165,7 @@ public sealed partial class MainWindow : Window
         var aw = AppWindow;
         var saved = SafeSettingsGet("gui.window");
         var parts = saved.Split(',');
+        var area = default(DisplayArea);
         if (parts.Length == 4 &&
             parts.All(p => int.TryParse(p, NumberStyles.Integer, CultureInfo.InvariantCulture, out _)))
         {
@@ -173,31 +174,61 @@ public sealed partial class MainWindow : Window
             int w = int.Parse(parts[2], CultureInfo.InvariantCulture);
             int h = int.Parse(parts[3], CultureInfo.InvariantCulture);
 
-            // Clamp onto a monitor that still exists (a laptop undocked since last time etc.).
-            var area = DisplayArea.GetFromRect(new RectInt32(x, y, w, h), DisplayAreaFallback.Nearest);
-            var wa = area.WorkArea;
-            w = Math.Clamp(w, (int)(MinWidthDip * Scale), wa.Width);
-            h = Math.Clamp(h, (int)(MinHeightDip * Scale), wa.Height);
-            x = Math.Clamp(x, wa.X, wa.X + wa.Width - w);
-            y = Math.Clamp(y, wa.Y, wa.Y + wa.Height - h);
-            aw.MoveAndResize(new RectInt32(x, y, w, h));
+            // Only restore onto a monitor that still exists: a rectangle that no longer
+            // touches any display (monitor unplugged, resolution changed) falls back to the default.
+            area = DisplayArea.GetFromRect(new RectInt32(x, y, w, h), DisplayAreaFallback.None);
+            if (area is not null)
+            {
+                var wa = area.WorkArea;
+                w = Math.Clamp(w, (int)(MinWidthDip * Scale), wa.Width);
+                h = Math.Clamp(h, (int)(MinHeightDip * Scale), wa.Height);
+                x = Math.Clamp(x, wa.X, wa.X + wa.Width - w);
+                y = Math.Clamp(y, wa.Y, wa.Y + wa.Height - h);
+                aw.MoveAndResize(new RectInt32(x, y, w, h));
+            }
         }
-        else
+        if (area is null)
         {
-            var area = DisplayArea.GetFromWindowId(aw.Id, DisplayAreaFallback.Primary).WorkArea;
-            int w = Math.Min((int)(1280 * Scale), area.Width);
-            int h = Math.Min((int)(800 * Scale), area.Height);
-            aw.MoveAndResize(new RectInt32(area.X + (area.Width - w) / 2, area.Y + (area.Height - h) / 2, w, h));
+            var wa = DisplayArea.GetFromWindowId(aw.Id, DisplayAreaFallback.Primary).WorkArea;
+            int w = Math.Min((int)(1280 * Scale), wa.Width);
+            int h = Math.Min((int)(800 * Scale), wa.Height);
+            aw.MoveAndResize(new RectInt32(wa.X + (wa.Width - w) / 2, wa.Y + (wa.Height - h) / 2, w, h));
+        }
+        else if (SafeSettingsGet("gui.window_maximized") == "1" && aw.Presenter is OverlappedPresenter op)
+        {
+            op.Maximize(); // the saved rectangle above is the restored size
         }
     }
 
+    /// <summary>
+    /// Saves the restored (normal) rectangle plus whether the window is maximised. While
+    /// maximised the rectangle from the last restored state is kept, so un-maximising later
+    /// returns to the user's size. Minimised: nothing to learn, keep the previous values.
+    /// </summary>
     private void SaveWindowGeometry()
     {
-        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Restored })
+        if (AppWindow.Presenter is not OverlappedPresenter op)
         {
-            var p = AppWindow.Position;
-            var s = AppWindow.Size;
-            SafeSettingsSet("gui.window", string.Create(CultureInfo.InvariantCulture, $"{p.X},{p.Y},{s.Width},{s.Height}"));
+            return;
+        }
+        try
+        {
+            switch (op.State)
+            {
+                case OverlappedPresenterState.Restored:
+                    var p = AppWindow.Position;
+                    var s = AppWindow.Size;
+                    SafeSettingsSet("gui.window", string.Create(CultureInfo.InvariantCulture, $"{p.X},{p.Y},{s.Width},{s.Height}"));
+                    SafeSettingsSet("gui.window_maximized", "0");
+                    break;
+                case OverlappedPresenterState.Maximized:
+                    SafeSettingsSet("gui.window_maximized", "1");
+                    break;
+            }
+        }
+        catch (Exception)
+        {
+            // window already gone; keep what was saved before
         }
     }
 
@@ -837,6 +868,7 @@ public sealed partial class MainWindow : Window
 
     private async void AppWindow_Closing(AppWindow sender, AppWindowClosingEventArgs args)
     {
+        SaveWindowGeometry();
         if (_allowClose)
         {
             return;
