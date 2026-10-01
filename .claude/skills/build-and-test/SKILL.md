@@ -1,6 +1,6 @@
 ---
 name: build-and-test
-description: Build the Pinnacle 500-USB driver (core DLL, CLIs, GUI) with scripts/build.ps1, run the tests, and test against the real device with the CLIs. Use when asked to build, rebuild, test, or reproduce a hardware problem from the command line.
+description: Build the Pinnacle 500-USB driver (core DLL, CLIs, GUI) with scripts/build.ps1 and run the automated ctest suite. Use when asked to build or rebuild. For testing against the real device see test-with-hardware-device.
 ---
 
 # Build and test
@@ -38,45 +38,14 @@ Output: `build\dist` (GUI + core DLL + `firmware\`) and `build\dist\cli`
   `libwinpthread-1.dll` from PATH (Git's mingw64, `Desktop\ffmpeg`). The script
   now copies the right one next to the CLIs; if you see this on an old
   `build\dist`, rebuild with the script.
-- **The GUI and the CLIs cannot hold the device at once.** `pinlist` shows
-  `IN USE (pid N, ...)`. Close the GUI before testing with a CLI; ask the user
-  rather than killing it.
+- Don't rebuild `build\dist` while the GUI is open (it locks the files).
 - **Edits that silently don't apply**: when patching source with scripts, assert
   the match exists; the files are CRLF in the working tree. Prefer the Edit tool.
-- Don't start a hardware test that needs a replug without asking the user.
 
-## Testing against the device (CLIs)
+## Automated tests vs. hardware tests
 
-```powershell
-cd build\dist\cli
-.\pinlist.exe                                   # devices and READY / IN USE
-.\pinctl.exe status usb:1-8
-.\pinctl.exe capture -d usb:1-8 -i dv -o $env:TEMP\x.dv --duration 3
-.\pinctl.exe deck usb:1-8 state
-```
-
-`pinctl` runs through the engine API, which swallows log output into events, so
-failures only show the session's error text. For the **raw log of the DV/1394
-bring-up** use the older, simpler CLI, which logs to stderr:
-
-```powershell
-$env:PINNACLE_DEBUG_1394 = "1"                  # 2 = also hex-dump EP 0x84
-.\pincli.exe -o $env:TEMP\x.dv -t 3
-```
-
-Other debug env vars: `PINNACLE_PROBE`, `PINNACLE_DEBUG_EP88`, `PINNACLE_DEBUG_EP84`
-(see `src/core/pinnacle_device.c`).
-
-## Diagnosing "USB error" / device not ready
-
-The engine error text names the failing bring-up step (`pin_session.c`,
-`pinnacle_stream.c: stream_fail`, `pinnacle_1394.c: l->step`). Known cases:
-
-- `... waiting for the FireWire bus to come up (no valid node ID)`: the link
-  controller works but no 1394 bus reset ever completed (`NodeID 0x0000ffff`).
-  The deck's FireWire port/cable is not answering electrically; try another
-  cable, power-cycle the deck with the cable plugged in. Not fixable in software.
-- `... USB transfer error (LIBUSB_ERROR_...)` at some step: a real USB/driver
-  problem; the step name says where.
-- `Cannot open the device: ...`: libusb open/claim failed (another process,
-  driver). `Device initialisation failed` / `Cannot read FPGA bitstream`: firmware.
+`ctest` (and `scriptsuild.ps1` without `-SkipTests`) is the **automated code
+test suite**: unit tests plus replay tests that run on recordings, no device
+needed. Testing against the real device, its deck or camera is a separate,
+manual activity: use the **test-with-hardware-device** skill (CLIs, debug logs,
+diagnosing "USB error").
