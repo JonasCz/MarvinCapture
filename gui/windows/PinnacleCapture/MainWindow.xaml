@@ -412,14 +412,13 @@
 
                             <Border Style="{StaticResource CardStyle}">
                                 <StackPanel Spacing="12">
-                                    <Grid>
-                                        <TextBlock Text="Tape" Style="{StaticResource CardHeaderStyle}" />
-                                        <!-- Fixed width fits the longest state ("Camera recording …"), so the text never shifts. -->
-                                        <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" HorizontalAlignment="Right"
-                                                   Width="120" TextAlignment="Left" TextTrimming="CharacterEllipsis"
+                                    <StackPanel Orientation="Horizontal" Spacing="12">
+                                        <TextBlock Text="Tape" Style="{StaticResource CardHeaderStyle}" VerticalAlignment="Center" />
+                                        <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}"
+                                                   TextTrimming="CharacterEllipsis"
                                                    Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
                                                    Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
-                                    </Grid>
+                                    </StackPanel>
                                     <Grid ColumnSpacing="8" x:Name="DeckRow">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />
