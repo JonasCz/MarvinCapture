@@ -961,7 +961,8 @@ typedef struct {
     hdv_pid_map_t hdv_map;
     int hdv_map_init;
     /* 1394 bus watch (dv_tick): async read of OHCI SelfIDCount, whose
-     * generation field changes with every bus reset */
+     * generation field (23:16) changes with every bus reset and whose size
+     * field (10:2) follows the node count */
     int bus_pending;
     double bus_poll_s;
     uint32_t bus_sig;
@@ -1362,8 +1363,18 @@ static void dv_tick(void *user)
                     ctx->bus_sig = v;
                     ctx->bus_sig_valid = 1;
                 } else if (v != ctx->bus_sig) {
-                    s->dv_rescan_retries = 0;
-                    rescan = 1;
+                    /* Some cameras answer our own link-init bus reset with one
+                     * of their own about half a second later, same topology.
+                     * Re-scanning for that resets the bus again and loops
+                     * forever; take it as the new baseline instead. A change
+                     * in the self-ID size (node count) is always a re-scan. */
+                    int same_topology = ((v ^ ctx->bus_sig) & 0x7fcu) == 0;
+                    if (same_topology && tnow - s->stream_start_s < 3.0) {
+                        ctx->bus_sig = v;
+                    } else {
+                        s->dv_rescan_retries = 0;
+                        rescan = 1;
+                    }
                 }
             } else if (tnow - ctx->bus_poll_s > 1.0) {
                 ctx->bus_pending = 0;
