@@ -43,6 +43,39 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
   The directory button uses `FolderPicker`. Old single-path settings
   (`gui.output_*`) are migrated in `LoadOutput`.
 
+## Adding or changing a native call / option
+
+- `Interop/Native.cs` uses source-generated `[LibraryImport]` (private) with a
+  friendly public wrapper. Size-versioned structs the core fills are passed by
+  `ref`, never `out` (`out` zero-inits and wipes `size`, giving `PIN_ERR_ABI`).
+- Fixed-size embedded UTF-8 strings in structs (`Path`, `Title`, ...) go through
+  `Utf8Fixed` property wrappers in `NativeStructs.cs`. A new field in
+  `pin_capture_opts_t` must be added in the same order/size in C and C#.
+- Settings: `Native.SettingsGet/Set` -> core `pin_settings_get/set`. Keys are
+  `gui.*`, all best-effort (try/catch). Writes are suppressed while `_loading`.
+  Add the save in the `OnXChanged` hook and the load in `LoadSettings`.
+- Command line: the core parses it (`pin_launch_parse`); the GUI applies the
+  result in `ApplyLaunch`, only for fields flagged in `capture_fields`. Docs for
+  the options are in `gui/windows/README.md` and `docs/usage.md`.
+- Tab order / accessibility: give controls `AutomationProperties.Name` (and
+  `HelpText` for the why); keep the XAML order = tab order.
+- Errors to the user: `VM.ShowInfo(title, message, severity)` (InfoBar); modal
+  questions: `ShowDialogAsync(title, text, primary, close)`.
+
+## Debugging
+
+- Crashes / unhandled exceptions: `%LOCALAPPDATA%\PinnacleOSS\crash.log`
+  (absent = clean run). If the core DLL fails to load or reports an API
+  version other than 1, the app shows an error window instead of the UI.
+- Quick GUI-only build: `dotnet build gui\windows\PinnacleCapture -c Debug
+  -p:Platform=x64`; the run target is `bind\Debug
+et10.0-windows10.0.19041.0\win-x64\`
+  and needs `pinnacle-oss-core.dll` copied from `build\core` (done by the csproj).
+- Hardware/replay testing of capture behaviour: see test-with-hardware-device.
+- Packages: WindowsAppSDK 2.5.1, CommunityToolkit.Mvvm 8.4.2, Vortice D3D11.
+  App is unpackaged, self-contained, x64, JIT (field-style `[ObservableProperty]`
+  is fine).
+
 ## Gotchas
 
 - `x:Bind` with `UpdateSourceTrigger=PropertyChanged` is needed for TextBoxes
