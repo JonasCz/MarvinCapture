@@ -501,7 +501,7 @@
             <Grid x:Name="PreviewHost" Grid.Column="1" Margin="4,4,16,16" SizeChanged="PreviewHost_SizeChanged">
                 <Grid x:Name="PreviewFrame" HorizontalAlignment="Center" VerticalAlignment="Center">
                     <SwapChainPanel x:Name="PreviewPanel" AutomationProperties.Name="Video preview" />
-                    <Border CornerRadius="8" BorderThickness="1"
+                    <Border CornerRadius="0" BorderThickness="1"
                             BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             Visibility="{x:Bind local:MainWindow.Collapsed(VM.PreviewHasVideo), Mode=OneWay}">
