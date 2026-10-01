@@ -88,6 +88,9 @@ foreach ($f in 'pincli', 'pinanalog', 'pindeck', 'pinlist', 'pinctl') {
 }
 Copy-Item (Join-Path $core 'pinnacle-oss-core.dll') $cli -Force
 Copy-Item (Join-Path $core 'libusb-1.0.dll') $cli -Force
+# the CLIs import libwinpthread-1.dll; without a copy next to them Windows picks up
+# whatever else is on PATH (Git's mingw64, ...) and they die with 0xC0000139
+Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $cli -Force
 Remove-Item -Recurse -Force (Join-Path $cli 'firmware') -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $root 'firmware') (Join-Path $cli 'firmware') -Recurse
 
@@ -102,6 +105,7 @@ if (-not $SkipGui) {
 # --- Check ---------------------------------------------------------------------
 Step 'Checking build\dist'
 $expect = @('cli\pincli.exe', 'cli\pinctl.exe', 'cli\pinnacle-oss-core.dll',
+            'cli\libusb-1.0.dll', 'cli\libwinpthread-1.dll',
             'cli\firmware\fpga-ohci.bin', 'cli\firmware\fpga-capture.bin')
 if (-not $SkipGui) {
     $expect += 'PinnacleCapture.exe', 'pinnacle-oss-core.dll', 'libusb-1.0.dll',
