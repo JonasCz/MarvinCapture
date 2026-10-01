@@ -24,6 +24,7 @@ add_library(pinnacle_engine_pure STATIC
     dv_audio.c
     hdv_aux.c
     pin_scene.c
+    pin_split.c
     pin_naming.c
     pin_settings.c
     pin_cmdline.c
@@ -54,6 +55,7 @@ pinnacle_engine_test(test_dv_subcode)
 pinnacle_engine_test(test_dv_audio)
 pinnacle_engine_test(test_hdv_aux)
 pinnacle_engine_test(test_pin_scene)
+pinnacle_engine_test(test_pin_split)
 pinnacle_engine_test(test_pin_naming)
 pinnacle_engine_test(test_pin_settings)
 pinnacle_engine_test(test_pin_cmdline)

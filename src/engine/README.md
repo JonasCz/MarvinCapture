@@ -23,6 +23,12 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   so the caller can back-date the cut. Also tells the caller how many
   trailing frames it must hold back before finalising a file.
 
+- **`pin_split.[ch]`** — split lookahead: a scene cut only becomes a new
+  file once the new segment has >= 1 MB and >= 1 s; until then its units are
+  held, and a later cut or the end of the capture/pass writes them to the
+  previous file instead. Pure (callbacks), unit tested in
+  `tests/engine/test_pin_split.c`.
+
 - **`pin_naming.[ch]`** — output filename generation (`base.ext`,
   `base-0001.ext`, `base-pass-2.ext`, `base-pass-2-0001.ext`) and a
   collision check against existing files, Windows- and POSIX-path aware.

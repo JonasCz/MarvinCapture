@@ -61,6 +61,17 @@ ffplay out.dv
 ffmpeg -i out.dv -c:v copy -c:a copy out.avi     # rewrap, no re-encode
 ```
 
+**Scene splitting (`--split`, DV/HDV).** A confirmed timecode / recording-date
+break starts a new file (`name-0001`, `name-0002`, ...). A new file is only
+created once the new segment is a real one, i.e. it has reached **at least
+1 s and at least 1 MB**; the frames are held in memory until then. If the
+capture, the pass or the tape ends first, or another break arrives first, the
+held frames are appended to the previous file instead, so a few odd frames
+with a weird timecode at the end of a scene or tape don't leave a tiny file
+behind (the very first file is always created). Only content-triggered splits
+are deferred this way; a hard size limit would not be. Details:
+`src/engine/pin_split.h`.
+
 **Timing.** Bring-up takes about **5.5 s** before the first byte arrives:
 bitstream upload, a 1.5 s FPGA settle, the 1394 link start-up, finding the
 camera and connecting to its output plug ([startup.md](startup.md)). `-t`

@@ -39,6 +39,7 @@
 #include "../sinks/pin_writer.h"
 #include "pin_deck.h"
 #include "pin_scene.h"
+#include "pin_split.h"
 #include "pin_naming.h"
 #include "pin_preview.h"
 #include "pin_hdv_audio.h"
@@ -185,6 +186,7 @@ struct pin_session {
     int have_output_hint;
     pin_scene_fifo_item_t scene_fifo[PIN_SCENE_FIFO_CAP];
     unsigned scene_fifo_head, scene_fifo_count; /* ring, oldest at head */
+    pin_split_t split;       /* content-split lookahead (zeroed = not initialised) */
     double capture_start_s, last_data_s;
     char naming_base[PIN_PATH_MAX]; /* extension-stripped */
     char naming_ext[16];

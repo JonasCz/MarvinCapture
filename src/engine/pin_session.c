@@ -630,12 +630,56 @@ static void scene_fifo_clear(pin_session_t *s)
     s->scene_fifo_head = s->scene_fifo_count = 0;
 }
 
-static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len)
+static void writer_commit(void *user, const uint8_t *data, size_t len)
 {
+    pin_session_t *s = user;
     if (!s->writer)
         return;
     if (!pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len))
         s->write_dropped++;
+}
+
+static void open_sink_for_scene(pin_session_t *s);
+
+/* The content split commits: close the current file, open the next. Called
+ * by the split lookahead (pin_split.h) once the new segment is long and big
+ * enough to deserve its own file. */
+static void split_do(void *user)
+{
+    pin_session_t *s = user;
+    if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
+    if (s->sink) { s->sink->close(s->sink); s->sink = NULL; }
+    s->scene_index++;
+    open_sink_for_scene(s);
+    pin_session_push_event(s, PIN_EVT_SCENE, (int32_t)s->scene_index, NULL);
+}
+
+static void split_ensure(pin_session_t *s)
+{
+    if (!s->split.commit)
+        pin_split_init(&s->split, writer_commit, split_do, s);
+}
+
+/* Seconds one new frame_index adds to a pending segment: a DV frame, or an
+ * HDV GOP (nominally 15 pictures at 60i, 12 at 50i: ~0.5 s). */
+static double unit_seconds(const pin_session_t *s)
+{
+    if (s->stream_kind == PIN_KIND_HDV)
+        return 0.5;
+    return s->is_60hz ? 1001.0 / 30000.0 : 0.04;
+}
+
+/* Every unit that reaches a file goes through here (so a pending content
+ * split can hold it). frame_index < 0: carries no time (PAT/PMT, raw). */
+static void commit_unit_fi(pin_session_t *s, const uint8_t *data, size_t len, long frame_index)
+{
+    split_ensure(s);
+    pin_split_push(&s->split, data, len, frame_index, unit_seconds(s));
+}
+
+static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len)
+{
+    commit_unit_fi(s, data, len, -1);
 }
 
 /* Pushes one unit into the FIFO, evicting (and committing) the oldest once
@@ -646,7 +690,7 @@ static void scene_fifo_push(pin_session_t *s, const uint8_t *data, size_t len, l
     if (s->scene_fifo_count == PIN_SCENE_FIFO_CAP ||
         (window && s->scene_fifo_count > window)) {
         pin_scene_fifo_item_t *oldest = &s->scene_fifo[s->scene_fifo_head];
-        commit_unit(s, oldest->data, oldest->len);
+        commit_unit_fi(s, oldest->data, oldest->len, oldest->frame_index);
         free(oldest->data);
         oldest->data = NULL;
         s->scene_fifo_head = (s->scene_fifo_head + 1) % PIN_SCENE_FIFO_CAP;
@@ -663,13 +707,15 @@ static void scene_fifo_push(pin_session_t *s, const uint8_t *data, size_t len, l
     }
 }
 
-static void open_sink_for_scene(pin_session_t *s);
-
-/* Splits the FIFO at cut_frame_index: everything before it is committed to
- * the current (old) scene's sink; a new sink is opened for the new scene;
- * everything from cut_frame_index on is committed to it. */
+/* A scene cut was confirmed at cut_frame_index. Units before it belong to
+ * the old scene; the cut itself only becomes a new file once the new segment
+ * is real (pin_split.h): until then its units are held, and a second cut or
+ * the end of the capture merges them back into the current file. */
 static void scene_cut(pin_session_t *s, long cut_frame_index)
 {
+    split_ensure(s);
+    /* a still-pending earlier split never made it: its units stay in the old file */
+    pin_split_cancel(&s->split);
     unsigned n = s->scene_fifo_count;
     unsigned split_at = n;
     for (unsigned i = 0; i < n; i++) {
@@ -678,18 +724,20 @@ static void scene_cut(pin_session_t *s, long cut_frame_index)
     }
     for (unsigned i = 0; i < split_at; i++) {
         unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        commit_unit(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len);
+        commit_unit_fi(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len,
+                       s->scene_fifo[idx].frame_index);
     }
-    /* close the old scene's sink and open the next one */
-    if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-    if (s->sink) { s->sink->close(s->sink); s->sink = NULL; }
-    s->scene_index++;
-    open_sink_for_scene(s);
-    pin_session_push_event(s, PIN_EVT_SCENE, (int32_t)s->scene_index, NULL);
-
+    pin_split_begin(&s->split);
     for (unsigned i = split_at; i < n; i++) {
         unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        commit_unit(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len);
+        commit_unit_fi(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len,
+                       s->scene_fifo[idx].frame_index);
+        free(s->scene_fifo[idx].data);
+        s->scene_fifo[idx].data = NULL;
+    }
+    /* the pre-cut items were freed by neither loop above */
+    for (unsigned i = 0; i < split_at; i++) {
+        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
         free(s->scene_fifo[idx].data);
         s->scene_fifo[idx].data = NULL;
     }
@@ -867,6 +915,7 @@ static void open_sink_for_scene(pin_session_t *s)
     }
     s->writer = pin_writer_start(0, writer_consume, s);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
+    pin_split_new_file(&s->split);
     pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, path);
 }
 
@@ -1208,9 +1257,12 @@ static void dv_flush_pending(pin_session_t *s)
 {
     for (unsigned i = 0; i < s->scene_fifo_count; i++) {
         unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        commit_unit(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len);
+        commit_unit_fi(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len,
+                       s->scene_fifo[idx].frame_index);
     }
     scene_fifo_clear(s);
+    /* a split that never became a real segment: its units go to the current file */
+    pin_split_flush(&s->split);
 }
 
 /* Sends one deck command through the async state machine. Always use this
@@ -1263,6 +1315,8 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->idle_s = 0;
     s->scene_det_ready = 0;
     s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
+    pin_split_free(&s->split);
+    memset(&s->split, 0, sizeof(s->split));
     open_sink_for_scene(s);
     if (s->state != PIN_STATE_ERROR) {
         set_state(s, PIN_STATE_CAPTURING);
@@ -2400,6 +2454,7 @@ void pin_session_close(pin_session_t *s)
 
     if (s->sink) { if (s->writer) pin_writer_stop(s->writer); s->sink->close(s->sink); }
     scene_fifo_clear(s);
+    pin_split_free(&s->split);
     pinnacle_lock_release(s->lock);
     if (!s->is_replay)
         pinnacle_close(&s->dev);

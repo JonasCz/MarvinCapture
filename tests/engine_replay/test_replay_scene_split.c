@@ -25,14 +25,18 @@
  * at offset 6 + 8*i -- see dv_subcode_pack_offset()).
  *
  * Two variants:
- *   - a persistent jump (20 continuous frames, then 20 frames at
+ *   - a persistent jump (50 continuous frames, then 50 frames at
  *     timecode+10s): --split must produce two files, cut exactly at the
  *     first anomalous frame (the debounce FIFO back-dates the cut, see
- *     pin_scene.h), containing 20 frames each.
+ *     pin_scene.h), containing 50 frames each (both segments are over
+ *     1 s and 1 MB, see pin_split.h).
+ *   - a jump only 10 frames before the end: the new segment would be
+ *     under 1 s, so it is appended to the first file (one file, all
+ *     100 frames).
  *   - a single-frame glitch (one frame is jumped, then the timecode goes
  *     right back to where the unglitched run would have been): --split
  *     must NOT cut -- a single bad frame is debounced away -- producing
- *     one file with all 40 frames.
+ *     one file with all 100 frames.
  *
  * Usage: test_replay_scene_split (no arguments; builds its own trace files)
  */
@@ -43,10 +47,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#define N_FRAMES 40
+#define N_FRAMES 100 /* ~3.3 s: a new segment needs >= 1 s and >= 1 MB to get its own file */
 #define SEQ_COUNT DV_SEQ_COUNT_NTSC
 #define FRAME_SIZE (SEQ_COUNT * DV_SEQ_SIZE)
-#define JUMP_AT 20
+#define JUMP_AT 50
+#define TAIL_JUMP_AT (N_FRAMES - 10) /* jump 10 frames before the end: too short for a file */
 #define JUMP_FRAMES 300 /* 10 s at a nominal 30 fps, well over tc_jump_seconds (1.0) */
 
 static int bcd_byte(int tens, int units) { return ((tens & 0xF) << 4) | (units & 0xF); }
@@ -100,7 +105,7 @@ static void fill_timecode(uint8_t *frame, long frame_number)
  * carry frame_number + JUMP_FRAMES (a persistent jump); if 1, only frame
  * JUMP_AT itself does, and every frame after it continues the original,
  * unjumped sequence (a single-frame glitch that self-heals). */
-static void write_synthetic_trace(const char *path, int glitch_only)
+static void write_synthetic_trace(const char *path, int glitch_only, long jump_at)
 {
     uint8_t *frame = malloc(FRAME_SIZE);
     CHECK(frame);
@@ -110,9 +115,9 @@ static void write_synthetic_trace(const char *path, int glitch_only)
         build_frame_skeleton(frame);
         long tc = i;
         if (glitch_only) {
-            if (i == JUMP_AT) tc = i + JUMP_FRAMES;
+            if (i == jump_at) tc = i + JUMP_FRAMES;
         } else {
-            if (i >= JUMP_AT) tc = i + JUMP_FRAMES;
+            if (i >= jump_at) tc = i + JUMP_FRAMES;
         }
         fill_timecode(frame, tc);
         CHECK(fwrite(frame, 1, FRAME_SIZE, f) == (size_t)FRAME_SIZE);
@@ -162,7 +167,7 @@ static void run_split_capture(const char *trace_path, const char *out_base)
 int main(void)
 {
     /* ---- persistent jump: expect a clean 2-way split ---- */
-    write_synthetic_trace("scene_jump.dv", 0);
+    write_synthetic_trace("scene_jump.dv", 0, JUMP_AT);
     run_split_capture("scene_jump.dv", "scene_jump_out");
 
     CHECK(pin_test_file_exists("scene_jump_out-0001.dv"));
@@ -184,7 +189,7 @@ int main(void)
     printf("OK: persistent timecode jump cut cleanly at frame %d\n", JUMP_AT);
 
     /* ---- single-frame glitch: expect no split at all ---- */
-    write_synthetic_trace("scene_glitch.dv", 1);
+    write_synthetic_trace("scene_glitch.dv", 1, JUMP_AT);
     run_split_capture("scene_glitch.dv", "scene_glitch_out");
 
     CHECK(pin_test_file_exists("scene_glitch_out-0001.dv"));
@@ -194,6 +199,17 @@ int main(void)
     printf("glitch: single file %ld bytes (%ld frames)\n", g1, g1_frames);
     CHECK(g1_frames == N_FRAMES || g1_frames == N_FRAMES - 1); /* see the jump case's comment */
     printf("OK: single-frame glitch was debounced away, no split\n");
+
+    /* ---- jump just before the end: the tiny tail is merged, not split off ---- */
+    write_synthetic_trace("scene_tail.dv", 0, TAIL_JUMP_AT);
+    run_split_capture("scene_tail.dv", "scene_tail_out");
+
+    CHECK(pin_test_file_exists("scene_tail_out-0001.dv"));
+    CHECK(!pin_test_file_exists("scene_tail_out-0002.dv"));
+    long t1_frames = file_size("scene_tail_out-0001.dv") / FRAME_SIZE;
+    printf("short tail: single file (%ld frames)\n", t1_frames);
+    CHECK(t1_frames == N_FRAMES || t1_frames == N_FRAMES - 1);
+    printf("OK: short tail merged into the previous file\n");
 
     return 0;
 }
