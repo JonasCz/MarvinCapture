@@ -1489,15 +1489,19 @@ static void dv_tick(void *user)
         }
     }
 
-    /* idle-stop / duration-stop / EOT multi-pass handling. Both idle-stop and
-     * duration-stop just end the *current pass* early -- with passes left,
-     * that means rewind and start the next one, same as an EOT would. */
+    /* No-signal stop (idle_stop_minutes) and total-time stop (max_duration_minutes).
+     * The no-signal timeout is also how the end of the tape is noticed: with
+     * passes left it ends this pass, rewinds and starts the next one. The
+     * total-time limit counts capture time over all passes and always ends the
+     * whole capture. Either way a capture that drives the deck stops the deck. */
+    double total_s = s->capture_prev_s + s->elapsed_s;
     int duration_stop = s->capture_opts.max_duration_minutes > 0 &&
-                         s->elapsed_s > s->capture_opts.max_duration_minutes * 60.0;
-    if (s->state == PIN_STATE_CAPTURING &&
-        ((s->capture_opts.idle_stop_minutes > 0 && s->idle_s > s->capture_opts.idle_stop_minutes * 60.0) ||
-         duration_stop)) {
-        if (s->pass < s->passes) {
+                         total_s > s->capture_opts.max_duration_minutes * 60.0;
+    int idle_stop = s->capture_opts.idle_stop_minutes > 0 &&
+                    s->idle_s > s->capture_opts.idle_stop_minutes * 60.0;
+    if (s->state == PIN_STATE_CAPTURING && (idle_stop || duration_stop)) {
+        if (!duration_stop && s->pass < s->passes) {
+            s->capture_prev_s = total_s;
             /* end this pass, rewind, next pass */
             if (s->sink) {
                 dv_flush_pending(s);
@@ -2682,6 +2686,20 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->writer_backlog = s->writer_backlog; out->writer_backlog_max = s->writer_backlog_max;
     out->idle_s = s->idle_s;
     out->write_dropped = s->write_dropped;
+    out->idle_stop_remaining_s = -1;
+    out->duration_remaining_s = -1;
+    if (s->state == PIN_STATE_CAPTURING) {
+        double now = pin_session_now();
+        if (s->capture_opts.idle_stop_minutes > 0) {
+            double rem = s->capture_opts.idle_stop_minutes * 60.0 - (now - s->last_data_s);
+            out->idle_stop_remaining_s = rem > 0 ? rem : 0;
+        }
+        if (s->capture_opts.max_duration_minutes > 0 && s->capture_start_s > 0) {
+            double rem = s->capture_opts.max_duration_minutes * 60.0 -
+                         (s->capture_prev_s + (now - s->capture_start_s));
+            out->duration_remaining_s = rem > 0 ? rem : 0;
+        }
+    }
     out->camera_present = s->camera_present;
     out->progress_percent = -1;
     if (s->state == PIN_STATE_PREPARING) {

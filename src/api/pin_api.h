@@ -428,6 +428,16 @@ typedef struct {
      * arrived but never reached the file because the disk writer's queue
      * was full (or the file had already failed). Always 0 in a good capture. */
     uint64_t write_dropped;
+
+    /* Appended fields, ABI-compatible. Seconds until the capture stops by
+     * itself, -1 when that limit is off or no capture is running:
+     * idle_stop_remaining_s: the no-signal timeout (idle_stop_minutes); counts
+     *   down from the full timeout while data / signal arrives (it restarts
+     *   with every frame), so show it only while `signal` is 0.
+     * duration_remaining_s: the total capture time limit (max_duration_minutes),
+     *   over all passes. */
+    double idle_stop_remaining_s;
+    double duration_remaining_s;
 } pin_status_snapshot_t;
 
 /* Non-blocking. */
@@ -435,6 +445,9 @@ PIN_API pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out
 
 /* Ready-made text so every GUI shows the same thing. */
 PIN_API void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t cap);
+/* Seconds as "5m30s" / "1h02m10s" / "45s" (rounded up), for the stop countdowns
+ * (idle_stop_remaining_s, duration_remaining_s). */
+PIN_API void pin_format_remaining(double seconds, char *out, size_t cap);
 PIN_API void pin_format_window_title(const pin_status_snapshot_t *st, const char *device_name,
                                      char *out, size_t cap);
 

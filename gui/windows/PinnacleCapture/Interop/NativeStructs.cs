@@ -203,6 +203,10 @@ public unsafe struct PinStatusSnapshot
     // Appended later: frames/audio blocks the disk writer's queue had to refuse.
     public ulong WriteDropped;
 
+    // Appended later: seconds until the capture stops by itself, -1 = no such limit / not capturing.
+    public double IdleStopRemainingS;   // the no-signal timeout (counts down while there is no signal)
+    public double DurationRemainingS;   // the total capture time limit
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }

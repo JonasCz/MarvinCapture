@@ -349,6 +349,19 @@ pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out)
     return pin_session_get_status(s, out);
 }
 
+void pin_format_remaining(double seconds, char *out, size_t cap)
+{
+    if (!out || !cap)
+        return;
+    long n = seconds > 0 ? (long)(seconds + 0.999) : 0;
+    if (n >= 3600)
+        snprintf(out, cap, "%ldh%02ldm%02lds", n / 3600, (n / 60) % 60, n % 60);
+    else if (n >= 60)
+        snprintf(out, cap, "%ldm%02lds", n / 60, n % 60);
+    else
+        snprintf(out, cap, "%lds", n);
+}
+
 static const char *state_name(pin_state_t st)
 {
     switch (st) {

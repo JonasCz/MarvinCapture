@@ -515,6 +515,15 @@
                                          IsIndeterminate="{x:Bind VM.ProgressIndeterminate, Mode=OneWay}"
                                          Minimum="0" Maximum="100" Value="{x:Bind VM.ProgressValue, Mode=OneWay}"
                                          AutomationProperties.Name="Preparing the device" />
+                            <!-- no-signal timeout while capturing: the bar shrinks toward 0 -->
+                            <StackPanel Spacing="6" HorizontalAlignment="Center"
+                                        Visibility="{x:Bind VM.NoSignalCountdownVisible, Mode=OneWay}">
+                                <TextBlock Text="{x:Bind VM.NoSignalCountdownText, Mode=OneWay}" HorizontalAlignment="Center"
+                                           Style="{StaticResource BodyStrongTextBlockStyle}" />
+                                <ProgressBar Width="240" HorizontalAlignment="Center"
+                                             Minimum="0" Maximum="1" Value="{x:Bind VM.NoSignalCountdownFraction, Mode=OneWay}"
+                                             AutomationProperties.Name="{x:Bind VM.NoSignalCountdownText, Mode=OneWay}" />
+                            </StackPanel>
                         </StackPanel>
                     </Border>
                 </Grid>

@@ -73,7 +73,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>True when the running capture was started by "Automatic rewind &amp; capture" (the core stops the deck when it ends).</summary>
     private bool _captureWithDeck;
 
-    public string ManualCaptureTitle => IsCapturing ? "Stop capture & continue tape" : "Manual capture";
+    public string ManualCaptureTitle => IsCapturing ? "Stop capture & continue tape" + StopCountdownSuffix : "Manual capture";
     public string ManualCaptureHelp => IsCapturing
         ? "Stops the capture and leaves the tape as it is"
         : "Records whatever the camera or deck is already sending, without controlling it";
@@ -96,11 +96,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (started that way) it stops the capture and the tape.</summary>
     public bool DvAutoCaptureEnabled => IsCapturing ? CanStop && _captureWithDeck : SessionState == PinState.Ready && DeckAvailable;
 
-    public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" : "Automatic rewind & capture";
+    public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
     public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
     public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE896"; // Stop / Download
 
-    public string CaptureButtonText => IsCapturing ? "Stop capture" : "Capture";
+    public string CaptureButtonText => IsCapturing ? "Stop capture" + StopCountdownSuffix : "Capture";
 
     partial void OnIsCapturingChanged(bool value)
     {
@@ -275,6 +275,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private bool _previewHasVideo;
 
     [ObservableProperty] private string _noVideoText = "No device open";
+
+    /// <summary>
+    /// No-signal timeout running during a capture: shown under "No camera or deck signal" as text and a
+    /// bar that shrinks to 0, and appended to the stop button's text. The seconds come from the core.
+    /// </summary>
+    [ObservableProperty] private bool _noSignalCountdownVisible;
+    [ObservableProperty] private string _noSignalCountdownText = "";
+    [ObservableProperty] private double _noSignalCountdownFraction;   // 1 = full timeout left, 0 = stopping
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(CaptureButtonText), nameof(ManualCaptureTitle), nameof(PrimaryDvTitle))]
+    private string _stopCountdownSuffix = "";
+    private double _activeIdleStopS;   // the timeout of the running capture, for the bar
 
     /// <summary>Progress bar in the preview pane while the device is being prepared.</summary>
     [ObservableProperty] private bool _progressVisible;
@@ -756,6 +768,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (st == PinStatus.Ok)
         {
             _captureWithDeck = o.StartDeck != 0;
+            _activeIdleStopS = Math.Max(0, o.IdleStopMinutes) * 60.0;
             OnPropertyChanged(nameof(PlayAndCaptureEnabled));
             OnPropertyChanged(nameof(DvAutoCaptureEnabled));
         }
@@ -871,6 +884,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             PinState.Error => string.IsNullOrEmpty(st.ErrorText) ? "Device error" : st.ErrorText,
             _ => st.Detail.Length > 0 ? st.Detail : IsDvInput ? "No camera or deck signal." : "No video signal.",
         };
+        bool counting = st.State == PinState.Capturing && st.Signal == 0 && st.IdleStopRemainingS >= 0;
+        if (counting)
+        {
+            var left = Native.FormatRemaining(st.IdleStopRemainingS);
+            NoSignalCountdownText = $"Stopping capture in {left}";
+            NoSignalCountdownFraction = _activeIdleStopS > 0 ? Math.Clamp(st.IdleStopRemainingS / _activeIdleStopS, 0, 1) : 0;
+            StopCountdownSuffix = $" ({left})";
+        }
+        else
+        {
+            StopCountdownSuffix = "";
+        }
+        NoSignalCountdownVisible = counting;
         ProgressVisible = st.State == PinState.Preparing;
         ProgressIndeterminate = st.ProgressPercent < 0;
         ProgressValue = Math.Max(0, st.ProgressPercent);

@@ -227,6 +227,18 @@ public static unsafe partial class Native
         return Utf8Fixed.Get(buf, cap);
     }
 
+    [LibraryImport(Lib)]
+    private static partial void pin_format_remaining(double seconds, byte* out_, nuint cap);
+
+    /// <summary>"5m30s" for a stop countdown (formatted by the core so every GUI agrees).</summary>
+    public static string FormatRemaining(double seconds)
+    {
+        const int cap = 32;
+        byte* buf = stackalloc byte[cap];
+        pin_format_remaining(seconds, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     private static partial void pin_format_window_title(in PinStatusSnapshot st, string deviceName, byte* out_, nuint cap);
 
