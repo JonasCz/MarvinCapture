@@ -117,12 +117,23 @@ PinnacleCapture/
 - Status and events use one 100 ms `DispatcherQueueTimer`
   (`pin_get_status` plus draining `pin_poll_event`). The device list is
   re-enumerated every 2 s only while its dropdown is open or no device is open.
-- During a capture, every deck control except Stop is disabled. Stop ends the
-  capture first, then stops the deck. Outside a capture, the deck buttons are
-  enabled under the same rule as the capture buttons (idle and READY).
-- "Play and capture" sets `rewind_first = 1` and `start_deck = 1`, so the core
-  rewinds to the start of the tape, sends PLAY, then starts the writer. While
-  recording, the same button becomes "Stop capture".
+- During a capture, all deck controls (including Stop) are disabled; only the
+  capture buttons stay active. Outside a capture the deck buttons are enabled
+  when idle and READY, and each one is disabled when the deck already reports
+  that state (Stop when stopped, Play when playing, ...; none with no tape).
+- "Automatic rewind & capture" sets `rewind_first = 1` and `start_deck = 1`, so
+  the core rewinds to the start of the tape, sends PLAY, then starts the
+  writer. While recording it becomes "Stop capture & stop tape" (the core stops
+  the deck when the capture ends). "Manual capture" records without touching
+  the deck and becomes "Stop capture & continue tape" while recording; only the
+  button matching how the capture was started is active.
+- Before a capture starts, `pin_check_output` reports `low_space` (free space
+  known and under 25 GiB, `PIN_LOW_SPACE_BYTES`); the window then asks "Only X
+  free on D:\. Continue?" with OK / Cancel, for analog, DV and HDV alike.
+- Window position, size and maximised state are saved on close
+  (`gui.window`, `gui.window_maximized`) and restored at start. A saved
+  rectangle that no longer touches any monitor falls back to the centred
+  default.
 - Aspect is set per kind (analog, DV, HDV) next to each format. The one for
   what is currently arriving also drives the preview (`pin_set_aspect`). The
   preview panel itself is sized to `pin_fit_rect`, so the window background

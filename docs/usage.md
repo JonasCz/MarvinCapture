@@ -4,7 +4,12 @@ Two ways in, both on the same core library:
 
 - **The GUI**, `PinnacleCapture.exe` ([gui/windows/README.md](../gui/windows/README.md)):
   device list, live preview, deck control, DV/HDV/analog capture with scene
-  splitting and the same integrity checks.
+  splitting and the same integrity checks. It remembers its window position
+  and size, and asks before capturing when the output drive has under 25 GB
+  free. During a capture the deck buttons are disabled; "Manual capture"
+  records without touching the tape and "Automatic rewind & capture" drives
+  the deck (their stop labels: "Stop capture & continue tape" / "Stop capture
+  & stop tape").
 - **The command-line tools** in `build\dist\cli\` (see [building.md](building.md)):
 
 | tool | what it does |

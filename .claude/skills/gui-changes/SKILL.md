@@ -85,6 +85,14 @@ et10.0-windows10.0.19041.0\win-x64\`
 - Edits made with Python/sed: C source needs doubled backslashes; heredoc
   Python strings halve them. Check escapes (`"\\"`) in the result.
 - Git reports CRLF to LF warnings on commit; harmless.
+- XAML/C# files in the working tree may be CRLF; scripted edits must detect the
+  line ending (assert the match count). Deck-button enablement lives in
+  `MainViewModel` (`DeckRewEnabled` etc., driven by `DeckState`); any new
+  property they depend on must be added to the `[NotifyPropertyChangedFor]`
+  lists of `_isCapturing` / `_sessionState` / `_deckState`.
+- Window geometry uses `AppWindow` (no P/Invoke): `gui.window` + `gui.window_maximized`,
+  saved in `Closing` and `Closed`; `DisplayAreaFallback.None` returns null for an
+  off-screen rect, which is how the default fallback is detected.
 
 ## Build / verify
 
