@@ -10,6 +10,14 @@ Two ways in, both on the same core library:
   records without touching the tape and "Automatic rewind & capture" drives
   the deck (their stop labels: "Stop capture & continue tape" / "Stop capture
   & stop tape").
+  When the camera stops sending (end of tape, blank tape) the preview shows
+  "No camera or deck signal" and, if the "Stop no signal (min)" option is on,
+  "Stopping capture in 5m30s" with a bar running down; the same time is
+  appended to the stop button. At zero the capture stops and, for "Automatic
+  rewind & capture", so does the tape. With several passes the tape is
+  rewound instead and the next pass starts from the beginning. The "total
+  time" limit (stop after N min, counted over all passes) also stops the tape.
+  How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
 - **The command-line tools** in `build\dist\cli\` (see [building.md](building.md)):
 
 | tool | what it does |

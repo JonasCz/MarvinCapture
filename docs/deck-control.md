@@ -170,6 +170,38 @@ into those ranges:
 - **The camera must be on the bus.** Start-up now reports it: "1394 bus has
   2 node(s)", "camera is node 1".
 
+## Capture flow in the session engine
+
+`src/engine/pin_session.c` drives the deck during a capture (`dv_tick()`, run
+from the stream loop's tick hook, about every 100 ms). Rules that matter:
+
+- **One AV/C transaction at a time, through `pin_deck_async_t`.** It only
+  advances while `deck_busy` is set, and the 1 Hz TRANSPORT STATE poll reuses
+  the same struct. Always send commands with `deck_send()`, never with a bare
+  `pin_deck_async_start()`: that was why "Automatic rewind & capture" never
+  sent PLAY and why Stop was lost when a capture ended (the next poll
+  overwrote the command before it was sent). `deck_send()` drops an in-flight
+  status query, or queues behind an in-flight command.
+- **Automatic rewind & capture** (`start_deck` + `rewind_first`): REW at once
+  (no stream needed), poll the state until STOPPED (BOT), then PLAY, then open
+  the file as soon as the first frame says DV or HDV. BOT is accepted only
+  3 s after REW was acknowledged, because a status query right after REW can
+  still say "stopped". The session is REWINDING during the rewind.
+- **Stopping.** The no-signal timeout (`idle_stop_minutes`; time since data
+  last arrived) and the total-time limit (`max_duration_minutes`, capture time
+  summed over all passes) close the file and, if `start_deck`, send Stop.
+  `pin_status_snapshot_t.idle_stop_remaining_s` / `duration_remaining_s` give
+  the seconds left (-1 = off); `pin_format_remaining()` formats "5m30s".
+- **Multi-pass.** The no-signal timeout is also how the end of the tape is
+  noticed. With passes left it closes the file, sends REW (state REWINDING,
+  `pass_rewinding`), and at BOT sends PLAY and opens the next file; the
+  no-signal timer restarts with each pass (it must not count the rewind). The
+  total-time limit ends everything instead.
+- Not implemented: detecting the end of tape from the deck state alone (with
+  the no-signal timeout off, a multi-pass capture waits forever at the end).
+- The deck's own timecode while winding is described under "Timecode while
+  winding" below.
+
 ## Tool
 
 `pindeck [-b bitstream] [-v|-vv] [-r raw.bin] step...`

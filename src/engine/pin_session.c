@@ -1555,6 +1555,7 @@ static void dv_tick(void *user)
             set_state(s, PIN_STATE_CAPTURING);
             pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
             s->capture_start_s = pin_session_now();
+            s->elapsed_s = 0;
             s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
             s->idle_s = 0;
             s->scene_det_ready = 0;
