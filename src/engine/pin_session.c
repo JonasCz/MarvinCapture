@@ -2549,6 +2549,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     uint64_t free_bytes = 0;
     fat32_and_free(dir, &free_bytes, &out->fat32);
     out->free_bytes = free_bytes;
+    out->low_space = pin_output_space_low(free_bytes);
 
     double bytes_per_s = nominal_bytes_per_second(kind, fmt);
     out->minutes_left = bytes_per_s > 0 ? (uint64_t)(free_bytes / bytes_per_s / 60.0) : 0;

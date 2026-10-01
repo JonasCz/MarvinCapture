@@ -253,3 +253,8 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
     closedir(d);
     return found;
 }
+
+int pin_output_space_low(unsigned long long free_bytes)
+{
+    return free_bytes > 0 && free_bytes < PIN_LOW_SPACE_BYTES;
+}

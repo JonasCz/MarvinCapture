@@ -673,6 +673,18 @@ public sealed partial class MainWindow : Window
             }
         }
 
+        if (check.LowSpace != 0)
+        {
+            var drive = Path.GetPathRoot(Path.GetFullPath(check.FirstPath)) ?? "the output drive";
+            var r = await ShowDialogAsync("Low disk space",
+                $"Only {MainViewModel.HumanSize(check.FreeBytes)} free on {drive}. Continue?",
+                "OK", "Cancel");
+            if (r != ContentDialogResult.Primary)
+            {
+                return;
+            }
+        }
+
         bool overwrite = false;
         if (check.Collision != 0)
         {

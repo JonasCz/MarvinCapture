@@ -336,6 +336,8 @@ typedef struct {
     int collision;              /* some output name already exists */
     char first_path[PIN_PATH_MAX]; /* the first file the capture would write */
     char message[PIN_TEXT_MAX];    /* human-readable summary of any problem, else "" */
+    int low_space;              /* free_bytes is known and below 25 GiB: the GUI asks before capturing
+                                   (not part of message, which has its own prompt). Appended field. */
 } pin_output_check_t;
 
 /* Checks free space, file system limits and name collisions before a

@@ -78,6 +78,14 @@ int pin_naming_validate(const char *path, char *reason, size_t reason_size);
 int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_match,
                          size_t first_match_size);
 
+/* Free space below which the GUI asks "Only X GB free. Continue?" before a
+ * capture starts (25 GiB). */
+#define PIN_LOW_SPACE_BYTES (25ull << 30)
+
+/* Returns 1 if free_bytes is a known amount (> 0) below PIN_LOW_SPACE_BYTES.
+ * 0 free bytes means "unknown" (the query failed) and is not reported low. */
+int pin_output_space_low(unsigned long long free_bytes);
+
 #ifdef __cplusplus
 }
 #endif

@@ -178,12 +178,22 @@ static void test_validate(void)
     CHECK(pin_naming_validate(longname, why, sizeof(why)) == 0, "too long");
 }
 
+static void test_low_space(void)
+{
+    CHECK(pin_output_space_low(0) == 0, "unknown free space is not low");
+    CHECK(pin_output_space_low(1) == 1, "1 byte is low");
+    CHECK(pin_output_space_low(PIN_LOW_SPACE_BYTES - 1) == 1, "just under 25 GiB is low");
+    CHECK(pin_output_space_low(PIN_LOW_SPACE_BYTES) == 0, "exactly 25 GiB is fine");
+    CHECK(pin_output_space_low(500ull << 30) == 0, "500 GiB is fine");
+}
+
 int main(void)
 {
     test_strip_extension();
     test_build();
     test_collides();
     test_validate();
+    test_low_space();
 
     if (g_failures == 0) {
         printf("test_pin_naming: all tests passed\n");

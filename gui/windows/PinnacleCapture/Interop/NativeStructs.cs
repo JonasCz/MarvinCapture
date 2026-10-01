@@ -138,6 +138,7 @@ public unsafe struct PinOutputCheck
     public int Collision;
     public fixed byte FirstPathBuf[PinLimits.PathMax];
     public fixed byte MessageBuf[PinLimits.TextMax];
+    public int LowSpace;           // free space known and below the core's 25 GiB threshold
 
     public string FirstPath { get { fixed (byte* p = FirstPathBuf) return Utf8Fixed.Get(p, PinLimits.PathMax); } }
     public string Message { get { fixed (byte* p = MessageBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
