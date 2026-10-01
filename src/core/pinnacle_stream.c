@@ -212,7 +212,7 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
 
     pinnacle_progress(dev, "Starting the FireWire (1394) link", -1);
     if (p1394_link_init(&link) != 0) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle: 1394 link initialisation failed\n");
+        stream_fail(dev, &link, "FireWire link init failed");
         return PINNACLE_ERR_USB_TRANSFER;
     }
     dev->node_count = link.node_count;

@@ -2169,7 +2169,9 @@ static void *worker_main(void *arg)
                 pinnacle_status_t pst = pinnacle_open_by_id(&s->dev, s->device_id);
                 if (pst != PINNACLE_OK) {
                     pin_session_lock(s);
-                    set_error(s, pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY : PIN_ERR_USB, NULL);
+                    char omsg[PIN_TEXT_MAX];
+                    snprintf(omsg, sizeof(omsg), "Cannot open the device: %s", pinnacle_strerror(pst));
+                    set_error(s, pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY : PIN_ERR_USB, omsg);
                     pin_session_unlock(s);
                     continue;
                 }
