@@ -2644,7 +2644,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
             snprintf(out->detail, sizeof(out->detail), "%s",
                      s->camera_present == 0
                          ? "No camera found. Connect a DV or HDV camera to the FireWire port and switch it on."
-                         : "The camera is connected but is not sending video. Put it in camera mode, or press Play on the deck.");
+                         : "No camera or deck signal. Put the camera in camera mode, or press Play on the deck.");
         } else {
             snprintf(out->detail, sizeof(out->detail),
                      "No video signal on the %s input. Check the cable and that the source is running.",

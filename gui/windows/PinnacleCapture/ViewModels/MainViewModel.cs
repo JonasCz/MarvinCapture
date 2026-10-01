@@ -848,7 +848,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             PinState.Preparing => st.Detail.Length > 0 ? st.Detail : "Preparing device…",
             PinState.Error => string.IsNullOrEmpty(st.ErrorText) ? "Device error" : st.ErrorText,
-            _ => st.Detail.Length > 0 ? st.Detail : IsDvInput ? "No camera or deck signal" : "No video signal",
+            _ => st.Detail.Length > 0 ? st.Detail : IsDvInput ? "No camera or deck signal." : "No video signal.",
         };
         ProgressVisible = st.State == PinState.Preparing;
         ProgressIndeterminate = st.ProgressPercent < 0;
