@@ -44,7 +44,7 @@ Output: `build\dist` (GUI + core DLL + `firmware\`) and `build\dist\cli`
 
 ## Automated tests vs. hardware tests
 
-`ctest` (and `scriptsuild.ps1` without `-SkipTests`) is the **automated code
+`ctest` (and `scriptsbuild.ps1` without `-SkipTests`) is the **automated code
 test suite**: unit tests plus replay tests that run on recordings, no device
 needed. Testing against the real device, its deck or camera is a separate,
 manual activity: use the **test-with-hardware-device** skill (CLIs, debug logs,
