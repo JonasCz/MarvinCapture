@@ -191,6 +191,14 @@ struct pin_session {
     pinnacle_1394_t link;
     pin_deck_async_t deck_async;
     double last_transport_poll_s;
+    int deck_q_valid;             /* a command waiting for the in-flight one (deck_send()) */
+    pin_deck_cmd_t deck_q_cmd;
+    double deck_cmd_done_s;       /* when the last transport command was answered */
+    int rewind_done;              /* CAPTURE_START: the rewind-to-start has finished */
+    int start_play_sent;          /* CAPTURE_START: PLAY already sent for this capture */
+    int pass_rewinding;           /* between passes: REWINDING, next pass starts at the tape start */
+    double rewind_wait_start_s;   /* when the current rewind was started */
+    double capture_prev_s;        /* capture time of earlier passes (for the total-time limit) */
 
     /* replay (virtual device) */
     int is_replay;

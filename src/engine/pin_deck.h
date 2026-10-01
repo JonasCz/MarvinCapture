@@ -76,6 +76,11 @@ pin_status_t pin_deck_query_state_sync(pinnacle_1394_t *link, uint16_t node,
 pin_status_t pin_deck_query_timecode_sync(pinnacle_1394_t *link, uint16_t node,
                                            pin_deck_timecode_t *out);
 
+/* Parses a TIME CODE status response (0c/0b 20 51 71 FF SS MM HH, BCD).
+ * Returns 0 with *out filled (valid = 1), -1 if it is not a usable answer
+ * (wrong response, or the deck has no readable time code right now). */
+int pin_deck_parse_timecode(const uint8_t *resp, int resp_len, pin_deck_timecode_t *out);
+
 /* --- async, driven from the stream loop's tick hook ---------------------- */
 
 typedef enum {
@@ -96,6 +101,12 @@ typedef struct {
     uint8_t resp[512];
     int resp_len;
 } pin_deck_async_t;
+
+typedef enum { PIN_DECK_QUERY_STATE = 0, PIN_DECK_QUERY_TIMECODE } pin_deck_query_t;
+
+/* Same, for a status query (TRANSPORT STATE or TIME CODE) instead of a command. */
+void pin_deck_async_start_query(pin_deck_async_t *a, pinnacle_1394_t *link, uint16_t node,
+                                 pin_deck_query_t q, double now_s);
 
 /* now_s: caller's monotonic clock (seconds), so this file needs no time.h
  * porting concerns of its own. */

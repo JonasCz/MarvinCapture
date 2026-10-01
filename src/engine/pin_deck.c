@@ -128,6 +128,28 @@ pin_status_t pin_deck_query_state_sync(pinnacle_1394_t *link, uint16_t node,
     return PIN_OK;
 }
 
+int pin_deck_parse_timecode(const uint8_t *resp, int rl, pin_deck_timecode_t *out)
+{
+    memset(out, 0, sizeof(*out));
+    /* STABLE (0c) or IN_TRANSITION (0b: the tape is moving) answers carry data */
+    if (rl < 8 || resp[1] != 0x20 || resp[2] != 0x51 || (resp[0] != 0x0c && resp[0] != 0x0b))
+        return -1;
+    /* frame/second/minute/hour, each one BCD byte, LSB-first in the reply
+     * (see pindeck.c's "%02x:%02x:%02x:%02x", resp[7],resp[6],resp[5],resp[4]) */
+    uint8_t f = resp[4], s = resp[5], m = resp[6], h = resp[7];
+    /* 0xff / non-BCD = "no time code" (blank tape, or not readable while winding) */
+    if (((f & 0xf) > 9) || ((s & 0xf) > 9) || ((m & 0xf) > 9) || ((h & 0xf) > 9) ||
+        ((f >> 4) & 0x7) > 5 || ((s >> 4) & 0x7) > 5 || ((m >> 4) & 0x7) > 5 || ((h >> 4) & 0xf) > 2)
+        return -1;
+    out->drop_frame = (f & 0x80) != 0;
+    out->frame  = ((f >> 4) & 0x3) * 10 + (f & 0xf);
+    out->second = ((s >> 4) & 0x7) * 10 + (s & 0xf);
+    out->minute = ((m >> 4) & 0x7) * 10 + (m & 0xf);
+    out->hour   = ((h >> 4) & 0x3) * 10 + (h & 0xf);
+    out->valid = 1;
+    return 0;
+}
+
 pin_status_t pin_deck_query_timecode_sync(pinnacle_1394_t *link, uint16_t node,
                                            pin_deck_timecode_t *out)
 {
@@ -136,18 +158,7 @@ pin_status_t pin_deck_query_timecode_sync(pinnacle_1394_t *link, uint16_t node,
         return PIN_ERR_NO_CAMERA;
     uint8_t resp[512];
     int rl = p1394_avc(link, node, CMD_TIMECODE, sizeof(CMD_TIMECODE), resp, sizeof(resp), 3000);
-    if (rl < 8 || resp[1] != 0x20 || resp[2] != 0x51 || resp[0] != 0x0c)
-        return PIN_ERR_DECK;
-    /* frame/second/minute/hour, each one BCD byte, LSB-first in the reply
-     * (see pindeck.c's "%02x:%02x:%02x:%02x", resp[7],resp[6],resp[5],resp[4]) */
-    uint8_t f = resp[4], s = resp[5], m = resp[6], h = resp[7];
-    out->drop_frame = (f & 0x80) != 0;
-    out->frame  = ((f >> 4) & 0x3) * 10 + (f & 0xf);
-    out->second = ((s >> 4) & 0x7) * 10 + (s & 0xf);
-    out->minute = ((m >> 4) & 0x7) * 10 + (m & 0xf);
-    out->hour   = ((h >> 4) & 0x3) * 10 + (h & 0xf);
-    out->valid = 1;
-    return PIN_OK;
+    return pin_deck_parse_timecode(resp, rl, out) == 0 ? PIN_OK : PIN_ERR_DECK;
 }
 
 /* --- async ---------------------------------------------------------------- */
@@ -164,6 +175,23 @@ void pin_deck_async_start(pin_deck_async_t *a, pinnacle_1394_t *link, uint16_t n
     a->status = PIN_DECK_ASYNC_RUNNING;
     if (!node || !a->cmd_len)
         a->status = PIN_DECK_ASYNC_FAILED;
+}
+
+void pin_deck_async_start_query(pin_deck_async_t *a, pinnacle_1394_t *link, uint16_t node,
+                                 pin_deck_query_t q, double now_s)
+{
+    memset(a, 0, sizeof(*a));
+    a->link = link;
+    a->node = node;
+    if (q == PIN_DECK_QUERY_TIMECODE) {
+        memcpy(a->cmd, CMD_TIMECODE, sizeof(CMD_TIMECODE));
+        a->cmd_len = sizeof(CMD_TIMECODE);
+    } else {
+        memcpy(a->cmd, CMD_STATE, sizeof(CMD_STATE));
+        a->cmd_len = sizeof(CMD_STATE);
+    }
+    a->next_send_at = now_s;
+    a->status = node ? PIN_DECK_ASYNC_RUNNING : PIN_DECK_ASYNC_FAILED;
 }
 
 pin_deck_async_status_t pin_deck_async_poll(pin_deck_async_t *a, double now_s)

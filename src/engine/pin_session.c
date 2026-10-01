@@ -1210,6 +1210,31 @@ static void dv_flush_pending(pin_session_t *s)
     scene_fifo_clear(s);
 }
 
+/* Sends one deck command through the async state machine. Always use this
+ * instead of calling pin_deck_async_start() directly: the state machine only
+ * advances while s->deck_busy is set, and the 1 Hz status poll reuses
+ * s->deck_async, so a command started without deck_busy was silently
+ * overwritten by the next poll and never sent. If something is in flight, a
+ * status query is dropped in favour of the command; another command is
+ * queued behind it (completed in dv_tick()). Caller holds the session lock. */
+static void deck_send(pin_session_t *s, uint16_t node, pin_deck_cmd_t cmd)
+{
+    if (!node)
+        return;
+    if (s->deck_busy) {
+        if (s->deck_async.cmd_len && s->deck_async.cmd[0] == 0x01) {
+            p1394_avc_cancel(&s->link); /* a status query: not worth waiting for */
+        } else {
+            s->deck_q_cmd = cmd;
+            s->deck_q_valid = 1;
+            return;
+        }
+    }
+    s->deck_q_valid = 0;
+    pin_deck_async_start(&s->deck_async, &s->link, node, cmd, pin_session_now());
+    s->deck_busy = 1;
+}
+
 /* Actually opens the sink and enters CAPTURING, once the stream's kind
  * (DV/HDV/analog) is known and any requested rewind-to-start has finished.
  * s->capture_opts must already hold the requested options. */
@@ -1229,6 +1254,10 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->write_dropped = 0;
     s->bytes_written = 0;
     s->capture_start_s = pin_session_now();
+    s->capture_prev_s = 0;
+    /* the no-signal timer counts from here, not from the last data before a rewind */
+    s->last_data_s = pin_session_now();
+    s->idle_s = 0;
     s->scene_det_ready = 0;
     s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
     open_sink_for_scene(s);
@@ -1237,9 +1266,10 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
         s->pass = 1;
         s->passes = s->capture_opts.passes < 1 ? 1 : s->capture_opts.passes;
         s->scene = 1;
-        if (s->capture_opts.start_deck && camera_node)
-            pin_deck_async_start(&s->deck_async, &s->link, camera_node, PIN_DECK_CMD_PLAY,
-                                  pin_session_now());
+        /* PLAY was already sent by maybe_begin_capture() (before the stream
+         * kind was known); this only covers a caller that skipped that. */
+        if (s->capture_opts.start_deck && camera_node && !s->start_play_sent)
+            deck_send(s, camera_node, PIN_DECK_CMD_PLAY);
     }
 }
 
@@ -1251,17 +1281,26 @@ static void maybe_begin_capture(pin_session_t *s, uint16_t camera_node)
 {
     if (!s->capture_want_start)
         return;
+    int with_deck = s->capture_opts.start_deck && camera_node;
+    if (with_deck && s->capture_opts.rewind_first && !s->rewind_done) {
+        if (!s->rewind_before_capture) {
+            /* Rewinding needs no stream, so it starts at once; the stream kind
+             * is only needed to open the file, after PLAY. */
+            s->rewind_before_capture = 1;
+            s->rewind_wait_start_s = pin_session_now();
+            set_state(s, PIN_STATE_REWINDING);
+            deck_send(s, camera_node, PIN_DECK_CMD_REW);
+        }
+        return; /* dv_tick() calls back here once the tape is at the start */
+    }
+    /* A stopped deck sends no data, so the stream kind can never resolve
+     * until PLAY has been sent. */
+    if (with_deck && !s->start_play_sent) {
+        s->start_play_sent = 1;
+        deck_send(s, camera_node, PIN_DECK_CMD_PLAY);
+    }
     if (!s->stream_kind_known)
         return; /* still waiting; dv_on_unit()/analog_video_cb() will call back */
-    if (s->capture_opts.start_deck && s->capture_opts.rewind_first && camera_node &&
-        !s->rewind_before_capture) {
-        s->rewind_before_capture = 1;
-        set_state(s, PIN_STATE_REWINDING);
-        pin_deck_async_start(&s->deck_async, &s->link, camera_node, PIN_DECK_CMD_REW,
-                              pin_session_now());
-        s->deck_busy = 1;
-        return; /* dv_tick()'s REWINDING+STOPPED handler finishes the job */
-    }
     s->capture_want_start = 0;
     s->rewind_before_capture = 0;
     start_capture_now(s, camera_node);
@@ -1286,10 +1325,14 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         s->capture_opts = s->cmd.capture;
         s->capture_want_start = 1;
         s->rewind_before_capture = 0;
+        s->rewind_done = 0;
+        s->start_play_sent = 0;
+        s->pass_rewinding = 0;
         maybe_begin_capture(s, camera_node);
     } else if (kind == PIN_CMD_CAPTURE_STOP) {
         s->capture_want_start = 0;
         s->rewind_before_capture = 0;
+        s->pass_rewinding = 0;
         if (s->sink) {
             dv_flush_pending(s);
             if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
@@ -1298,8 +1341,7 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
             pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         }
         if (s->capture_opts.start_deck && camera_node)
-            pin_deck_async_start(&s->deck_async, &s->link, camera_node, PIN_DECK_CMD_STOP,
-                                  pin_session_now());
+            deck_send(s, camera_node, PIN_DECK_CMD_STOP);
         if (s->state != PIN_STATE_ERROR)
             set_state(s, PIN_STATE_READY);
     } else if (kind == PIN_CMD_DECK) {
@@ -1318,11 +1360,10 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
                 pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
             }
             set_state(s, PIN_STATE_READY);
-            pin_deck_async_start(&s->deck_async, &s->link, node, PIN_DECK_CMD_STOP, pin_session_now());
+            deck_send(s, node, PIN_DECK_CMD_STOP);
         } else {
-            pin_deck_async_start(&s->deck_async, &s->link, node, s->cmd.deck_cmd, pin_session_now());
+            deck_send(s, node, s->cmd.deck_cmd);
         }
-        s->deck_busy = 1;
     }
     s->cmd.pending = 0;
     s->cmd.kind = PIN_CMD_NONE;
@@ -1405,22 +1446,25 @@ static void dv_tick(void *user)
         pin_deck_async_status_t st = pin_deck_async_poll(&s->deck_async, pin_session_now());
         if (st == PIN_DECK_ASYNC_DONE || st == PIN_DECK_ASYNC_FAILED) {
             s->deck_busy = 0;
-            if (st == PIN_DECK_ASYNC_DONE && s->deck_async.resp_len >= 4) {
+            if (s->deck_async.cmd[0] == 0x00)   /* a transport command, not a status query */
+                s->deck_cmd_done_s = pin_session_now();
+            /* A NOT_IMPLEMENTED (08) answer echoes the command; it says nothing about the state. */
+            if (st == PIN_DECK_ASYNC_DONE && s->deck_async.resp_len >= 4 && s->deck_async.resp[0] != 0x08) {
                 uint8_t op = s->deck_async.resp[2], mode = s->deck_async.resp[3];
                 s->deck = pin_deck_state_from_avc(op, mode);
                 pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
+            }
+            if (s->deck_q_valid) {
+                s->deck_q_valid = 0;
+                deck_send(s, node, s->deck_q_cmd);
             }
         }
     } else if (node && pin_session_now() - s->last_transport_poll_s > 1.0) {
         /* ~1 Hz transport-state poll (async), also drives multi-pass EOT
          * detection and the idle-stop timer. */
         s->last_transport_poll_s = pin_session_now();
-        pin_deck_async_start(&s->deck_async, &s->link, node, PIN_DECK_CMD_PLAY /* unused */,
-                              pin_session_now());
-        /* build a TRANSPORT STATE query instead of a transport command */
-        static const uint8_t state_cmd[4] = { 0x01, 0x20, 0xd0, 0x7f };
-        memcpy(s->deck_async.cmd, state_cmd, 4);
-        s->deck_async.cmd_len = 4;
+        pin_deck_async_start_query(&s->deck_async, &s->link, node, PIN_DECK_QUERY_STATE,
+                                    pin_session_now());
         s->deck_busy = 1;
     }
 
@@ -1463,10 +1507,9 @@ static void dv_tick(void *user)
                 pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
             }
             set_state(s, PIN_STATE_REWINDING);
-            if (node)
-                pin_deck_async_start(&s->deck_async, &s->link, node, PIN_DECK_CMD_REW,
-                                      pin_session_now());
-            s->deck_busy = 1;
+            s->pass_rewinding = 1;
+            s->rewind_wait_start_s = pin_session_now();
+            deck_send(s, node, PIN_DECK_CMD_REW);
             s->pass_index++;
             s->pass++;
             s->last_data_s = pin_session_now(); /* reset idle timer across the rewind */
@@ -1480,30 +1523,38 @@ static void dv_tick(void *user)
                 pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
             }
             if (s->capture_opts.start_deck && node)
-                pin_deck_async_start(&s->deck_async, &s->link, node, PIN_DECK_CMD_STOP,
-                                      pin_session_now());
+                deck_send(s, node, PIN_DECK_CMD_STOP);
             set_state(s, PIN_STATE_READY);
         }
-    } else if (s->state == PIN_STATE_REWINDING && s->deck == PIN_DECK_STOPPED && !s->deck_busy) {
-        /* rewind finished (BOT) */
+    } else if (s->state == PIN_STATE_REWINDING && (s->rewind_before_capture || s->pass_rewinding) &&
+               s->deck == PIN_DECK_STOPPED && !s->deck_busy && !s->deck_q_valid &&
+               s->deck_cmd_done_s >= s->rewind_wait_start_s &&
+               pin_session_now() - s->deck_cmd_done_s > 3.0) {
+        /* Rewind finished (BOT). A status query answered within a moment of
+         * the REW command can still report the old "stopped", so the deck must
+         * also have had a few seconds since REW was acknowledged. */
         if (s->rewind_before_capture) {
-            /* "Play and capture" with rewind_first: this was the initial
-             * rewind (pass 1), not a between-passes one -- start_capture_now()
-             * sends its own PLAY. */
+            /* "Automatic rewind & capture": this was the initial rewind (pass 1).
+             * maybe_begin_capture() sends PLAY and opens the file once the
+             * stream kind is known; READY meanwhile, as for any capture that
+             * is waiting for its first data. */
             s->rewind_before_capture = 0;
-            s->capture_want_start = 0;
-            start_capture_now(s, node);
+            s->rewind_done = 1;
+            set_state(s, PIN_STATE_READY);
+            maybe_begin_capture(s, node);
         } else {
             /* start the next pass */
-            if (node)
-                pin_deck_async_start(&s->deck_async, &s->link, node, PIN_DECK_CMD_PLAY,
-                                      pin_session_now());
-            s->deck_busy = 1;
+            s->pass_rewinding = 0;
+            deck_send(s, node, PIN_DECK_CMD_PLAY);
             s->scene_index = first_scene_number(s);
             open_sink_for_scene(s);
             set_state(s, PIN_STATE_CAPTURING);
             pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
             s->capture_start_s = pin_session_now();
+            s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
+            s->idle_s = 0;
+            s->scene_det_ready = 0;
+            s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
         }
     }
     pin_session_unlock(s);
