@@ -145,11 +145,45 @@ static void test_collides(void)
     remove(path);
 }
 
+static void test_validate(void)
+{
+    char why[128];
+    CHECK(pin_naming_validate("C:\\videos\\tape 1", why, sizeof(why)) == 1, "plain name ok");
+    CHECK(pin_naming_validate("/home/u/my.tape-2", NULL, 0) == 1, "dots inside and NULL reason ok");
+    CHECK(pin_naming_validate("/home/u/CONSOLE", NULL, 0) == 1, "CON prefix only is fine");
+    CHECK(pin_naming_validate("/home/u/COM10", NULL, 0) == 1, "COM10 is not reserved");
+    CHECK(pin_naming_validate("", why, sizeof(why)) == 0, "empty");
+    CHECK(pin_naming_validate("C:\\videos\\", why, sizeof(why)) == 0, "empty after separator");
+    CHECK(pin_naming_validate("a<b", why, sizeof(why)) == 0, "<");
+    CHECK(pin_naming_validate("a>b", why, sizeof(why)) == 0, ">");
+    CHECK(pin_naming_validate("a:b", why, sizeof(why)) == 0, ":");
+    CHECK(pin_naming_validate("a\"b", why, sizeof(why)) == 0, "quote");
+    CHECK(pin_naming_validate("a|b", why, sizeof(why)) == 0, "|");
+    CHECK(pin_naming_validate("a?b", why, sizeof(why)) == 0, "?");
+    CHECK(pin_naming_validate("a*b", why, sizeof(why)) == 0, "*");
+    CHECK(pin_naming_validate("a	b", why, sizeof(why)) == 0, "control char");
+    CHECK(pin_naming_validate("/x/ name", why, sizeof(why)) == 0, "leading space");
+    CHECK(pin_naming_validate("/x/name ", why, sizeof(why)) == 0, "trailing space");
+    CHECK(pin_naming_validate("/x/name.", why, sizeof(why)) == 0, "trailing dot");
+    CHECK(pin_naming_validate("/x/.name", why, sizeof(why)) == 0, "leading dot");
+    CHECK(pin_naming_validate("/x/con", why, sizeof(why)) == 0, "con");
+    CHECK(pin_naming_validate("/x/NUL.txt", why, sizeof(why)) == 0, "NUL.txt");
+    CHECK(pin_naming_validate("/x/Aux", why, sizeof(why)) == 0, "Aux");
+    CHECK(pin_naming_validate("/x/lpt1", why, sizeof(why)) == 0, "lpt1");
+    CHECK(pin_naming_validate("/x/com0.dv", why, sizeof(why)) == 0, "com0.dv");
+    CHECK(strstr(why, "reserved") != NULL, "reason mentions reserved");
+    char longname[300];
+    memset(longname, 'a', sizeof(longname));
+    longname[299] = 0;
+    CHECK(pin_naming_validate(longname, why, sizeof(why)) == 0, "too long");
+}
+
 int main(void)
 {
     test_strip_extension();
     test_build();
     test_collides();
+    test_validate();
 
     if (g_failures == 0) {
         printf("test_pin_naming: all tests passed\n");

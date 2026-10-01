@@ -58,6 +58,72 @@ static int starts_with(const char *name, const char *prefix)
     return strncmp(name, prefix, strlen(prefix)) == 0;
 }
 
+#define PIN_NAME_MAX_BYTES 200 /* 255 minus "-pass-99-0001.ext" and some slack */
+
+static int fail(char *reason, size_t size, const char *fmt, int arg)
+{
+    if (reason && size)
+        snprintf(reason, size, fmt, arg, arg);
+    return 0;
+}
+
+static int is_reserved_device(const char *name)
+{
+    /* the device name is whatever precedes the first '.' (so "con.txt" counts) */
+    char stem[8];
+    size_t n = 0;
+    while (name[n] && name[n] != '.' && n < sizeof(stem) - 1) {
+        stem[n] = (char)toupper((unsigned char)name[n]);
+        n++;
+    }
+    if (name[n] && name[n] != '.')
+        return 0; /* longer than any reserved name */
+    stem[n] = 0;
+    if (!strcmp(stem, "CON") || !strcmp(stem, "PRN") || !strcmp(stem, "AUX") || !strcmp(stem, "NUL"))
+        return 1;
+    return n == 4 && (!strncmp(stem, "COM", 3) || !strncmp(stem, "LPT", 3)) && isdigit((unsigned char)stem[3]);
+}
+
+int pin_naming_validate(const char *path, char *reason, size_t reason_size)
+{
+    if (!path)
+        return fail(reason, reason_size, "No file name", 0);
+    const char *name = path;
+    for (const char *p = path; *p; p++)
+        if (is_sep(*p))
+            name = p + 1;
+
+    size_t len = strlen(name);
+    if (len == 0)
+        return fail(reason, reason_size, "The file name is empty", 0);
+    if (len > PIN_NAME_MAX_BYTES)
+        return fail(reason, reason_size, "The file name is too long (over %d bytes)", PIN_NAME_MAX_BYTES);
+    for (size_t i = 0; i < len; i++) {
+        unsigned char c = (unsigned char)name[i];
+        if (c < 0x20 || c == 0x7f)
+            return fail(reason, reason_size, "The file name contains a control character", 0);
+        if (strchr("<>:\"/\\|?*", c)) {
+            if (reason && reason_size)
+                snprintf(reason, reason_size, "The file name contains the character '%c', which is not allowed", c);
+            return 0;
+        }
+    }
+    if (name[0] == ' ')
+        return fail(reason, reason_size, "The file name can't start with a space", 0);
+    if (name[len - 1] == ' ')
+        return fail(reason, reason_size, "The file name can't end with a space", 0);
+    if (name[0] == '.')
+        return fail(reason, reason_size, "The file name can't start with a dot", 0);
+    if (name[len - 1] == '.')
+        return fail(reason, reason_size, "The file name can't end with a dot", 0);
+    if (is_reserved_device(name)) {
+        if (reason && reason_size)
+            snprintf(reason, reason_size, "\"%.8s\" is a reserved name and can't be used for a file", name);
+        return 0;
+    }
+    return 1;
+}
+
 int pin_naming_strip_extension(const char *base_path, const char *known_ext, char *out,
                                 size_t out_size)
 {

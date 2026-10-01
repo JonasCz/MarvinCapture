@@ -2506,6 +2506,9 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     memset(out, 0, sizeof(*out));
     out->size = sizeof(*out);
 
+    if (!pin_naming_validate(o->path, out->message, sizeof(out->message)))
+        return PIN_ERR_ARG;
+
     pin_kind_t kind = s->stream_kind;
     pin_format_t fmt = kind == PIN_KIND_HDV ? o->format_hdv
                        : kind == PIN_KIND_DV ? o->format_dv : o->format_analog;
@@ -2565,11 +2568,12 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     if (s->state != PIN_STATE_READY) { pin_session_unlock(s); return PIN_ERR_STATE; }
     pin_session_unlock(s);
 
-    if (!overwrite) {
-        pin_output_check_t chk;
-        if (pin_session_check_output(s, o, &chk) == PIN_OK && chk.collision)
-            return PIN_ERR_EXISTS;
-    }
+    pin_output_check_t chk;
+    pin_status_t cs = pin_session_check_output(s, o, &chk);
+    if (cs == PIN_ERR_ARG)
+        return cs; /* unusable file name */
+    if (!overwrite && cs == PIN_OK && chk.collision)
+        return PIN_ERR_EXISTS;
     pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_START, .capture = *o, .overwrite = overwrite };
     post_cmd(s, &c);
     return PIN_OK;

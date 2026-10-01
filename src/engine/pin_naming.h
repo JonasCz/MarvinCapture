@@ -57,6 +57,17 @@ int pin_naming_strip_extension(const char *base_path, const char *known_ext, cha
 int pin_naming_build(const char *base_no_ext, const pin_naming_opts_t *opts, const char *ext,
                       char *out, size_t out_size);
 
+/* Validates the final component of an output path (what follows the last
+ * '/' or '\') as a portable file name: not empty, no control characters or
+ * any of < > : " / \ | ? *, no leading or trailing space, no leading or
+ * trailing '.', no Windows reserved device names (CON, PRN, AUX, NUL,
+ * COM0-9, LPT0-9, with or without an extension), and short enough to leave
+ * room for the "-pass-N-NNNN.ext" suffixes. Returns 1 if usable, 0 if not,
+ * with a short human-readable reason in reason (reason_size bytes; may be
+ * NULL). Deliberately stricter than the running OS so files move freely
+ * between platforms and file systems. */
+int pin_naming_validate(const char *path, char *reason, size_t reason_size);
+
 /* Checks whether ANY file matching this capture's naming pattern already
  * exists on disk: base.ext, base-NNNN.ext, base-pass-N.ext and
  * base-pass-N-NNNN.ext, for the given base (already extension-stripped)

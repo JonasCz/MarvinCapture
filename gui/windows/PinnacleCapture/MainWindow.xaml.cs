@@ -646,6 +646,11 @@ public sealed partial class MainWindow : Window
         // "Play and capture" = rewind to the start of the tape, play, record.
         var opts = VM.BuildCaptureOpts(startDeck: playFirst, rewindFirst: playFirst);
         var st = VM.CheckOutput(in opts, out var check);
+        if (st == PinStatus.ErrArg && !string.IsNullOrEmpty(check.Message))
+        {
+            VM.ShowInfo("Invalid file name", check.Message, 3);
+            return;
+        }
         if (st != PinStatus.Ok)
         {
             VM.ShowInfo("Can't capture to this location", $"{Native.StrError(st)} {check.Message}".Trim(), 3);
