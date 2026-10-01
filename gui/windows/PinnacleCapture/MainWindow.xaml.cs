@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
 
     private readonly nint _hwnd;
     private readonly DispatcherQueueTimer _statusTimer;
+    private readonly DispatcherQueueTimer _meterTimer;
     private Thread? _deviceWatch;
     private volatile bool _closing;
     private readonly TaskbarProgress _taskbar;
@@ -90,6 +91,10 @@ public sealed partial class MainWindow : Window
         _statusTimer = DispatcherQueue.CreateTimer();
         _statusTimer.Interval = TimeSpan.FromMilliseconds(100);
         _statusTimer.Tick += (_, _) => OnStatusTick();
+        // Audio meters run faster than the status tick (~30 Hz) with their own decay.
+        _meterTimer = DispatcherQueue.CreateTimer();
+        _meterTimer.Interval = TimeSpan.FromMilliseconds(33);
+        _meterTimer.Tick += (_, _) => VM.UpdateMeters();
 
         VM.PropertyChanged += VM_PropertyChanged;
         VM.EngineEvent += VM_EngineEvent;
@@ -286,6 +291,7 @@ public sealed partial class MainWindow : Window
         OpenSelectedIfNeeded();
 
         _statusTimer.Start();
+        _meterTimer.Start();
         SyncKindSelector();
         StartDeviceWatch();
 
@@ -914,6 +920,7 @@ public sealed partial class MainWindow : Window
     {
         SaveWindowGeometry();
         _statusTimer.Stop();
+        _meterTimer.Stop();
         _closing = true;
         Native.DevicesWake();
         _preview?.Dispose();

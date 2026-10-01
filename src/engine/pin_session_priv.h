@@ -134,6 +134,8 @@ struct pin_session {
     uint64_t bytes_written, writer_backlog, writer_backlog_max;
     uint64_t write_dropped;     /* units the writer queue refused, see pin_status_snapshot_t */
     float audio_peak_db[2], audio_rms_db[2];
+    float audio_peak_acc[2]; /* linear peak since the last status read (valid if audio_peak_acc_n) */
+    int audio_peak_acc_n;    /* blocks metered since the last status read */
     double audio_meter_t;   /* monotonic seconds of the last metered block; 0 = none yet */
 
     pin_std_t requested_std;

@@ -67,7 +67,7 @@ variable: if it is smooth with replay but not live, the problem is delivery.
   `_statusTimer`), so the meter shows every 3rd frame's peak: 10 Hz updates, and
   transients between samples are missed. That matches "low fps" and aliased
   peaks. The peak-hold tick (10 s window) is computed GUI side from the same samples.
-- Suggested fix (not done, it needs a core change plus hardware/replay check):
+- DONE (see commit "Audio meters"): core now reports peak-since-last-read; GUI has a 33 ms meter timer with 30 dB/s decay. Original proposal:
   keep a peak that is max-accumulated since the last status read (reset on read,
   under the same lock as `feed_audio_locked`), and apply a short exponential
   decay in the GUI, then run the meter at ~30-60 Hz via a separate light timer

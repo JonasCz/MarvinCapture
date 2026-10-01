@@ -398,7 +398,7 @@ typedef struct {
     uint64_t writer_backlog_max;
     double idle_s;              /* seconds since data / signal was last seen */
 
-    float audio_peak_db[2];     /* dBFS, -inf as -144 */
+    float audio_peak_db[2];     /* dBFS, -inf as -144; loudest sample since the previous status read (the latest block if none new) */
     float audio_rms_db[2];
 
     /* Appended fields, ABI-compatible (PIN_API_VERSION unchanged). Disk

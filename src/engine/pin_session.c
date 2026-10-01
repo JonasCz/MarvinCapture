@@ -921,9 +921,12 @@ static void feed_audio_locked(pin_session_t *s, const int16_t *pcm, unsigned fra
     for (int ch = 0; ch < 2; ch++) {
         double rms = sqrt(sum[ch] / frames) / 32768.0;
         double pk = peak[ch] / 32768.0;
+        if (!s->audio_peak_acc_n || pk > s->audio_peak_acc[ch])
+            s->audio_peak_acc[ch] = (float)pk;
         s->audio_peak_db[ch] = pk > 0 ? (float)(20.0 * log10(pk)) : -144.0f;
         s->audio_rms_db[ch] = rms > 0 ? (float)(20.0 * log10(rms)) : -144.0f;
     }
+    s->audio_peak_acc_n++;
     if (s->mon_enabled) {
         pthread_mutex_lock(&s->mon_mtx);
         for (unsigned i = 0; i < frames && s->mon_buf; i++) {
@@ -2747,7 +2750,17 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         }
     }
     if (s->audio_meter_t > 0 && meter_clock() - s->audio_meter_t < 0.5) {
-        memcpy(out->audio_peak_db, s->audio_peak_db, sizeof(out->audio_peak_db));
+        if (s->audio_peak_acc_n) {
+            /* loudest sample since the previous read, not just the latest
+             * frame's: a fast poller never misses a transient */
+            for (int ch = 0; ch < 2; ch++) {
+                float pk = s->audio_peak_acc[ch];
+                out->audio_peak_db[ch] = pk > 0 ? (float)(20.0 * log10(pk)) : -144.0f;
+            }
+            s->audio_peak_acc_n = 0;
+        } else {
+            memcpy(out->audio_peak_db, s->audio_peak_db, sizeof(out->audio_peak_db));
+        }
         memcpy(out->audio_rms_db, s->audio_rms_db, sizeof(out->audio_rms_db));
     } else {
         /* no audio yet, or none for half a second (signal lost, stopped):

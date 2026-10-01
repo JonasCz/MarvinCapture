@@ -786,6 +786,40 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // ================================================================== polling
 
+    // The core reports the loudest peak since the previous status read and
+    // resets it, so every read (the 100 ms tick and the meter tick) must pass
+    // through FeedMeter; the meter tick then publishes the max with a decay.
+    private double _meterAccL = double.NegativeInfinity, _meterAccR = double.NegativeInfinity;
+    private long _meterLastTick;
+    private const double MeterDecayDbPerSecond = 30;
+
+    private void FeedMeter(in PinStatusSnapshot st)
+    {
+        _meterAccL = Math.Max(_meterAccL, st.AudioPeakDb0);
+        _meterAccR = Math.Max(_meterAccR, st.AudioPeakDb1);
+    }
+
+    /// <summary>Meter timer (~30 Hz): fresh status read, peak with a short decay.</summary>
+    public void UpdateMeters()
+    {
+        if (Session is { IsInvalid: false } && Native.GetStatus(Session, out var st) == PinStatus.Ok)
+        {
+            FeedMeter(in st);
+        }
+        long now = Environment.TickCount64;
+        double dt = _meterLastTick == 0 ? 0 : Math.Min(0.25, (now - _meterLastTick) / 1000.0);
+        _meterLastTick = now;
+        double fall = MeterDecayDbPerSecond * dt;
+        double l = Math.Clamp(_meterAccL, MeterFloorDb, 0);
+        double r = Math.Clamp(_meterAccR, MeterFloorDb, 0);
+        _meterAccL = _meterAccR = double.NegativeInfinity;
+        AudioPeakLeft = Math.Max(l, AudioPeakLeft - fall);
+        AudioPeakRight = Math.Max(r, AudioPeakRight - fall);
+        // Hold tick follows the true (undecayed) peaks.
+        AudioHoldLeft = _holdLeft.Push(l);
+        AudioHoldRight = _holdRight.Push(r);
+    }
+
     public void Tick()
     {
         // The core's own log lines (process-wide, session or not). Only the
@@ -849,10 +883,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         FileSizeText = HumanSize(st.BytesWritten);
         ElapsedText = TimeSpan.FromSeconds(Math.Max(0, st.ElapsedS)).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
 
-        AudioPeakLeft = Math.Clamp(st.AudioPeakDb0, MeterFloorDb, 0);
-        AudioPeakRight = Math.Clamp(st.AudioPeakDb1, MeterFloorDb, 0);
-        AudioHoldLeft = _holdLeft.Push(AudioPeakLeft);
-        AudioHoldRight = _holdRight.Push(AudioPeakRight);
+        FeedMeter(in st);
         AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
 
         TapePercent = st.TapePercent;
