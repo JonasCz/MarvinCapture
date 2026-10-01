@@ -142,6 +142,16 @@ PinnacleCapture/
   `pin_set_output_hint`, so the status bar can show free space and capture
   time left before a capture starts. Both turn red when the core reports
   `disk_low`.
+- The status bar has two rows and one font (no bold, no monospace). Left to
+  right: deck status (DV/HDV), the file being written (or "Ready" / the error)
+  with the capture state under it, time (tape timecode; for analog the time
+  since capture start), signal (Locked / No signal over the source type HDV / DV /
+  S-Video / Composite and PAL / NTSC), frames (total on row 1, current clip on row
+  2: frames, frames with error, dropped), storage (bytes total / current clip over
+  free space and hours left), then the audio meters and mute. All numbers come
+  from the core status: totals count since capture start (since app start while
+  idle), the clip ones restart with every file. Tooltips and automation names
+  spell the items out.
 - Closing the window during a capture asks first. Confirming stops the capture,
   shows "Finalizing files…" and exits once the core reports READY.
 - There are no keyboard shortcuts, on purpose. Every control is tabbable and

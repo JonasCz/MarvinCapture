@@ -26,7 +26,7 @@ namespace PinnacleCapture;
 public sealed partial class MainWindow : Window
 {
     // Logical (DIP) minimum size; converted to physical pixels for the presenter.
-    private const int MinWidthDip = 1000;
+    private const int MinWidthDip = 1100;
     private const int MinHeightDip = 640;
 
     public MainViewModel VM { get; } = new();
@@ -121,6 +121,9 @@ public sealed partial class MainWindow : Window
     public static double EnabledOpacity(bool enabled) => enabled ? 1.0 : 0.45;
     public static string StartStopName(bool capturing) => capturing ? "Stop capture" : "Start capture";
     public static string Label(string name, string value) => $"{name}: {value}";
+    public static string SignalName(string lockText, string type) => type.Length > 0 ? $"Signal: {lockText}, {type}" : $"Signal: {lockText}";
+    public static string StorageName(string size, string free, string left, bool low) =>
+        (low ? "Low disk space. " : "Storage: ") + size + ", " + free + ", " + left;
 
     public static InfoBarSeverity Severity(int s) => s switch
     {
@@ -399,18 +402,6 @@ public sealed partial class MainWindow : Window
     private int _fitDarNum = 4, _fitDarDen = 3;
 
     private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdatePreviewFrame();
-
-    /// <summary>
-    /// Narrow windows: drop the status-bar items that are available elsewhere
-    /// (timecode is in the window title; frames are in the screen-reader
-    /// status line) so the state text on the left never gets squeezed.
-    /// </summary>
-    private void RootGrid_SizeChanged(object sender, SizeChangedEventArgs e)
-    {
-        var compact = e.NewSize.Width < 1240 ? Visibility.Collapsed : Visibility.Visible;
-        StatusTimecodeItem.Visibility = compact;
-        StatusFramesItem.Visibility = e.NewSize.Width < 1100 ? Visibility.Collapsed : Visibility.Visible;
-    }
 
     /// <summary>
     /// Sizes PreviewFrame (swap chain panel + no-video overlay) to the largest

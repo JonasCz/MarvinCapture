@@ -354,19 +354,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty] private string _statusLine = "Idle";
 
-    /// <summary>Visible left side of the status bar: state word + current file, or the error.
-    /// The full pin_format_status_line text is only the automation name (live region).</summary>
+    /// <summary>Status bar, row 1 of the file item: the file being written while capturing, else the
+    /// state ("Ready", "Preparing: ...") or the error. The full pin_format_status_line text is only the
+    /// automation name (live region).</summary>
     [ObservableProperty] private string _statusShortText = "No device open";
+
+    /// <summary>Status bar, row 2 of the file item: "Capturing  ·  pass 2/3" while a capture runs, else "".</summary>
+    [ObservableProperty] private string _statusSubText = "";
 
     private static bool IsCapturingState(PinState s) => s is PinState.Capturing or PinState.Stopping or PinState.Rewinding;
     [ObservableProperty] private string _timecode = "--:--:--:--";
+    /// <summary>Status bar time: the tape timecode for DV/HDV, the time since capture start for analog.</summary>
+    [ObservableProperty] private string _statusTimeText = "--:--:--:--";
+    [ObservableProperty] private string _statusTimeTip = "Tape timecode";
     [ObservableProperty] private string _deckStateText = "Deck: —";
     [ObservableProperty] private bool _signalLocked;
     [ObservableProperty] private string _signalLockText = "No signal";
-    [ObservableProperty] private string _framesText = "0 frames";
-    [ObservableProperty] private string _droppedText = "0 dropped";
-    [ObservableProperty] private string _fileSizeText = "0 B";
-    [ObservableProperty] private string _elapsedText = "00:00:00";
+    [ObservableProperty] private string _signalTypeText = "";
+    // Frame counters, all from the core: total = since capture start (since app start while idle), clip = current file.
+    [ObservableProperty] private string _framesTotalText = "Total 0 · 0 err · 0 dropped";
+    [ObservableProperty] private string _framesClipText = "Clip 0 · 0 err · 0 dropped";
+    [ObservableProperty] private string _framesTip = "";
+    [ObservableProperty] private string _sizeText = "0 B total · 0 B clip";
     [ObservableProperty] private double _audioPeakLeft = MeterFloorDb;
     [ObservableProperty] private double _audioPeakRight = MeterFloorDb;
     [ObservableProperty] private string _audioPeakText = "L — R —";
@@ -873,15 +882,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 ? "Preparing: " + st.Detail
                 : string.IsNullOrEmpty(file) || !IsCapturingState(st.State)
                 ? SessionStateText
-                : SessionStateText +"  \u00B7  " + file;
+                : file;
         }
+        StatusSubText = IsCapturingState(st.State)
+            ? (st.Passes > 1 && st.State != PinState.Rewinding ? $"{SessionStateText}  \u00B7  pass {st.Pass}/{st.Passes}" : SessionStateText)
+            : "";
+
         Timecode = string.IsNullOrEmpty(st.Timecode) ? "--:--:--:--" : st.Timecode;
+        if (st.Input == PinInput.Dv)
+        {
+            StatusTimeText = Timecode;
+            StatusTimeTip = "Tape timecode";
+        }
+        else
+        {
+            StatusTimeText = TimeSpan.FromSeconds(Math.Max(0, st.ElapsedS)).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+            StatusTimeTip = "Time since capture start";
+        }
+
         SignalLocked = st.Signal != 0;
-        SignalLockText = SignalLocked ? "Signal locked" : "No signal";
-        FramesText = $"{st.Frames:N0} frames";
-        DroppedText = $"{st.FramesDropped + st.WriteDropped:N0} dropped";
-        FileSizeText = HumanSize(st.BytesWritten);
-        ElapsedText = TimeSpan.FromSeconds(Math.Max(0, st.ElapsedS)).ToString(@"hh\:mm\:ss", CultureInfo.InvariantCulture);
+        SignalLockText = SignalLocked ? "Locked" : "No signal";
+        SignalTypeText = SignalTypeFor(in st);
+
+        var dropped = st.FramesDropped + st.WriteDropped;
+        FramesTotalText = $"Total {st.Frames:N0} · {st.FramesError:N0} err · {dropped:N0} dropped";
+        FramesClipText = $"Clip {st.ClipFrames:N0} · {st.ClipFramesError:N0} err · {st.ClipFramesDropped:N0} dropped";
+        FramesTip = $"Frames, frames with an error and dropped frames. Total (since {(IsCapturingState(st.State) ? "capture start" : "the app started")}): "
+            + $"{st.Frames:N0} frames, {st.FramesError:N0} with error, {dropped:N0} dropped. "
+            + $"Current clip: {st.ClipFrames:N0} frames, {st.ClipFramesError:N0} with error, {st.ClipFramesDropped:N0} dropped. "
+            + "A frame has an error if it was damaged or concealed by the camera, data was missing, or (HDV) it depends on a damaged picture.";
+        SizeText = $"{HumanSize(st.TotalBytesWritten)} total · {HumanSize(st.ClipBytesWritten)} clip";
 
         FeedMeter(in st);
         AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
@@ -939,6 +969,36 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private static string FormatDb(float db) => db <= -143 ? "silent" : $"{db:0.0} dBFS";
+
+    /// <summary>"HDV", "DV · PAL", "S-Video · NTSC", ...: what is arriving, from the core's status.</summary>
+    private static string SignalTypeFor(in PinStatusSnapshot st)
+    {
+        string type = st.Input switch
+        {
+            PinInput.SVideo => "S-Video",
+            PinInput.Composite => "Composite",
+            _ => st.StreamKind == PinKind.Hdv ? "HDV" : st.StreamKind == PinKind.Dv ? "DV" : "DV/HDV",
+        };
+        if (st.Signal == 0 || st.StreamKind == PinKind.Hdv)
+        {
+            return type; // HDV carries no PAL/NTSC flag at the core level (1440x1080)
+        }
+        string std = st.Input == PinInput.Dv
+            ? (st.Is60Hz != 0 ? "NTSC" : "PAL")
+            : st.DetectedStd switch
+            {
+                PinStd.Pal => "PAL",
+                PinStd.Ntsc => "NTSC",
+                PinStd.PalM => "PAL-M",
+                PinStd.PalN => "PAL-N",
+                PinStd.Pal60 => "PAL-60",
+                PinStd.Ntsc443 => "NTSC-4.43",
+                PinStd.NtscJ => "NTSC-J",
+                PinStd.Secam => "SECAM",
+                _ => st.Is60Hz != 0 ? "NTSC" : "PAL",
+            };
+        return type + " · " + std;
+    }
 
     public static string HumanSize(ulong bytes)
     {

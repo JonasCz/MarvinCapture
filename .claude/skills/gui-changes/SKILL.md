@@ -62,6 +62,15 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
 - Errors to the user: `VM.ShowInfo(title, message, severity)` (InfoBar); modal
   questions: `ShowDialogAsync(title, text, primary, close)`.
 
+## Status bar
+
+Two-row grid in `MainWindow.xaml` (bottom). Every text uses `StatusTextStyle`
+(do not set FontFamily/FontWeight/FontSize). Properties are set in
+`MainViewModel.ApplyStatus` straight from the core snapshot; counters
+(`frames_error`, `clip_*`, `total_bytes_written`, `est_seconds_left`) are
+computed in the core, never in C#. Low-disk uses two copies of the storage
+item toggled by `DiskVisible`. Minimum window width is 1100 DIP for this bar.
+
 ## Debugging
 
 - Crashes / unhandled exceptions: `%LOCALAPPDATA%\PinnacleOSS\crash.log`

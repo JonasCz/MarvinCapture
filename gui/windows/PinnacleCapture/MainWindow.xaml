@@ -6,7 +6,7 @@
     xmlns:vm="using:PinnacleCapture.ViewModels"
     xmlns:controls="using:PinnacleCapture.Controls">
 
-    <Grid x:Name="RootGrid" Loaded="RootGrid_Loaded" SizeChanged="RootGrid_SizeChanged" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+    <Grid x:Name="RootGrid" Loaded="RootGrid_Loaded" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
         <Grid.Resources>
             <controls:DbThumbConverter x:Key="DbConverter" />
 
@@ -531,80 +531,115 @@
         </Grid>
 
         <!-- ============================================================ status bar -->
+        <!-- Two rows, one font (StatusTextStyle: Caption, secondary colour, regular weight) for every
+             text. Left to right: deck | file | time | signal | frames | storage | meters. Single-line
+             items span both rows; paired ones (total/clip, size/free) stack. Counters are the core's
+             (pin_status_snapshot_t): since capture start (since app start while idle) and per clip. -->
         <Border Grid.Row="2" BorderThickness="0,1,0,0" BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
-                Background="{ThemeResource LayerFillColorDefaultBrush}" Padding="16,6,8,6">
-            <Grid ColumnSpacing="16">
+                Background="{ThemeResource LayerFillColorDefaultBrush}" Padding="16,4,8,4">
+            <Grid ColumnSpacing="18" RowSpacing="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" MinWidth="96" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <!-- Visible: state word + current file (or the error). The right-hand items show the
-                     numbers, so pin_format_status_line is only this live region's automation name. -->
-                <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
-                    <Ellipse Width="8" Height="8" VerticalAlignment="Center"
-                             Fill="{ThemeResource SystemFillColorCriticalBrush}"
-                             Visibility="{x:Bind VM.IsCapturing, Mode=OneWay}" />
-                    <TextBlock x:Name="StatusBarText" Text="{x:Bind VM.StatusShortText, Mode=OneWay}"
-                               Style="{StaticResource CaptionTextBlockStyle}"
-                               VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                               AutomationProperties.LiveSetting="Polite"
-                               AutomationProperties.Name="{x:Bind VM.StatusLine, Mode=OneWay}" />
+
+                <!-- deck status (DV / HDV input only) -->
+                <StackPanel Grid.RowSpan="2" Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Deck status"
+                            Visibility="{x:Bind VM.IsDvInput, Mode=OneWay}">
+                    <FontIcon Glyph="&#xEC58;" Style="{StaticResource StatusIconStyle}" />
+                    <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                               TextTrimming="CharacterEllipsis"
+                               AutomationProperties.Name="{x:Bind local:MainWindow.Label('Deck', VM.DeckStateText), Mode=OneWay}" />
                 </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="18">
-                    <StackPanel x:Name="StatusTimecodeItem" Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Timecode">
-                        <FontIcon Glyph="&#xE916;" Style="{StaticResource StatusIconStyle}" />
-                        <TextBlock Text="{x:Bind VM.Timecode, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" FontFamily="Consolas"
-                                   AutomationProperties.Name="{x:Bind local:MainWindow.Label('Timecode', VM.Timecode), Mode=OneWay}" />
+
+                <!-- the file being written, or "Ready" / the preparing step / the error; second row: the
+                     capture state. pin_format_status_line is this live region's automation name. -->
+                <StackPanel Grid.Column="1" Grid.RowSpan="2" VerticalAlignment="Center" Spacing="1"
+                            ToolTipService.ToolTip="{x:Bind VM.StatusShortText, Mode=OneWay}">
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Ellipse Width="8" Height="8" VerticalAlignment="Center"
+                                 Fill="{ThemeResource SystemFillColorCriticalBrush}"
+                                 Visibility="{x:Bind VM.IsCapturing, Mode=OneWay}" />
+                        <TextBlock x:Name="StatusBarText" Text="{x:Bind VM.StatusShortText, Mode=OneWay}"
+                                   Style="{StaticResource StatusTextStyle}" TextTrimming="CharacterEllipsis"
+                                   AutomationProperties.LiveSetting="Polite"
+                                   AutomationProperties.Name="{x:Bind VM.StatusLine, Mode=OneWay}" />
                     </StackPanel>
-                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Deck"
-                                Visibility="{x:Bind VM.IsDvInput, Mode=OneWay}">
-                        <FontIcon Glyph="&#xEC58;" Style="{StaticResource StatusIconStyle}" />
-                        <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
-                                   Width="120" TextAlignment="Left" TextTrimming="CharacterEllipsis"
-                                   AutomationProperties.Name="{x:Bind local:MainWindow.Label('Deck', VM.DeckStateText), Mode=OneWay}" />
-                    </StackPanel>
-                    <StackPanel Style="{StaticResource StatusItemStyle}">
-                        <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{ThemeResource SystemFillColorSuccessBrush}"
-                                  Visibility="{x:Bind VM.SignalLocked, Mode=OneWay}" />
-                        <FontIcon Glyph="&#xE7BA;" FontSize="12" Foreground="{ThemeResource SystemFillColorCautionBrush}"
-                                  Visibility="{x:Bind local:MainWindow.Collapsed(VM.SignalLocked), Mode=OneWay}" />
+                    <TextBlock Text="{x:Bind VM.StatusSubText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+
+                <!-- tape timecode (DV/HDV) or time since capture start (analog); same font as the rest -->
+                <StackPanel Grid.Column="2" Grid.RowSpan="2" Style="{StaticResource StatusItemStyle}"
+                            ToolTipService.ToolTip="{x:Bind VM.StatusTimeTip, Mode=OneWay}">
+                    <FontIcon Glyph="&#xE916;" Style="{StaticResource StatusIconStyle}" />
+                    <TextBlock Text="{x:Bind VM.StatusTimeText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                               AutomationProperties.Name="{x:Bind local:MainWindow.Label(VM.StatusTimeTip, VM.StatusTimeText), Mode=OneWay}" />
+                </StackPanel>
+
+                <!-- signal: lock state, and what is arriving (HDV / DV / S-Video / Composite, PAL / NTSC) -->
+                <StackPanel Grid.Column="3" Grid.RowSpan="2" Style="{StaticResource StatusItemStyle}"
+                            ToolTipService.ToolTip="Signal: lock state, source type and video standard"
+                            AutomationProperties.Name="{x:Bind local:MainWindow.SignalName(VM.SignalLockText, VM.SignalTypeText), Mode=OneWay}">
+                    <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                              Visibility="{x:Bind VM.SignalLocked, Mode=OneWay}" />
+                    <FontIcon Glyph="&#xE7BA;" FontSize="12" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                              Visibility="{x:Bind local:MainWindow.Collapsed(VM.SignalLocked), Mode=OneWay}" />
+                    <StackPanel Spacing="1">
                         <TextBlock Text="{x:Bind VM.SignalLockText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" />
+                        <TextBlock Text="{x:Bind VM.SignalTypeText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" />
                     </StackPanel>
-                    <StackPanel x:Name="StatusFramesItem" Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Frames captured / dropped">
-                        <FontIcon Glyph="&#xE8B2;" Style="{StaticResource StatusIconStyle}" />
-                        <TextBlock Style="{StaticResource StatusTextStyle}">
-                            <Run Text="{x:Bind VM.FramesText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{x:Bind VM.DroppedText, Mode=OneWay}" />
-                        </TextBlock>
+                </StackPanel>
+
+                <!-- frames: total on row 1, current clip on row 2 (frames / with error / dropped) -->
+                <StackPanel Grid.Column="4" Grid.RowSpan="2" Style="{StaticResource StatusItemStyle}"
+                            ToolTipService.ToolTip="{x:Bind VM.FramesTip, Mode=OneWay}"
+                            AutomationProperties.Name="{x:Bind VM.FramesTip, Mode=OneWay}">
+                    <FontIcon Glyph="&#xE8B2;" Style="{StaticResource StatusIconStyle}" />
+                    <StackPanel Spacing="1">
+                        <TextBlock Text="{x:Bind VM.FramesTotalText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" />
+                        <TextBlock Text="{x:Bind VM.FramesClipText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" />
                     </StackPanel>
-                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="File size">
-                        <FontIcon Glyph="&#xE8B7;" Style="{StaticResource StatusIconStyle}" />
-                        <TextBlock Text="{x:Bind VM.FileSizeText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
-                                   AutomationProperties.Name="{x:Bind local:MainWindow.Label('File size', VM.FileSizeText), Mode=OneWay}" />
-                    </StackPanel>
-                    <!-- free space + time left; the second copy (critical colour) replaces the first when disk_low -->
-                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Free disk space and capture time left"
-                                Visibility="{x:Bind local:MainWindow.DiskVisible(VM.HasDiskInfo, VM.DiskLow, x:False), Mode=OneWay}"
-                                AutomationProperties.Name="{x:Bind local:MainWindow.DiskName(VM.DiskFreeText, VM.TimeLeftText, VM.DiskLow), Mode=OneWay}">
-                        <FontIcon Glyph="&#xEDA2;" Style="{StaticResource StatusIconStyle}" />
+                </StackPanel>
+
+                <!-- storage, one icon: size total / clip over free space and time left. The second copy
+                     (critical colour) replaces the first when the core says disk_low. -->
+                <StackPanel Grid.Column="5" Grid.RowSpan="2" Style="{StaticResource StatusItemStyle}"
+                            ToolTipService.ToolTip="Storage: bytes written in this capture / in the current file, free space on the output volume and capture time left"
+                            AutomationProperties.Name="{x:Bind local:MainWindow.StorageName(VM.SizeText, VM.DiskFreeText, VM.TimeLeftText, VM.DiskLow), Mode=OneWay}"
+                            Visibility="{x:Bind local:MainWindow.DiskVisible(VM.HasDiskInfo, VM.DiskLow, x:False), Mode=OneWay}">
+                    <FontIcon Glyph="&#xEDA2;" Style="{StaticResource StatusIconStyle}" />
+                    <StackPanel Spacing="1">
+                        <TextBlock Text="{x:Bind VM.SizeText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" />
                         <TextBlock Style="{StaticResource StatusTextStyle}">
                             <Run Text="{x:Bind VM.DiskFreeText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{x:Bind VM.TimeLeftText, Mode=OneWay}" />
                         </TextBlock>
                     </StackPanel>
-                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Low disk space: less than 1 hour or 50 GB left"
-                                Visibility="{x:Bind local:MainWindow.DiskVisible(VM.HasDiskInfo, VM.DiskLow, x:True), Mode=OneWay}"
-                                AutomationProperties.Name="{x:Bind local:MainWindow.DiskName(VM.DiskFreeText, VM.TimeLeftText, VM.DiskLow), Mode=OneWay}">
-                        <FontIcon Glyph="&#xEDA2;" FontSize="12" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                </StackPanel>
+                <StackPanel Grid.Column="5" Grid.RowSpan="2" Style="{StaticResource StatusItemStyle}"
+                            ToolTipService.ToolTip="Low disk space: less than 1 hour or 50 GB left"
+                            AutomationProperties.Name="{x:Bind local:MainWindow.StorageName(VM.SizeText, VM.DiskFreeText, VM.TimeLeftText, VM.DiskLow), Mode=OneWay}"
+                            Visibility="{x:Bind local:MainWindow.DiskVisible(VM.HasDiskInfo, VM.DiskLow, x:True), Mode=OneWay}">
+                    <FontIcon Glyph="&#xEDA2;" FontSize="12" Foreground="{ThemeResource SystemFillColorCriticalBrush}" />
+                    <StackPanel Spacing="1">
+                        <TextBlock Text="{x:Bind VM.SizeText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" />
                         <TextBlock Style="{StaticResource StatusTextStyle}" Foreground="{ThemeResource SystemFillColorCriticalBrush}">
                             <Run Text="{x:Bind VM.DiskFreeText, Mode=OneWay}" /><Run Text=" · " /><Run Text="{x:Bind VM.TimeLeftText, Mode=OneWay}" />
                         </TextBlock>
                     </StackPanel>
-                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Elapsed">
-                        <FontIcon Glyph="&#xE823;" Style="{StaticResource StatusIconStyle}" />
-                        <TextBlock Text="{x:Bind VM.ElapsedText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}" FontFamily="Consolas"
-                                   AutomationProperties.Name="{x:Bind local:MainWindow.Label('Elapsed', VM.ElapsedText), Mode=OneWay}" />
-                    </StackPanel>
+                </StackPanel>
                     <!-- level meters: bar = current peak, tick = highest peak of the last 10 s -->
-                    <Grid ColumnSpacing="6" RowSpacing="3" VerticalAlignment="Center"
+                    <Grid Grid.Column="6" Grid.RowSpan="2" ColumnSpacing="6" RowSpacing="1" VerticalAlignment="Center"
                           AutomationProperties.Name="{x:Bind VM.AudioPeakText, Mode=OneWay}"
                           ToolTipService.ToolTip="{x:Bind VM.AudioPeakText, Mode=OneWay}">
                         <Grid.RowDefinitions>
@@ -613,13 +648,13 @@
                         </Grid.RowDefinitions>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="264" />
+                            <ColumnDefinition Width="160" />
                         </Grid.ColumnDefinitions>
-                        <TextBlock Text="L" FontSize="9" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Text="L" Style="{StaticResource StatusTextStyle}" />
                         <controls:LevelMeter Grid.Column="1" Level="{x:Bind VM.AudioPeakLeft, Mode=OneWay}"
                                              Hold="{x:Bind VM.AudioHoldLeft, Mode=OneWay}"
                                              AutomationProperties.Name="Left audio peak" />
-                        <TextBlock Grid.Row="1" Text="R" FontSize="9" Foreground="{ThemeResource TextFillColorSecondaryBrush}" VerticalAlignment="Center" />
+                        <TextBlock Grid.Row="1" Text="R" Style="{StaticResource StatusTextStyle}" />
                         <controls:LevelMeter Grid.Row="1" Grid.Column="1" Level="{x:Bind VM.AudioPeakRight, Mode=OneWay}"
                                              Hold="{x:Bind VM.AudioHoldRight, Mode=OneWay}"
                                              AutomationProperties.Name="Right audio peak" />
@@ -628,7 +663,7 @@
                     <!-- Mute: icon-only; the speaker glyph shows the state. The checked state is deliberately
                          not accent-filled ("filled = muted" vs "filled = sound on" is ambiguous). Screen
                          readers get the toggle state plus the action name. -->
-                    <ToggleButton IsChecked="{x:Bind VM.IsMuted, Mode=TwoWay}"
+                    <ToggleButton Grid.Column="7" Grid.RowSpan="2" IsChecked="{x:Bind VM.IsMuted, Mode=TwoWay}"
                                   Width="36" Height="30" Padding="0" Margin="-8,0,0,0"
                                   Style="{StaticResource DefaultToggleButtonStyle}"
                                   AutomationProperties.Name="{x:Bind VM.MuteActionName, Mode=OneWay}"
@@ -674,7 +709,6 @@
                         </ToggleButton.Resources>
                         <FontIcon Glyph="{x:Bind VM.MuteGlyph, Mode=OneWay}" FontSize="15" />
                     </ToggleButton>
-                </StackPanel>
             </Grid>
         </Border>
 
