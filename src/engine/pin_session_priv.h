@@ -191,6 +191,8 @@ struct pin_session {
     pinnacle_1394_t link;
     pin_deck_async_t deck_async;
     double last_transport_poll_s;
+    int poll_tc_next;             /* the next 1 Hz poll asks TIME CODE instead of TRANSPORT STATE */
+    int tc_after_wind;            /* one more TIME CODE poll after the tape stopped winding */
     int deck_q_valid;             /* a command waiting for the in-flight one (deck_send()) */
     pin_deck_cmd_t deck_q_cmd;
     double deck_cmd_done_s;       /* when the last transport command was answered */

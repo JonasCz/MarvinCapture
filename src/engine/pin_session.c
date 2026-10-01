@@ -1448,10 +1448,25 @@ static void dv_tick(void *user)
             s->deck_busy = 0;
             if (s->deck_async.cmd[0] == 0x00)   /* a transport command, not a status query */
                 s->deck_cmd_done_s = pin_session_now();
-            /* A NOT_IMPLEMENTED (08) answer echoes the command; it says nothing about the state. */
-            if (st == PIN_DECK_ASYNC_DONE && s->deck_async.resp_len >= 4 && s->deck_async.resp[0] != 0x08) {
+            if (st == PIN_DECK_ASYNC_DONE && s->deck_async.cmd[2] == 0x51) {
+                /* TIME CODE answer: the tape position, shown while no DV/HDV stream
+                 * carries its own timecode (winding, stopped). */
+                pin_deck_timecode_t tc;
+                if (pin_deck_parse_timecode(s->deck_async.resp, s->deck_async.resp_len, &tc) == 0 &&
+                    !s->signal)
+                    snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
+                             tc.hour, tc.minute, tc.second, tc.drop_frame ? ';' : ':', tc.frame);
+                if (s->deck != PIN_DECK_REWINDING && s->deck != PIN_DECK_FAST_FORWARD)
+                    s->tc_after_wind = 0;
+            } else if (st == PIN_DECK_ASYNC_DONE && s->deck_async.resp_len >= 4 &&
+                       s->deck_async.resp[0] != 0x08) {
+                /* (A NOT_IMPLEMENTED (08) answer echoes the command; it says nothing about the state.) */
+                pin_deck_state_t prev = s->deck;
                 uint8_t op = s->deck_async.resp[2], mode = s->deck_async.resp[3];
                 s->deck = pin_deck_state_from_avc(op, mode);
+                if ((prev == PIN_DECK_REWINDING || prev == PIN_DECK_FAST_FORWARD) &&
+                    s->deck != PIN_DECK_REWINDING && s->deck != PIN_DECK_FAST_FORWARD)
+                    s->tc_after_wind = 1;
                 pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
             }
             if (s->deck_q_valid) {
@@ -1459,13 +1474,22 @@ static void dv_tick(void *user)
                 deck_send(s, node, s->deck_q_cmd);
             }
         }
-    } else if (node && pin_session_now() - s->last_transport_poll_s > 1.0) {
-        /* ~1 Hz transport-state poll (async), also drives multi-pass EOT
-         * detection and the idle-stop timer. */
-        s->last_transport_poll_s = pin_session_now();
-        pin_deck_async_start_query(&s->deck_async, &s->link, node, PIN_DECK_QUERY_STATE,
-                                    pin_session_now());
-        s->deck_busy = 1;
+    } else if (node) {
+        /* ~1 Hz transport-state poll (async); drives rewind/BOT detection. While
+         * the tape winds (and once more after it stopped) with no DV stream to
+         * read the timecode from, every other poll asks the deck's TIME CODE
+         * instead, so the timecode display follows the tape (2 Hz polling). */
+        double now = pin_session_now();
+        int winding = s->deck == PIN_DECK_REWINDING || s->deck == PIN_DECK_FAST_FORWARD;
+        if (now - s->last_transport_poll_s > (winding ? 0.5 : 1.0)) {
+            s->last_transport_poll_s = now;
+            int want_tc = !s->signal && (winding || s->tc_after_wind);
+            pin_deck_query_t q = s->poll_tc_next && want_tc ? PIN_DECK_QUERY_TIMECODE
+                                                              : PIN_DECK_QUERY_STATE;
+            s->poll_tc_next = q == PIN_DECK_QUERY_STATE && want_tc;
+            pin_deck_async_start_query(&s->deck_async, &s->link, node, q, now);
+            s->deck_busy = 1;
+        }
     }
 
     if (s->capture_start_s > 0)

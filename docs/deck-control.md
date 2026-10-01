@@ -202,6 +202,23 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
 - The deck's own timecode while winding is described under "Timecode while
   winding" below.
 
+## Timecode while winding
+
+TIME CODE (`01 20 51 71 ff ff ff ff`, answered `0c 20 51 71 FF SS MM HH`) is
+the only position the deck reports over AV/C. While the tape winds there is no
+DV stream (the camera sends 0 bytes), so the timecode display would stay empty.
+`dv_tick()` therefore alternates TRANSPORT STATE and TIME CODE polls (0.5 s
+apart, so each every second) while the deck is REWINDING or FAST_FORWARD and no
+signal is arriving, and once more after the winding stopped. An IN_TRANSITION
+(`0b`) answer is accepted as well as STABLE (`0c`); NOT_IMPLEMENTED, a short
+answer or `ff` (no readable time code) leaves the last value on screen. While a
+stream with its own timecode runs, the stream's value is used instead.
+
+**Untested on the camera**: whether the Canon answers TIME CODE while winding
+(and with which response code) has not been checked, only the parsing is
+covered by `tests/engine/test_pin_deck.c`. To check:
+`pindeck rew wait:3 timecode wait:2 timecode stop`.
+
 ## Tool
 
 `pindeck [-b bitstream] [-v|-vv] [-r raw.bin] step...`
