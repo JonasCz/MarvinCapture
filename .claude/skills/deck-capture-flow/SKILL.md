@@ -34,6 +34,9 @@ session engine"). The traps:
   no-signal does; in the last pass both end the capture and send deck Stop when
   `start_deck`. Remaining seconds are in the
   status snapshot (`idle_stop_remaining_s`, `duration_remaining_s`).
+- Passes need a limit: `pin_capture_passes_allowed()` / `pin_capture_opts_normalize()`
+  (no-signal or time limit, else passes = 1), enforced in `pin_session_capture_start`
+  except for replay sessions; the GUI mirrors it via `Native.PassesAllowed`.
 - Manual stop: `pin_capture_stop_ex(stop_deck)` (PIN_STOP_DECK_AS_STARTED/NO/YES)
   decides about deck Stop independent of `start_deck`; the GUI's two stop buttons
   use NO / YES.

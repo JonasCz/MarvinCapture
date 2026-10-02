@@ -82,9 +82,10 @@
             HorizontalAlignment="Left" Width="140"
             Minimum="1" Maximum="20" SmallChange="1"
             SpinButtonPlacementMode="Compact"
-            Value="{x:Bind ViewModel.Passes, Mode=TwoWay}"
-            IsEnabled="{x:Bind Both(ViewModel.PassesEnabled, IsEditable), Mode=OneWay}"
+            Value="{x:Bind ViewModel.DisplayPasses, Mode=TwoWay}"
+            IsEnabled="{x:Bind Both(ViewModel.PassesUsable, IsEditable), Mode=OneWay}"
             AutomationProperties.Name="Capture passes"
-            AutomationProperties.HelpText="1 captures the tape once. More passes rewind to the start of the tape and capture it again." />
+            AutomationProperties.HelpText="{x:Bind ViewModel.PassesToolTip, Mode=OneWay}"
+            ToolTipService.ToolTip="{x:Bind ViewModel.PassesToolTip, Mode=OneWay}" />
     </StackPanel>
 </UserControl>

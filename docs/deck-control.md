@@ -203,6 +203,12 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   `pass_rewinding`), and at BOT sends PLAY and opens the next file; the
   no-signal timer and the per-pass time limit restart with each pass (they must
   not count the rewind). Whichever limit comes first ends the pass.
+- **Passes need a limit.** `pin_capture_passes_allowed(idle_min, duration_min)`
+  is true when either is > 0; `pin_capture_opts_normalize()` forces `passes` to 1
+  otherwise, and `pin_capture_start()` calls it for real devices (replay
+  sessions are exempt: their end of file ends a pass). With only the time limit
+  set, the no-signal check is off and the pass ends after the time alone; with
+  both, whichever comes first.
 - Not implemented: detecting the end of tape from the deck state alone (with
   the no-signal timeout off, a multi-pass capture waits forever at the end).
 - The deck's own timecode while winding is described under "Timecode while

@@ -331,6 +331,19 @@ typedef struct {
 
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);
 
+/* Multi-pass needs a way to notice the end of a pass: the no-signal timeout
+ * (idle_stop_minutes > 0) or the per-pass time limit (max_duration_minutes > 0).
+ * Without either, a second pass could never start, so more than one pass is not
+ * allowed. Returns 1 if passes > 1 makes sense with these limits, else 0. GUIs
+ * use it to disable their "passes" entry. */
+PIN_API int pin_capture_passes_allowed(int idle_stop_minutes, int max_duration_minutes);
+
+/* Makes opts consistent: passes < 1 becomes 1 and, when pin_capture_passes_allowed()
+ * says no, passes is forced to 1. Returns 1 if passes was changed. Called by
+ * pin_capture_start() (not for replay sessions, whose end-of-file is the end of
+ * the pass), so command-line presets and other front ends are covered too. */
+PIN_API int pin_capture_opts_normalize(pin_capture_opts_t *o);
+
 typedef struct {
     uint32_t size;
     uint64_t free_bytes;

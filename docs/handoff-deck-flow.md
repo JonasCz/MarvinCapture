@@ -31,6 +31,11 @@ pure helpers have unit tests (`tests/engine/test_pin_deck.c`). Background:
 
 ## To verify with the camera
 
+- Multi-pass with only "Stop after" (`--passes 2`, `idle_stop_minutes = 0`,
+  `max_duration_minutes = 1`): pass ends after 1 min of capture, REW, BOT, PLAY,
+  pass 2; the minute is not counted while rewinding. Only the pure rule
+  (`pin_capture_passes_allowed`) has a unit test.
+
 - `pin_capture_stop_ex`: GUI "Stop capture & stop tape" on a Manual capture must
   stop the tape; "Stop capture & continue tape" on an Automatic capture must
   leave it playing (only reasoned, no camera test).

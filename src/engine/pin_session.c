@@ -2846,6 +2846,10 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     if (!overwrite && cs == PIN_OK && chk.collision)
         return PIN_ERR_EXISTS;
     pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_START, .capture = *o, .overwrite = overwrite };
+    /* A real tape needs a no-signal or time limit to notice the end of a pass;
+     * a replay's end of file is the end of the pass. */
+    if (!s->is_replay)
+        pin_capture_opts_normalize(&c.capture);
     post_cmd(s, &c);
     return PIN_OK;
 }

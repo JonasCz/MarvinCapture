@@ -161,6 +161,23 @@ public static unsafe partial class Native
     [LibraryImport(Lib)]
     private static partial void pin_capture_opts_defaults(ref PinCaptureOpts o);
 
+    [LibraryImport(Lib)]
+    private static partial int pin_capture_passes_allowed(int idleStopMinutes, int maxDurationMinutes);
+
+    /// <summary>Core rule: more than one pass needs the no-signal timeout or the per-pass time limit.</summary>
+    public static bool PassesAllowed(double idleStopMinutes, double maxDurationMinutes)
+    {
+        static int Min(double v) => double.IsNaN(v) || v < 0 ? 0 : (int)Math.Min(v, int.MaxValue);
+        try
+        {
+            return pin_capture_passes_allowed(Min(idleStopMinutes), Min(maxDurationMinutes)) != 0;
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return true; // older core: it enforces nothing either
+        }
+    }
+
     public static PinCaptureOpts CaptureOptsDefaults()
     {
         var o = PinCaptureOpts.Create();

@@ -708,7 +708,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.SceneSplit = !analog && kind.SplitIntoScenes && kind.SplitEnabled ? 1 : 0;
         o.IdleStopMinutes = (int)Math.Max(0, analog ? AnalogIdleStopMinutes : kind.IdleStopMinutes);
         o.MaxDurationMinutes = (int)Math.Max(0, analog ? AnalogMaxDurationMinutes : kind.MaxDurationMinutes);
-        o.Passes = analog ? 1 : (int)Math.Max(1, kind.Passes);
+        o.Passes = analog ? 1 : kind.EffectivePasses;
         o.StartDeck = startDeck ? 1 : 0;
         o.RewindFirst = rewindFirst ? 1 : 0; // "Play and capture": start of tape, then play
         return o;

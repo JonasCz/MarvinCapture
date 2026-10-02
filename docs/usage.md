@@ -23,7 +23,13 @@ Two ways in, both on the same core library:
   rewound instead and the next pass starts from the beginning. The "Stop
   after (min)" limit is per pass and counts only capture time (not the rewind);
   it ends a pass like the no-signal timeout, and in the last pass it ends the
-  capture and stops the tape.
+  capture and stops the tape. "Capture passes" is greyed out (fixed at 1, with a
+  tooltip saying why) while neither "Stop no signal" nor "Stop after" is set,
+  because multi-pass needs one of them to detect the end of a pass; with only
+  "Stop after" set, each pass is stopped and rewound after that time. The
+  value you chose comes back when a limit is set again. The core enforces the
+  same rule (`pin_capture_passes_allowed`, `pin_capture_opts_normalize`), so
+  `--passes 2` without `--idle-min` / a duration limit also captures once.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
 - **The command-line tools** in `build\dist\cli\` (see [building.md](building.md)):
 

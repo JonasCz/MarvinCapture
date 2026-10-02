@@ -42,13 +42,48 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     public ObservableCollection<FormatItem> Formats { get; } = new();
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(TitleEnabled), nameof(SplitEnabled), nameof(PassesEnabled))]
+    [NotifyPropertyChangedFor(nameof(TitleEnabled), nameof(SplitEnabled), nameof(PassesEnabled), nameof(PassesUsable))]
     private FormatItem? _selectedFormat;
 
     [ObservableProperty] private bool _splitIntoScenes;
-    [ObservableProperty] private double _idleStopMinutes = 5;
-    [ObservableProperty] private double _maxDurationMinutes;
-    [ObservableProperty] private double _passes = 1;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PassesAllowed), nameof(PassesUsable), nameof(DisplayPasses), nameof(PassesToolTip))]
+    private double _idleStopMinutes = 5;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PassesAllowed), nameof(PassesUsable), nameof(DisplayPasses), nameof(PassesToolTip))]
+    private double _maxDurationMinutes;
+
+    /// <summary>The user's own pass count; kept (and saved) while the entry is greyed out, so it comes back.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(DisplayPasses), nameof(EffectivePasses))]
+    private double _passes = 1;
+
+    /// <summary>The core's rule: passes need the no-signal timeout or the "stop after" limit.</summary>
+    public bool PassesAllowed => Native.PassesAllowed(IdleStopMinutes, MaxDurationMinutes);
+
+    /// <summary>Entry enabled (before the editable-while-idle check): format supports passes and a limit is set.</summary>
+    public bool PassesUsable => PassesEnabled && PassesAllowed;
+
+    /// <summary>What the entry shows: 1 while passes are not allowed, else the user's value.</summary>
+    public double DisplayPasses
+    {
+        get => PassesAllowed ? Passes : 1;
+        set
+        {
+            if (PassesAllowed)
+            {
+                Passes = value;
+            }
+        }
+    }
+
+    /// <summary>Pass count to capture with (what the core would also enforce).</summary>
+    public int EffectivePasses => PassesAllowed ? (int)Math.Max(1, double.IsNaN(Passes) ? 1 : Passes) : 1;
+
+    public string PassesToolTip => PassesAllowed
+        ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again."
+        : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass.";
 
     /// <summary>Aspect override for this kind (PinAspect order: Auto, 4:3, 16:9).</summary>
     [ObservableProperty] private int _aspectIndex;

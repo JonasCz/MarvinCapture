@@ -130,6 +130,12 @@ PinnacleCapture/
   `pin_capture_stop_ex` with `PIN_STOP_DECK_NO` ("continue tape") or
   `PIN_STOP_DECK_YES` ("stop tape"), so the choice does not depend on how the
   capture was started.
+- "Capture passes" is disabled and shown as 1 (tooltip: multi-pass needs a way
+  to detect the end of a pass) while both "Stop no signal" and "Stop after" are
+  0. The rule is the core's (`pin_capture_passes_allowed`, called through
+  `Native.PassesAllowed`); `KindSettingsViewModel` keeps the user's pass count
+  and restores it when a limit is set again, and `EffectivePasses` is what goes
+  into the capture options (the core also enforces it at capture start).
 - Before a capture starts, `pin_check_output` reports `low_space` (free space
   known and under 25 GiB, `PIN_LOW_SPACE_BYTES`); the window then asks "Only X
   free on D:\. Continue?" with OK / Cancel, for analog, DV and HDV alike.

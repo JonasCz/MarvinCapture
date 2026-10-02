@@ -321,6 +321,23 @@ void pin_capture_opts_defaults(pin_capture_opts_t *o)
     o->passes = 1;
 }
 
+int pin_capture_passes_allowed(int idle_stop_minutes, int max_duration_minutes)
+{
+    return idle_stop_minutes > 0 || max_duration_minutes > 0;
+}
+
+int pin_capture_opts_normalize(pin_capture_opts_t *o)
+{
+    if (!o)
+        return 0;
+    int want = o->passes < 1 ? 1 : o->passes;
+    if (want > 1 && !pin_capture_passes_allowed(o->idle_stop_minutes, o->max_duration_minutes))
+        want = 1;
+    int changed = want != o->passes;
+    o->passes = want;
+    return changed;
+}
+
 pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
                                pin_output_check_t *out)
 {

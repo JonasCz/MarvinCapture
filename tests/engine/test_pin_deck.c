@@ -57,6 +57,20 @@ int main(void)
     CHECK(pin_deck_parse_timecode(wrongop, 8, &tc) != 0, "wrong opcode");
 
     /* TRANSPORT STATE (replaces the opcode with the transport mode) */
+    {
+        pin_capture_opts_t o;
+        pin_capture_opts_defaults(&o);
+        CHECK(!pin_capture_passes_allowed(0, 0), "no limit: no passes");
+        CHECK(pin_capture_passes_allowed(5, 0), "idle only");
+        CHECK(pin_capture_passes_allowed(0, 30), "duration only");
+        CHECK(pin_capture_passes_allowed(5, 30), "both");
+        o.passes = 3;
+        CHECK(pin_capture_opts_normalize(&o) == 1 && o.passes == 1, "forced to 1 without limits");
+        o.passes = 3; o.max_duration_minutes = 10;
+        CHECK(pin_capture_opts_normalize(&o) == 0 && o.passes == 3, "kept with duration");
+        o.passes = 0;
+        CHECK(pin_capture_opts_normalize(&o) == 1 && o.passes == 1, "passes < 1 becomes 1");
+    }
     CHECK(pin_deck_state_from_avc(0xc4, 0x60) == PIN_DECK_STOPPED, "wind stop");
     CHECK(pin_deck_state_from_avc(0xc4, 0x65) == PIN_DECK_REWINDING, "rewind");
     CHECK(pin_deck_state_from_avc(0xc4, 0x75) == PIN_DECK_FAST_FORWARD, "ff");
