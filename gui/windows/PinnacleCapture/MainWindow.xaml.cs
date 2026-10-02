@@ -515,7 +515,16 @@ public sealed partial class MainWindow : Window
             _taskbar.SetProgress(VM.TaskbarMode, VM.TaskbarFraction);
         }
         _taskbar.SetCapturing(VM.IsCapturing);
+
+        // A capture that ended or failed while the window is in the background: flash its taskbar button.
+        if (_wasCapturing && !VM.IsCapturing && !_finalizingForClose && !_closing)
+        {
+            _taskbar.FlashIfInBackground();
+        }
+        _wasCapturing = VM.IsCapturing;
     }
+
+    private bool _wasCapturing;
 
     /// <summary>Keeps the machine from sleeping mid-capture; released as soon as capture ends.</summary>
     private void UpdateKeepAwake()

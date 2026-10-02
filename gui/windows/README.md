@@ -102,6 +102,9 @@ dot at its lower right corner (`ITaskbarList3::SetOverlayIcon`, accessible name 
 drawn at run time at the small-icon size of the window's DPI (`Controls/TaskbarIcons`), so there are no
 asset files. It is cleared when the capture ends.
 
+When a capture finishes or fails while the window is not in the foreground, the taskbar button flashes
+(`FlashWindowEx`, `FLASHW_TRAY | FLASHW_TIMERNOFG`) until the window is brought to the front.
+
 ## Theme testing
 
 The app follows the Windows light/dark setting. To check the other theme

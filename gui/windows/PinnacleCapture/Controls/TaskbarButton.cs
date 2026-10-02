@@ -182,6 +182,28 @@ public sealed class TaskbarButton : IDisposable
         }
     }
 
+    // ================================================================== attention
+
+    /// <summary>
+    /// Flashes the taskbar button (not the caption) until the window is brought to the front, but
+    /// only if it is not the foreground window right now.
+    /// </summary>
+    public void FlashIfInBackground()
+    {
+        if (_disposed || Win32.GetForegroundWindow() == _hwnd)
+        {
+            return;
+        }
+        var info = new Win32.FLASHWINFO
+        {
+            CbSize = (uint)Marshal.SizeOf<Win32.FLASHWINFO>(),
+            Hwnd = _hwnd,
+            Flags = Win32.FLASHW_TRAY | Win32.FLASHW_TIMERNOFG,
+            Count = uint.MaxValue, // with TIMERNOFG: until the window comes to the foreground
+        };
+        Win32.FlashWindowEx(ref info);
+    }
+
     // ================================================================== overlay icon
 
     private bool? _overlayOn;
