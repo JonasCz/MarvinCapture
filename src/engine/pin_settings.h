@@ -86,6 +86,16 @@ void pin_settings_set_double(pin_settings_t *s, const char *section, const char 
                               double value);
 void pin_settings_set_bool(pin_settings_t *s, const char *section, const char *key, int value);
 
+/* Builds the per-device settings key "dev_<ID>.<key>" (section "dev_<ID>"), so
+ * every unit keeps its own independent settings in the shared INI. <ID> is the
+ * unit's 1394 GUID (serial, 16 hex chars, upper-cased) when known, else the
+ * device id (USB port path) with every character other than [A-Za-z0-9_-]
+ * replaced by '_' (a '.' would split the section). key NULL or "" yields just
+ * the prefix "dev_<ID>." to concatenate keys onto. Returns 0, or -1 if neither
+ * serial nor id is usable or out_size is too small. */
+int pin_settings_device_key(const char *serial, const char *id, const char *key, char *out,
+                            size_t out_size);
+
 /* Fills out (UTF-8, out_size bytes) with this platform's default settings
  * file path and makes sure its containing directory exists (best-effort;
  * pin_settings_save will still fail cleanly if that didn't work):

@@ -116,8 +116,33 @@ static void test_default_path(void)
     }
 }
 
+static void test_device_key(void)
+{
+    char k[128];
+    CHECK(pin_settings_device_key("0a1b2c3d4e5f6071", "usb:1-4.2", "gui.dir_dv", k, sizeof(k)) == 0 &&
+              strcmp(k, "dev_0A1B2C3D4E5F6071.gui.dir_dv") == 0,
+          "serial wins, upper-cased");
+    CHECK(pin_settings_device_key("", "usb:1-4.2", "gui.x", k, sizeof(k)) == 0 &&
+              strcmp(k, "dev_usb_1-4_2.gui.x") == 0,
+          "id fallback has no dots or colons");
+    CHECK(pin_settings_device_key("ABCD", NULL, NULL, k, sizeof(k)) == 0 && strcmp(k, "dev_ABCD.") == 0,
+          "no key gives the prefix");
+    CHECK(pin_settings_device_key(NULL, NULL, "k", k, sizeof(k)) == -1, "no identity fails");
+    CHECK(pin_settings_device_key("ABCD", NULL, "gui.long_key", k, 12) == -1, "too small fails");
+
+    /* two devices stay independent, and the key's section/key split survives the INI store */
+    char ka[128], kb[128];
+    pin_settings_device_key("AAAA", NULL, "gui.name_dv", ka, sizeof(ka));
+    pin_settings_device_key("BBBB", NULL, "gui.name_dv", kb, sizeof(kb));
+    CHECK(strcmp(ka, kb) != 0, "different devices, different keys");
+    const char *dot = strchr(ka, '.');
+    CHECK(dot && strncmp(dot + 1, "gui.name_dv", 11) == 0 && (size_t)(dot - ka) == 8,
+          "section ends at the first dot");
+}
+
 int main(void)
 {
+    test_device_key();
     test_missing_file_is_empty();
     test_round_trip();
     test_bool_variants_and_comments();

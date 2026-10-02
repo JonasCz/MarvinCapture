@@ -57,7 +57,7 @@ If the app runs cleanly, that file doesn't exist.
 ## Command line
 
 The core parses the command line (`pin_launch_parse`), so every front-end
-accepts the same options. Presets are applied over the saved settings. Actions
+accepts the same options. Presets are applied over the selected device's saved settings. Actions
 run once the device is ready.
 
 ```powershell
@@ -130,6 +130,14 @@ PinnacleCapture/
 - Before a capture starts, `pin_check_output` reports `low_space` (free space
   known and under 25 GiB, `PIN_LOW_SPACE_BYTES`); the window then asks "Only X
   free on D:\. Continue?" with OK / Cancel, for analog, DV and HDV alike.
+- Settings are per device. Everything except the items below is stored under
+  `dev_<GUID>.gui.*` in the settings file, where the prefix comes from the core
+  (`pin_device_settings_key`: the unit's GUID, or the sanitised USB port id
+  while no GUID is known). Selecting another device in the list loads that
+  device's settings (defaults if it has none); with no device selected nothing
+  is saved. Global: window geometry (`gui.window*`), the last used device
+  (`gui.last_device`) and mute (`gui.muted`). Older flat `gui.*` options are not
+  migrated and are ignored.
 - Window position, size and maximised state are saved on close
   (`gui.window`, `gui.window_maximized`) and restored at start. A saved
   rectangle that no longer touches any monitor falls back to the centred

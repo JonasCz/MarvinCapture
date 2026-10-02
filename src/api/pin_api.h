@@ -607,6 +607,17 @@ PIN_API int pin_monitor_available(pin_session_t *s);
 PIN_API pin_status_t pin_settings_get(const char *key, char *out, size_t cap);
 PIN_API pin_status_t pin_settings_set(const char *key, const char *value);
 
+/* Per-device settings: builds the key "dev_<ID>.<key>" for a unit so each
+ * device keeps its own independent set (GUI options, output paths, ...).
+ * <ID> is the unit's GUID (pin_device_info_t.serial) when known, else the
+ * device id (sanitised; only stable while plugged into the same port). Pass
+ * the serial and id fields of pin_device_info_t; either may be "" but not both.
+ * key NULL/"" returns just the prefix "dev_<ID>." to append keys to. Use the
+ * result with pin_settings_get/set. App-global settings (window geometry, last
+ * used device) keep their plain keys. */
+PIN_API pin_status_t pin_device_settings_key(const char *serial, const char *id, const char *key,
+                                            char *out, size_t cap);
+
 /* ---- launch options / scripted actions ----------------------------------- */
 
 typedef enum {

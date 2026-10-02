@@ -127,7 +127,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnInputIndexChanged(int value)
     {
-        if (Session is { IsInvalid: false })
+        if (Session is { IsInvalid: false } && !_loading)
         {
             Report(Native.SetInput(Session, (PinInput)value), "Switch input");
             RefreshControls();
@@ -302,7 +302,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         OnPropertyChanged(nameof(MuteGlyph));
         OnPropertyChanged(nameof(MuteActionName));
-        SaveSetting("gui.muted", value ? "1" : "0");
+        SaveGlobalSetting("gui.muted", value ? "1" : "0");
         _audio.IsMuted = value;
         if (Session is { IsInvalid: false })
         {
@@ -539,8 +539,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         if (pick is null && preferredId != "first")
         {
-            var last = LoadSetting("gui.last_device");
-            pick = Devices.FirstOrDefault(d => d.Id == last && d.IsUsable);
+            var last = LoadGlobalSetting("gui.last_device");
+            pick = Devices.FirstOrDefault(d => d.IsUsable && last.Length > 0 &&
+                       (d.Id == last || string.Equals(d.Serial, last, StringComparison.OrdinalIgnoreCase)));
         }
         pick ??= Devices.FirstOrDefault(d => d.IsUsable); // in-use devices can't be picked at all
         return pick;
@@ -580,7 +581,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         Session = session;
         _openedDeviceId = dev.Id;
-        SaveSetting("gui.last_device", dev.Id);
+        SaveGlobalSetting("gui.last_device", dev.Serial.Length > 0 ? dev.Serial : dev.Id);
 
         _appliedAspect = null;
         ApplyPreviewAspect();
@@ -1098,7 +1099,43 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // ================================================================== settings
 
-    private static string LoadSetting(string key, string fallback = "")
+    // Every option except the app-global ones (window geometry, last device, mute) is stored per
+    // device: the core builds the "dev_<GUID>." key prefix (pin_device_settings_key). With no device
+    // selected there is no scope: loads give the defaults and nothing is written.
+    private string? _settingsScope;
+
+    /// <summary>The selected device's settings prefix, or null when no device is selected.</summary>
+    private static string? ScopeFor(DeviceItemViewModel d)
+    {
+        try
+        {
+            return Native.DeviceSettingsPrefix(d.Serial, d.Id);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Per-device settings are reloaded whenever another device is selected (not while capturing).</summary>
+    partial void OnSelectedDeviceChanged(DeviceItemViewModel? value)
+    {
+        if (value is null || IsCapturing)
+        {
+            return;
+        }
+        var scope = ScopeFor(value);
+        if (scope != _settingsScope)
+        {
+            _settingsScope = scope;
+            LoadSettings();
+        }
+    }
+
+    private string LoadSetting(string key, string fallback = "") =>
+        _settingsScope is null ? fallback : LoadGlobalSetting(_settingsScope + key, fallback);
+
+    private static string LoadGlobalSetting(string key, string fallback = "")
     {
         try
         {
@@ -1111,6 +1148,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private void SaveSetting(string key, string value)
+    {
+        if (_settingsScope is not null)
+        {
+            SaveGlobalSetting(_settingsScope + key, value);
+        }
+    }
+
+    private void SaveGlobalSetting(string key, string value)
     {
         if (_loading)
         {
@@ -1140,18 +1185,32 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveSetting($"gui.aspect_{p}", k.AspectIndex.ToString(CultureInfo.InvariantCulture));
     }
 
-    private static int LoadInt(string key, int fallback) =>
+    private int LoadInt(string key, int fallback) =>
         int.TryParse(LoadSetting(key), NumberStyles.Integer, CultureInfo.InvariantCulture, out var v) ? v : fallback;
 
-    public void LoadSettings()
+    /// <summary>App-global (not per-device) settings, read once at startup.</summary>
+    public void LoadGlobalSettings()
+    {
+        _loading = true;
+        try
+        {
+            // Muted unless the user unmuted last time: a live monitor into
+            // speakers next to the source's microphone is a feedback loop.
+            IsMuted = LoadGlobalSetting("gui.muted", "1") != "0";
+        }
+        finally
+        {
+            _loading = false;
+        }
+    }
+
+    /// <summary>Loads the selected device's settings (defaults for a device never seen before).</summary>
+    private void LoadSettings()
     {
         _loading = true;
         try
         {
             InputIndex = Math.Clamp(LoadInt("gui.last_input", 0), 0, 2);
-            // Muted unless the user unmuted last time: a live monitor into
-            // speakers next to the source's microphone is a feedback loop.
-            IsMuted = LoadInt("gui.muted", 1) != 0;
             AnalogAspectIndex = Math.Clamp(LoadInt("gui.aspect_analog", 0), 0, 2);
             LoadOutput("analog", "analog", out var analogDir, out var analogName);
             AnalogOutputDir = analogDir;
@@ -1194,19 +1253,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    /// <summary>Loads the directory and name; falls back to the old single-path setting, then the defaults.</summary>
-    private static void LoadOutput(string key, string defaultName, out string dir, out string name)
+    /// <summary>Loads the directory and name for this device, falling back to the defaults.</summary>
+    private void LoadOutput(string key, string defaultName, out string dir, out string name)
     {
         dir = LoadSetting($"gui.dir_{key}");
         name = LoadSetting($"gui.name_{key}");
-        if (dir.Length == 0 && name.Length == 0)
-        {
-            var legacy = LoadSetting($"gui.output_{key}");
-            if (legacy.Length > 0)
-            {
-                SplitPath(legacy, out dir, out name);
-            }
-        }
         if (dir.Length == 0)
         {
             dir = Environment.GetFolderPath(Environment.SpecialFolder.MyVideos);

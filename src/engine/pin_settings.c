@@ -325,6 +325,31 @@ void pin_settings_set_bool(pin_settings_t *s, const char *section, const char *k
     set_entry(s, section, key, value ? "true" : "false");
 }
 
+int pin_settings_device_key(const char *serial, const char *id, const char *key, char *out,
+                            size_t out_size)
+{
+    const char *src = (serial && *serial) ? serial : id;
+    if (!src || !*src || !out || out_size < 8)
+        return -1;
+    int upper = (serial && *serial) ? 1 : 0;
+    size_t n = (size_t)snprintf(out, out_size, "dev_");
+    for (; *src; src++) {
+        unsigned char ch = (unsigned char)*src;
+        char o = (isalnum(ch) || ch == '-' || ch == '_') ? (char)(upper ? toupper(ch) : ch) : '_';
+        if (n + 2 >= out_size)
+            return -1;
+        out[n++] = o;
+    }
+    out[n++] = '.';
+    out[n] = ' ';
+    if (key && *key) {
+        if (n + strlen(key) + 1 > out_size)
+            return -1;
+        memcpy(out + n, key, strlen(key) + 1);
+    }
+    return 0;
+}
+
 #ifdef _WIN32
 static int ensure_dir(const char *utf8_path)
 {

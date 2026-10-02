@@ -270,11 +270,7 @@ public sealed partial class MainWindow : Window
 
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
-        VM.LoadSettings();
-        if (_hasLaunch)
-        {
-            VM.ApplyLaunch(in _launch);
-        }
+        VM.LoadGlobalSettings();
 
         try
         {
@@ -289,7 +285,12 @@ public sealed partial class MainWindow : Window
 
         VM.RefreshDevices();
         var preferred = _hasLaunch ? _launch.Device : null;
+        // Selecting the device loads its own settings; the command-line presets go on top of them.
         VM.SelectedDevice = VM.PickInitialDevice(string.IsNullOrEmpty(preferred) ? null : preferred);
+        if (_hasLaunch)
+        {
+            VM.ApplyLaunch(in _launch);
+        }
         _startupDone = true;
         OpenSelectedIfNeeded();
 

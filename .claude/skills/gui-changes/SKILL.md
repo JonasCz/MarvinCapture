@@ -40,8 +40,7 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
 - Output path = `OutputDir` + `Name` (analog: `AnalogOutputDir`/`AnalogName`,
   DV/HDV shared: `DvOutputDir`/`DvName`); `AnalogOutputPath` / `DvOutputPath` are
   computed. The name box is also the embedded title (no separate Title field).
-  The directory button uses `FolderPicker`. Old single-path settings
-  (`gui.output_*`) are migrated in `LoadOutput`.
+  The directory button uses `FolderPicker`.
 
 ## Adding or changing a native call / option
 
@@ -53,7 +52,14 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
   `pin_capture_opts_t` must be added in the same order/size in C and C#.
 - Settings: `Native.SettingsGet/Set` -> core `pin_settings_get/set`. Keys are
   `gui.*`, all best-effort (try/catch). Writes are suppressed while `_loading`.
-  Add the save in the `OnXChanged` hook and the load in `LoadSettings`.
+  Add the save in the `OnXChanged` hook and the load in `LoadSettings`. Options
+  are **per device**: `SaveSetting`/`LoadSetting` prefix the key with
+  `dev_<GUID>.` (core `pin_device_settings_key`, scope `_settingsScope`), and
+  `OnSelectedDeviceChanged` reloads them when another device is selected (no
+  device = defaults, nothing saved). Only window geometry, `gui.last_device`
+  and `gui.muted` are global: use `SaveGlobalSetting`/`LoadGlobalSetting`.
+  Startup order matters: select the device (loads its settings), then
+  `ApplyLaunch`, then open. No migration of old flat keys.
 - Command line: the core parses it (`pin_launch_parse`); the GUI applies the
   result in `ApplyLaunch`, only for fields flagged in `capture_fields`. Docs for
   the options are in `gui/windows/README.md` and `docs/usage.md`.

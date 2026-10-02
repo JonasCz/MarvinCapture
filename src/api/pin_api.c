@@ -579,6 +579,14 @@ pin_status_t pin_settings_get(const char *key, char *out, size_t cap)
     return PIN_OK;
 }
 
+pin_status_t pin_device_settings_key(const char *serial, const char *id, const char *key,
+                                    char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return PIN_ERR_ARG;
+    return pin_settings_device_key(serial, id, key, out, cap) == 0 ? PIN_OK : PIN_ERR_ARG;
+}
+
 pin_status_t pin_settings_set(const char *key, const char *value)
 {
     if (!key || !value)

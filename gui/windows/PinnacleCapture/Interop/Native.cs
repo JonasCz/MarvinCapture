@@ -356,6 +356,17 @@ public static unsafe partial class Native
     private static partial PinStatus pin_settings_set(string key, string value);
     public static PinStatus SettingsSet(string key, string value) => pin_settings_set(key, value);
 
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial PinStatus pin_device_settings_key(string serial, string id, string? key, byte* out_, nuint cap);
+
+    /// <summary>"dev_&lt;ID&gt;." prefix for this unit's own settings (core: pin_device_settings_key); null if no usable ID.</summary>
+    public static string? DeviceSettingsPrefix(string serial, string id)
+    {
+        const int cap = 256;
+        byte* buf = stackalloc byte[cap];
+        return pin_device_settings_key(serial, id, null, buf, (nuint)cap) == PinStatus.Ok ? Utf8Fixed.Get(buf, cap) : null;
+    }
+
     // ---- launch options / scripted actions --------------------------------------------
 
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]

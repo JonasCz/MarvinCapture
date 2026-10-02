@@ -5,7 +5,10 @@ Two ways in, both on the same core library:
 - **The GUI**, `PinnacleCapture.exe` ([gui/windows/README.md](../gui/windows/README.md)):
   device list, live preview, deck control, DV/HDV/analog capture with scene
   splitting and the same integrity checks. It remembers its window position
-  and size, and asks before capturing when the output drive has under 25 GB
+  and size, and keeps a separate set of settings (output folders and names,
+  formats, passes, idle/duration limits, aspect, standard, picture controls)
+  for each camera/capture unit, keyed by the unit's FireWire GUID, so switching
+  device in the list loads that unit's own options (defaults for a new one). It asks before capturing when the output drive has under 25 GB
   free. During a capture the deck buttons are disabled; "Manual capture"
   records without touching the tape and "Automatic rewind & capture" drives
   the deck (their stop labels: "Stop capture & continue tape" / "Stop capture

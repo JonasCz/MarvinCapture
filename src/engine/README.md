@@ -48,7 +48,8 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
 
 - **`pin_settings.[ch]`** — tiny INI settings store (load/save,
   string/int/double/bool accessors) with an atomic (write-temp-then-rename)
-  save and the per-platform default config file path.
+  save and the per-platform default config file path, plus
+  `pin_settings_device_key` (the `dev_<GUID>.` per-device key prefix).
 
 - **`pin_cmdline.[ch]`** — the command-line parser shared by every GUI and
   by `pinctl`: one-shot capture presets (optionally seeded from an INI file
