@@ -304,8 +304,12 @@ static int cmd_capture(int argc, char **argv)
     printf("\n");
     pin_capture_stop(s);
     sleep_ms(300);
+    pin_status_snapshot_t fin; memset(&fin, 0, sizeof(fin)); fin.size = sizeof(fin);
+    pin_get_status(s, &fin);
+    if (fin.stop_text[0])
+        printf("%s\n", fin.stop_text);
     pin_close(s);
-    return 0;
+    return fin.stop_reason == PIN_STOP_NONE || fin.stop_reason == PIN_STOP_USER ? 0 : 2;
 }
 
 static int cmd_preview_dump(int argc, char **argv, const char *id)

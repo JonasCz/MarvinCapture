@@ -231,8 +231,14 @@ public unsafe struct PinStatusSnapshot
     public int VideoInterlaced;
     public fixed byte VideoLabelBuf[16];
 
+    // Appended later: how the last capture ended (see pin_stop_reason_t).
+    public PinStopReason StopReason;
+    public double StopCapturedS;
+    public fixed byte StopTextBuf[PinLimits.TextMax];
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string VideoLabel { get { fixed (byte* p = VideoLabelBuf) return Utf8Fixed.Get(p, 16); } }
+    public string StopText { get { fixed (byte* p = StopTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }
     public string RecDatetime { get { fixed (byte* p = RecDatetimeBuf) return Utf8Fixed.Get(p, 32); } }

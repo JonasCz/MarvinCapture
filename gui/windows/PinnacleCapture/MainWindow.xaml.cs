@@ -707,6 +707,14 @@ public sealed partial class MainWindow : Window
             _allowClose = true;
             Close();
         }
+        // A capture that ended on its own (no signal, time limit, device or camera gone,
+        // disk full, ...): say so, with how much was captured. Not for the user's own stop,
+        // and not while closing or running unattended command-line actions.
+        if (e.Kind == PinEventKind.CaptureEnded && (PinStopReason)e.A != PinStopReason.User &&
+            !_closing && !_finalizingForClose && !_exitWhenDone)
+        {
+            _ = ShowDialogAsync("Capture stopped", e.Text, null, "OK");
+        }
     }
 
     // ================================================================== devices

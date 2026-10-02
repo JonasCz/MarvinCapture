@@ -209,6 +209,16 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   sessions are exempt: their end of file ends a pass). With only the time limit
   set, the no-signal check is off and the pass ends after the time alone; with
   both, whichever comes first.
+- **Why it ended.** Every end of a capture goes through `capture_end()`, which
+  closes the file, sends Stop if asked, and reports a `pin_stop_reason_t` with a
+  ready-made sentence (`PIN_EVT_CAPTURE_ENDED`, `stop_*` in the status). See
+  usage.md "When a capture stops by itself".
+- **Bus reset during a capture.** The bus watch (`SelfIDCount` every 0.5 s)
+  runs while a capture is active too; a change restarts the stream with the
+  file kept open (HDV waits for the next GOP). If the camera is missing after
+  the re-scan, `camera_lost_s` starts a 10 s grace period; when the camera comes
+  back, a capture that drives the deck sends PLAY again (or REW, if it was
+  rewinding). Untested (no camera).
 - Not implemented: detecting the end of tape from the deck state alone (with
   the no-signal timeout off, a multi-pass capture waits forever at the end).
 - The deck's own timecode while winding is described under "Timecode while

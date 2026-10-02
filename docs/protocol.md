@@ -140,8 +140,9 @@ vendor binary.
 - Decode the EP 0x84 event stream properly. Type-10 messages carry the OHCI
   `IntEvent` register (bit 17 selfIDComplete, 18 busReset, 23 cycleLost, 24
   cycleInconsistent, 26 cycleTooLong). That would turn most failures into a
-  printed reason. Handling a bus reset *during* capture belongs here too: the
-  connection must be re-established within 1 s.
+  printed reason. A bus reset *during* capture is noticed by polling
+  `SelfIDCount` and handled by restarting the stream (see hardware.md); reading
+  the busReset bit from these records instead would notice it sooner.
 - Timecode-based drop detection is not worth doing: the camera emits none in
   live view, and CIP/DBC continuity is finer-grained. Revisit only if capture
   from *tape* is added.

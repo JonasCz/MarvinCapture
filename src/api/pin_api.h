@@ -390,6 +390,23 @@ PIN_API pin_status_t pin_capture_stop_ex(pin_session_t *s, pin_stop_deck_t stop_
 
 /* ---- status --------------------------------------------------------------- */
 
+/* Why a capture ended (pin_status_snapshot_t.stop_reason, PIN_EVT_CAPTURE_ENDED).
+ * Everything but PIN_STOP_USER happened on its own; GUIs tell the user. */
+typedef enum {
+    PIN_STOP_NONE = 0,          /* no capture has ended in this session yet */
+    PIN_STOP_USER,              /* pin_capture_stop[_ex], deck Stop, input switch, close */
+    PIN_STOP_NO_SIGNAL,         /* idle_stop_minutes without data / signal, in the last pass */
+    PIN_STOP_TIME_LIMIT,        /* max_duration_minutes reached, in the last pass */
+    PIN_STOP_END_OF_TAPE,       /* replay device: the end of the source file, in the last pass */
+    PIN_STOP_DEVICE_LOST,       /* the capture device stopped answering on USB (unplugged);
+                                   the session goes to PIN_STATE_ERROR */
+    PIN_STOP_CAMERA_LOST,       /* DV / HDV: the camera left the FireWire bus and did not come back */
+    PIN_STOP_DISK_FULL,         /* the output drive got too full to go on; stopped while there
+                                   was still room to finish the file */
+    PIN_STOP_WRITE_ERROR,       /* writing or opening an output file failed */
+    PIN_STOP_ERROR,             /* any other error (see last_error / error_text) */
+} pin_stop_reason_t;
+
 typedef struct {
     uint32_t size;
     pin_state_t state;
@@ -524,6 +541,15 @@ typedef struct {
     int video_fps_num, video_fps_den;
     int video_interlaced;
     char video_label[16];
+
+    /* Appended fields, ABI-compatible. How the last capture of this session
+     * ended (PIN_STOP_NONE until one has; cleared when a capture starts):
+     * stop_captured_s is the length of what was captured (all passes, from
+     * the frame count), stop_text the same ready-made sentence as the
+     * PIN_EVT_CAPTURE_ENDED event. */
+    pin_stop_reason_t stop_reason;
+    double stop_captured_s;
+    char stop_text[PIN_TEXT_MAX];
 } pin_status_snapshot_t;
 
 /* Non-blocking. */
@@ -577,6 +603,8 @@ typedef enum {
     PIN_EVT_ERROR,          /* a = pin_status_t, text = message */
     PIN_EVT_DONE,           /* the action list (pin_run_actions) finished: a = pin_status_t */
     PIN_EVT_DEVICES,        /* device list may have changed (this process's own view) */
+    PIN_EVT_CAPTURE_ENDED,  /* a capture ended (after its files were closed): a = pin_stop_reason_t,
+                               text = "Capture stopped after capturing 12m30s, because ..." */
 } pin_event_kind_t;
 
 typedef struct {

@@ -224,6 +224,31 @@ An FFV1 capture saves its 10-minute average every minute and when it ends as
 (`core.ffv1_bytes_per_hour` for `pin_settings_get/set`); implausible values
 (< 1 GB/h, > 300 GB/h) are ignored.
 
+### When a capture stops by itself
+
+Every end of a capture is reported once, after its files are closed, as
+`PIN_EVT_CAPTURE_ENDED` (`a` = `pin_stop_reason_t`, text = one sentence such as
+"Capture stopped after capturing 12m30s, because the output drive is almost
+full (60 MB left).") and in the status (`stop_reason`, `stop_captured_s`,
+`stop_text`, kept until the next capture starts). The captured time is the
+frame count of all passes, not the wall time. The GUI shows the sentence in a
+dialog with an OK button for every reason except the user's own stop;
+`pinctl capture` prints it and exits with 2.
+
+| reason | when |
+|---|---|
+| `NO_SIGNAL` / `TIME_LIMIT` | the no-signal timeout or the time limit, in the last pass |
+| `END_OF_TAPE` | replay device: the end of the file in the last pass |
+| `DEVICE_LOST` | the USB stream failed and the unit no longer answers a standard GET_STATUS on EP0 (unplugged); the session goes to ERROR. Another USB failure is `ERROR` |
+| `CAMERA_LOST` | DV / HDV: the camera left the FireWire bus and was not back within 10 s |
+| `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second |
+| `WRITE_ERROR` | writing a file failed, or the next file (split, pass) could not be created |
+
+A capture that drives the deck (`start_deck`) stops the tape when it ends for
+any reason except a lost device or camera. `PINNACLE_DISK_RESERVE_MB=<n>`
+replaces the 64 MB margin; set it to the drive's free space minus a few MB to
+test the disk-full stop (verified that way with the replay device).
+
 ### The USB thread must never wait on the disk
 
 Found while chasing sporadic single holes in HDV captures; it applies equally
@@ -256,6 +281,7 @@ All opt-in environment variables; the defaults are the right values.
 | `PINNACLE_DEBUG_EP84=1` | log every EP 0x84 record with its arrival time |
 | `PINNACLE_RAW_DUMP=<path>` | write the raw EP 0x88 byte stream to a file before reassembly. This is also the input format of the replay device below |
 | `PINNACLE_DEBUG_1394`, `PINNACLE_VIDEO_QUEUE`, `PINNACLE_VIDEO_XFER` | 1394 debug logging, and the analog USB queue depth and transfer size |
+| `PINNACLE_DISK_RESERVE_MB=<n>` | free space (MB) a capture keeps on the output drive beyond the writer queue before it stops with "disk full" (default 64) |
 
 These are read by the CLIs and by the capture engine (so the GUI honours
 them too). Started from a console, the GUI also prints its log there;

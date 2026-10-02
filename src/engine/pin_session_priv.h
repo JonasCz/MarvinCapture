@@ -204,6 +204,13 @@ struct pin_session {
     unsigned scene_fifo_head, scene_fifo_count; /* ring, oldest at head */
     pin_split_t split;       /* content-split lookahead (zeroed = not initialised) */
     double capture_start_s, last_data_s;
+    int capture_began;       /* start_capture_now() opened the first file of this capture */
+    double camera_lost_s;    /* DV/HDV capture: when the camera left the bus (0 = it is there) */
+    double disk_check_s;     /* capture_guard(): last free-space check */
+    /* how the last capture ended (pin_status_snapshot_t.stop_*) */
+    pin_stop_reason_t stop_reason;
+    double stop_captured_s;
+    char stop_text[PIN_TEXT_MAX];
     char naming_base[PIN_PATH_MAX]; /* extension-stripped */
     char naming_ext[16];
 

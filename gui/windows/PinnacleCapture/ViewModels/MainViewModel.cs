@@ -1105,6 +1105,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             case PinEventKind.Devices:
                 RefreshDevices();
                 break;
+            case PinEventKind.CaptureEnded:
+                LastLogLine = evt.Text; // MainWindow shows it in a dialog unless the user stopped
+                break;
             case PinEventKind.State:
                 SessionState = (PinState)evt.A;
                 RefreshDevices(); // badge: Open / Capturing

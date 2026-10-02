@@ -151,6 +151,22 @@ public enum PinEventKind : int
     Error,
     Done,
     Devices,
+    CaptureEnded,   // A = PinStopReason, Text = ready-made sentence
+}
+
+/// <summary>Why a capture ended (pin_stop_reason_t).</summary>
+public enum PinStopReason : int
+{
+    None = 0,
+    User,
+    NoSignal,
+    TimeLimit,
+    EndOfTape,
+    DeviceLost,
+    CameraLost,
+    DiskFull,
+    WriteError,
+    Error,
 }
 
 public enum PinMatrix : int

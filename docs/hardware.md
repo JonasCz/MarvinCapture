@@ -160,5 +160,12 @@ Matching only `1f 07 00` finds sequence 0 alone and undercounts ~10×.
   reboot does not cut VBUS ([usage.md](usage.md)).
 - **The 1394 connection is managed properly**: the camera node is found by reading
   each node's oMPR, the oPCR is read and compare-swapped, receive listens on
-  the channel the plug reports, and it is released on stop. Re-connecting after
-  a bus reset *during* a capture is not handled.
+  the channel the plug reports, and it is released on stop. A bus reset
+  *during* a capture (cable moved, camera switched off and on, another node
+  added) restarts the stream the same way as when idle (link init, find the
+  camera, connect its plug again: its node number may have changed), but keeps
+  the output file open, so the capture goes on in the same file after a gap of
+  a second or two. A camera that is gone for more than 10 s ends the capture
+  ("the camera or deck was disconnected or switched off"). See
+  [usage.md](usage.md#when-a-capture-stops-by-itself). **Untested**: no camera
+  was attached when this was written.

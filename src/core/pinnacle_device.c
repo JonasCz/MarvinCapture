@@ -206,6 +206,17 @@ pinnacle_status_t pinnacle_open(pinnacle_device_t *dev)
     return pinnacle_open_by_id(dev, NULL);
 }
 
+int pinnacle_device_responds(pinnacle_device_t *dev)
+{
+    if (!dev || !dev->handle)
+        return 0;
+    uint8_t st[2];
+    int rc = libusb_control_transfer(dev->handle, LIBUSB_ENDPOINT_IN | LIBUSB_REQUEST_TYPE_STANDARD |
+                                     LIBUSB_RECIPIENT_DEVICE, LIBUSB_REQUEST_GET_STATUS, 0, 0,
+                                     st, sizeof(st), 500);
+    return rc == (int)sizeof(st);
+}
+
 void pinnacle_close(pinnacle_device_t *dev)
 {
     if (!dev)

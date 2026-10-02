@@ -37,6 +37,15 @@ session engine"). The traps:
 - Passes need a limit: `pin_capture_passes_allowed()` / `pin_capture_opts_normalize()`
   (no-signal or time limit, else passes = 1), enforced in `pin_session_capture_start`
   except for replay sessions; the GUI mirrors it via `Native.PassesAllowed`.
+- **End a capture only with `capture_end(s, reason, detail, deck_node)`** (then
+  set the state). It closes the file, sends Stop, and reports the reason
+  (`PIN_EVT_CAPTURE_ENDED` + `stop_*` status, the GUI's "Capture stopped"
+  dialog). A pass change uses `finish_file()`. `capture_guard()` (disk reserve,
+  writer failure) runs from dv_tick / analog_tick / the replay loops;
+  `stream_failed()` handles a read loop that returned by itself (unplug).
+- Bus reset during a capture: the bus watch runs while `capture_active()`, a
+  re-scan keeps the sink open across `pinnacle_stream_stop/start`;
+  `camera_lost_s` + `PIN_CAMERA_LOST_GRACE_S` end it if the camera stays gone.
 - Manual stop: `pin_capture_stop_ex(stop_deck)` (PIN_STOP_DECK_AS_STARTED/NO/YES)
   decides about deck Stop independent of `start_deck`; the GUI's two stop buttons
   use NO / YES.

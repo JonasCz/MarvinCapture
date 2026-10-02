@@ -179,6 +179,7 @@ void pin_writer_get_stats(pin_writer_t *w, pin_writer_stats_t *out)
         return;
     pthread_mutex_lock(&w->lock);
     *out = w->stats;
+    out->failed = w->failed;
     pthread_mutex_unlock(&w->lock);
 }
 

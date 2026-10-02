@@ -147,6 +147,12 @@ pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device
  * on a zero-initialised or partially-opened dev. */
 void pinnacle_close(pinnacle_device_t *dev);
 
+/* 1 if the open unit still answers a standard GET_STATUS on EP0 (handled by
+ * the FX2 itself, so it works whatever the FPGA is doing), 0 if it is gone
+ * (unplugged, powered off). For telling a vanished device from a transfer
+ * that failed for another reason. */
+int pinnacle_device_responds(pinnacle_device_t *dev);
+
 /* Reads the unit's 1394 GUID ("80 03 08" on the config channel) and nothing
  * else, so a device list can show a stable per-unit id before anyone has
  * brought the device up. The EZ-USB side answers it without the power-up

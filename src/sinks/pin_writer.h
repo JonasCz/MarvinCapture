@@ -69,6 +69,7 @@ typedef struct {
     uint64_t units_pushed;
     uint64_t units_consumed;
     uint64_t bytes_pushed;
+    int failed;                 /* the consumer returned an error: nothing more reaches the file */
 } pin_writer_stats_t;
 
 /* capacity_bytes == 0 means PIN_WRITER_DEFAULT_CAPACITY. Starts the consumer
