@@ -27,6 +27,7 @@
 #include "dv_error.h"
 #include "hdv_error.h"
 #include "pin_estimate.h"
+#include "pin_vidfmt.h"
 #include "pin_naming.h"
 #include "pin_settings.h"
 #include "../core/pinnacle_enum.h"
@@ -1315,19 +1316,26 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                      gop.hours, gop.minutes, gop.seconds, gop.drop_frame ? ';' : ':', gop.pictures);
         }
         s->ts_errors += hdv_ts_discontinuity_count(data, len / 188);
+        hdv_unit_errors_t herr;
         {
             /* a stream break (rewind, pause, no-signal gap) is not a loss: restart the tracking */
             if (s->hdv_err_reset || pin_session_now() - s->last_data_s > 1.0) {
                 hdv_error_init(&ctx->hdv_err);
                 s->hdv_err_reset = 0;
             }
-            hdv_unit_errors_t herr;
             hdv_error_analyze(&ctx->hdv_err, data, len / 188, vpid, &herr);
             count_frame(s, herr.frame_error, 0);
             s->err_video_blocks += herr.video_damaged || herr.tainted;
             s->err_missing_blocks += herr.cc_errors + herr.tei + herr.sync_lost;
         }
-        s->width = 1440; s->height = 1080; s->dar_num = 16; s->dar_den = 9;
+        if (herr.seq_found && herr.seq_width > 0 && herr.seq_height > 0) {
+            s->hdv_seq_w = herr.seq_width;
+            s->hdv_seq_h = herr.seq_height;
+            pin_vidfmt_rate_from_code(herr.seq_frame_rate_code, &s->hdv_fps_num, &s->hdv_fps_den);
+        }
+        s->width = s->hdv_seq_w ? s->hdv_seq_w : 1440;
+        s->height = s->hdv_seq_h ? s->hdv_seq_h : 1080;
+        s->dar_num = 16; s->dar_den = 9;
         s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
 
         /* Scene split for HDV: fed one GOP (picture unit) at a time, using
@@ -2918,6 +2926,18 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         }
     }
     out->camera_present = s->camera_present;
+    if (s->stream_kind == PIN_KIND_HDV) {
+        out->video_fps_num = s->hdv_fps_num;
+        out->video_fps_den = s->hdv_fps_den;
+        out->video_interlaced = pin_vidfmt_hdv_interlaced(s->height);
+    } else if (s->height > 0) {
+        out->video_fps_num = s->is_60hz ? 30000 : 25;
+        out->video_fps_den = s->is_60hz ? 1001 : 1;
+        out->video_interlaced = 1;
+    }
+    if (s->signal)
+        pin_vidfmt_label(s->height, out->video_fps_num, out->video_fps_den,
+                         out->video_interlaced, out->video_label, sizeof(out->video_label));
     out->progress_percent = -1;
     if (s->state == PIN_STATE_PREPARING) {
         snprintf(out->detail, sizeof(out->detail), "%s", s->step_text[0] ? s->step_text : "Preparing the device");

@@ -225,7 +225,14 @@ public unsafe struct PinStatusSnapshot
     public double EstBytesPerHour;
     public int EstRateSource;       // 0 nominal, 1 learned FFV1 rate, 2 measured
 
+    // Appended later: video format (frame rate fraction, interlaced flag, short label such as "PAL", "1080i25").
+    public int VideoFpsNum;
+    public int VideoFpsDen;
+    public int VideoInterlaced;
+    public fixed byte VideoLabelBuf[16];
+
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
+    public string VideoLabel { get { fixed (byte* p = VideoLabelBuf) return Utf8Fixed.Get(p, 16); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }
     public string RecDatetime { get { fixed (byte* p = RecDatetimeBuf) return Utf8Fixed.Get(p, 32); } }

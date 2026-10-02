@@ -512,6 +512,18 @@ typedef struct {
     uint64_t total_bytes_written;
     double est_bytes_per_hour;
     int est_rate_source;
+
+    /* Appended fields, ABI-compatible. Video format of what is arriving, for
+     * every kind (width / height above): the frame rate as a fraction
+     * (analog and DV: 25/1 or 30000/1001; HDV: from the stream's sequence
+     * header, 0/0 until the first one is seen), whether it is interlaced
+     * (everything but 720p HDV), and video_label, a short ready-made name so
+     * every GUI shows the same: "PAL", "NTSC", "1080i25", "1080i29.97",
+     * "720p50", "720p59.94" (HDV 720p is untested, no hardware). Empty while
+     * there is no signal or the format is not known yet. */
+    int video_fps_num, video_fps_den;
+    int video_interlaced;
+    char video_label[16];
 } pin_status_snapshot_t;
 
 /* Non-blocking. */

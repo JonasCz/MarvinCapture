@@ -68,6 +68,9 @@ typedef struct {
     int video_damaged;      /* the unit's own video data is damaged */
     int tainted;            /* damaged only through a reference it depends on */
     int frame_error;        /* video_damaged || tainted || any other error */
+    int seq_found;          /* an MPEG-2 sequence header was in the unit: */
+    int seq_width, seq_height;  /* its horizontal_size / vertical_size */
+    int seq_frame_rate_code;    /* its frame_rate_code (1..8, see pin_vidfmt.h) */
 } hdv_unit_errors_t;
 
 void hdv_error_init(hdv_err_state_t *st);

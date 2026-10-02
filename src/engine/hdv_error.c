@@ -91,7 +91,12 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
             if (need > 0) {
                 cap[capn++] = c;
                 if (--need == 0) {
-                    if (need_kind == 0 && pics == 0) {  /* picture: tr(10) type(3) */
+                    if (need_kind == 2) {               /* sequence: w(12) h(12) aspect(4) rate(4) */
+                        out->seq_found = 1;
+                        out->seq_width = (cap[0] << 4) | (cap[1] >> 4);
+                        out->seq_height = ((cap[1] & 15) << 8) | cap[2];
+                        out->seq_frame_rate_code = cap[3] & 15;
+                    } else if (need_kind == 0 && pics == 0) {  /* picture: tr(10) type(3) */
                         out->pic_type = (cap[1] >> 3) & 7;
                         if (out->pic_type > 3) out->pic_type = 0;
                     } else if (need_kind == 1) {        /* GOP: ... closed_gop */
@@ -106,6 +111,7 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
             if ((win >> 8) == 0x000001) {
                 if ((win & 0xFF) == 0x00) { need = 2; need_kind = 0; capn = 0; }
                 else if ((win & 0xFF) == 0xB8) { need = 4; need_kind = 1; capn = 0; }
+                else if ((win & 0xFF) == 0xB3) { need = 4; need_kind = 2; capn = 0; }
             }
         }
     }
