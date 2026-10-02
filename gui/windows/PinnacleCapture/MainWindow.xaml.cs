@@ -46,8 +46,6 @@ public sealed partial class MainWindow : Window
     private bool _allowClose;
     private bool _finalizingForClose;
 
-    private TaskbarProgressState _lastTaskbarState = TaskbarProgressState.NoProgress;
-    private int _lastTaskbarValue = -1;
     private bool _keepingAwake;
 
     // command line
@@ -502,43 +500,19 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>
+    /// Taskbar progress: the core picks mode and fraction from the status; an error
+    /// InfoBar that is still open (device / capture failure) shows red until dismissed.
+    /// </summary>
     private void UpdateTaskbar()
     {
-        TaskbarProgressState state;
-        int value = -1;
-        if (VM.SessionState == PinState.Error)
+        if (VM.InfoOpen && VM.InfoSeverity == 3)
         {
-            state = TaskbarProgressState.Error;
-        }
-        else if (!VM.IsCapturing)
-        {
-            state = TaskbarProgressState.NoProgress;
-        }
-        else if (VM.DeckState == PinDeckState.Paused)
-        {
-            state = TaskbarProgressState.Paused;
-            value = VM.TapePercent >= 0 ? VM.TapePercent : 100;
-        }
-        else if (VM.TapePercent >= 0)
-        {
-            state = TaskbarProgressState.Normal;
-            value = VM.TapePercent;
+            _taskbar.Apply(PinProgressMode.Error, 1);
         }
         else
         {
-            state = TaskbarProgressState.Indeterminate;
-        }
-
-        if (state != _lastTaskbarState)
-        {
-            _taskbar.SetState(state);
-            _lastTaskbarState = state;
-            _lastTaskbarValue = -1;
-        }
-        if (value >= 0 && value != _lastTaskbarValue)
-        {
-            _taskbar.SetValue(value);
-            _lastTaskbarValue = value;
+            _taskbar.Apply(VM.TaskbarMode, VM.TaskbarFraction);
         }
     }
 
@@ -986,6 +960,6 @@ public sealed partial class MainWindow : Window
             Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);
             _keepingAwake = false;
         }
-        _taskbar.SetState(TaskbarProgressState.NoProgress);
+        _taskbar.Apply(PinProgressMode.None, 0);
     }
 }

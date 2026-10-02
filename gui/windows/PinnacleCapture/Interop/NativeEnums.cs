@@ -37,6 +37,16 @@ public enum PinDevState : int
     Unsupported,
 }
 
+/// <summary>pin_progress_mode_t: what the taskbar progress should show.</summary>
+public enum PinProgressMode : int
+{
+    None = 0,
+    Indeterminate,
+    Normal,
+    Paused,
+    Error,
+}
+
 public enum PinState : int
 {
     Closed = 0,

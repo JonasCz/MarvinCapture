@@ -102,6 +102,40 @@ int main(void)
     pin_format_remaining(-3, buf, sizeof(buf));
     CHECK(!strcmp(buf, "0s"), "clamped");
 
+    /* taskbar progress mode */
+    {
+        pin_status_snapshot_t st;
+        double f;
+        memset(&st, 0, sizeof(st));
+        st.idle_stop_remaining_s = st.duration_remaining_s = -1;
+        st.progress_percent = -1;
+        st.state = PIN_STATE_READY;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_NONE && f == 0, "ready: none");
+        st.state = PIN_STATE_PREPARING;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_INDETERMINATE, "preparing: unknown length");
+        st.progress_percent = 25;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_NORMAL && f == 0.25, "preparing: percent");
+        st.state = PIN_STATE_ERROR;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_ERROR, "error");
+        st.state = PIN_STATE_CAPTURING;
+        st.signal = 1;
+        CHECK(pin_status_progress(&st, 300, 0, &f) == PIN_PROGRESS_INDETERMINATE, "capturing, no limit");
+        st.duration_remaining_s = 750;
+        CHECK(pin_status_progress(&st, 0, 1000, &f) == PIN_PROGRESS_NORMAL && f == 0.25, "elapsed / limit");
+        st.signal = 0;
+        st.idle_stop_remaining_s = 75;
+        CHECK(pin_status_progress(&st, 300, 1000, &f) == PIN_PROGRESS_NORMAL && f == 0.25,
+              "no-signal countdown wins, falls");
+        st.idle_stop_remaining_s = -1;
+        CHECK(pin_status_progress(&st, 300, 1000, &f) == PIN_PROGRESS_NORMAL && f == 0.25, "limit without timeout");
+        st.duration_remaining_s = -1;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_PAUSED && f == 1, "waiting for signal");
+        st.state = PIN_STATE_REWINDING;
+        CHECK(pin_status_progress(&st, 0, 0, NULL) == PIN_PROGRESS_PAUSED, "rewinding");
+        st.state = PIN_STATE_STOPPING;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_INDETERMINATE, "stopping");
+    }
+
     if (g_failures == 0)
         printf("test_pin_deck: all passed\n");
     return g_failures ? 1 : 0;

@@ -386,6 +386,60 @@ void pin_format_remaining(double seconds, char *out, size_t cap)
         snprintf(out, cap, "%lds", n);
 }
 
+static double clamp01(double v)
+{
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+pin_progress_mode_t pin_status_progress(const pin_status_snapshot_t *st, double idle_total_s,
+                                        double duration_total_s, double *fraction)
+{
+    double f = 0;
+    pin_progress_mode_t m = PIN_PROGRESS_NONE;
+    if (st) {
+        switch (st->state) {
+        case PIN_STATE_ERROR:
+            m = PIN_PROGRESS_ERROR;
+            f = 1;
+            break;
+        case PIN_STATE_PREPARING:
+            if (st->progress_percent >= 0) {
+                m = PIN_PROGRESS_NORMAL;
+                f = clamp01(st->progress_percent / 100.0);
+            } else {
+                m = PIN_PROGRESS_INDETERMINATE;
+            }
+            break;
+        case PIN_STATE_STOPPING:
+            m = PIN_PROGRESS_INDETERMINATE;
+            break;
+        case PIN_STATE_REWINDING:
+            m = PIN_PROGRESS_PAUSED;
+            f = 1;
+            break;
+        case PIN_STATE_CAPTURING:
+            if (!st->signal && idle_total_s > 0 && st->idle_stop_remaining_s >= 0) {
+                m = PIN_PROGRESS_NORMAL;
+                f = clamp01(st->idle_stop_remaining_s / idle_total_s);
+            } else if (duration_total_s > 0 && st->duration_remaining_s >= 0) {
+                m = PIN_PROGRESS_NORMAL;
+                f = clamp01(1.0 - st->duration_remaining_s / duration_total_s);
+            } else if (!st->signal) {
+                m = PIN_PROGRESS_PAUSED;
+                f = 1;
+            } else {
+                m = PIN_PROGRESS_INDETERMINATE;
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    if (fraction)
+        *fraction = f;
+    return m;
+}
+
 static const char *state_name(pin_state_t st)
 {
     switch (st) {

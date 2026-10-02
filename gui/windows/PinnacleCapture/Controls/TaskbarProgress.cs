@@ -1,5 +1,6 @@
 using System;
 using System.Runtime.InteropServices;
+using PinnacleCapture.Interop;
 
 namespace PinnacleCapture.Controls;
 
@@ -13,11 +14,10 @@ public enum TaskbarProgressState
 }
 
 /// <summary>
-/// Minimal ITaskbarList3 wrapper for the capture progress badge on the
-/// taskbar button: indeterminate while capturing without a tape-percent
-/// report, a real progress bar once the deck answers a counter inquiry,
-/// red on error, yellow while paused (per the plan's "Changes after your
-/// review" / Taskbar section).
+/// Minimal ITaskbarList3 wrapper for the progress badge on the taskbar button.
+/// What to show (mode and fraction) is decided by the core
+/// (pin_status_progress); this class only talks to the shell and skips calls
+/// when nothing visible changed (state, or the value by less than 1 %).
 /// </summary>
 public sealed class TaskbarProgress
 {
@@ -73,26 +73,47 @@ public sealed class TaskbarProgress
         }
     }
 
-    public void SetState(TaskbarProgressState state)
-    {
-        try
-        {
-            _taskbar?.SetProgressState(_hwnd, state);
-        }
-        catch (COMException)
-        {
-            // Explorer restarted, or no taskbar button yet; not fatal.
-        }
-    }
+    private PinProgressMode _mode = PinProgressMode.None;
+    private int _percent = -1;
 
-    public void SetValue(int percent0To100)
+    /// <summary>Shows mode / fraction (0..1); cheap to call on every status tick.</summary>
+    public void Apply(PinProgressMode mode, double fraction)
     {
+        if (_taskbar is null)
+        {
+            return;
+        }
+        int percent = mode is PinProgressMode.None or PinProgressMode.Indeterminate
+            ? -1 : (int)Math.Round(Math.Clamp(fraction, 0, 1) * 100);
+        // Value first for a mode that shows one, so a bar never flashes at its old value.
         try
         {
-            _taskbar?.SetProgressValue(_hwnd, (ulong)Math.Clamp(percent0To100, 0, 100), 100);
+            if (mode != _mode)
+            {
+                if (percent >= 0)
+                {
+                    _taskbar.SetProgressValue(_hwnd, (ulong)percent, 100);
+                }
+                _taskbar.SetProgressState(_hwnd, mode switch
+                {
+                    PinProgressMode.Indeterminate => TaskbarProgressState.Indeterminate,
+                    PinProgressMode.Normal => TaskbarProgressState.Normal,
+                    PinProgressMode.Paused => TaskbarProgressState.Paused,
+                    PinProgressMode.Error => TaskbarProgressState.Error,
+                    _ => TaskbarProgressState.NoProgress,
+                });
+                _mode = mode;
+                _percent = percent;
+            }
+            else if (percent != _percent)
+            {
+                _taskbar.SetProgressValue(_hwnd, (ulong)percent, 100);
+                _percent = percent;
+            }
         }
         catch (COMException)
         {
+            // Explorer restarted or no taskbar button yet: not cached, so the next tick retries.
         }
     }
 }

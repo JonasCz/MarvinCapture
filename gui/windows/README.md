@@ -80,6 +80,22 @@ text comes from `pin_launch_help()`, so it always matches the core in use.
 Each window runs as its own process. "..." > "New window" starts a second one,
 for example to use a second device.
 
+## Taskbar progress
+
+The taskbar button shows what the app is doing (mode and value come from the
+core, `pin_status_progress`; `Controls/TaskbarProgress` only talks to the shell):
+
+| State | Taskbar |
+|---|---|
+| Device initialisation | green bar, same value as the in-window progress bar (indeterminate if unmeasurable) |
+| Capturing, no signal, "no signal" timeout set | green bar counting down from full to empty |
+| Capturing with "Stop after (min)" | green bar, elapsed / limit of the current pass |
+| Capturing, no limit | indeterminate |
+| Capturing, waiting for signal (no timeout), or rewinding between passes | yellow (paused), full |
+| Stopping / finalising | indeterminate |
+| Device error, or an error InfoBar open | red; clears when the InfoBar is dismissed, or when the next capture starts |
+| Idle / ready | none |
+
 ## Theme testing
 
 The app follows the Windows light/dark setting. To check the other theme

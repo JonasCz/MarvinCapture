@@ -534,6 +534,30 @@ PIN_API void pin_format_status_line(const pin_status_snapshot_t *st, char *out, 
 /* Seconds as "5m30s" / "1h02m10s" / "45s" (rounded up), for the stop countdowns
  * (idle_stop_remaining_s, duration_remaining_s). */
 PIN_API void pin_format_remaining(double seconds, char *out, size_t cap);
+
+/* What a taskbar / dock progress indicator should show for a status snapshot,
+ * so every GUI picks the same mode. idle_total_s / duration_total_s are the
+ * running capture's no-signal timeout and per-pass time limit in seconds (0 =
+ * off; the snapshot only carries what is left). *fraction (0..1, may be NULL)
+ * is set for PIN_PROGRESS_NORMAL / PAUSED / ERROR, else 0.
+ *   ERROR          session in the error state
+ *   PREPARING      NORMAL with progress_percent, or INDETERMINATE if unmeasurable
+ *   CAPTURING      no signal with a timeout: NORMAL, remaining / timeout (falls);
+ *                  else a per-pass limit: NORMAL, elapsed / limit (rises);
+ *                  else no signal: PAUSED (waiting for the signal);
+ *                  else INDETERMINATE (running, end unknown)
+ *   REWINDING      PAUSED (between passes)
+ *   STOPPING       INDETERMINATE
+ *   otherwise      NONE */
+typedef enum {
+    PIN_PROGRESS_NONE = 0,
+    PIN_PROGRESS_INDETERMINATE,
+    PIN_PROGRESS_NORMAL,
+    PIN_PROGRESS_PAUSED,
+    PIN_PROGRESS_ERROR
+} pin_progress_mode_t;
+PIN_API pin_progress_mode_t pin_status_progress(const pin_status_snapshot_t *st, double idle_total_s,
+                                                double duration_total_s, double *fraction);
 PIN_API void pin_format_window_title(const pin_status_snapshot_t *st, const char *device_name,
                                      char *out, size_t cap);
 

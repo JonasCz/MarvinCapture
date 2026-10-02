@@ -261,6 +261,18 @@ public static unsafe partial class Native
         return Utf8Fixed.Get(buf, cap);
     }
 
+    [LibraryImport(Lib)]
+    private static partial PinProgressMode pin_status_progress(in PinStatusSnapshot st, double idleTotalS,
+                                                               double durationTotalS, ref double fraction);
+
+    /// <summary>Taskbar progress mode and fraction (0..1) for a status snapshot, decided by the core.</summary>
+    public static PinProgressMode StatusProgress(in PinStatusSnapshot st, double idleTotalS, double durationTotalS,
+                                                 out double fraction)
+    {
+        fraction = 0;
+        return pin_status_progress(in st, idleTotalS, durationTotalS, ref fraction);
+    }
+
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
     private static partial void pin_format_window_title(in PinStatusSnapshot st, string deviceName, byte* out_, nuint cap);
 

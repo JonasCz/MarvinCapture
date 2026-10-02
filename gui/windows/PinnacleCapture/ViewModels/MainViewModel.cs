@@ -287,6 +287,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(CaptureButtonText), nameof(ManualCaptureTitle), nameof(PrimaryDvTitle))]
     private string _stopCountdownSuffix = "";
     private double _activeIdleStopS;   // the timeout of the running capture, for the bar
+    private double _activeDurationS;   // its per-pass time limit, for the taskbar
+
+    /// <summary>Taskbar progress as decided by the core from the last status (see Native.StatusProgress).</summary>
+    public PinProgressMode TaskbarMode { get; private set; }
+    public double TaskbarFraction { get; private set; }
 
     /// <summary>Progress bar in the preview pane while the device is being prepared.</summary>
     [ObservableProperty] private bool _progressVisible;
@@ -781,6 +786,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             _captureWithDeck = o.StartDeck != 0;
             _activeIdleStopS = Math.Max(0, o.IdleStopMinutes) * 60.0;
+            _activeDurationS = Math.Max(0, o.MaxDurationMinutes) * 60.0;
+            if (InfoSeverity == 3)
+            {
+                InfoOpen = false; // a stale error must not colour the taskbar of a running capture
+            }
             OnPropertyChanged(nameof(PlayAndCaptureEnabled));
             OnPropertyChanged(nameof(DvAutoCaptureEnabled));
         }
@@ -978,6 +988,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         ProgressVisible = st.State == PinState.Preparing;
         ProgressIndeterminate = st.ProgressPercent < 0;
         ProgressValue = Math.Max(0, st.ProgressPercent);
+        TaskbarMode = Native.StatusProgress(in st, _activeIdleStopS, _activeDurationS, out var taskbarFraction);
+        TaskbarFraction = taskbarFraction;
 
         // Deck buttons have nothing to talk to without a camera (analog inputs report -1).
         DeckAvailable = !IsDvInput || st.CameraPresent != 0;
