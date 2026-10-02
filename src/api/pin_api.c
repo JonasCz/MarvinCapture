@@ -339,7 +339,12 @@ pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, in
 
 pin_status_t pin_capture_stop(pin_session_t *s)
 {
-    return pin_session_capture_stop(s);
+    return pin_session_capture_stop(s, PIN_STOP_DECK_AS_STARTED);
+}
+
+pin_status_t pin_capture_stop_ex(pin_session_t *s, pin_stop_deck_t stop_deck)
+{
+    return pin_session_capture_stop(s, stop_deck);
 }
 
 /* ========================================================================

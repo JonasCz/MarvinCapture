@@ -1517,7 +1517,9 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
             s->sink = NULL;
             pin_session_push_event(s, PIN_EVT_FILE_CLOSED, PIN_OK, s->current_file);
         }
-        if (s->capture_opts.start_deck && camera_node)
+        /* AS_STARTED: only a capture that drives the deck stops it. */
+        if (camera_node && (s->cmd.stop_deck == PIN_STOP_DECK_YES ||
+                            (s->cmd.stop_deck == PIN_STOP_DECK_AS_STARTED && s->capture_opts.start_deck)))
             deck_send(s, camera_node, PIN_DECK_CMD_STOP);
         if (s->state != PIN_STATE_ERROR)
             set_state(s, PIN_STATE_READY);
@@ -2848,10 +2850,10 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     return PIN_OK;
 }
 
-pin_status_t pin_session_capture_stop(pin_session_t *s)
+pin_status_t pin_session_capture_stop(pin_session_t *s, pin_stop_deck_t stop_deck)
 {
     if (!s) return PIN_ERR_ARG;
-    pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_STOP };
+    pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_STOP, .stop_deck = stop_deck };
     post_cmd(s, &c);
     return PIN_OK;
 }

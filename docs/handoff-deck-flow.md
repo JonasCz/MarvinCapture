@@ -29,6 +29,10 @@ pure helpers have unit tests (`tests/engine/test_pin_deck.c`). Background:
 
 ## To verify with the camera
 
+- `pin_capture_stop_ex`: GUI "Stop capture & stop tape" on a Manual capture must
+  stop the tape; "Stop capture & continue tape" on an Automatic capture must
+  leave it playing (only reasoned, no camera test).
+
 - `pinctl capture -d <id> -i dv -o x --rewind-first --idle-min 1` (tape not at the
   start): REW, stops at BOT, PLAY, file starts, and the countdown/Stop at the end.
 - The Canon's state after REW reaches the start. The code expects TRANSPORT STATE

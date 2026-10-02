@@ -643,7 +643,9 @@ public sealed partial class MainWindow : Window
     {
         if (VM.IsCapturing)
         {
-            VM.StopCapture();
+            // DV/HDV "Manual capture" button while recording: stop, leave the tape running.
+            // (The analog Capture button shares this handler; there is no deck then.)
+            VM.StopCapture(stopDeck: false);
             return;
         }
         await StartCaptureAsync(playFirst: false);
@@ -653,8 +655,8 @@ public sealed partial class MainWindow : Window
     {
         if (VM.IsCapturing)
         {
-            // The same button is "Stop capture" while recording.
-            VM.StopCapture();
+            // The same button is "Stop capture & stop tape" while recording.
+            VM.StopCapture(stopDeck: true);
             return;
         }
         // start_deck = 1: the core sends PLAY first, then starts the writer

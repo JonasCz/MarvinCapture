@@ -67,8 +67,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>The Capture/Stop button (analog) and the Play-and-capture/Stop button (DV).</summary>
     public bool CaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready;
 
-    /// <summary>Idle: start a capture without touching the tape. Capturing (started that way): stop it and leave the tape alone.</summary>
-    public bool PlayAndCaptureEnabled => IsCapturing ? CanStop && !_captureWithDeck : SessionState == PinState.Ready;
+    /// <summary>Idle: start a capture without touching the tape. Capturing: stop it and leave the tape alone (always available, however the capture was started).</summary>
+    public bool PlayAndCaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready;
 
     /// <summary>True when the running capture was started by "Automatic rewind &amp; capture" (the core stops the deck when it ends).</summary>
     private bool _captureWithDeck;
@@ -94,7 +94,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool DeckFfEnabled => DeckControlsUsable && DeckState != PinDeckState.FastForward;
 
     /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (started that way) it stops the capture and the tape.</summary>
-    public bool DvAutoCaptureEnabled => IsCapturing ? CanStop && _captureWithDeck : SessionState == PinState.Ready && DeckAvailable;
+    public bool DvAutoCaptureEnabled => IsCapturing ? CanStop && DeckAvailable : SessionState == PinState.Ready && DeckAvailable;
 
     public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
     public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
@@ -791,6 +791,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (Session is { IsInvalid: false })
         {
             Report(Native.CaptureStop(Session), "Stop capture");
+        }
+    }
+
+    /// <summary>Stops the capture and decides about the tape: true = deck Stop, false = leave it running.</summary>
+    public void StopCapture(bool stopDeck)
+    {
+        if (Session is { IsInvalid: false })
+        {
+            Report(Native.CaptureStop(Session, stopDeck), "Stop capture");
         }
     }
 

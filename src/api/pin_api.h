@@ -359,8 +359,19 @@ PIN_API pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opt
 PIN_API pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite);
 
 /* Non-blocking. State goes STOPPING -> READY. Also stops the deck if the
- * capture started it. */
+ * capture started it (start_deck). */
 PIN_API pin_status_t pin_capture_stop(pin_session_t *s);
+
+typedef enum {
+    PIN_STOP_DECK_AS_STARTED = 0, /* send deck Stop only if the capture was started with start_deck */
+    PIN_STOP_DECK_NO = 1,         /* never: "stop capture & continue tape" */
+    PIN_STOP_DECK_YES = 2         /* always, even for a manual capture: "stop capture & stop tape" */
+} pin_stop_deck_t;
+
+/* Like pin_capture_stop(), but the caller decides whether the deck gets a Stop
+ * too, regardless of how the capture was started. Needs a camera on the bus
+ * for YES (silently nothing without one). */
+PIN_API pin_status_t pin_capture_stop_ex(pin_session_t *s, pin_stop_deck_t stop_deck);
 
 /* ---- status --------------------------------------------------------------- */
 

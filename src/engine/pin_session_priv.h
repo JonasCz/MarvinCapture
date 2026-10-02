@@ -76,6 +76,7 @@ typedef struct {
     pin_capture_opts_t capture;
     int overwrite;
     pin_deck_cmd_t deck_cmd;
+    pin_stop_deck_t stop_deck;    /* CAPTURE_STOP: who stops the deck */
     pin_launch_t launch;
     int pending;
 } pin_cmd_t;

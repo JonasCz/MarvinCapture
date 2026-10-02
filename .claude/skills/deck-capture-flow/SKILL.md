@@ -32,6 +32,9 @@ session engine"). The traps:
   or the capture; total time (`max_duration_minutes`, summed over passes) always
   ends it; both send deck Stop when `start_deck`. Remaining seconds are in the
   status snapshot (`idle_stop_remaining_s`, `duration_remaining_s`).
+- Manual stop: `pin_capture_stop_ex(stop_deck)` (PIN_STOP_DECK_AS_STARTED/NO/YES)
+  decides about deck Stop independent of `start_deck`; the GUI's two stop buttons
+  use NO / YES.
 - Timecode while winding comes from the TIME CODE status poll, only when no
   stream timecode is arriving.
 - Mirroring a new status field: `pin_api.h` (appended, ABI-compatible) ->

@@ -125,8 +125,11 @@ PinnacleCapture/
   the core rewinds to the start of the tape, sends PLAY, then starts the
   writer. While recording it becomes "Stop capture & stop tape" (the core stops
   the deck when the capture ends). "Manual capture" records without touching
-  the deck and becomes "Stop capture & continue tape" while recording; only the
-  button matching how the capture was started is active.
+  the deck and becomes "Stop capture & continue tape" while recording. Both stop
+  buttons are active during any DV/HDV capture: the GUI calls
+  `pin_capture_stop_ex` with `PIN_STOP_DECK_NO` ("continue tape") or
+  `PIN_STOP_DECK_YES` ("stop tape"), so the choice does not depend on how the
+  capture was started.
 - Before a capture starts, `pin_check_output` reports `low_space` (free space
   known and under 25 GiB, `PIN_LOW_SPACE_BYTES`); the window then asks "Only X
   free on D:\. Continue?" with OK / Cancel, for analog, DV and HDV alike.

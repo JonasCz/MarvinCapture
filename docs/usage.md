@@ -12,7 +12,9 @@ Two ways in, both on the same core library:
   free. During a capture the deck buttons are disabled; "Manual capture"
   records without touching the tape and "Automatic rewind & capture" drives
   the deck (their stop labels: "Stop capture & continue tape" / "Stop capture
-  & stop tape").
+  & stop tape"). While capturing both stop buttons are available, however the
+  capture was started: "continue tape" never sends deck Stop, "stop tape"
+  always does.
   When the camera stops sending (end of tape, blank tape) the preview shows
   "No camera or deck signal" and, if the "Stop no signal (min)" option is on,
   "Stopping capture in 5m30s" with a bar running down; the same time is

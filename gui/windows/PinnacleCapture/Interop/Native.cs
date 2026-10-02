@@ -206,6 +206,11 @@ public static unsafe partial class Native
     private static partial PinStatus pin_capture_stop(SafeHandle s);
     public static PinStatus CaptureStop(SafeHandle s) => pin_capture_stop(s);
 
+    /// <summary>stopDeck: 1 = never send deck Stop, 2 = always (see PIN_STOP_DECK_*).</summary>
+    [LibraryImport(Lib)]
+    private static partial PinStatus pin_capture_stop_ex(SafeHandle s, int stopDeck);
+    public static PinStatus CaptureStop(SafeHandle s, bool stopDeck) => pin_capture_stop_ex(s, stopDeck ? 2 : 1);
+
     // ---- status -----------------------------------------------------------------
 
     [LibraryImport(Lib)]

@@ -56,7 +56,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
 pin_status_t pin_session_set_output_hint(pin_session_t *s, const pin_capture_opts_t *o);
 pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_t *o,
                                         int overwrite);
-pin_status_t pin_session_capture_stop(pin_session_t *s);
+pin_status_t pin_session_capture_stop(pin_session_t *s, pin_stop_deck_t stop_deck);
 
 pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out);
 int pin_session_poll_event(pin_session_t *s, pin_event_t *out);

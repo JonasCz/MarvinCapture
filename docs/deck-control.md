@@ -192,6 +192,10 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   summed over all passes) close the file and, if `start_deck`, send Stop.
   `pin_status_snapshot_t.idle_stop_remaining_s` / `duration_remaining_s` give
   the seconds left (-1 = off); `pin_format_remaining()` formats "5m30s".
+- **Manual stop.** `pin_capture_stop()` sends deck Stop only if the capture was
+  started with `start_deck`. `pin_capture_stop_ex(s, PIN_STOP_DECK_NO | _YES)`
+  overrides that either way (the GUI's "continue tape" / "stop tape" buttons);
+  the Stop goes through `deck_send()` like every other deck command.
 - **Multi-pass.** The no-signal timeout is also how the end of the tape is
   noticed. With passes left it closes the file, sends REW (state REWINDING,
   `pass_rewinding`), and at BOT sends PLAY and opens the next file; the
