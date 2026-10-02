@@ -74,8 +74,8 @@ One-line grid in `MainWindow.xaml` (bottom). Every text uses `StatusTextStyle`
 (do not set FontFamily/FontWeight/FontSize). Each item sits in a "host" panel
 that carries its 24 DIP left margin (a collapsed host leaves no gap).
 `MainWindow.FitStatusBar` shows deck/storage by state and, if the items do not
-fit next to the file text's 80 DIP, collapses free-space, frames, storage, deck,
-time in that order (re-run on size and on the text properties changing).
+fit next to the file text's 80 DIP, collapses free-space, frames, storage, time, deck
+in that order (the file text is the first item, deck the second) (re-run on size and on the text properties changing).
 Properties are set in `MainViewModel.ApplyStatus` straight from the core
 snapshot; counters (`frames_error`, `clip_*`, `total_bytes_written`,
 `est_seconds_left`) and the format label (`video_label`) are the core's, never
@@ -113,6 +113,39 @@ et10.0-windows10.0.19041.0\win-x64\`
 - Window geometry uses `AppWindow` (no P/Invoke): `gui.window` + `gui.window_maximized`,
   saved in `Closing` and `Closed`; `DisplayAreaFallback.None` returns null for an
   off-screen rect, which is how the default fallback is detected.
+
+## Taskbar / shell interop (Controls/TaskbarButton, TaskbarIcons, Interop/Win32.cs)
+
+- **No WndProc in WinUI 3.** To see window messages, subclass the HWND from
+  `WindowNative.GetWindowHandle(this)` with comctl32 `SetWindowSubclass`; keep the
+  `SubclassProc` delegate in a field (the function pointer from
+  `Marshal.GetFunctionPointerForDelegate` dangles if it is collected), never let an
+  exception leave the proc, always end in `DefSubclassProc`, remove it in Dispose.
+  The proc runs inside the message: hand real work to `DispatcherQueue.TryEnqueue`
+  (a capture start can open a ContentDialog).
+- **`TaskbarButtonCreated`** (`RegisterWindowMessage`) is sent when the shell makes the
+  button, and again after an Explorer restart; everything set on the button before is
+  lost. `ThumbBarAddButtons` fails until then and only works once per button, so the
+  code retries on the status tick, and the message drops all cached state
+  (progress, overlay, buttons, clip) so the next tick re-applies it. Call
+  `ChangeWindowMessageFilterEx` for it, or an elevated app never gets it.
+- **The project disables runtime marshalling** (`[LibraryImport]` everywhere): arrays/strings in
+  signatures give SYSLIB1051; use `char*` / `nint` buffers. Same for the `[ComImport]`
+  ITaskbarList3: it is declared with `nint` buffers, and THUMBBUTTON (552 bytes on x64,
+  mask 0, id 4, icon 16, tip 24, flags 544) is written into unmanaged memory by hand.
+  The COM vtable must declare every member up to the last one called, in order.
+- **Icons** are made at run time: 32-bit top-down DIB section + a zeroed 1-bpp mask
+  bitmap -> `CreateIconIndirect` (straight, not premultiplied, alpha). Glyphs: draw white
+  text with `ANTIALIASED_QUALITY` on black in a DIB and use the coverage as alpha (GDI text
+  has no alpha). GDI silently substitutes a missing font: check `GetTextFace` (Segoe
+  Fluent Icons on Windows 11, else Segoe MDL2 Assets). Size = `GetSystemMetricsForDpi(SM_CXSMICON,
+  GetDpiForWindow)`; colour follows `SystemUsesLightTheme` (the thumbnail bar is
+  taskbar-themed); rebuild on `WM_DPICHANGED` / `WM_SETTINGCHANGE "ImmersiveColorSet"`.
+  `DestroyIcon` what you create, after the shell has the replacement.
+- `SetThumbnailClip` takes client pixels: XAML position x `XamlRoot.RasterizationScale`
+  (verified: the XAML root fills the client area even with `ExtendsContentIntoTitleBar`).
+- Thumbnail-button clicks go through the same view-model enable rules and
+  `StartCaptureAsync` as the window buttons; Stop uses `PIN_STOP_DECK_AS_STARTED`.
 
 ## Build / verify
 
