@@ -15,7 +15,8 @@ public enum TaskbarProgressState
 
 /// <summary>
 /// Everything the window shows on its taskbar button, through ITaskbarList3: the progress bar,
-/// the "capturing" overlay dot. What to show (progress mode and fraction) is decided by the
+/// the "capturing" overlay dot, the flash, the thumbnail toolbar (Start / Stop) and the thumbnail
+/// clip. What to show (progress mode and fraction) is decided by the
 /// core (pin_status_progress); this class only talks to the shell and skips calls when nothing
 /// visible changed.
 ///
@@ -71,6 +72,11 @@ public sealed class TaskbarButton : IDisposable
     private readonly Win32.SubclassProc _proc;
     private readonly nint _procPtr;
     private bool _disposed;
+    private readonly nint _scratch = Marshal.AllocHGlobal(ButtonSize * 2 + 16); // two THUMBBUTTONs, then a RECT
+
+    /// <summary>The user clicked "Start capture" / "Stop capture" in the taskbar thumbnail (UI thread, inside the window procedure).</summary>
+    public event Action? StartClicked;
+    public event Action? StopClicked;
 
     public TaskbarButton(nint hwnd)
     {
@@ -110,6 +116,9 @@ public sealed class TaskbarButton : IDisposable
             Win32.DestroyIcon(_dotIcon);
             _dotIcon = 0;
         }
+        DestroyButtonIcons(_startIcon, _stopIcon);
+        _startIcon = _stopIcon = 0;
+        Marshal.FreeHGlobal(_scratch);
     }
 
     private nint WndProc(nint hwnd, uint msg, nuint wParam, nint lParam, nuint id, nuint data)
@@ -119,6 +128,25 @@ public sealed class TaskbarButton : IDisposable
             if (msg == _buttonCreatedMsg)
             {
                 ForgetShellState();
+            }
+            else if (msg == Win32.WM_COMMAND && (uint)((ulong)wParam >> 16 & 0xFFFF) == Win32.THBN_CLICKED)
+            {
+                uint button = (uint)((ulong)wParam & 0xFFFF);
+                if (button == StartButtonId)
+                {
+                    StartClicked?.Invoke();
+                }
+                else if (button == StopButtonId)
+                {
+                    StopClicked?.Invoke();
+                }
+                return 0;
+            }
+            else if (msg == Win32.WM_DPICHANGED
+                     || (msg == Win32.WM_SETTINGCHANGE && lParam != 0
+                         && Marshal.PtrToStringUni(lParam) == "ImmersiveColorSet"))
+            {
+                _iconsStale = true; // glyph colour follows the taskbar theme, size follows the DPI
             }
         }
         catch (Exception)
@@ -134,6 +162,8 @@ public sealed class TaskbarButton : IDisposable
         _mode = (PinProgressMode)(-1);
         _percent = -2;
         _overlayOn = null;
+        _buttonsAdded = false;
+        _clip = null;
     }
 
     // ================================================================== progress
@@ -179,6 +209,131 @@ public sealed class TaskbarButton : IDisposable
         catch (COMException)
         {
             // Explorer restarted or no taskbar button yet: not cached, so the next tick retries.
+        }
+    }
+
+    // ================================================================== thumbnail toolbar
+
+    private const uint StartButtonId = 1, StopButtonId = 2;
+    private const int ButtonSize = 552;     // sizeof(THUMBBUTTON) on x64: 4+4+4 (+4) +8 +520 +4 (+4)
+    private const uint THB_ICON = 0x2, THB_TOOLTIP = 0x4, THB_FLAGS = 0x8;
+    private const uint THBF_ENABLED = 0, THBF_DISABLED = 1;
+
+    private nint _startIcon, _stopIcon;
+    private bool _buttonsAdded, _iconsStale;
+    private bool? _appliedStart, _appliedStop;
+    private bool _wantStart, _wantStop;
+
+    /// <summary>
+    /// "Start capture" and "Stop capture" buttons under the taskbar thumbnail. They can only be added
+    /// once the shell has created the taskbar button (the first call may fail; the next tick retries).
+    /// The icons are Segoe Fluent / MDL2 glyphs drawn at run time. Cheap to call on every tick.
+    /// </summary>
+    public void SetControls(bool startEnabled, bool stopEnabled)
+    {
+        _wantStart = startEnabled;
+        _wantStop = stopEnabled;
+        if (_taskbar is null || _disposed || IntPtr.Size != 8)
+        {
+            return;
+        }
+        if (_buttonsAdded && !_iconsStale && _appliedStart == startEnabled && _appliedStop == stopEnabled)
+        {
+            return;
+        }
+        nint oldStart = 0, oldStop = 0;
+        try
+        {
+            if (_startIcon == 0 || _stopIcon == 0 || _iconsStale)
+            {
+                uint dpi = Win32.GetDpiForWindow(_hwnd);
+                int size = Math.Max(16, Win32.GetSystemMetricsForDpi(Win32.SM_CXSMICON, dpi == 0 ? 96 : dpi));
+                oldStart = _startIcon;
+                oldStop = _stopIcon;
+                _startIcon = TaskbarIcons.CreateGlyph("", size); // Download
+                _stopIcon = TaskbarIcons.CreateGlyph("", size);  // Stop
+                _iconsStale = false;
+            }
+            WriteButton(_scratch, StartButtonId, _startIcon, "Start capture", startEnabled);
+            WriteButton(_scratch + ButtonSize, StopButtonId, _stopIcon, "Stop capture", stopEnabled);
+            if (_buttonsAdded)
+            {
+                _taskbar.ThumbBarUpdateButtons(_hwnd, 2, _scratch);
+            }
+            else
+            {
+                _taskbar.ThumbBarAddButtons(_hwnd, 2, _scratch);
+                _buttonsAdded = true;
+            }
+            _appliedStart = startEnabled;
+            _appliedStop = stopEnabled;
+        }
+        catch (COMException)
+        {
+            // no taskbar button yet: retried by the next tick
+        }
+        finally
+        {
+            DestroyButtonIcons(oldStart, oldStop);
+        }
+    }
+
+    private static void WriteButton(nint p, uint id, nint icon, string tip, bool enabled)
+    {
+        for (int i = 0; i < ButtonSize; i++)
+        {
+            Marshal.WriteByte(p, i, 0);
+        }
+        Marshal.WriteInt32(p, 0, (int)(THB_ICON | THB_TOOLTIP | THB_FLAGS)); // dwMask
+        Marshal.WriteInt32(p, 4, (int)id);                                   // iId
+        Marshal.WriteIntPtr(p, 16, icon);                                    // hIcon
+        for (int i = 0; i < tip.Length && i < 259; i++)
+        {
+            Marshal.WriteInt16(p, 24 + i * 2, tip[i]);                       // szTip[260]
+        }
+        Marshal.WriteInt32(p, 544, (int)(enabled ? THBF_ENABLED : THBF_DISABLED)); // dwFlags
+    }
+
+    private static void DestroyButtonIcons(nint a, nint b)
+    {
+        if (a != 0) Win32.DestroyIcon(a);
+        if (b != 0) Win32.DestroyIcon(b);
+    }
+
+    // ================================================================== thumbnail clip
+
+    private (int L, int T, int R, int B)? _clip;
+
+    /// <summary>
+    /// Shows only this rectangle of the window (client pixels) in the taskbar thumbnail, or the
+    /// whole window for null. Only calls the shell when the rectangle changed.
+    /// </summary>
+    public void SetThumbnailClip((int L, int T, int R, int B)? clip)
+    {
+        if (_taskbar is null || _disposed || clip == _clip)
+        {
+            return;
+        }
+        try
+        {
+            if (clip is { } c)
+            {
+                nint r = _scratch + ButtonSize * 2;
+                Marshal.WriteInt32(r, 0, c.L);
+                Marshal.WriteInt32(r, 4, c.T);
+                Marshal.WriteInt32(r, 8, c.R);
+                Marshal.WriteInt32(r, 12, c.B);
+                _taskbar.SetThumbnailClip(_hwnd, r);
+            }
+            else
+            {
+                _taskbar.SetThumbnailClip(_hwnd, 0);
+            }
+            _clip = clip;
+        }
+        catch (COMException)
+        {
+            // no button yet: retried by the next update
         }
     }
 

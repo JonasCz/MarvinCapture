@@ -65,6 +65,9 @@ public sealed partial class MainWindow : Window
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _taskbar = new TaskbarButton(_hwnd);
+        // Raised inside the window procedure: handle on the next dispatcher turn.
+        _taskbar.StartClicked += () => DispatcherQueue.TryEnqueue(() => _ = TaskbarStartAsync());
+        _taskbar.StopClicked += () => DispatcherQueue.TryEnqueue(TaskbarStop);
 
         Title = "Pinnacle Capture";
         ExtendsContentIntoTitleBar = true;
@@ -395,7 +398,11 @@ public sealed partial class MainWindow : Window
 
     private int _fitDarNum = 4, _fitDarDen = 3;
 
-    private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e) => UpdatePreviewFrame();
+    private void PreviewHost_SizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        UpdatePreviewFrame();
+        DispatcherQueue.TryEnqueue(UpdateThumbnailClip); // after the layout pass that applies the new frame size
+    }
 
     /// <summary>
     /// Sizes PreviewFrame (swap chain panel + no-video overlay) to the largest
@@ -515,6 +522,8 @@ public sealed partial class MainWindow : Window
             _taskbar.SetProgress(VM.TaskbarMode, VM.TaskbarFraction);
         }
         _taskbar.SetCapturing(VM.IsCapturing);
+        _taskbar.SetControls(VM.TaskbarStartEnabled, VM.TaskbarStopEnabled);
+        UpdateThumbnailClip();
 
         // A capture that ended or failed while the window is in the background: flash its taskbar button.
         if (_wasCapturing && !VM.IsCapturing && !_finalizingForClose && !_closing)
@@ -525,6 +534,62 @@ public sealed partial class MainWindow : Window
     }
 
     private bool _wasCapturing;
+
+    private bool _taskbarStartBusy;
+
+    /// <summary>Thumbnail "Start capture": exactly the in-window start (checks, dialogs), for the current mode.</summary>
+    private async Task TaskbarStartAsync()
+    {
+        if (_taskbarStartBusy || !VM.TaskbarStartEnabled)
+        {
+            return;
+        }
+        _taskbarStartBusy = true; // a double click must not queue a second start behind a dialog
+        try
+        {
+            await StartCaptureAsync(playFirst: false);
+        }
+        finally
+        {
+            _taskbarStartBusy = false;
+        }
+    }
+
+    /// <summary>Thumbnail "Stop capture": stops the way the capture was started.</summary>
+    private void TaskbarStop()
+    {
+        if (VM.TaskbarStopEnabled)
+        {
+            VM.StopCaptureAsStarted();
+        }
+    }
+
+    /// <summary>
+    /// The taskbar thumbnail shows only the video area (ITaskbarList3::SetThumbnailClip, client
+    /// pixels), or the whole window when no preview area is visible. Cheap: the shell is only
+    /// called when the rectangle changes.
+    /// </summary>
+    private void UpdateThumbnailClip()
+    {
+        (int, int, int, int)? clip = null;
+        var xr = RootGrid.XamlRoot;
+        if (xr is not null && PreviewFrame.Visibility == Visibility.Visible
+            && PreviewFrame.ActualWidth >= 1 && PreviewFrame.ActualHeight >= 1)
+        {
+            double s = xr.RasterizationScale;
+            var p = PreviewFrame.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(0, 0));
+            int l = (int)Math.Round(p.X * s), t = (int)Math.Round(p.Y * s);
+            int r = (int)Math.Round((p.X + PreviewFrame.ActualWidth) * s), b = (int)Math.Round((p.Y + PreviewFrame.ActualHeight) * s);
+            int cw = (int)Math.Round(RootGrid.ActualWidth * s), ch = (int)Math.Round(RootGrid.ActualHeight * s);
+            l = Math.Clamp(l, 0, cw); r = Math.Clamp(r, 0, cw);
+            t = Math.Clamp(t, 0, ch); b = Math.Clamp(b, 0, ch);
+            if (r > l && b > t)
+            {
+                clip = (l, t, r, b);
+            }
+        }
+        _taskbar.SetThumbnailClip(clip);
+    }
 
     /// <summary>Keeps the machine from sleeping mid-capture; released as soon as capture ends.</summary>
     private void UpdateKeepAwake()
@@ -881,6 +946,7 @@ public sealed partial class MainWindow : Window
     {
         // Only one ContentDialog may be open per XamlRoot at a time.
         await _dialogGate.WaitAsync();
+        BringToFront(); // a start from the taskbar thumbnail can reach a dialog while the window is behind
         try
         {
             var dlg = new ContentDialog
@@ -907,6 +973,19 @@ public sealed partial class MainWindow : Window
         {
             _dialogGate.Release();
         }
+    }
+
+    private void BringToFront()
+    {
+        if (Win32.GetForegroundWindow() == _hwnd)
+        {
+            return;
+        }
+        if (AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } p)
+        {
+            p.Restore();
+        }
+        Activate();
     }
 
     // ================================================================== close

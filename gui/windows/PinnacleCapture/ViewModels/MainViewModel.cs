@@ -806,6 +806,21 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>Taskbar "Start capture": the main start action of the current mode (analog Capture, DV/HDV Manual capture), same enable rule as that button.</summary>
+    public bool TaskbarStartEnabled => !IsCapturing && (IsDvInput ? PlayAndCaptureEnabled : CaptureEnabled);
+
+    /// <summary>Taskbar "Stop capture": whenever the in-window stop buttons can stop.</summary>
+    public bool TaskbarStopEnabled => IsCapturing && CanStop;
+
+    /// <summary>Stops the way the capture was started (manual: tape keeps running; automatic: tape stops too).</summary>
+    public void StopCaptureAsStarted()
+    {
+        if (Session is { IsInvalid: false })
+        {
+            Report(Native.CaptureStopAsStarted(Session), "Stop capture");
+        }
+    }
+
     /// <summary>Stops the capture and decides about the tape: true = deck Stop, false = leave it running.</summary>
     public void StopCapture(bool stopDeck)
     {

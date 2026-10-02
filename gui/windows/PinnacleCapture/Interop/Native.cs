@@ -228,6 +228,9 @@ public static unsafe partial class Native
     private static partial PinStatus pin_capture_stop_ex(SafeHandle s, int stopDeck);
     public static PinStatus CaptureStop(SafeHandle s, bool stopDeck) => pin_capture_stop_ex(s, stopDeck ? 2 : 1);
 
+    /// <summary>Stops the way the capture was started: deck Stop only if it was started with the deck (PIN_STOP_DECK_AS_STARTED).</summary>
+    public static PinStatus CaptureStopAsStarted(SafeHandle s) => pin_capture_stop_ex(s, 0);
+
     // ---- status -----------------------------------------------------------------
 
     [LibraryImport(Lib)]

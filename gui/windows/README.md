@@ -105,6 +105,25 @@ asset files. It is cleared when the capture ends.
 When a capture finishes or fails while the window is not in the foreground, the taskbar button flashes
 (`FlashWindowEx`, `FLASHW_TRAY | FLASHW_TIMERNOFG`) until the window is brought to the front.
 
+### Thumbnail toolbar and thumbnail clip
+
+Hovering the taskbar button shows two buttons under the thumbnail (`ThumbBarAddButtons`; Segoe Fluent /
+MDL2 glyphs E896 and E71A drawn at run time):
+
+| Button | Does | Enabled |
+|---|---|---|
+| Start capture | the main start action of the current mode, through the same code as the in-window button (output checks, free-space / overwrite dialogs; the window is brought to the front if a dialog is needed): analog = Capture, DV/HDV = Manual capture (it does not move the tape; "Automatic rewind & capture" stays in the window) | idle and the in-window button is enabled |
+| Stop capture | `pin_capture_stop_ex(PIN_STOP_DECK_AS_STARTED)`: a manual capture leaves the tape running, an automatic rewind & capture stops it | while a capture can be stopped (not while finalising) |
+
+The buttons can only be added after the shell has created the taskbar button, so the window listens for
+the registered `TaskbarButtonCreated` message and re-adds everything when it arrives again (Explorer
+restart). The glyphs are redrawn when the taskbar theme or the DPI changes.
+
+The thumbnail shows only the video picture instead of the whole window: `ITaskbarList3::SetThumbnailClip`
+with the preview frame's rectangle in client pixels (XAML position x rasterization scale). It is updated on
+layout changes (checked on every status tick, the shell is only called when the rectangle changes) and
+cleared (whole window) when there is no preview area.
+
 ## Theme testing
 
 The app follows the Windows light/dark setting. To check the other theme
