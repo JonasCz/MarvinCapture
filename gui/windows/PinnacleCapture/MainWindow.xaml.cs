@@ -707,10 +707,11 @@ public sealed partial class MainWindow : Window
             _allowClose = true;
             Close();
         }
-        // A capture that ended on its own (no signal, time limit, device or camera gone,
-        // disk full, ...): say so, with how much was captured. Not for the user's own stop,
-        // and not while closing or running unattended command-line actions.
-        if (e.Kind == PinEventKind.CaptureEnded && (PinStopReason)e.A != PinStopReason.User &&
+        // A capture that ended abnormally (device or camera gone, disk full, write error):
+        // a dialog, with how much was captured. A normal end (limit, end of tape) only goes to
+        // the status bar (MainViewModel.ApplyStatus). Not while closing or running unattended
+        // command-line actions.
+        if (e.Kind == PinEventKind.CaptureEnded && Native.StopReasonAbnormal((PinStopReason)e.A) &&
             !_closing && !_finalizingForClose && !_exitWhenDone)
         {
             _ = ShowDialogAsync("Capture stopped", e.Text, null, "OK");

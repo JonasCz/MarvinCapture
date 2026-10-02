@@ -917,6 +917,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             StatusShortText = st.State == PinState.Preparing && st.Detail.Length > 0
                 ? "Preparing: " + st.Detail
+                // why the last capture stopped (not after the user's own stop), until the next one
+                : st.State == PinState.Ready && st.StopReason is not (PinStopReason.None or PinStopReason.User) &&
+                  st.StopText.Length > 0
+                ? st.StopText
                 : string.IsNullOrEmpty(file) || st.State != PinState.Capturing
                 ? SessionStateText
                 : st.Passes > 1 ? $"{file}  \u00B7  pass {st.Pass}/{st.Passes}" : file;
@@ -1106,7 +1110,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 RefreshDevices();
                 break;
             case PinEventKind.CaptureEnded:
-                LastLogLine = evt.Text; // MainWindow shows it in a dialog unless the user stopped
+                LastLogLine = evt.Text; // abnormal: MainWindow's dialog; the status bar shows it either way
                 break;
             case PinEventKind.State:
                 SessionState = (PinState)evt.A;

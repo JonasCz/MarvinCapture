@@ -214,11 +214,10 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   ready-made sentence (`PIN_EVT_CAPTURE_ENDED`, `stop_*` in the status). See
   usage.md "When a capture stops by itself".
 - **Bus reset during a capture.** The bus watch (`SelfIDCount` every 0.5 s)
-  runs while a capture is active too; a change restarts the stream with the
-  file kept open (HDV waits for the next GOP). If the camera is missing after
-  the re-scan, `camera_lost_s` starts a 10 s grace period; when the camera comes
-  back, a capture that drives the deck sends PLAY again (or REW, if it was
-  rewinding). Untested (no camera).
+  runs while a capture is active too. A topology change while the capture is
+  under way (file open, or rewinding for it) ends it with `PIN_STOP_CAMERA_LOST`
+  (no deck Stop: the node may have changed) and then re-scans as when idle. A
+  capture still waiting for its first frame keeps waiting. Untested (no camera).
 - Not implemented: detecting the end of tape from the deck state alone (with
   the no-signal timeout off, a multi-pass capture waits forever at the end).
 - The deck's own timecode while winding is described under "Timecode while

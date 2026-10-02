@@ -253,6 +253,12 @@ public static unsafe partial class Native
     }
 
     [LibraryImport(Lib)]
+    private static partial int pin_stop_reason_abnormal(PinStopReason reason);
+
+    /// <summary>The core's rule: a capture that ended this way failed or lost something (dialog), else it ended normally (status bar).</summary>
+    public static bool StopReasonAbnormal(PinStopReason reason) => pin_stop_reason_abnormal(reason) != 0;
+
+    [LibraryImport(Lib)]
     private static partial void pin_format_remaining(double seconds, byte* out_, nuint cap);
 
     /// <summary>"5m30s" for a stop countdown (formatted by the core so every GUI agrees).</summary>

@@ -31,6 +31,7 @@
 #include "../engine/pin_deck.h"
 #include "../engine/pin_settings.h"
 #include "../engine/pin_cmdline.h"
+#include "../engine/pin_stop.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pin_log.h"
@@ -384,6 +385,11 @@ void pin_format_remaining(double seconds, char *out, size_t cap)
         snprintf(out, cap, "%ldm%02lds", n / 60, n % 60);
     else
         snprintf(out, cap, "%lds", n);
+}
+
+int pin_stop_reason_abnormal(pin_stop_reason_t reason)
+{
+    return pin_stop_abnormal(reason);
 }
 
 static double clamp01(double v)

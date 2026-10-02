@@ -231,16 +231,21 @@ Every end of a capture is reported once, after its files are closed, as
 "Capture stopped after capturing 12m30s, because the output drive is almost
 full (60 MB left).") and in the status (`stop_reason`, `stop_captured_s`,
 `stop_text`, kept until the next capture starts). The captured time is the
-frame count of all passes, not the wall time. The GUI shows the sentence in a
-dialog with an OK button for every reason except the user's own stop;
-`pinctl capture` prints it and exits with 2.
+frame count of all passes, not the wall time.
+
+`pin_stop_reason_abnormal()` splits the reasons. **Abnormal** (device or camera
+gone, disk full, write error, any error): the GUI shows the sentence in a
+dialog with an OK button, and `pinctl capture` exits with 2. **Normal** (the
+user's stop, the no-signal timeout, the time limit, end of tape): no dialog;
+the GUI shows the sentence in the status bar instead of "Ready" until the next
+capture starts (not for the user's own stop).
 
 | reason | when |
 |---|---|
 | `NO_SIGNAL` / `TIME_LIMIT` | the no-signal timeout or the time limit, in the last pass |
 | `END_OF_TAPE` | replay device: the end of the file in the last pass |
 | `DEVICE_LOST` | the USB stream failed and the unit no longer answers a standard GET_STATUS on EP0 (unplugged); the session goes to ERROR. Another USB failure is `ERROR` |
-| `CAMERA_LOST` | DV / HDV: the camera left the FireWire bus and was not back within 10 s |
+| `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
 | `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second |
 | `WRITE_ERROR` | writing a file failed, or the next file (split, pass) could not be created |
 

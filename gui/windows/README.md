@@ -180,12 +180,14 @@ PinnacleCapture/
   `Native.PassesAllowed`); `KindSettingsViewModel` keeps the user's pass count
   and restores it when a limit is set again, and `EffectivePasses` is what goes
   into the capture options (the core also enforces it at capture start).
-- A capture that ends on its own (no signal, time limit, device or camera
-  disconnected, disk almost full, write error) shows a "Capture stopped" dialog
-  with the core's sentence ("Capture stopped after capturing 12m30s, because
-  ...") and an OK button (`PIN_EVT_CAPTURE_ENDED`, handled in
-  `MainWindow.VM_EngineEvent`). Not after the user's own stop, while closing,
-  or when running command-line actions with exit-when-done.
+- A capture that ends abnormally (`Native.StopReasonAbnormal`: device or
+  camera disconnected, disk almost full, write error) shows a "Capture stopped"
+  dialog with the core's sentence ("Capture stopped after capturing 12m30s,
+  because ...") and an OK button (`PIN_EVT_CAPTURE_ENDED`, handled in
+  `MainWindow.VM_EngineEvent`); not while closing or when running command-line
+  actions with exit-when-done. A normal end by a limit (no signal, time limit,
+  end of tape) only replaces "Ready" in the status bar with that sentence
+  until the next capture (`MainViewModel.ApplyStatus`, `stop_text`).
 - Before a capture starts, `pin_check_output` reports `low_space` (free space
   known and under 25 GiB, `PIN_LOW_SPACE_BYTES`); the window then asks "Only X
   free on D:\. Continue?" with OK / Cancel, for analog, DV and HDV alike.

@@ -162,10 +162,10 @@ Matching only `1f 07 00` finds sequence 0 alone and undercounts ~10×.
   each node's oMPR, the oPCR is read and compare-swapped, receive listens on
   the channel the plug reports, and it is released on stop. A bus reset
   *during* a capture (cable moved, camera switched off and on, another node
-  added) restarts the stream the same way as when idle (link init, find the
-  camera, connect its plug again: its node number may have changed), but keeps
-  the output file open, so the capture goes on in the same file after a gap of
-  a second or two. A camera that is gone for more than 10 s ends the capture
-  ("the camera or deck was disconnected or switched off"). See
+  added) ends the capture with an error dialog ("the FireWire connection to
+  the camera was interrupted"), because frames are lost while the plug is
+  connected again; carrying on in the same file would hide a loose cable.
+  The stream is then restarted as when idle (link init, find the camera,
+  connect its plug: its node number may have changed). See
   [usage.md](usage.md#when-a-capture-stops-by-itself). **Untested**: no camera
   was attached when this was written.

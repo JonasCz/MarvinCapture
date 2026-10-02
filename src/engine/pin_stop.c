@@ -24,6 +24,20 @@ uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_
     return (margin ? margin : PIN_STOP_DISK_MARGIN) + writer_backlog + remux_bytes;
 }
 
+int pin_stop_abnormal(pin_stop_reason_t reason)
+{
+    switch (reason) {
+    case PIN_STOP_DEVICE_LOST:
+    case PIN_STOP_CAMERA_LOST:
+    case PIN_STOP_DISK_FULL:
+    case PIN_STOP_WRITE_ERROR:
+    case PIN_STOP_ERROR:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 void pin_stop_format_duration(double seconds, char *out, size_t cap)
 {
     if (!out || !cap)
@@ -44,7 +58,7 @@ static const char *default_detail(pin_stop_reason_t reason)
     case PIN_STOP_TIME_LIMIT:  return "the time limit was reached";
     case PIN_STOP_END_OF_TAPE: return "the end of the tape was reached";
     case PIN_STOP_DEVICE_LOST: return "the capture device was disconnected";
-    case PIN_STOP_CAMERA_LOST: return "the camera or deck was disconnected or switched off";
+    case PIN_STOP_CAMERA_LOST: return "the FireWire connection to the camera was interrupted";
     case PIN_STOP_DISK_FULL:   return "the output drive is almost full";
     case PIN_STOP_WRITE_ERROR: return "writing the file failed";
     case PIN_STOP_ERROR:       return "of an error";

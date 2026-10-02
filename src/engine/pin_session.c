@@ -1425,10 +1425,6 @@ static void deck_send(pin_session_t *s, uint16_t node, pin_deck_cmd_t cmd)
  * ending a capture: why, and the checks that end one on their own
  * ==================================================================== */
 
-/* Seconds a camera may be off the bus during a capture before the capture
- * ends (a cable that was bumped, a camera switched off and on again). */
-#define PIN_CAMERA_LOST_GRACE_S 10.0
-
 static int fat32_and_free(const char *path, uint64_t *free_bytes, int *fat32);
 
 /* The directory part of a file path ("." if it has none). */
@@ -1462,7 +1458,6 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
     pin_logf(why == PIN_STOP_USER ? PIN_LOG_INFO : PIN_LOG_WARN, "session: %s\n", s->stop_text);
     pin_session_push_event(s, PIN_EVT_CAPTURE_ENDED, (int32_t)why, s->stop_text);
     s->capture_began = 0;
-    s->camera_lost_s = 0;
 }
 
 /* A capture is running, rewinding between passes, or waiting to start. */
@@ -1499,7 +1494,6 @@ static void capture_end(pin_session_t *s, pin_stop_reason_t why, const char *det
         deck_send(s, deck_node, PIN_DECK_CMD_STOP);
     if (active)
         capture_report_end(s, why, detail);
-    s->camera_lost_s = 0;
 }
 
 /* The deck a capture that ends on its own stops: the camera, if the capture
@@ -1688,7 +1682,6 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         s->stop_captured_s = 0;
         s->stop_text[0] = 0;
         s->capture_began = 0;
-        s->camera_lost_s = 0;
         s->capture_want_start = 1;
         s->rewind_before_capture = 0;
         s->rewind_done = 0;
@@ -1744,11 +1737,11 @@ static void dv_tick(void *user)
     }
 
     /* Bus watch: a camera switched on or off (or a cable moved) resets the
-     * bus. During a capture too: after a bus reset the camera's plug must be
-     * connected again (and its node number may have changed), so the stream
-     * is restarted the same way, keeping the open file (do_run_dv()). */
+     * bus. During a capture that ends the capture: the reset interrupts the
+     * stream (frames are lost while the plug is connected again), and a loose
+     * cable must not go unnoticed in a file that looks complete. */
     if ((s->state == PIN_STATE_READY || capture_active(s)) && !s->dv_rescan) {
-        int rescan = 0;
+        int rescan = 0, bus_changed = 0;
         if (ctx->bus_pending) {
             uint32_t v;
             if (p1394_reg_read_poll(&s->link, P1394_OHCI_SELF_ID_COUNT, &v)) {
@@ -1768,6 +1761,7 @@ static void dv_tick(void *user)
                     } else {
                         s->dv_rescan_retries = 0;
                         rescan = 1;
+                        bus_changed = 1;
                     }
                 }
             } else if (tnow - ctx->bus_poll_s > 1.0) {
@@ -1784,6 +1778,14 @@ static void dv_tick(void *user)
             s->dv_rescan_retries < 5 && tnow - s->stream_start_s > 2.0) {
             s->dv_rescan_retries++;
             rescan = 1;
+        }
+        /* only a capture that is under way (file open, or the deck rewinding
+         * for it); one still waiting for its first frame just waits on */
+        if (bus_changed && (s->capture_began || s->rewind_before_capture || s->pass_rewinding)) {
+            capture_end(s, PIN_STOP_CAMERA_LOST,
+                        "the FireWire connection to the camera was interrupted (cable moved or "
+                        "camera switched off)", 0);
+            set_state(s, PIN_STATE_READY);
         }
         if (rescan) {
             s->dv_rescan = 1;
@@ -1866,12 +1868,6 @@ static void dv_tick(void *user)
         }
         rate_sample(s);
         capture_guard(s, auto_stop_node(s, node));
-    }
-
-    /* The camera left the bus during a capture and did not come back. */
-    if (s->camera_lost_s > 0 && !node && tnow - s->camera_lost_s > PIN_CAMERA_LOST_GRACE_S) {
-        capture_end(s, PIN_STOP_CAMERA_LOST, NULL, 0);
-        set_state(s, PIN_STATE_READY);
     }
 
     /* No-signal stop (idle_stop_minutes) and total-time stop (max_duration_minutes).
@@ -1998,18 +1994,10 @@ static void do_run_dv(pin_session_t *s)
         }
         pin_session_lock(s);
         s->camera_present = s->dev.camera_node ? 1 : 0;
-        int camera_back = 0;
         if (!s->camera_present) {
             s->deck = PIN_DECK_UNKNOWN;
             s->tape_percent = -1;
             s->deck_busy = 0;
-            /* gone in the middle of a capture: dv_tick() ends it unless the
-             * camera is back within PIN_CAMERA_LOST_GRACE_S */
-            if (capture_active(s) && s->camera_lost_s <= 0)
-                s->camera_lost_s = pin_session_now();
-        } else if (s->camera_lost_s > 0) {
-            s->camera_lost_s = 0;
-            camera_back = 1;
         }
         s->reconnecting = 0;
         s->dv_rescan = 0;
@@ -2025,22 +2013,6 @@ static void do_run_dv(pin_session_t *s)
         if (first) {
             pin_session_lock(s);
             set_state(s, PIN_STATE_READY);
-            pin_session_unlock(s);
-        }
-        if (camera_back) {
-            /* The camera came back during a capture, maybe after being
-             * switched off: a capture that drives the deck starts the tape
-             * again (or the rewind it was doing). Untested: no camera here. */
-            pin_session_lock(s);
-            pin_logf(PIN_LOG_INFO, "session: the camera is back; the capture goes on\n");
-            if (s->capture_opts.start_deck && s->dev.camera_node) {
-                if (s->state == PIN_STATE_CAPTURING) {
-                    deck_send(s, s->dev.camera_node, PIN_DECK_CMD_PLAY);
-                } else if (s->state == PIN_STATE_REWINDING) {
-                    s->rewind_wait_start_s = pin_session_now();
-                    deck_send(s, s->dev.camera_node, PIN_DECK_CMD_REW);
-                }
-            }
             pin_session_unlock(s);
         }
 
@@ -2070,12 +2042,8 @@ static void do_run_dv(pin_session_t *s)
         pin_session_lock(s);
         /* a pending SET_INPUT / CLOSE wins over a re-scan */
         int rescan = s->dv_rescan && !s->worker_stop && !s->cmd.pending;
-        /* A re-scan during a capture keeps the file open: the stream comes
-         * back on the same file once the camera is connected again. */
         if (!rescan)
-            capture_end(s, PIN_STOP_USER, NULL, 0);
-        else if (s->stream_kind == PIN_KIND_HDV && s->sink)
-            s->hdv_await_gop = 1; /* resume on a whole GOP */
+            capture_end(s, PIN_STOP_USER, NULL, 0); /* input switch / close */
         pin_session_unlock(s);
         dv_reassembler_finish(&reasm);
         pinnacle_stream_stop(&s->dev);

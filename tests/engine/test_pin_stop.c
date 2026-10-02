@@ -42,14 +42,20 @@ int main(void)
     pin_stop_message(PIN_STOP_USER, 45, NULL, b, sizeof(b));
     CHECK(strcmp(b, "Capture stopped after capturing 45s.") == 0, "user stop has no reason");
     pin_stop_message(PIN_STOP_CAMERA_LOST, 750, NULL, b, sizeof(b));
-    CHECK(strcmp(b, "Capture stopped after capturing 12m30s, because the camera or deck was "
-                    "disconnected or switched off.") == 0, "default wording");
+    CHECK(strcmp(b, "Capture stopped after capturing 12m30s, because the FireWire connection "
+                    "to the camera was interrupted.") == 0, "default wording");
     pin_stop_message(PIN_STOP_DISK_FULL, 60, "the output drive is almost full (60 MB left)", b, sizeof(b));
     CHECK(strcmp(b, "Capture stopped after capturing 1m00s, because the output drive is almost "
                     "full (60 MB left).") == 0, "caller's detail");
     pin_stop_message(PIN_STOP_ERROR, 1, "", b, sizeof(b));
     CHECK(strcmp(b, "Capture stopped after capturing 1s, because of an error.") == 0, "empty detail");
 
+    CHECK(!pin_stop_abnormal(PIN_STOP_USER) && !pin_stop_abnormal(PIN_STOP_NO_SIGNAL) &&
+              !pin_stop_abnormal(PIN_STOP_TIME_LIMIT) && !pin_stop_abnormal(PIN_STOP_END_OF_TAPE) &&
+              !pin_stop_abnormal(PIN_STOP_NONE), "normal ends");
+    CHECK(pin_stop_abnormal(PIN_STOP_DEVICE_LOST) && pin_stop_abnormal(PIN_STOP_CAMERA_LOST) &&
+              pin_stop_abnormal(PIN_STOP_DISK_FULL) && pin_stop_abnormal(PIN_STOP_WRITE_ERROR) &&
+              pin_stop_abnormal(PIN_STOP_ERROR), "abnormal ends");
     CHECK(pin_stop_disk_reserve(0, 0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
     CHECK(pin_stop_disk_reserve(10, 20, 30) == 60, "margin + backlog + remux");
 

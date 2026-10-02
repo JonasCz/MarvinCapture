@@ -391,7 +391,9 @@ PIN_API pin_status_t pin_capture_stop_ex(pin_session_t *s, pin_stop_deck_t stop_
 /* ---- status --------------------------------------------------------------- */
 
 /* Why a capture ended (pin_status_snapshot_t.stop_reason, PIN_EVT_CAPTURE_ENDED).
- * Everything but PIN_STOP_USER happened on its own; GUIs tell the user. */
+ * pin_stop_reason_abnormal() splits them: an abnormal end (something failed or
+ * was disconnected) deserves a dialog; a normal one (the user, a limit that
+ * was set, the end of the tape) a line in the status bar. */
 typedef enum {
     PIN_STOP_NONE = 0,          /* no capture has ended in this session yet */
     PIN_STOP_USER,              /* pin_capture_stop[_ex], deck Stop, input switch, close */
@@ -400,7 +402,8 @@ typedef enum {
     PIN_STOP_END_OF_TAPE,       /* replay device: the end of the source file, in the last pass */
     PIN_STOP_DEVICE_LOST,       /* the capture device stopped answering on USB (unplugged);
                                    the session goes to PIN_STATE_ERROR */
-    PIN_STOP_CAMERA_LOST,       /* DV / HDV: the camera left the FireWire bus and did not come back */
+    PIN_STOP_CAMERA_LOST,       /* DV / HDV: the FireWire bus was reset during the capture (cable
+                                   moved, camera switched off): frames were lost, so it stops */
     PIN_STOP_DISK_FULL,         /* the output drive got too full to go on; stopped while there
                                    was still room to finish the file */
     PIN_STOP_WRITE_ERROR,       /* writing or opening an output file failed */
@@ -560,6 +563,10 @@ PIN_API void pin_format_status_line(const pin_status_snapshot_t *st, char *out, 
 /* Seconds as "5m30s" / "1h02m10s" / "45s" (rounded up), for the stop countdowns
  * (idle_stop_remaining_s, duration_remaining_s). */
 PIN_API void pin_format_remaining(double seconds, char *out, size_t cap);
+/* 1 if a capture that ended this way failed or lost something (device or
+ * camera gone, disk full, write error, any error): show a dialog. 0 for the
+ * user's own stop and for the limits and end of tape the user asked for. */
+PIN_API int pin_stop_reason_abnormal(pin_stop_reason_t reason);
 
 /* What a taskbar / dock progress indicator should show for a status snapshot,
  * so every GUI picks the same mode. idle_total_s / duration_total_s are the

@@ -41,6 +41,9 @@ extern "C" {
  * writes a temp .ts and remuxes it at close). margin 0 = PIN_STOP_DISK_MARGIN. */
 uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_t remux_bytes);
 
+/* pin_stop_reason_abnormal(): device / camera gone, disk full, write or other error. */
+int pin_stop_abnormal(pin_stop_reason_t reason);
+
 /* "12m30s" / "1h02m05s" / "45s", rounded down (what was captured). */
 void pin_stop_format_duration(double seconds, char *out, size_t cap);
 

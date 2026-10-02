@@ -309,7 +309,7 @@ static int cmd_capture(int argc, char **argv)
     if (fin.stop_text[0])
         printf("%s\n", fin.stop_text);
     pin_close(s);
-    return fin.stop_reason == PIN_STOP_NONE || fin.stop_reason == PIN_STOP_USER ? 0 : 2;
+    return pin_stop_reason_abnormal(fin.stop_reason) ? 2 : 0;
 }
 
 static int cmd_preview_dump(int argc, char **argv, const char *id)
