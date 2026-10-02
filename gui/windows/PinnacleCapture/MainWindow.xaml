@@ -532,10 +532,10 @@
 
         <!-- ============================================================ status bar -->
         <!-- One line, one font (StatusTextStyle: Caption, secondary colour, regular weight) for every
-             text. Left to right: deck | file | time | signal | frames | storage | meters | mute.
+             text. Left to right: file | deck | time | signal | frames | storage | meters | mute.
              Every item sits in a "host" that carries its left margin (the uniform spacing), so a
              collapsed host leaves no gap. When the window is too narrow MainWindow.FitStatusBar
-             collapses, in this order: the free-space part of storage, frames, storage, deck, time
+             collapses, in this order: the free-space part of storage, frames, storage, time, deck
              (deck and storage are also hidden by state: no DV/HDV input, no disk info);
              the file text just trims. Counters are the core's (pin_status_snapshot_t): since capture
              start (since app start while idle); the clip's own numbers are in the tooltip. -->
@@ -545,8 +545,8 @@
                 SizeChanged="StatusBar_SizeChanged">
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" MinWidth="80" />
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
@@ -556,7 +556,7 @@
                 </Grid.ColumnDefinitions>
 
                 <!-- deck status (DV / HDV input only) -->
-                <StackPanel x:Name="StatusDeckHost" Margin="0,0,24,0" VerticalAlignment="Center">
+                <StackPanel Grid.Column="1" x:Name="StatusDeckHost" Margin="24,0,0,0" VerticalAlignment="Center">
                     <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Deck status">
                         <FontIcon Glyph="&#xEC58;" Style="{StaticResource StatusIconStyle}" />
                         <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
@@ -566,7 +566,7 @@
 
                 <!-- the file being written, or "Ready" / the preparing step / the error. Tooltip: the
                      capture state too. pin_format_status_line is this live region's automation name. -->
-                <StackPanel Grid.Column="1" Style="{StaticResource StatusItemStyle}"
+                <StackPanel Style="{StaticResource StatusItemStyle}"
                             ToolTipService.ToolTip="{x:Bind VM.StatusTip, Mode=OneWay}">
                     <Ellipse Width="8" Height="8" VerticalAlignment="Center"
                              Fill="{ThemeResource SystemFillColorCriticalBrush}"

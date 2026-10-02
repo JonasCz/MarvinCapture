@@ -614,7 +614,7 @@ public sealed partial class MainWindow : Window
     /// Keeps the one-line status bar inside the window: shows the items the state calls for
     /// (deck only on DV/HDV, storage only with disk info), then, while they do not fit next to the
     /// file text's minimum width, drops the lowest-priority one: the free-space part of storage,
-    /// frames, storage, deck, time. The file text trims on its own.
+    /// frames, storage, time, deck. The file text trims on its own.
     /// </summary>
     private void FitStatusBar()
     {
@@ -644,8 +644,8 @@ public sealed partial class MainWindow : Window
             () => StatusFreeHost.Visibility = Visibility.Collapsed,
             () => StatusFramesHost.Visibility = Visibility.Collapsed,
             () => StatusStorageHost.Visibility = Visibility.Collapsed,
-            () => StatusDeckHost.Visibility = Visibility.Collapsed,
             () => StatusTimeHost.Visibility = Visibility.Collapsed,
+            () => StatusDeckHost.Visibility = Visibility.Collapsed,
         };
         foreach (var drop in drops)
         {

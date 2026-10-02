@@ -204,8 +204,9 @@ PinnacleCapture/
   time left before a capture starts. Both turn red when the core reports
   `disk_low`.
 - The status bar is one line with one font (no bold, no monospace), items
-  separated by uniform spacing. Left to right: deck status (DV/HDV), the file
-  being written (or "Ready" / the error; the capture state is in its tooltip),
+  separated by uniform spacing. Left to right: the file being written (or
+  "Ready" / the error; the capture state is in its tooltip), deck status
+  (DV/HDV),
   time (tape timecode; for analog the time since capture start), signal
   (check mark Locked / No signal, source type HDV / DV / S-Video / Composite and
   the format label from the core's `video_label`: PAL, NTSC, 1080i25, 720p59.94),
@@ -213,10 +214,11 @@ PinnacleCapture/
   in the tooltip), storage (one icon: bytes total / current file, free space,
   time left), then the small audio meters and mute. When the window is too narrow
   the bar drops items in this order: free space / time left, frames, storage,
-  deck, time (the file text just trims); minimum window width is 1000 DIP. All
+  time, deck (the file text just trims); minimum window width is 1000 DIP. All
   numbers come from the core status: totals count since capture start (since
   app start while idle), the clip ones restart with every file. Tooltips and
-  automation names spell the items out.
+  automation names spell the items out, one fact per line (frames: total and
+  current clip; storage: written, free, time left).
 - Closing the window during a capture asks first. Confirming stops the capture,
   shows "Finalizing files…" and exits once the core reports READY.
 - There are no keyboard shortcuts, on purpose. Every control is tabbable and

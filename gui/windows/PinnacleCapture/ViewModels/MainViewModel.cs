@@ -923,7 +923,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         StatusSubText = IsCapturingState(st.State) ? SessionStateText : "";
         StatusTip = StatusSubText.Length > 0 && StatusSubText != StatusShortText
-            ? $"{StatusSubText}: {StatusShortText}" : StatusShortText;
+            ? $"{StatusSubText}\n{StatusShortText}" : StatusShortText;
 
         Timecode = string.IsNullOrEmpty(st.Timecode) ? "--:--:--:--" : st.Timecode;
         if (st.Input == PinInput.Dv)
@@ -943,10 +943,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         var dropped = st.FramesDropped + st.WriteDropped;
         FramesTotalText = $"Frames {st.Frames:N0} · {st.FramesError:N0} err · {dropped:N0} drop";
-        FramesTip = $"Frames, frames with an error and dropped frames. Total (since {(IsCapturingState(st.State) ? "capture start" : "the app started")}): "
-            + $"{st.Frames:N0} frames, {st.FramesError:N0} with error, {dropped:N0} dropped. "
-            + $"Current clip: {st.ClipFrames:N0} frames, {st.ClipFramesError:N0} with error, {st.ClipFramesDropped:N0} dropped. "
-            + "A frame has an error if it was damaged or concealed by the camera, data was missing, or (HDV) it depends on a damaged picture.";
+        FramesTip = $"Total (since {(IsCapturingState(st.State) ? "capture start" : "the app started")})\n"
+            + $"Frames: {st.Frames:N0}\nWith errors: {st.FramesError:N0}\nDropped: {dropped:N0}\n\n"
+            + $"Current clip\nFrames: {st.ClipFrames:N0}\nWith errors: {st.ClipFramesError:N0}\nDropped: {st.ClipFramesDropped:N0}\n\n"
+            + "A frame has an error if the camera damaged or concealed it,\ndata was missing, or (HDV) it depends on a damaged picture.";
         SizeText = $"{HumanSize(st.TotalBytesWritten)} / {HumanSize(st.ClipBytesWritten)}";
 
         FeedMeter(in st);
@@ -969,10 +969,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         TimeLeftText = st.EstSecondsLeft >= 0 ? FormatTimeLeft(st.EstSecondsLeft) : "";
         StorageFreeText = (DiskFreeText.Length > 0 ? "· " + DiskFreeText : "")
             + (TimeLeftText.Length > 0 ? " · " + TimeLeftText : "");
-        StorageTip = $"Written: {HumanSize(st.TotalBytesWritten)} in this capture, {HumanSize(st.ClipBytesWritten)} in the current file. "
-            + (DiskFreeText.Length > 0 ? $"{DiskFreeText} on the output volume" : "")
-            + (TimeLeftText.Length > 0 ? $", {TimeLeftText}" : "")
-            + (st.DiskLow != 0 ? ". Low disk space: less than 1 hour or 50 GB left" : "");
+        StorageTip = $"Written in this capture: {HumanSize(st.TotalBytesWritten)}\nWritten in the current file: {HumanSize(st.ClipBytesWritten)}"
+            + (DiskFreeText.Length > 0 ? $"\nFree on the output volume: {HumanSize(st.DiskFreeBytes)}" : "")
+            + (TimeLeftText.Length > 0 ? $"\n{TimeLeftText}" : "")
+            + (st.DiskLow != 0 ? "\n\nLow disk space: less than 1 hour or 50 GB left" : "");
         HasDiskInfo = st.DiskFreeBytes > 0;
 
         IsCapturing = st.State is PinState.Capturing or PinState.Stopping or PinState.Rewinding;
