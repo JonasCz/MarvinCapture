@@ -357,7 +357,10 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
      * first needs the power-up sequence before its loader answers "05". */
     uint8_t up = 0;
     pinnacle_progress(dev, "Checking the device", -1);
-    pinnacle_status_t st = pinnacle_cfg_op(dev, 0x06, 0x00, &up);
+    pinnacle_status_t st = pinnacle_ensure_fx2(dev, capture_bitstream_path);
+    if (st != PINNACLE_OK)
+        return st;
+    st = pinnacle_cfg_op(dev, 0x06, 0x00, &up);
     if (st != PINNACLE_OK)
         return st;
     if (up != 0x01) {

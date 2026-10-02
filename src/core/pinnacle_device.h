@@ -61,7 +61,7 @@ typedef enum {
     PINNACLE_ERR_NOT_READY,
     PINNACLE_ERR_BUSY,          /* device/lock already held by another process */
     PINNACLE_ERR_LOCK,          /* pinnacle_lock.[ch]: OS lock primitive failed (not a BUSY case) */
-    PINNACLE_ERR_NO_FX2_FIRMWARE, /* the unit's FX2 has no firmware running; downloading it is not implemented */
+    PINNACLE_ERR_NO_FX2_FIRMWARE, /* the unit's FX2 has no firmware running and the host-side download failed or its file is missing */
 } pinnacle_status_t;
 
 const char *pinnacle_strerror(pinnacle_status_t status);
@@ -155,6 +155,16 @@ void pinnacle_close(pinnacle_device_t *dev);
  * (pinnacle_open_by_id); the caller should hold the device's pinnacle_lock
  * so this never runs under another process's capture. */
 pinnacle_status_t pinnacle_read_guid(pinnacle_device_t *dev, uint32_t *guid_hi, uint32_t *guid_lo);
+
+/* For models with an FX2 image in the table (MovieBox Deluxe): probes the
+ * config channel ("07 00" -> "07 01"); if the unit does not answer, downloads
+ * the model's FX2 firmware (fx2_firmware, looked up in the directory of
+ * any_firmware_path, e.g. the bitstream path), waits for the unit to
+ * re-enumerate on the same USB port and re-opens it (dev->handle changes).
+ * No-op for other models. PINNACLE_ERR_NO_FX2_FIRMWARE if the file is missing
+ * or the unit does not come back. Called by pinnacle_init_hardware and
+ * pinnacle_analog_open. Untested on real hardware. */
+pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_firmware_path);
 
 /* Replays the config-channel bring-up sequence, the FPGA bitstream upload,
  * and selects the operational alt setting. bitstream_path must point to the

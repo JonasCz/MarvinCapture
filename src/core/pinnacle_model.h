@@ -49,6 +49,11 @@ typedef struct {
      * vendor driver skips both and reads the identity with FX2 vendor
      * request 0xA0 instead (pinnacle_device.c). */
     int cr_config;
+    /* File name in firmware/ of the FX2 (USB controller) image the host must
+     * download when the unit boots without firmware (probe "07 00" not
+     * answered "07 01"), or NULL for the models that boot from EEPROM
+     * (pinnacle_ensure_fx2, pinnacle_fx2.h). */
+    const char *fx2_firmware;
 } pinnacle_model_t;
 
 extern const pinnacle_model_t pinnacle_model_table[];

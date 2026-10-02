@@ -31,6 +31,12 @@ one node). See [hardware.md](hardware.md#models).
 
 ## Phase 1 — USB side (unchanged, still a replay)
 
+0. **MovieBox Deluxe only (0206): FX2 firmware.** If the `07 00` probe is not
+   answered `07 01`, `fx2-marvin.bin` is downloaded over EP0 (vendor request
+   `0xA0`, CPUCS `0xE600` = 1, 512-byte blocks, CPUCS = 0, 50 ms settle), the
+   unit is re-opened on the same port and probed again (up to 10 s). Source:
+   **code** (`FUN_0002bf8c`); the re-enumeration wait is a guess; untested on
+   hardware. Skipped on every other model. See [hardware.md](hardware.md#models).
 1. **Select alt setting 0.**
 2. **Config-channel bring-up (EP 0x01 / 0x81).** This replays 80
    exchanges, `PINNACLE_CONFIG_PREBITSTREAM_SEQ` in `protocol_data.h`.

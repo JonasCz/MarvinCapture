@@ -21,7 +21,7 @@ it treats two PIDs alike they share a row's behaviour here.
 | `0223` | Marvin-510 | Studio **510-USB** | supported; DV/analog bring-up verified on hardware (no camera attached), capture untested |
 | `0212` | Marvin-CR | Studio **700-USB** | supported, **untested** (same code path as the 500) |
 | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | supported, **untested** (same code path as the 700) |
-| `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; may need an FX2 firmware download that is not implemented (see below) |
+| `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; host-side FX2 firmware download implemented as a best guess (see below) |
 
 Untested models appear as "(untested)" in the GUI device list, `pinlist` and
 `pinctl list`. The other PIDs in the vendor driver (`0x20a`, `0x20b`, `0x211`
@@ -56,13 +56,20 @@ in the config channel and flags it by `cr_config = 0` in the model table:
   (`read_guid_a0`); if it fails the 1394 code logs a warning and publishes the
   fallback GUID.
 - the vendor driver sends the `07 00` probe first; if it is not answered `07 01`
-  it assumes a blank FX2 and downloads firmware (embedded 8 KB image at VA
-  `0x49720` of the driver, or `Marvin_000.bix` / `MarvinCR_000.bix`) with vendor
-  request `0xA0` over EP0, CPUCS (`0xE600`) held in reset, then re-enumerates.
-  That is **not implemented** (FX2 firmware is not shipped, and the re-enumeration
-  handling is untested); a classic unit that comes up without firmware fails
-  bring-up with "no firmware loaded" (`PINNACLE_ERR_NO_FX2_FIRMWARE`). The 500/510
-  boot from EEPROM and never need this.
+  it assumes a blank FX2 and downloads firmware (embedded image at VA `0x49720`
+  of the driver, 0x1350 bytes, or `Marvin_000.bix` / `MarvinCR_000.bix`) with
+  vendor request `0xA0` over EP0, CPUCS (`0xE600`) held in reset, 512-byte
+  blocks at wValue = block * 512, then CPUCS = 0, ~50 ms settle after each
+  CPUCS write (**code**, `FUN_0002bf8c`). The vendor driver also recognises a
+  blank FX2 at 04b4:8613; we do not claim that PID (it would hijack other
+  Cypress devices), the trigger is the failed `07 00` probe on 2304:0206.
+  **Implemented as a best guess, untested** (`pinnacle_ensure_fx2`,
+  `src/core/pinnacle_fx2.c`; image shipped as `firmware/fx2-marvin.bin`, see
+  firmware/README.md): download, close, re-open the same USB port path, retry
+  the probe for up to 10 s (guess: that the unit re-enumerates with the same
+  PID on the same port, and that the vendor's wait differs). Missing file or a
+  unit that never comes back fails bring-up with `PINNACLE_ERR_NO_FX2_FIRMWARE`.
+  The 500/510 boot from EEPROM and never need this.
 
 **510-USB** (`0223`): in every PID branch of the vendor driver that was found,
 `0x223` is handled exactly like `0x213`: same capability word, same embedded

@@ -106,10 +106,12 @@ if (-not $SkipGui) {
 Step 'Checking build\dist'
 $expect = @('cli\pincli.exe', 'cli\pinctl.exe', 'cli\pinnacle-oss-core.dll',
             'cli\libusb-1.0.dll', 'cli\libwinpthread-1.dll',
-            'cli\firmware\fpga-ohci.bin', 'cli\firmware\fpga-capture.bin')
+            'cli\firmware\fpga-ohci.bin', 'cli\firmware\fpga-capture.bin',
+            'cli\firmware\fx2-marvin.bin')
 if (-not $SkipGui) {
     $expect += 'PinnacleCapture.exe', 'pinnacle-oss-core.dll', 'libusb-1.0.dll',
-               'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin'
+               'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin',
+               'firmware\fx2-marvin.bin'
 }
 $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dist $_)) }
 if ($missing) { throw "missing from build\dist: $($missing -join ', ')" }

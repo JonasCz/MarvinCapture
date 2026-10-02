@@ -7,7 +7,7 @@
 # Software Foundation, either version 3 of the License, or (at your option) any
 # later version. This program is distributed WITHOUT ANY WARRANTY; see
 # <https://www.gnu.org/licenses/> for the full licence.
-"""Extract the three FPGA bitstreams embedded in your own copy of the vendor
+"""Extract the three FPGA bitstreams (and the FX2 firmware image) embedded in your own copy of the vendor
 driver MarvinAVS64.sys (from Pinnacle_Video_Driver_64bit.msi ->
 Data1.cab -> marvinavs64.cab). Never redistribute the output.
 
@@ -33,6 +33,10 @@ BLOBS = [   # name, virtual address, md5
     ("render",  0x5dcd0, "cacaa36da76a4499fb27f727aad1cf96"),
     ("capture", 0x70f30, "280bacc631c6a69b831734e3bc72969d"),
 ]
+# The FX2 (USB controller) firmware the driver downloads to units that boot
+# without one (MovieBox Deluxe): a raw 8051 image at VA 0x49720, which runs up
+# to the start of the OHCI bitstream (0x1350 bytes). Written as fx2-marvin.bin.
+FX2_VA, FX2_SIZE, FX2_MD5 = 0x49720, 0x1350, "22f873f4c47d52de4a4423ef19e6e29b"
 
 
 def va_to_offset(pe, va):
@@ -69,6 +73,16 @@ def main():
         path = os.path.join(out, "fpga-%s.bin" % name)
         open(path, "wb").write(blob)
         print("%-8s -> %s" % (name, path))
+    off = va_to_offset(pe, FX2_VA)
+    blob = pe[off:off + FX2_SIZE]
+    got = hashlib.md5(blob).hexdigest()
+    if got != FX2_MD5:
+        print("fx2      md5 %s does not match %s -- different driver version?" % (got, FX2_MD5))
+        ok = False
+    else:
+        path = os.path.join(out, "fx2-marvin.bin")
+        open(path, "wb").write(blob)
+        print("fx2      -> %s" % path)
     return 0 if ok else 1
 
 

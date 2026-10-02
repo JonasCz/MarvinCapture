@@ -41,6 +41,10 @@ No camera is attached, so only bring-up can be tested. Quick checks from `~/pin-
   and hangs the ssh call (then `pkill pinanalog`).
 - Crash hunting: `gdb -batch -ex run -ex bt --args ./build/pindeck ...` (gdb is installed).
 
+Do not run anything that loads the FX2 firmware (`pinnacle_ensure_fx2`) against
+the 510-USB: it is a no-op there (`fx2_firmware` is NULL for every model but
+0206), and the 510 has its firmware in ROM.
+
 ## Vendor driver decompilation on the host
 
 `~/tools/decompiled_avs.c` (MarvinAVS64.sys, Ghidra, `FUN_0002c280` bitstream select at

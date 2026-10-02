@@ -20,6 +20,7 @@
 #include "pin_log.h"
 #include "pinnacle_cfg.h"
 #include "pinnacle_enum.h"
+#include "pinnacle_fx2.h"
 #include "protocol_data.h"
 
 #include <errno.h>
@@ -83,7 +84,7 @@ const char *pinnacle_strerror(pinnacle_status_t status)
     case PINNACLE_ERR_BUSY: return "device already open in another process";
     case PINNACLE_ERR_LOCK: return "internal locking error";
     case PINNACLE_ERR_NO_FX2_FIRMWARE:
-        return "the device's USB controller has no firmware loaded (this model needs a host-side FX2 firmware download, which is not implemented)";
+        return "the device's USB controller has no firmware loaded and the host-side download failed (is firmware/fx2-marvin.bin present?)";
     }
     return "unknown error";
 }
@@ -397,6 +398,117 @@ static pinnacle_status_t config_replay_seq(pinnacle_device_t *dev,
     return result;
 }
 
+static int fx2_probe(pinnacle_device_t *dev)
+{
+    uint8_t probe = 0;
+    return pinnacle_cfg_op(dev, 0x07, 0x00, &probe) == PINNACLE_OK && probe == 0x01;
+}
+
+static int fx2_write(void *user, uint16_t addr, const uint8_t *data, uint16_t len)
+{
+    pinnacle_device_t *dev = user;
+    int rc = libusb_control_transfer(dev->handle, 0x40, 0xA0, addr, 0, (uint8_t *)data, len,
+                                     BULK_TIMEOUT_MS);
+    return rc == (int)len ? 0 : 1;
+}
+
+static void fx2_drop_handle(pinnacle_device_t *dev)
+{
+    if (!dev->handle)
+        return;
+    if (dev->interface_claimed)
+        libusb_release_interface(dev->handle, PINNACLE_INTERFACE_NUM);
+    libusb_close(dev->handle);
+    dev->handle = NULL;
+    dev->interface_claimed = 0;
+}
+
+/* Re-opens the unit at the USB port path `id` after it re-enumerated:
+ * same steps as the tail of pinnacle_open_by_id. */
+static pinnacle_status_t fx2_reopen(pinnacle_device_t *dev, const char *id)
+{
+    libusb_device *match = NULL;
+    const pinnacle_model_t *model = NULL;
+    if (find_device(dev->usb_ctx, id, &match, &model) != PINNACLE_OK)
+        return PINNACLE_ERR_NOT_FOUND;
+    int rc = libusb_open(match, &dev->handle);
+    libusb_unref_device(match);
+    if (rc != 0) {
+        dev->handle = NULL;
+        return PINNACLE_ERR_USB_OPEN;
+    }
+    dev->model = model;
+    libusb_set_auto_detach_kernel_driver(dev->handle, 1);
+    if (libusb_set_configuration(dev->handle, 1) != 0)
+        return PINNACLE_ERR_USB_CONFIG;
+    if (libusb_claim_interface(dev->handle, PINNACLE_INTERFACE_NUM) != 0)
+        return PINNACLE_ERR_USB_CLAIM;
+    dev->interface_claimed = 1;
+    return PINNACLE_OK;
+}
+
+pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_firmware_path)
+{
+    if (!dev || !dev->model || !dev->model->fx2_firmware)
+        return PINNACLE_OK;
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: probing for FX2 firmware (classic model)\n");
+    if (fx2_probe(dev))
+        return PINNACLE_OK;
+
+    /* image: <dir of any_firmware_path>/<fx2_firmware> */
+    const char *base = any_firmware_path ? any_firmware_path : "";
+    char path[1024];
+    size_t dirlen = 0;
+    for (const char *p = base; *p; p++)
+        if (*p == '/' || *p == '\\')
+            dirlen = (size_t)(p - base) + 1;
+    if (dirlen + strlen(dev->model->fx2_firmware) + 1 > sizeof(path))
+        return PINNACLE_ERR_NO_FX2_FIRMWARE;
+    memcpy(path, base, dirlen);
+    strcpy(path + dirlen, dev->model->fx2_firmware);
+
+    uint8_t *img = malloc(PINNACLE_FX2_MAX_IMAGE + 1);
+    if (!img)
+        return PINNACLE_ERR_NO_FX2_FIRMWARE;
+    FILE *f = fopen(path, "rb");
+    size_t n = f ? fread(img, 1, PINNACLE_FX2_MAX_IMAGE + 1, f) : 0;
+    if (f)
+        fclose(f);
+    if (!f || pinnacle_fx2_validate(img, n) != 0) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: FX2 firmware '%s' missing or invalid\n", path);
+        free(img);
+        return PINNACLE_ERR_NO_FX2_FIRMWARE;
+    }
+
+    char id[PINNACLE_ENUM_ID_MAX];
+    pinnacle_enum_build_id(libusb_get_device(dev->handle), id, sizeof(id));
+
+    pinnacle_progress(dev, "Loading the USB controller firmware", -1);
+    pin_logf(PIN_LOG_INFO, "pinnacle: no answer to the FX2 probe, downloading %s (%zu bytes)\n",
+             path, n);
+    int rc = pinnacle_fx2_download(img, n, fx2_write, dev, 50);
+    free(img);
+    if (rc != 0) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: FX2 firmware download failed\n");
+        return PINNACLE_ERR_NO_FX2_FIRMWARE;
+    }
+
+    /* The FX2 drops off the bus and comes back (new descriptors) on the same
+     * port: close our handle, then re-open by port path until the probe works. */
+    fx2_drop_handle(dev);
+    pinnacle_progress(dev, "Waiting for the USB controller to restart", -1);
+    for (int waited = 0; waited < 10000; waited += 250) {
+        sleep_ms(250);
+        if (fx2_reopen(dev, id) == PINNACLE_OK && fx2_probe(dev)) {
+            pin_logf(PIN_LOG_INFO, "pinnacle: FX2 firmware running\n");
+            return PINNACLE_OK;
+        }
+        fx2_drop_handle(dev);
+    }
+    pin_logf(PIN_LOG_ERROR, "pinnacle: the unit did not come back after the FX2 download\n");
+    return PINNACLE_ERR_NO_FX2_FIRMWARE;
+}
+
 pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bitstream_path)
 {
     dev->have_guid = 0;
@@ -406,15 +518,11 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
     if (rc != 0)
         return PINNACLE_ERR_USB_TRANSFER;
 
-    /* Classic units may boot without firmware (VID/PID-only EEPROM); the
-     * vendor driver then downloads one over EP0 when the "07 00" probe is not
-     * answered with "07 01" (not implemented here, see docs/hardware.md). */
-    if (dev->model && !dev->model->cr_config) {
-        uint8_t probe = 0;
-        pin_logf(PIN_LOG_DEBUG, "pinnacle: probing for FX2 firmware (classic model)\n");
-        if (pinnacle_cfg_op(dev, 0x07, 0x00, &probe) != PINNACLE_OK || probe != 0x01)
-            return PINNACLE_ERR_NO_FX2_FIRMWARE;
-    }
+    /* Classic units may boot without firmware (VID/PID-only EEPROM): see
+     * pinnacle_ensure_fx2. */
+    pinnacle_status_t fx2 = pinnacle_ensure_fx2(dev, bitstream_path);
+    if (fx2 != PINNACLE_OK)
+        return fx2;
 
     /* Full captured cold-boot sequence on the low-level config channel,
      * immediately before the FPGA bitstream upload begins -- see

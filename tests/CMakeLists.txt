@@ -60,3 +60,7 @@ add_executable(test_lock test_lock.c)
 target_link_libraries(test_lock PRIVATE pinnacle_core)
 add_test(NAME pinnacle_lock COMMAND test_lock)
 set_tests_properties(pinnacle_lock PROPERTIES TIMEOUT 60)
+
+add_executable(test_fx2 test_fx2.c)
+target_link_libraries(test_fx2 PRIVATE pinnacle_core)
+add_test(NAME pinnacle_fx2 COMMAND test_fx2)

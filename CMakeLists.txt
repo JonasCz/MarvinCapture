@@ -157,6 +157,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_SOURCE_DIR}/firmware/fpga-ohci.bin
             ${CMAKE_SOURCE_DIR}/firmware/fpga-capture.bin
+            ${CMAKE_SOURCE_DIR}/firmware/fx2-marvin.bin
             ${CMAKE_SOURCE_DIR}/firmware/README.md
             $<TARGET_FILE_DIR:pinnacle-oss-core>/firmware)
 
