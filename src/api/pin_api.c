@@ -430,6 +430,13 @@ pin_progress_mode_t pin_status_progress(const pin_status_snapshot_t *st, double 
             } else {
                 m = PIN_PROGRESS_INDETERMINATE;
             }
+            /* Low disk space turns the bar yellow, keeping the value a bar mode had
+             * (a countdown or limit stays readable), else full. Only while writing. */
+            if (st->disk_low) {
+                if (m != PIN_PROGRESS_NORMAL)
+                    f = 1;
+                m = PIN_PROGRESS_PAUSED;
+            }
             break;
         default:
             break;

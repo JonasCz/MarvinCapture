@@ -546,6 +546,8 @@ PIN_API void pin_format_remaining(double seconds, char *out, size_t cap);
  *                  else a per-pass limit: NORMAL, elapsed / limit (rises);
  *                  else no signal: PAUSED (waiting for the signal);
  *                  else INDETERMINATE (running, end unknown)
+ *                  disk_low (while writing, not an error): PAUSED (yellow) instead, with
+ *                  the value of a bar mode kept (countdown / limit), else full
  *   REWINDING      PAUSED (between passes)
  *   STOPPING       INDETERMINATE
  *   otherwise      NONE */

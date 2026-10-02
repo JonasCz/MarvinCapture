@@ -92,6 +92,7 @@ core, `pin_status_progress`; `Controls/TaskbarProgress` only talks to the shell)
 | Capturing with "Stop after (min)" | green bar, elapsed / limit of the current pass |
 | Capturing, no limit | indeterminate |
 | Capturing, waiting for signal (no timeout), or rewinding between passes | yellow (paused), full |
+| Capturing and the core reports low disk space (under 1 hour or 50 GB left) | yellow (paused); keeps the value of a countdown / time limit bar, else full. Beaten only by an error |
 | Stopping / finalising | indeterminate |
 | Device error, or an error InfoBar open | red; clears when the InfoBar is dismissed, or when the next capture starts |
 | Idle / ready | none |

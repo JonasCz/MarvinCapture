@@ -130,6 +130,21 @@ int main(void)
         CHECK(pin_status_progress(&st, 300, 1000, &f) == PIN_PROGRESS_NORMAL && f == 0.25, "limit without timeout");
         st.duration_remaining_s = -1;
         CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_PAUSED && f == 1, "waiting for signal");
+        /* low disk space: yellow while capturing, keeping a bar's value, never over an error */
+        st.signal = 1;
+        st.disk_low = 1;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_PAUSED && f == 1, "low disk, no limit: full yellow");
+        st.duration_remaining_s = 750;
+        CHECK(pin_status_progress(&st, 0, 1000, &f) == PIN_PROGRESS_PAUSED && f == 0.25, "low disk keeps the limit value");
+        st.signal = 0;
+        st.idle_stop_remaining_s = 75;
+        CHECK(pin_status_progress(&st, 300, 1000, &f) == PIN_PROGRESS_PAUSED && f == 0.25, "low disk keeps the countdown");
+        st.idle_stop_remaining_s = st.duration_remaining_s = -1;
+        st.state = PIN_STATE_READY;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_NONE, "low disk while idle: none");
+        st.state = PIN_STATE_ERROR;
+        CHECK(pin_status_progress(&st, 0, 0, &f) == PIN_PROGRESS_ERROR, "error beats low disk");
+        st.disk_low = 0;
         st.state = PIN_STATE_REWINDING;
         CHECK(pin_status_progress(&st, 0, 0, NULL) == PIN_PROGRESS_PAUSED, "rewinding");
         st.state = PIN_STATE_STOPPING;
