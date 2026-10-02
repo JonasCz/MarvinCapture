@@ -24,8 +24,10 @@ pure helpers have unit tests (`tests/engine/test_pin_deck.c`). Background:
    pass started, so after minutes of rewinding it was already expired: the
    capture would have stopped immediately with a "no signal" limit set.
 5. NOT_IMPLEMENTED answers (echo of the command) were mapped to a deck state.
-6. Total-time limit now always ends the capture (counted over all passes) and
-   sends deck Stop; before, with passes left it just rewound.
+6. Time limit ("Stop after") is per pass again (capture time of the current
+   pass, rewind excluded): it ends the pass like the no-signal timeout (rewind +
+   next pass, or deck Stop and end in the last pass). An intermediate version
+   made it span all passes; that was reverted.
 
 ## To verify with the camera
 

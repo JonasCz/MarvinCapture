@@ -218,7 +218,6 @@ struct pin_session {
     int start_play_sent;          /* CAPTURE_START: PLAY already sent for this capture */
     int pass_rewinding;           /* between passes: REWINDING, next pass starts at the tape start */
     double rewind_wait_start_s;   /* when the current rewind was started */
-    double capture_prev_s;        /* capture time of earlier passes (for the total-time limit) */
 
     /* replay (virtual device) */
     int is_replay;

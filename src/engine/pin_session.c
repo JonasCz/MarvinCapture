@@ -1429,7 +1429,6 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     pin_rate_reset(&s->rate_win);
     s->rate_saved_s = pin_session_now();
     s->capture_start_s = pin_session_now();
-    s->capture_prev_s = 0;
     /* the no-signal timer counts from here, not from the last data before a rewind */
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
@@ -1696,16 +1695,17 @@ static void dv_tick(void *user)
     /* No-signal stop (idle_stop_minutes) and total-time stop (max_duration_minutes).
      * The no-signal timeout is also how the end of the tape is noticed: with
      * passes left it ends this pass, rewinds and starts the next one. The
-     * total-time limit counts capture time over all passes and always ends the
-     * whole capture. Either way a capture that drives the deck stops the deck. */
-    double total_s = s->capture_prev_s + s->elapsed_s;
+     * time limit is per pass: elapsed_s counts only the capture time of the
+     * current pass (it restarts when the next pass starts, so the rewind is
+     * not counted) and ends the pass exactly like the no-signal timeout; in
+     * the last pass either one ends the capture and a capture that drives the
+     * deck stops the deck. */
     int duration_stop = s->capture_opts.max_duration_minutes > 0 &&
-                         total_s > s->capture_opts.max_duration_minutes * 60.0;
+                         s->elapsed_s > s->capture_opts.max_duration_minutes * 60.0;
     int idle_stop = s->capture_opts.idle_stop_minutes > 0 &&
                     s->idle_s > s->capture_opts.idle_stop_minutes * 60.0;
     if (s->state == PIN_STATE_CAPTURING && (idle_stop || duration_stop)) {
-        if (!duration_stop && s->pass < s->passes) {
-            s->capture_prev_s = total_s;
+        if (s->pass < s->passes) {
             /* end this pass, rewind, next pass */
             if (s->sink) {
                 dv_flush_pending(s);
@@ -2909,7 +2909,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         }
         if (s->capture_opts.max_duration_minutes > 0 && s->capture_start_s > 0) {
             double rem = s->capture_opts.max_duration_minutes * 60.0 -
-                         (s->capture_prev_s + (now - s->capture_start_s));
+                         (now - s->capture_start_s);
             out->duration_remaining_s = rem > 0 ? rem : 0;
         }
     }

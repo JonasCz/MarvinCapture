@@ -188,8 +188,10 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   3 s after REW was acknowledged, because a status query right after REW can
   still say "stopped". The session is REWINDING during the rewind.
 - **Stopping.** The no-signal timeout (`idle_stop_minutes`; time since data
-  last arrived) and the total-time limit (`max_duration_minutes`, capture time
-  summed over all passes) close the file and, if `start_deck`, send Stop.
+  last arrived) and the time limit (`max_duration_minutes`, per pass: capture
+  time of the current pass only, `elapsed_s`, which restarts with each pass so
+  the rewind is not counted) end a pass; in the last pass they close the file
+  and, if `start_deck`, send Stop.
   `pin_status_snapshot_t.idle_stop_remaining_s` / `duration_remaining_s` give
   the seconds left (-1 = off); `pin_format_remaining()` formats "5m30s".
 - **Manual stop.** `pin_capture_stop()` sends deck Stop only if the capture was
@@ -199,8 +201,8 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
 - **Multi-pass.** The no-signal timeout is also how the end of the tape is
   noticed. With passes left it closes the file, sends REW (state REWINDING,
   `pass_rewinding`), and at BOT sends PLAY and opens the next file; the
-  no-signal timer restarts with each pass (it must not count the rewind). The
-  total-time limit ends everything instead.
+  no-signal timer and the per-pass time limit restart with each pass (they must
+  not count the rewind). Whichever limit comes first ends the pass.
 - Not implemented: detecting the end of tape from the deck state alone (with
   the no-signal timeout off, a multi-pass capture waits forever at the end).
 - The deck's own timecode while winding is described under "Timecode while

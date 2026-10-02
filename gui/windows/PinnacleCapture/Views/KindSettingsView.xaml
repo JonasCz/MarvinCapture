@@ -73,8 +73,8 @@
                 Value="{x:Bind ViewModel.MaxDurationMinutes, Mode=TwoWay}"
                 IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
                 AutomationProperties.Name="Stop this many minutes into the pass, regardless of signal"
-                AutomationProperties.HelpText="Ends the pass after this many minutes of capture, whether or not signal is present. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)."
-                ToolTipService.ToolTip="Ends the pass after this many minutes of capture, whether or not signal is present. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)." />
+                AutomationProperties.HelpText="Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it."
+                ToolTipService.ToolTip="Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it." />
         </Grid>
 
         <NumberBox

@@ -322,9 +322,11 @@ typedef struct {
                                     "base-NNNN.ext", starting at this number and counting up
                                     per scene; the caller picks an unused number. Appended. */
     int max_duration_minutes;   /* stop after this long of capture time, signal/data or not;
-                                    0 = never. DV/HDV: applies across all passes (cuts a pass
-                                    short rather than rewinding for the next one). Appended
-                                    field, ABI-compatible. */
+                                    0 = never. DV/HDV: per pass, counting only the capture time
+                                    of the current pass (not the rewind between passes); when it
+                                    expires the pass ends like a no-signal timeout (rewind and
+                                    next pass, or end of the capture in the last pass).
+                                    Appended field, ABI-compatible. */
 } pin_capture_opts_t;
 
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);
@@ -446,8 +448,8 @@ typedef struct {
      * idle_stop_remaining_s: the no-signal timeout (idle_stop_minutes); counts
      *   down from the full timeout while data / signal arrives (it restarts
      *   with every frame), so show it only while `signal` is 0.
-     * duration_remaining_s: the total capture time limit (max_duration_minutes),
-     *   over all passes. */
+     * duration_remaining_s: the capture time limit of the current pass
+     *   (max_duration_minutes), restarting with each pass. */
     double idle_stop_remaining_s;
     double duration_remaining_s;
 

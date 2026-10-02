@@ -29,8 +29,10 @@ session engine"). The traps:
   STOPPED) -> READY (PLAY sent, waiting for the first frame) -> CAPTURING.
   Between passes: CAPTURING -> REWINDING (`pass_rewinding`) -> CAPTURING.
 - Stopping: no-signal (`idle_stop_minutes`) ends a pass (rewind if passes are left)
-  or the capture; total time (`max_duration_minutes`, summed over passes) always
-  ends it; both send deck Stop when `start_deck`. Remaining seconds are in the
+  or the capture; the time limit (`max_duration_minutes`) is per pass (`elapsed_s`,
+  reset when the next pass starts, so no rewind time) and ends a pass exactly like
+  no-signal does; in the last pass both end the capture and send deck Stop when
+  `start_deck`. Remaining seconds are in the
   status snapshot (`idle_stop_remaining_s`, `duration_remaining_s`).
 - Manual stop: `pin_capture_stop_ex(stop_deck)` (PIN_STOP_DECK_AS_STARTED/NO/YES)
   decides about deck Stop independent of `start_deck`; the GUI's two stop buttons
