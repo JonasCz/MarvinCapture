@@ -8,8 +8,10 @@ The Studio 500-USB's FPGA has no flash: the host uploads one of three
 | `fpga-ohci.bin` | DV / HDV over FireWire |
 | `fpga-capture.bin` | Analog capture (composite / S-video + line audio) |
 
-The 510-USB (PID 0223) uses the same two files: the vendor driver embeds one set
-of bitstreams for every PID except the Pro. Which file a model takes is a column
+Every supported model (500/510/700/710 and MovieBox Deluxe) uses the same two
+files: the vendor driver embeds one set of bitstreams for every PID except the
+Pro. No FX2 (USB controller) firmware is shipped or needed for the 500 and 510;
+see docs/hardware.md for the classic MovieBox Deluxe. Which file a model takes is a column
 of the model table (`src/core/pinnacle_model.c`).
 
 A third design, Render (analog output from the PC), exists in the vendor driver

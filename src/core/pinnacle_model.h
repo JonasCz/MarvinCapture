@@ -43,6 +43,12 @@ typedef struct {
     const char *dv_bitstream;   /* file name in firmware/: DV/HDV (OHCI) design */
     const char *analog_bitstream; /* file name in firmware/: analog capture design */
     uint8_t decoder_i2c;        /* 7-bit I2C address of the SAA7113-class video decoder */
+    /* 1 = "Marvin-CR" firmware family (500/510/700/710): the config channel
+     * has the 0c power-up and 80 <idx> 08 configuration-memory reads. 0 =
+     * the older "classic" firmware (MovieBox Deluxe), which has neither: the
+     * vendor driver skips both and reads the identity with FX2 vendor
+     * request 0xA0 instead (pinnacle_device.c). */
+    int cr_config;
 } pinnacle_model_t;
 
 extern const pinnacle_model_t pinnacle_model_table[];

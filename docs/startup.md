@@ -36,7 +36,8 @@ one node). See [hardware.md](hardware.md#models).
    exchanges, `PINNACLE_CONFIG_PREBITSTREAM_SEQ` in `protocol_data.h`.
    - Most of them are SAA7113 analog-decoder I2C writes. The decoder sits at
      I2C address `0x4a`; that address is in the code of `MarvinAVS64.sys`,
-     which uses `0x48` only for the older 0206 model.
+     which uses `0x48` only for PID `0x20b`, a model this driver's INF does not
+     bind (not 0206, as an earlier version of these notes said).
    - Removing the whole sequence stops the device coming up. That was tested
      earlier: see [protocol.md](protocol.md).
    - Two of the exchanges read the device's configuration memory:

@@ -4,7 +4,9 @@ An open user-space driver, command-line tools and a Windows capture app for the
 **Pinnacle Studio 500-USB** (`USB\VID_2304&PID_0213`, codename *Marvin-Lite*), a
 discontinued ~2005 analog/DV/HDV capture box. The **510-USB** (`PID_0223`)
 brings up identically (verified without a camera; capture itself not yet
-tested on it). The supported models live in one table, see
+tested on it). The 700-USB, MovieBox Plus / 710-USB and MovieBox Deluxe are
+implemented from the vendor driver's code but **untested** (flagged in the GUI
+and the CLIs). The models live in one table, see
 [docs/hardware.md](docs/hardware.md#models). The vendor driver is XP/Vista-era
 and increasingly unusable; this reverse-engineers the protocol from scratch and
 implements it on libusb.

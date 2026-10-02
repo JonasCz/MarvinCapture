@@ -19,9 +19,50 @@ it treats two PIDs alike they share a row's behaviour here.
 |---|---|---|---|
 | `0213` | Marvin-Lite | Studio **500-USB** | supported, tested |
 | `0223` | Marvin-510 | Studio **510-USB** | supported; DV/analog bring-up verified on hardware (no camera attached), capture untested |
-| `0206` | Marvin-classic | MovieBox Deluxe | not supported yet |
-| `0212` | Marvin-CR | Studio 700-USB | not supported yet |
-| `0224` | Marvin-710 | Studio 710-USB / MovieBox Plus | not supported yet |
+| `0212` | Marvin-CR | Studio **700-USB** | supported, **untested** (same code path as the 500) |
+| `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | supported, **untested** (same code path as the 700) |
+| `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; may need an FX2 firmware download that is not implemented (see below) |
+
+Untested models appear as "(untested)" in the GUI device list, `pinlist` and
+`pinctl list`. The other PIDs in the vendor driver (`0x20a`, `0x20b`, `0x211`
+Pro) are not in the INF's list for this driver and are not handled.
+
+**Bitstreams**: `MarvinAVS64.sys` embeds one OHCI, one Render and one Capture
+bitstream and uses them for every PID except `0x211`. So no model needs files
+beyond `fpga-ohci.bin` / `fpga-capture.bin`.
+
+**Capability word** (vendor `FUN_00019588`; nibble 0 = decoder type, nibbles 1 and 2 = two
+further chip objects, probably the analog output side and the audio part):
+`0x101` for 0213 and 0223, `0x111` for 0212, 0224
+and 0206. The extra nibble on the 700/710/Deluxe instantiates one more I2C chip
+object (address `0x54`), apparently on the analog output side. Nothing the
+capture path uses depends on it; the extra inputs and outputs of the 700-USB
+are not driven by this project. The decoder is at I2C `0x4a` on all of them.
+
+**700-USB, 710-USB** (`0212`, `0224`): every PID branch found
+(`0x212`/`0x213`/`0x223`/`0x224` in one `if`) treats them like the 500-USB:
+the `0c` power-up, the `80 <idx> 08` configuration-memory reads, the GUID,
+`MarvinCR_000.bix`. No difference was found, so they run the 500-USB's code
+unchanged.
+
+**MovieBox Deluxe** (`0206`, "classic" firmware): differs from the CR family
+in the config channel and flags it by `cr_config = 0` in the model table:
+
+- no `0c` power-up and no `80 <idx> 08` reads (the vendor driver only sends them
+  for 0212/0213/0223/0224); we skip them (`config_replay_seq`, analog `power_up`).
+- the identity (the GUID that goes into our 1394 config ROM) is read as eight
+  single-byte FX2 vendor requests `0xA0`, wValue `0x78 + i` (`FUN_0002cb5c`,
+  else branch). Implemented as a best guess from the decompilation
+  (`read_guid_a0`); if it fails the 1394 code logs a warning and publishes the
+  fallback GUID.
+- the vendor driver sends the `07 00` probe first; if it is not answered `07 01`
+  it assumes a blank FX2 and downloads firmware (embedded 8 KB image at VA
+  `0x49720` of the driver, or `Marvin_000.bix` / `MarvinCR_000.bix`) with vendor
+  request `0xA0` over EP0, CPUCS (`0xE600`) held in reset, then re-enumerates.
+  That is **not implemented** (FX2 firmware is not shipped, and the re-enumeration
+  handling is untested); a classic unit that comes up without firmware fails
+  bring-up with "no firmware loaded" (`PINNACLE_ERR_NO_FX2_FIRMWARE`). The 500/510
+  boot from EEPROM and never need this.
 
 **510-USB** (`0223`): in every PID branch of the vendor driver that was found,
 `0x223` is handled exactly like `0x213`: same capability word, same embedded

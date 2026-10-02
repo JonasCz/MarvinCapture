@@ -61,6 +61,7 @@ typedef enum {
     PINNACLE_ERR_NOT_READY,
     PINNACLE_ERR_BUSY,          /* device/lock already held by another process */
     PINNACLE_ERR_LOCK,          /* pinnacle_lock.[ch]: OS lock primitive failed (not a BUSY case) */
+    PINNACLE_ERR_NO_FX2_FIRMWARE, /* the unit's FX2 has no firmware running; downloading it is not implemented */
 } pinnacle_status_t;
 
 const char *pinnacle_strerror(pinnacle_status_t status);

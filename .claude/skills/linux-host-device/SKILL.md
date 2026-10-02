@@ -47,3 +47,11 @@ No camera is attached, so only bring-up can be tested. Quick checks from `~/pin-
 line ~19899, PID branches by grepping `0x223`), `~/tools/decompiled_all.c` (MarvinBus64),
 `~/pinnacle-driver/marvin/*.sys` (the binaries), Ghidra in `~/tools/ghidra_12.1.4_PUBLIC`.
 What the PID branches say is summarised in docs/hardware.md (Models).
+
+Useful starting points in `decompiled_avs.c` (see docs/hardware.md, Models): `FUN_00019588`
+(capability word per PID, `0xc4` = PID field), `FUN_0002c280` (bitstream per PID), `FUN_0002bf8c`
+(FX2 `.bix` download), `FUN_0002cb5c`/`FUN_0002cc90` (identity reads: `80 idx 08` for the CR
+family, vendor request 0xA0 for classic). `grep -n '0x206\|0x212\|0x224'` finds every PID branch.
+Edit scripts: when patching C with python, do not put `\n` inside a non-raw triple-quoted string
+that is also a C string literal; use the Edit tool, and grep the build log for `error` (a stale
+binary makes a failed build look like a pass).

@@ -18,6 +18,7 @@
 
 #include "pinnacle_device.h"
 #include "pin_log.h"
+#include "pinnacle_cfg.h"
 #include "pinnacle_enum.h"
 #include "protocol_data.h"
 
@@ -81,6 +82,8 @@ const char *pinnacle_strerror(pinnacle_status_t status)
     case PINNACLE_ERR_NOT_READY: return "device reports not ready (FPGA did not come up; needs a physical USB power cycle)";
     case PINNACLE_ERR_BUSY: return "device already open in another process";
     case PINNACLE_ERR_LOCK: return "internal locking error";
+    case PINNACLE_ERR_NO_FX2_FIRMWARE:
+        return "the device's USB controller has no firmware loaded (this model needs a host-side FX2 firmware download, which is not implemented)";
     }
     return "unknown error";
 }
@@ -328,10 +331,37 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
     return PINNACLE_OK;
 }
 
+/* "Classic" firmware (no 80 <idx> 08 command): the vendor driver reads the
+ * same 8 bytes as eight single-byte FX2 vendor requests, bRequest 0xA0 (the
+ * Cypress "internal RAM" request), wValue 0x78 + i (MarvinAVS64.sys
+ * FUN_0002cb5c, else branch). Untested: no classic unit has been available. */
+static pinnacle_status_t read_guid_a0(pinnacle_device_t *dev)
+{
+    uint8_t b[8];
+    for (int i = 0; i < 8; i++) {
+        int rc = libusb_control_transfer(dev->handle, 0xC0, 0xA0, (uint16_t)(0x78 + i), 0,
+                                          &b[i], 1, BULK_TIMEOUT_MS);
+        if (rc != 1)
+            return PINNACLE_ERR_USB_TRANSFER;
+    }
+    dev->guid_hi = ((uint32_t)b[0] << 24) | ((uint32_t)b[1] << 16) | ((uint32_t)b[2] << 8) | b[3];
+    dev->guid_lo = ((uint32_t)b[4] << 24) | ((uint32_t)b[5] << 16) | ((uint32_t)b[6] << 8) | b[7];
+    dev->have_guid = 1;
+    return PINNACLE_OK;
+}
+
 pinnacle_status_t pinnacle_read_guid(pinnacle_device_t *dev, uint32_t *guid_hi, uint32_t *guid_lo)
 {
     static const uint8_t req[10] = { 0x80, 0x03, 0x08 };
     dev->have_guid = 0;
+    if (dev->model && !dev->model->cr_config) {
+        pinnacle_status_t st = read_guid_a0(dev);
+        if (st != PINNACLE_OK)
+            return st;
+        *guid_hi = dev->guid_hi;
+        *guid_lo = dev->guid_lo;
+        return PINNACLE_OK;
+    }
     pinnacle_status_t st = config_exchange(dev, req, sizeof(req));
     if (st != PINNACLE_OK)
         return st;
@@ -353,6 +383,11 @@ static pinnacle_status_t config_replay_seq(pinnacle_device_t *dev,
     pinnacle_status_t result = PINNACLE_OK;
 
     for (unsigned i = 0; i < count; i++) {
+        /* classic firmware has no 0c power-up and no 80 <idx> 08 reads: the
+         * vendor driver only sends those to the Marvin-CR family */
+        if (dev->model && !dev->model->cr_config &&
+            (seq[i].data[0] == 0x0c || seq[i].data[0] == 0x80))
+            continue;
         if (seq[i].delay_ms > 0)
             sleep_ms(seq[i].delay_ms);
         pinnacle_status_t status = config_exchange(dev, seq[i].data, (int)seq[i].len);
@@ -370,6 +405,16 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
                                                PINNACLE_ALT_SETTING_IDLE);
     if (rc != 0)
         return PINNACLE_ERR_USB_TRANSFER;
+
+    /* Classic units may boot without firmware (VID/PID-only EEPROM); the
+     * vendor driver then downloads one over EP0 when the "07 00" probe is not
+     * answered with "07 01" (not implemented here, see docs/hardware.md). */
+    if (dev->model && !dev->model->cr_config) {
+        uint8_t probe = 0;
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: probing for FX2 firmware (classic model)\n");
+        if (pinnacle_cfg_op(dev, 0x07, 0x00, &probe) != PINNACLE_OK || probe != 0x01)
+            return PINNACLE_ERR_NO_FX2_FIRMWARE;
+    }
 
     /* Full captured cold-boot sequence on the low-level config channel,
      * immediately before the FPGA bitstream upload begins -- see
@@ -401,6 +446,10 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
     }
     if (ready != PINNACLE_OK)
         return ready;
+
+    /* The replay above carried the CR family's GUID read; classic units get theirs here. */
+    if (dev->model && !dev->model->cr_config && read_guid_a0(dev) != PINNACLE_OK)
+        pin_logf(PIN_LOG_WARN, "pinnacle: could not read the device GUID (classic model)\n");
 
     pinnacle_status_t status = upload_bitstream(dev, bitstream_path);
     if (status != PINNACLE_OK)

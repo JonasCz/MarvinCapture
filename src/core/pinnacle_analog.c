@@ -123,9 +123,16 @@ static const regval_t saa7113_init[] = {
     { 0x58, 0x00 }, { 0x59, 0x54 }, { 0x5a, 0x07 }, { 0x5b, 0x83 }, { 0x5e, 0x00 },
 };
 
+/* The decoder's I2C address comes from the model table (0x4a on every model
+ * this driver knows). */
+static uint8_t decoder_addr(const pinnacle_device_t *dev)
+{
+    return dev && dev->model ? dev->model->decoder_i2c : SAA7113_ADDR;
+}
+
 static pinnacle_status_t saa_write(pinnacle_analog_t *a, uint8_t reg, uint8_t val)
 {
-    return pinnacle_i2c_write(a->dev, SAA7113_ADDR, reg, val);
+    return pinnacle_i2c_write(a->dev, decoder_addr(a->dev), reg, val);
 }
 
 static pinnacle_status_t saa_write_table(pinnacle_analog_t *a, const regval_t *t, size_t n)
@@ -315,14 +322,16 @@ static pinnacle_status_t power_up(pinnacle_analog_t *a)
         return PINNACLE_ERR_USB_TRANSFER;
     if ((st = pinnacle_cfg_op(dev, 0x07, 0x00, &r)) != PINNACLE_OK)
         return st;
-    if ((st = pinnacle_cfg_op(dev, 0x0c, 0x01, &r)) != PINNACLE_OK)
-        return st;
-    if (r)
-        sleep_ms(1000);   /* FUN_0002cabc: the device asks for a second */
-    if ((st = pinnacle_cfg_chip_reset(dev, SAA7113_ADDR)) != PINNACLE_OK)
+    if (!dev->model || dev->model->cr_config) { /* classic firmware has no 0c */
+        if ((st = pinnacle_cfg_op(dev, 0x0c, 0x01, &r)) != PINNACLE_OK)
+            return st;
+        if (r)
+            sleep_ms(1000);   /* FUN_0002cabc: the device asks for a second */
+    }
+    if ((st = pinnacle_cfg_chip_reset(dev, decoder_addr(dev))) != PINNACLE_OK)
         return st;
     uint8_t ver = 0;
-    if (pinnacle_i2c_read(dev, SAA7113_ADDR, 0x00, &ver) != PINNACLE_OK)
+    if (pinnacle_i2c_read(dev, decoder_addr(dev), 0x00, &ver) != PINNACLE_OK)
         pin_logf(PIN_LOG_WARN, "pinnacle: SAA7113 did not answer\n");
     if ((st = saa_write_table(a, saa7113_init, sizeof(saa7113_init) / sizeof(saa7113_init[0]))) !=
         PINNACLE_OK)
@@ -443,7 +452,7 @@ pinnacle_status_t pinnacle_analog_set_audio_gain(pinnacle_analog_t *a, int32_t d
 pinnacle_status_t pinnacle_analog_get_status(pinnacle_analog_t *a, pinnacle_analog_status_t *s)
 {
     uint8_t v = 0;
-    pinnacle_status_t st = pinnacle_i2c_read(a->dev, SAA7113_ADDR, 0x1f, &v);
+    pinnacle_status_t st = pinnacle_i2c_read(a->dev, decoder_addr(a->dev), 0x1f, &v);
     if (st != PINNACLE_OK)
         return st;
     s->raw = v;

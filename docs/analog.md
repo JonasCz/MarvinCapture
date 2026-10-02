@@ -413,8 +413,10 @@ plausible, no direct evidence.
 Differences visible in code:
 
 - **Decoder I2C address.** The video decoder is at I2C `0x4a` on 0213 and
-  the later models, and at `0x48` only on 0206 (**code**, in a crossbar
-  object constructor in `MarvinAVS64.sys`).
+  every other model in the INF, including 0206. `0x48` is used only for PID
+  `0x20b`, which the INF does not list (**code**: the crossbar/decoder object
+  constructor in `MarvinAVS64.sys` compares the PID with `0x20b`; an earlier
+  version of this note said 0206).
 - **Chip objects are data-driven.** A per-device capability word selects
   which chip objects get instantiated. It has three nibbles: decoder type,
   and two other categories. **code**, structure only; the values were not
