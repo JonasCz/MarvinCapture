@@ -36,7 +36,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherQueueTimer _meterTimer;
     private Thread? _deviceWatch;
     private volatile bool _closing;
-    private readonly TaskbarProgress _taskbar;
+    private readonly TaskbarButton _taskbar;
     private readonly SemaphoreSlim _dialogGate = new(1, 1);
 
     private D3DPreview? _preview;
@@ -64,7 +64,7 @@ public sealed partial class MainWindow : Window
         InitializeComponent();
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
-        _taskbar = new TaskbarProgress(_hwnd);
+        _taskbar = new TaskbarButton(_hwnd);
 
         Title = "Pinnacle Capture";
         ExtendsContentIntoTitleBar = true;
@@ -508,12 +508,13 @@ public sealed partial class MainWindow : Window
     {
         if (VM.InfoOpen && VM.InfoSeverity == 3)
         {
-            _taskbar.Apply(PinProgressMode.Error, 1);
+            _taskbar.SetProgress(PinProgressMode.Error, 1);
         }
         else
         {
-            _taskbar.Apply(VM.TaskbarMode, VM.TaskbarFraction);
+            _taskbar.SetProgress(VM.TaskbarMode, VM.TaskbarFraction);
         }
+        _taskbar.SetCapturing(VM.IsCapturing);
     }
 
     /// <summary>Keeps the machine from sleeping mid-capture; released as soon as capture ends.</summary>
@@ -960,6 +961,8 @@ public sealed partial class MainWindow : Window
             Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);
             _keepingAwake = false;
         }
-        _taskbar.Apply(PinProgressMode.None, 0);
+        _taskbar.SetProgress(PinProgressMode.None, 0);
+        _taskbar.SetCapturing(false);
+        _taskbar.Dispose();
     }
 }

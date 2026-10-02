@@ -97,6 +97,11 @@ core, `pin_status_progress`; `Controls/TaskbarProgress` only talks to the shell)
 | Device error, or an error InfoBar open | red; clears when the InfoBar is dismissed, or when the next capture starts |
 | Idle / ready | none |
 
+While a capture runs (including stopping and rewinding between passes) the button also carries a small red
+dot at its lower right corner (`ITaskbarList3::SetOverlayIcon`, accessible name "Capturing"). The icon is
+drawn at run time at the small-icon size of the window's DPI (`Controls/TaskbarIcons`), so there are no
+asset files. It is cleared when the capture ends.
+
 ## Theme testing
 
 The app follows the Windows light/dark setting. To check the other theme
@@ -118,7 +123,7 @@ PinnacleCapture/
                 KindSettingsViewModel (DV / HDV tab), ControlSliderViewModel,
                 DeviceItemViewModel
   Views/        KindSettingsView (format, title, split, idle, passes)
-  Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarProgress (ITaskbarList3), DbThumbConverter
+  Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarButton + TaskbarIcons (ITaskbarList3), DbThumbConverter
   Preview/      D3DPreview (swap chain + render thread), Shaders (HLSL)
   Services/     IAudioMonitorService (stub; WASAPI playback is a later phase)
   MainWindow.xaml(.cs), App.xaml(.cs)
