@@ -7,6 +7,34 @@ FPGA**, plus an SAA7113H video decoder and an AC'97 audio codec on the analog
 side. Everything below was worked out by watching the vendor driver with usbmon
 and by reading its decompiled code; how the driver uses it is in the other docs.
 
+## Models
+
+All Marvin-family units use VID `0x2304`. The core has one model table
+(`src/core/pinnacle_model.c`, row = PID, name, supported / tested flags, the two
+bitstream file names, decoder I2C address); nothing else hard-codes a PID.
+The vendor driver (`MarvinAVS64.sys`) branches on the PID in a few places; where
+it treats two PIDs alike they share a row's behaviour here.
+
+| PID | internal name | product | status |
+|---|---|---|---|
+| `0213` | Marvin-Lite | Studio **500-USB** | supported, tested |
+| `0223` | Marvin-510 | Studio **510-USB** | supported; DV/analog bring-up verified on hardware (no camera attached), capture untested |
+| `0206` | Marvin-classic | MovieBox Deluxe | not supported yet |
+| `0212` | Marvin-CR | Studio 700-USB | not supported yet |
+| `0224` | Marvin-710 | Studio 710-USB / MovieBox Plus | not supported yet |
+
+**510-USB** (`0223`): in every PID branch of the vendor driver that was found,
+`0x223` is handled exactly like `0x213`: same capability word, same embedded
+bitstreams (OHCI, Render, Capture; only `0x211`, the Pro, has its own files),
+same config-memory GUID read, same decoder I2C address `0x4a`, same
+`MarvinCR_000.bix` for a blank FX2 (not needed: the unit enumerates with its
+EEPROM firmware, iProduct "Pinnacle High Speed USB Device"). Descriptors and
+alternate settings are identical to the 500-USB. Confirmed on a real unit:
+config-channel handshake, both bitstream loads, GUID read, 1394 link up
+(`NodeID 0xc000ffc0`, one node), SAA7113 answering at `0x4a` (no signal).
+Its Linux id shows as "DazzleTV Sat BDA Device" in `lsusb` (the PID is shared
+with a different Pinnacle product name in the USB id database).
+
 ## USB descriptors
 
 One configuration (300 mA, bus powered), one interface of class **0xFF

@@ -73,7 +73,8 @@ public sealed partial class DeviceItemViewModel
     {
         IsCapturingHere = capturingHere;
         Id = info.Id;
-        Name = info.Name;
+        // Models the core drives but nobody verified on real hardware are flagged in the list.
+        Name = info.Tested == 0 && info.State != PinDevState.Unsupported ? info.Name + " (untested)" : info.Name;
         State = info.State;
         OwnerPid = info.OwnerPid;
         Serial = info.Serial;

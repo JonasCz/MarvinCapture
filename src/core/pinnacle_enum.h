@@ -30,6 +30,8 @@
 #ifndef PINNACLE_ENUM_H
 #define PINNACLE_ENUM_H
 
+#include "pinnacle_model.h"
+
 #include <libusb-1.0/libusb.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -82,24 +84,10 @@ typedef struct {
     uint16_t vid, pid;
     pinnacle_enum_state_t state;
     uint32_t owner_pid;                /* PINNACLE_ENUM_IN_USE: the other process; else 0 */
+    int tested;                        /* model verified end to end on real hardware (pinnacle_model_t.tested) */
     uint8_t usb_address;               /* changes on every replug: with id, keys a per-plug cache */
 } pinnacle_enum_entry_t;
 
-/* One row per known Marvin-family model. "supported" is 1 only for models
- * this driver actually drives (0213 today); the rest are listed so they
- * show up as PINNACLE_ENUM_UNSUPPORTED instead of being invisible. */
-typedef struct {
-    uint16_t pid;
-    const char *name;
-    int supported;
-} pinnacle_model_t;
-
-extern const pinnacle_model_t pinnacle_model_table[];
-extern const int pinnacle_model_table_count;
-
-/* Looks up a PID (under VID 0x2304) in pinnacle_model_table. Returns NULL
- * if it isn't a recognised Marvin-family model at all. */
-const pinnacle_model_t *pinnacle_model_lookup(uint16_t pid);
 
 /* Builds the "usb:<bus>-<port>.<port>..." id pinnacle_enumerate() reports
  * for this device, from its USB topology alone (bus number + hub port

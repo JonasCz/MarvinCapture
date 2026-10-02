@@ -25,30 +25,6 @@
 #include <stdio.h>
 #include <string.h>
 
-/* See docs/analog.md, "Models (from marvinavs64.inf)". Only the PID
- * -> name/support mapping lives here; nothing about a specific unit
- * (serial, calibration, I2C address, FX2 firmware file, ...) belongs in
- * this table -- those stay wherever the code that needs them already
- * branches on PID (pinnacle_device.c, pinnacle_analog.c). */
-const pinnacle_model_t pinnacle_model_table[] = {
-    { 0x0213, "Pinnacle Studio 500-USB",    1 }, /* Marvin-Lite -- this project */
-    { 0x0206, "Pinnacle MovieBox Deluxe",   0 }, /* Marvin-classic */
-    { 0x0212, "Pinnacle Studio 700-USB",    0 }, /* Marvin-CR */
-    { 0x0223, "Pinnacle Studio 510-USB",    0 }, /* Marvin-510 */
-    { 0x0224, "Pinnacle Studio 710-USB",    0 }, /* Marvin-710 */
-};
-const int pinnacle_model_table_count =
-    (int)(sizeof(pinnacle_model_table) / sizeof(pinnacle_model_table[0]));
-
-const pinnacle_model_t *pinnacle_model_lookup(uint16_t pid)
-{
-    for (int i = 0; i < pinnacle_model_table_count; i++) {
-        if (pinnacle_model_table[i].pid == pid)
-            return &pinnacle_model_table[i];
-    }
-    return NULL;
-}
-
 void pinnacle_enum_build_id(libusb_device *dev, char *out, size_t out_cap)
 {
     uint8_t bus = libusb_get_bus_number(dev);
@@ -167,6 +143,7 @@ int pinnacle_enumerate(pinnacle_enum_entry_t *out, int max)
         snprintf(entry.name, sizeof(entry.name), "%s", model->name);
         entry.vid = desc.idVendor;
         entry.pid = desc.idProduct;
+        entry.tested = model->tested;
         entry.usb_address = libusb_get_device_address(list[i]);
 
         if (!model->supported) {

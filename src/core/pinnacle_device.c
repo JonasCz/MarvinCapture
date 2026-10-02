@@ -72,7 +72,7 @@ const char *pinnacle_strerror(pinnacle_status_t status)
     switch (status) {
     case PINNACLE_OK: return "ok";
     case PINNACLE_ERR_USB_INIT: return "libusb initialisation failed";
-    case PINNACLE_ERR_NOT_FOUND: return "device 2304:0213 not found";
+    case PINNACLE_ERR_NOT_FOUND: return "no supported Pinnacle USB capture device (2304:xxxx) found";
     case PINNACLE_ERR_USB_OPEN: return "failed to open device (check permissions, try sudo)";
     case PINNACLE_ERR_USB_CONFIG: return "failed to set USB configuration";
     case PINNACLE_ERR_USB_CLAIM: return "failed to claim interface (another driver/process attached?)";
@@ -93,7 +93,8 @@ const char *pinnacle_strerror(pinnacle_status_t status)
  * (libusb_device* pointers from the list are only valid while it's alive,
  * or until individually ref'd, which we do here). */
 static pinnacle_status_t find_device(libusb_context *ctx, const char *device_id,
-                                      libusb_device **match_out)
+                                      libusb_device **match_out,
+                                      const pinnacle_model_t **model_out)
 {
     int use_first = (!device_id || strcmp(device_id, "first") == 0);
 
@@ -105,11 +106,15 @@ static pinnacle_status_t find_device(libusb_context *ctx, const char *device_id,
         struct libusb_device_descriptor desc;
         if (libusb_get_device_descriptor(list[i], &desc) != 0)
             continue;
-        if (desc.idVendor != PINNACLE_VID || desc.idProduct != PINNACLE_PID)
-            continue; /* only 0213 is ever actually opened -- see pinnacle_enum.h for the rest of the model table */
+        if (desc.idVendor != PINNACLE_VID)
+            continue;
+        const pinnacle_model_t *model = pinnacle_model_lookup(desc.idProduct);
+        if (!model || !model->supported)
+            continue; /* not a model in pinnacle_model_table that we drive */
 
         if (use_first) {
             *match_out = libusb_ref_device(list[i]);
+            *model_out = model;
             status = PINNACLE_OK;
             break;
         }
@@ -118,6 +123,7 @@ static pinnacle_status_t find_device(libusb_context *ctx, const char *device_id,
         pinnacle_enum_build_id(list[i], id, sizeof(id));
         if (strcmp(id, device_id) == 0) {
             *match_out = libusb_ref_device(list[i]);
+            *model_out = model;
             status = PINNACLE_OK;
             break;
         }
@@ -137,7 +143,8 @@ pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device
         return PINNACLE_ERR_USB_INIT;
 
     libusb_device *match = NULL;
-    pinnacle_status_t status = find_device(dev->usb_ctx, device_id, &match);
+    const pinnacle_model_t *model = NULL;
+    pinnacle_status_t status = find_device(dev->usb_ctx, device_id, &match, &model);
     if (status != PINNACLE_OK) {
         libusb_exit(dev->usb_ctx);
         dev->usb_ctx = NULL;
@@ -158,6 +165,7 @@ pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device
                    ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_OPEN;
     }
 
+    dev->model = model;
     libusb_set_auto_detach_kernel_driver(dev->handle, 1);
 
     /* libusb_reset_device() was tried here to clear bad state without a

@@ -25,6 +25,10 @@ from Windows. It is now generated step by step in
 - **trace**: the value was observed, but its meaning is not known.
 - **tested**: we removed the step and watched what happened.
 
+The same sequence runs unchanged on the 510-USB (PID 0223, verified on hardware
+without a camera: both bitstreams load, GUID is read, `NodeID 0xc000ffc0`, bus of
+one node). See [hardware.md](hardware.md#models).
+
 ## Phase 1 — USB side (unchanged, still a replay)
 
 1. **Select alt setting 0.**
@@ -164,9 +168,9 @@ It is kept for three reasons:
 - Other cameras, or the Windows-style bus managers some cameras implement,
   may read it.
 - It must carry the unit's own GUID. Other units, revisions and the other
-  Marvin models (700-USB, 510, 710) are not guaranteed to share the
-  development unit's GUID; we cannot test them, so the GUID is read from the
-  device and never hardcoded.
+  Marvin models (510-USB, 700-USB, 710) do not share the development
+  unit's GUID, so the GUID is read from the device and never hardcoded (on the
+  510-USB the read works the same way).
 
 ## Phase 3 — the camera
 

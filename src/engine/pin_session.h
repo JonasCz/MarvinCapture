@@ -35,6 +35,7 @@
 #define PIN_SESSION_H
 
 #include "../api/pin_api.h"
+#include "../core/pinnacle_model.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -71,13 +72,13 @@ int pin_session_monitor_available(pin_session_t *s);
 /* Global (not per-session): firmware directory override, see pin_api.h's
  * pin_set_firmware_dir(). Resolves fpga-ohci.bin / fpga-capture.bin. */
 pin_status_t pin_session_set_firmware_dir(const char *utf8_dir);
-/* Finds the kind's bitstream in, in order: the pin_set_firmware_dir() dir,
+/* Finds the model's bitstream for the kind (model->dv_bitstream / analog_bitstream) in, in order: the pin_set_firmware_dir() dir,
  * the settings key Paths/firmware_dir, firmware/ next to the core library,
  * firmware/ next to the executable. PIN_OK: *out is an existing file of the
  * right size. PIN_ERR_FIRMWARE: *why (optional) says what is wrong and which
  * directories were searched. */
-pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t out_size,
-                                       char *why, size_t why_size);
+pin_status_t pin_session_firmware_path(const pinnacle_model_t *model, pin_kind_t for_kind,
+                                       char *out, size_t out_size, char *why, size_t why_size);
 
 /* Global (not per-session): the replay (virtual device) source file, see
  * pin_api.h's pin_set_replay_file(). NULL/"" clears it. The getter returns

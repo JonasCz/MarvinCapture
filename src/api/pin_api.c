@@ -166,6 +166,7 @@ int pin_enumerate(pin_device_info_t *out, int max)
         d->vid = entries[i].vid;
         d->pid = entries[i].pid;
         d->owner_pid = entries[i].owner_pid;
+        d->tested = (uint32_t)entries[i].tested;
         switch (entries[i].state) {
         case PINNACLE_ENUM_READY: d->state = PIN_DEV_READY; break;
         case PINNACLE_ENUM_IN_USE: d->state = PIN_DEV_IN_USE; break;
@@ -226,6 +227,7 @@ int pin_enumerate(pin_device_info_t *out, int max)
             snprintf(d->name, sizeof(d->name), "Replay: %.55s", base);
             strncpy(d->serial, "REPLAY", sizeof(d->serial) - 1);
             d->state = PIN_DEV_READY;
+            d->tested = 1;
             written++;
         }
     }

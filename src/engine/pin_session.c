@@ -16,6 +16,9 @@
  * along with this program. If not, see <https://www.gnu.org/licenses/>.
  */
 
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE /* dladdr / Dl_info on glibc */
+#endif
 #include "pin_session_priv.h"
 #include "pin_session.h"
 #include "dv_subcode.h"
@@ -382,10 +385,17 @@ static long long file_size(const char *path)
 /* Every bitstream (fpga-ohci.bin, fpga-capture.bin) is exactly this long. */
 #define PIN_BITSTREAM_BYTES 78422
 
-pin_status_t pin_session_firmware_path(pin_kind_t for_kind, char *out, size_t out_size,
-                                       char *why, size_t why_size)
+pin_status_t pin_session_firmware_path(const pinnacle_model_t *model, pin_kind_t for_kind,
+                                       char *out, size_t out_size, char *why, size_t why_size)
 {
-    const char *name = for_kind == PIN_KIND_ANALOG ? "fpga-capture.bin" : "fpga-ohci.bin";
+    const char *name = NULL;
+    if (model)
+        name = for_kind == PIN_KIND_ANALOG ? model->analog_bitstream : model->dv_bitstream;
+    if (!name) {
+        if (why && why_size)
+            snprintf(why, why_size, "no FPGA bitstream known for this device model");
+        return PIN_ERR_FIRMWARE;
+    }
     enum { MAX_DIRS = 4 };
     char dirs[MAX_DIRS][PIN_PATH_MAX];
     int ndirs = 0;
@@ -1779,7 +1789,7 @@ static void do_run_dv(pin_session_t *s)
     }
 
     char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
-    if (pin_session_firmware_path(PIN_KIND_DV, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
+    if (pin_session_firmware_path(s->dev.model, PIN_KIND_DV, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
         set_error(s, PIN_ERR_FIRMWARE, why);
         return;
     }
@@ -2049,7 +2059,7 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
 static void do_run_analog(pin_session_t *s, pin_input_t input)
 {
     char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
-    if (pin_session_firmware_path(PIN_KIND_ANALOG, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
+    if (pin_session_firmware_path(s->dev.model, PIN_KIND_ANALOG, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
         set_error(s, PIN_ERR_FIRMWARE, why);
         return;
     }

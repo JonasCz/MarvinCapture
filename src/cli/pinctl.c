@@ -90,8 +90,9 @@ static void print_device_list(void)
     if (n == 0) { printf("No devices found.\n"); return; }
     int shown = n > 16 ? 16 : n;
     for (int i = 0; i < shown; i++) {
-        printf("%-24s %-28s %04x:%04x  %s", devs[i].id, devs[i].name, devs[i].vid, devs[i].pid,
-               dev_state_name(devs[i].state));
+        printf("%-24s %-28s %04x:%04x  %s%s", devs[i].id, devs[i].name, devs[i].vid, devs[i].pid,
+               dev_state_name(devs[i].state),
+               devs[i].tested || devs[i].state == PIN_DEV_UNSUPPORTED ? "" : " (untested)");
         if (devs[i].state == PIN_DEV_IN_USE || devs[i].state == PIN_DEV_PREPARING)
             printf(" (pid %u)", (unsigned)devs[i].owner_pid);
         if (devs[i].serial[0])

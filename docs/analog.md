@@ -407,7 +407,7 @@ plausible, no direct evidence.
 | 0206 | Marvin-classic | MovieBox Deluxe |
 | 0212 | Marvin-CR | **700-USB** (more inputs and outputs) |
 | 0213 | Marvin-Lite | **500-USB** (this project) |
-| 0223 | Marvin-510 | 510-USB |
+| 0223 | Marvin-510 | 510-USB (supported, see [hardware.md](hardware.md#models)) |
 | 0224 | Marvin-710 | 710-USB |
 
 Differences visible in code:

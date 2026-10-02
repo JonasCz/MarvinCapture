@@ -17,7 +17,7 @@
  */
 
 /*
- * Core USB access to the Pinnacle 500-USB ("Marvin-Lite", 2304:0213).
+ * Core USB access to the Pinnacle 500-USB / 510-USB ("Marvin-Lite", 2304:0213 / 0223; see pinnacle_model.h).
  * See docs/hardware.md for the reverse-engineering background.
  *
  * This header intentionally exposes only device init/teardown. Streaming
@@ -28,6 +28,8 @@
 #ifndef PINNACLE_DEVICE_H
 #define PINNACLE_DEVICE_H
 
+#include "pinnacle_model.h"
+
 #include <libusb-1.0/libusb.h>
 #include <stdint.h>
 
@@ -36,7 +38,6 @@ extern "C" {
 #endif
 
 #define PINNACLE_VID 0x2304
-#define PINNACLE_PID 0x0213
 
 #define PINNACLE_INTERFACE_NUM 0
 #define PINNACLE_ALT_SETTING_IDLE 0
@@ -98,6 +99,7 @@ typedef struct {
     libusb_context *usb_ctx;
     libusb_device_handle *handle;
     int interface_claimed;
+    const pinnacle_model_t *model; /* the table row of the opened unit (never NULL once open) */
     /* read from the device's configuration memory by pinnacle_init_hardware
      * (config-channel reads "80 00 08" and "80 03 08", 8 bytes each) */
     int have_guid;
@@ -132,7 +134,7 @@ pinnacle_status_t pinnacle_open(pinnacle_device_t *dev);
 /* Same, but opens a specific device: device_id is a port-path id as
  * reported by pinnacle_enumerate() (src/core/pinnacle_enum.h), e.g.
  * "usb:1-4.2". NULL or "first" opens the first supported device found,
- * exactly like pinnacle_open() (today: the first 2304:0213 libusb finds).
+ * exactly like pinnacle_open() (the first supported model libusb finds).
  * Returns PINNACLE_ERR_NOT_FOUND if no device matches, PINNACLE_ERR_BUSY if
  * a matching device exists but another process (or driver) already has it
  * open -- see pinnacle_lock.h for the cross-process story; this is only the

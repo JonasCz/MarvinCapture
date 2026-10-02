@@ -128,6 +128,7 @@ typedef struct {
     uint16_t vid, pid;
     pin_dev_state_t state;
     uint32_t owner_pid;         /* PREPARING / IN_USE: the other process, else 0 */
+    uint32_t tested;            /* 1 = model verified on real hardware, 0 = supported but untested */
 } pin_device_info_t;
 
 /* Lists devices without opening them. Cheap enough to call on every OS

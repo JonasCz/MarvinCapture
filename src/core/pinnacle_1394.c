@@ -1017,7 +1017,7 @@ int p1394_link_init(pinnacle_1394_t *l)
     uint32_t rom[ROM_WORDS], be[ROM_WORDS];
     build_config_rom(rom, guid_hi, guid_lo);
     if (l->verbose > 1) {
-        char line[16 + 9 * ROM_WORDS];
+        char line[32 + 9 * ROM_WORDS];
         int off = snprintf(line, sizeof(line), "p1394: config ROM");
         for (unsigned i = 0; i < ROM_WORDS; i++)
             off += snprintf(line + off, sizeof(line) - off, " %08x", rom[i]);

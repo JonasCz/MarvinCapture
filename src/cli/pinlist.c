@@ -83,7 +83,7 @@ int main(void)
         }
         case PINNACLE_ENUM_READY:
         default:
-            snprintf(status, sizeof(status), "READY");
+            snprintf(status, sizeof(status), "READY%s", e->tested ? "" : " (untested)");
             break;
         }
 
