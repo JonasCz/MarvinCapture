@@ -159,16 +159,20 @@ PinnacleCapture/
   `pin_set_output_hint`, so the status bar can show free space and capture
   time left before a capture starts. Both turn red when the core reports
   `disk_low`.
-- The status bar has two rows and one font (no bold, no monospace). Left to
-  right: deck status (DV/HDV), the file being written (or "Ready" / the error)
-  with the capture state under it, time (tape timecode; for analog the time
-  since capture start), signal (Locked / No signal over the source type HDV / DV /
-  S-Video / Composite and PAL / NTSC), frames (total on row 1, current clip on row
-  2: frames, frames with error, dropped), storage (bytes total / current clip over
-  free space and hours left), then the audio meters and mute. All numbers come
-  from the core status: totals count since capture start (since app start while
-  idle), the clip ones restart with every file. Tooltips and automation names
-  spell the items out.
+- The status bar is one line with one font (no bold, no monospace), items
+  separated by uniform spacing. Left to right: deck status (DV/HDV), the file
+  being written (or "Ready" / the error; the capture state is in its tooltip),
+  time (tape timecode; for analog the time since capture start), signal
+  (check mark Locked / No signal, source type HDV / DV / S-Video / Composite and
+  the format label from the core's `video_label`: PAL, NTSC, 1080i25, 720p59.94),
+  frames ("Frames 1,234 · 2 err · 0 drop", totals; the current clip's numbers are
+  in the tooltip), storage (one icon: bytes total / current file, free space,
+  time left), then the small audio meters and mute. When the window is too narrow
+  the bar drops items in this order: free space / time left, frames, storage,
+  deck, time (the file text just trims); minimum window width is 1000 DIP. All
+  numbers come from the core status: totals count since capture start (since
+  app start while idle), the clip ones restart with every file. Tooltips and
+  automation names spell the items out.
 - Closing the window during a capture asks first. Confirming stops the capture,
   shows "Finalizing files…" and exits once the core reports READY.
 - There are no keyboard shortcuts, on purpose. Every control is tabbable and

@@ -26,7 +26,7 @@ namespace PinnacleCapture;
 public sealed partial class MainWindow : Window
 {
     // Logical (DIP) minimum size; converted to physical pixels for the presenter.
-    private const int MinWidthDip = 1100;
+    private const int MinWidthDip = 1000;
     private const int MinHeightDip = 640;
 
     public MainViewModel VM { get; } = new();
@@ -112,18 +112,13 @@ public sealed partial class MainWindow : Window
     public static string AnalogCaptureHint(bool capturing) =>
         capturing ? "Finishes the file safely" : "Records the analog input to the file";
 
-    public static Visibility DiskVisible(bool hasInfo, bool low, bool wantLow) =>
-        hasInfo && low == wantLow ? Visibility.Visible : Visibility.Collapsed;
-
-    public static string DiskName(string free, string left, bool low) =>
-        (low ? "Low disk space: " : "Disk: ") + free + ", " + left;
-
     public static double EnabledOpacity(bool enabled) => enabled ? 1.0 : 0.45;
     public static string StartStopName(bool capturing) => capturing ? "Stop capture" : "Start capture";
     public static string Label(string name, string value) => $"{name}: {value}";
     public static string SignalName(string lockText, string type) => type.Length > 0 ? $"Signal: {lockText}, {type}" : $"Signal: {lockText}";
-    public static string StorageName(string size, string free, string left, bool low) =>
-        (low ? "Low disk space. " : "Storage: ") + size + ", " + free + ", " + left;
+    public static string StorageName(string tip, bool low) => (low ? "Low disk space. " : "Storage: ") + tip;
+    public static string SignalText(string lockText, string type) => type.Length > 0 ? lockText + " · " + type : lockText;
+    public static Visibility Shown(bool value) => value ? Visibility.Visible : Visibility.Collapsed;
 
     public static InfoBarSeverity Severity(int s) => s switch
     {
@@ -562,10 +557,76 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    private bool _statusFitQueued;
+
+    private void StatusBar_SizeChanged(object sender, SizeChangedEventArgs e) => FitStatusBar();
+
+    /// <summary>
+    /// Keeps the one-line status bar inside the window: shows the items the state calls for
+    /// (deck only on DV/HDV, storage only with disk info), then, while they do not fit next to the
+    /// file text's minimum width, drops the lowest-priority one: the free-space part of storage,
+    /// frames, storage, deck, time. The file text trims on its own.
+    /// </summary>
+    private void FitStatusBar()
+    {
+        bool deck = VM.IsDvInput, storage = VM.HasDiskInfo;
+        StatusDeckHost.Visibility = deck ? Visibility.Visible : Visibility.Collapsed;
+        StatusStorageHost.Visibility = storage ? Visibility.Visible : Visibility.Collapsed;
+        StatusFramesHost.Visibility = StatusTimeHost.Visibility = Visibility.Visible;
+        StatusFreeHost.Visibility = Visibility.Visible;
+
+        double avail = StatusBar.ActualWidth - StatusBar.Padding.Left - StatusBar.Padding.Right - 80;
+        if (avail <= 0) return;
+        FrameworkElement[] hosts = { StatusDeckHost, StatusTimeHost, StatusSignalHost, StatusFramesHost,
+                                     StatusStorageHost, StatusMeters, StatusMute };
+        double Need()
+        {
+            double sum = 0;
+            foreach (var h in hosts)
+            {
+                if (h.Visibility == Visibility.Collapsed) continue;
+                h.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
+                sum += h.DesiredSize.Width;
+            }
+            return sum;
+        }
+        Action[] drops =
+        {
+            () => StatusFreeHost.Visibility = Visibility.Collapsed,
+            () => StatusFramesHost.Visibility = Visibility.Collapsed,
+            () => StatusStorageHost.Visibility = Visibility.Collapsed,
+            () => StatusDeckHost.Visibility = Visibility.Collapsed,
+            () => StatusTimeHost.Visibility = Visibility.Collapsed,
+        };
+        foreach (var drop in drops)
+        {
+            if (Need() <= avail) break;
+            drop();
+        }
+    }
+
+    private void QueueStatusFit()
+    {
+        if (_statusFitQueued) return;
+        _statusFitQueued = true;
+        DispatcherQueue.TryEnqueue(() => { _statusFitQueued = false; FitStatusBar(); });
+    }
+
     private void VM_PropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         switch (e.PropertyName)
         {
+            case nameof(MainViewModel.SizeText):
+            case nameof(MainViewModel.StorageFreeText):
+            case nameof(MainViewModel.FramesTotalText):
+            case nameof(MainViewModel.StatusTimeText):
+            case nameof(MainViewModel.SignalLockText):
+            case nameof(MainViewModel.SignalTypeText):
+            case nameof(MainViewModel.DeckStateText):
+            case nameof(MainViewModel.IsDvInput):
+            case nameof(MainViewModel.HasDiskInfo):
+                QueueStatusFit();
+                break;
             case nameof(MainViewModel.WindowTitle):
                 Title = VM.WindowTitle;
                 break;

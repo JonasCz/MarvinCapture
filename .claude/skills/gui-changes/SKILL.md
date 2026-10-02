@@ -70,12 +70,17 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
 
 ## Status bar
 
-Two-row grid in `MainWindow.xaml` (bottom). Every text uses `StatusTextStyle`
-(do not set FontFamily/FontWeight/FontSize). Properties are set in
-`MainViewModel.ApplyStatus` straight from the core snapshot; counters
-(`frames_error`, `clip_*`, `total_bytes_written`, `est_seconds_left`) are
-computed in the core, never in C#. Low-disk uses two copies of the storage
-item toggled by `DiskVisible`. Minimum window width is 1100 DIP for this bar.
+One-line grid in `MainWindow.xaml` (bottom). Every text uses `StatusTextStyle`
+(do not set FontFamily/FontWeight/FontSize). Each item sits in a "host" panel
+that carries its 24 DIP left margin (a collapsed host leaves no gap).
+`MainWindow.FitStatusBar` shows deck/storage by state and, if the items do not
+fit next to the file text's 80 DIP, collapses free-space, frames, storage, deck,
+time in that order (re-run on size and on the text properties changing).
+Properties are set in `MainViewModel.ApplyStatus` straight from the core
+snapshot; counters (`frames_error`, `clip_*`, `total_bytes_written`,
+`est_seconds_left`) and the format label (`video_label`) are the core's, never
+computed in C#. Low-disk uses two copies of the storage elements toggled by
+`DiskLow`. Minimum window width is 1000 DIP.
 
 ## Debugging
 

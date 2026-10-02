@@ -372,10 +372,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _signalLockText = "No signal";
     [ObservableProperty] private string _signalTypeText = "";
     // Frame counters, all from the core: total = since capture start (since app start while idle), clip = current file.
-    [ObservableProperty] private string _framesTotalText = "Total 0 · 0 err · 0 dropped";
-    [ObservableProperty] private string _framesClipText = "Clip 0 · 0 err · 0 dropped";
+    [ObservableProperty] private string _framesTotalText = "Frames 0 · 0 err · 0 drop";
+    [ObservableProperty] private string _statusTip = "";
+    [ObservableProperty] private string _storageTip = "";
+    [ObservableProperty] private string _storageFreeText = "";
     [ObservableProperty] private string _framesTip = "";
-    [ObservableProperty] private string _sizeText = "0 B total · 0 B clip";
+    [ObservableProperty] private string _sizeText = "0 B / 0 B";
     [ObservableProperty] private double _audioPeakLeft = MeterFloorDb;
     [ObservableProperty] private double _audioPeakRight = MeterFloorDb;
     [ObservableProperty] private string _audioPeakText = "L — R —";
@@ -890,13 +892,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             StatusShortText = st.State == PinState.Preparing && st.Detail.Length > 0
                 ? "Preparing: " + st.Detail
-                : string.IsNullOrEmpty(file) || !IsCapturingState(st.State)
+                : string.IsNullOrEmpty(file) || st.State != PinState.Capturing
                 ? SessionStateText
-                : file;
+                : st.Passes > 1 ? $"{file}  \u00B7  pass {st.Pass}/{st.Passes}" : file;
         }
-        StatusSubText = IsCapturingState(st.State)
-            ? (st.Passes > 1 && st.State != PinState.Rewinding ? $"{SessionStateText}  \u00B7  pass {st.Pass}/{st.Passes}" : SessionStateText)
-            : "";
+        StatusSubText = IsCapturingState(st.State) ? SessionStateText : "";
+        StatusTip = StatusSubText.Length > 0 && StatusSubText != StatusShortText
+            ? $"{StatusSubText}: {StatusShortText}" : StatusShortText;
 
         Timecode = string.IsNullOrEmpty(st.Timecode) ? "--:--:--:--" : st.Timecode;
         if (st.Input == PinInput.Dv)
@@ -915,13 +917,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SignalTypeText = SignalTypeFor(in st);
 
         var dropped = st.FramesDropped + st.WriteDropped;
-        FramesTotalText = $"Total {st.Frames:N0} · {st.FramesError:N0} err · {dropped:N0} dropped";
-        FramesClipText = $"Clip {st.ClipFrames:N0} · {st.ClipFramesError:N0} err · {st.ClipFramesDropped:N0} dropped";
+        FramesTotalText = $"Frames {st.Frames:N0} · {st.FramesError:N0} err · {dropped:N0} drop";
         FramesTip = $"Frames, frames with an error and dropped frames. Total (since {(IsCapturingState(st.State) ? "capture start" : "the app started")}): "
             + $"{st.Frames:N0} frames, {st.FramesError:N0} with error, {dropped:N0} dropped. "
             + $"Current clip: {st.ClipFrames:N0} frames, {st.ClipFramesError:N0} with error, {st.ClipFramesDropped:N0} dropped. "
             + "A frame has an error if it was damaged or concealed by the camera, data was missing, or (HDV) it depends on a damaged picture.";
-        SizeText = $"{HumanSize(st.TotalBytesWritten)} total · {HumanSize(st.ClipBytesWritten)} clip";
+        SizeText = $"{HumanSize(st.TotalBytesWritten)} / {HumanSize(st.ClipBytesWritten)}";
 
         FeedMeter(in st);
         AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
@@ -941,6 +942,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         DiskLow = st.DiskLow != 0;
         DiskFreeText = st.DiskFreeBytes > 0 ? $"{HumanSize(st.DiskFreeBytes)} free" : "";
         TimeLeftText = st.EstSecondsLeft >= 0 ? FormatTimeLeft(st.EstSecondsLeft) : "";
+        StorageFreeText = (DiskFreeText.Length > 0 ? "· " + DiskFreeText : "")
+            + (TimeLeftText.Length > 0 ? " · " + TimeLeftText : "");
+        StorageTip = $"Written: {HumanSize(st.TotalBytesWritten)} in this capture, {HumanSize(st.ClipBytesWritten)} in the current file. "
+            + (DiskFreeText.Length > 0 ? $"{DiskFreeText} on the output volume" : "")
+            + (TimeLeftText.Length > 0 ? $", {TimeLeftText}" : "")
+            + (st.DiskLow != 0 ? ". Low disk space: less than 1 hour or 50 GB left" : "");
         HasDiskInfo = st.DiskFreeBytes > 0;
 
         IsCapturing = st.State is PinState.Capturing or PinState.Stopping or PinState.Rewinding;
@@ -980,7 +987,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     private static string FormatDb(float db) => db <= -143 ? "silent" : $"{db:0.0} dBFS";
 
-    /// <summary>"HDV", "DV · PAL", "S-Video · NTSC", ...: what is arriving, from the core's status.</summary>
+    /// <summary>"HDV · 1080i25", "DV · PAL", "S-Video · NTSC", ...: what is arriving, from the core's status.</summary>
     private static string SignalTypeFor(in PinStatusSnapshot st)
     {
         string type = st.Input switch
@@ -989,12 +996,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             PinInput.Composite => "Composite",
             _ => st.StreamKind == PinKind.Hdv ? "HDV" : st.StreamKind == PinKind.Dv ? "DV" : "DV/HDV",
         };
-        if (st.Signal == 0 || st.StreamKind == PinKind.Hdv)
+        if (st.Signal == 0)
         {
-            return type; // HDV carries no PAL/NTSC flag at the core level (1440x1080)
+            return type;
         }
+        // DV/HDV: the core's own label (PAL, NTSC, 1080i25, 720p59.94); analog adds the
+        // variants the decoder detects.
         string std = st.Input == PinInput.Dv
-            ? (st.Is60Hz != 0 ? "NTSC" : "PAL")
+            ? st.VideoLabel
             : st.DetectedStd switch
             {
                 PinStd.Pal => "PAL",
@@ -1005,9 +1014,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 PinStd.Ntsc443 => "NTSC-4.43",
                 PinStd.NtscJ => "NTSC-J",
                 PinStd.Secam => "SECAM",
-                _ => st.Is60Hz != 0 ? "NTSC" : "PAL",
+                _ => st.VideoLabel,
             };
-        return type + " · " + std;
+        return std.Length > 0 ? type + " · " + std : type;
     }
 
     public static string HumanSize(ulong bytes)
