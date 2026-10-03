@@ -34,7 +34,7 @@ table (id, name, vid:pid, serial, state, owner pid), to stdout, exit 0.
 | `-d, --device ID` | first device | Device id (`usb:2-1`), 16-hex serial, or a path to a `.dv`/`.ts` file (replay device). Only before the first action. |
 | `-i, --input dv\|svideo\|composite` | `dv` | `dv` means DV and HDV over FireWire (auto-detected). |
 | `--std S` | `auto` | `auto pal ntsc pal-m pal-n pal-60 ntsc-443 ntsc-j secam` (analog). |
-| `--format KEY` | from the file extension | `dv dv-avi dv-mov hdv-ts hdv-mov hdv-mkv avi ffv1-mkv`; may be given once per kind. |
+| `--format KEY` | from the file extension | `dv dv-avi dv-mov hdv-ts hdv-mov hdv-mkv avi ffv1-mkv`; overrides the file extension. Once per input signal (analog, DV, HDV); the key picks the signal. A later `--format` for the same signal replaces the earlier one. |
 | `--aspect auto\|4:3\|16:9` | `auto` | |
 | `--split` | off | Scene split (DV/HDV). |
 | `--title T` | none | Metadata title, where the format supports it. |
