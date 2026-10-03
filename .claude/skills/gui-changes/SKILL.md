@@ -60,9 +60,11 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
   and `gui.muted` are global: use `SaveGlobalSetting`/`LoadGlobalSetting`.
   Startup order matters: select the device (loads its settings), then
   `ApplyLaunch`, then open. No migration of old flat keys.
-- Command line: the core parses it (`pin_launch_parse`); the GUI applies the
-  result in `ApplyLaunch`, only for fields flagged in `capture_fields`. Docs for
-  the options are in `gui/windows/README.md` and `docs/usage.md`.
+- Command line: the core parses it (`pin_script_parse`, language in
+  `docs/cli.md`); the GUI applies the settings it has fields for
+  (`pin_script_settings`) in `ApplyScriptSettings`, and runs the steps with
+  `pin_script_run` once READY (`MainWindow.RunPendingScriptIfReady`; `PIN_EVT_STEP`
+  / `PIN_EVT_DONE` in `HandleEvent`). Docs: `gui/windows/README.md`.
 - Tab order / accessibility: give controls `AutomationProperties.Name` (and
   `HelpText` for the why); keep the XAML order = tab order.
 - Errors to the user: `VM.ShowInfo(title, message, severity)` (InfoBar); modal
@@ -86,7 +88,7 @@ computed in C#. Low-disk uses two copies of the storage elements toggled by
 
 - Crashes / unhandled exceptions: `%LOCALAPPDATA%\PinnacleOSS\crash.log`
   (absent = clean run). If the core DLL fails to load or reports an API
-  version other than 1, the app shows an error window instead of the UI.
+  version other than 3, the app shows an error window instead of the UI.
 - Quick GUI-only build: `dotnet build gui\windows\MarvinCaptureGUI -c Debug
   -p:Platform=x64`; the run target is `bind\Debug
 et10.0-windows10.0.19041.0\win-x64\`

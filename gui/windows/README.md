@@ -56,26 +56,29 @@ If the app runs cleanly, that file doesn't exist.
 
 ## Command line
 
-The core parses the command line (`pin_launch_parse`), so every front-end
-accepts the same options. Presets are applied over the selected device's saved settings. Actions
-run once the device is ready.
+The core parses the command line (`pin_script_parse`), so every front-end
+accepts the same language, documented in [docs/cli.md](../../docs/cli.md):
+settings and actions processed left to right. The settings the window has
+fields for (`--device`, `--input`, `--std`, `--format`, `--aspect`, `--split`,
+the analog controls) are applied over the selected device's saved settings;
+`--title` and `--keep-raw` have no field here and only affect the script's own
+captures. If there are actions (`--rew`, `--play`, `--capture PATH`, `--wait`,
+...), they run (`pin_script_run`) once the device is ready, and the window shows
+them like any other capture. The old `--preset`, `--actions`, `--output`,
+`--passes`, `--idle-min` and `--exit-when-done` are gone.
 
 ```powershell
 # open a specific device on the composite input, PAL, 16:9 anamorphic
-MarvinCaptureGUI.exe --device usb:1-4 --input composite --std PAL --aspect 16:9
+MarvinCaptureGUI.exe --device usb:1-4 --input composite --std pal --aspect 16:9
 
-# DV tape: split scenes, capture twice, stop after 3 min without data
-MarvinCaptureGUI.exe --input dv --output D:\tapes\holiday --format dv-avi --split --passes 2 --idle-min 3
-
-# unattended: rewind, capture the whole tape, close the window when finished
-MarvinCaptureGUI.exe --device first --input dv --output D:\tapes\tape07 --actions rewind,capture --exit-when-done
+# DV tape: rewind, play, capture until the tape ends (or 1 minute without signal)
+MarvinCaptureGUI.exe --rew --wait --play --capture D:	apes	ape07.dv --wait idle,nosignal
 
 # show the option list (also under "..." > "Command-line help")
 MarvinCaptureGUI.exe --help
 ```
 
-Actions are `rewind`, `play`, `stop`, `capture` and `wait-eot`. The `--help`
-text comes from `pin_launch_help()`, so it always matches the core in use.
+The help text comes from `pin_script_help()`, so it always matches the core in use.
 
 Each window runs as its own process. "..." > "New window" starts a second one,
 for example to use a second device.
@@ -184,8 +187,8 @@ MarvinCaptureGUI/
   camera disconnected, disk almost full, write error) shows a "Capture stopped"
   dialog with the core's sentence ("Capture stopped after capturing 12m30s,
   because ...") and an OK button (`PIN_EVT_CAPTURE_ENDED`, handled in
-  `MainWindow.VM_EngineEvent`); not while closing or when running command-line
-  actions with exit-when-done. A normal end by a limit (no signal, time limit,
+  `MainWindow.VM_EngineEvent`); not while closing or while a command-line script
+  runs (its `PIN_EVT_DONE` reports the failure instead). A normal end by a limit (no signal, time limit,
   end of tape) only replaces "Ready" in the status bar with that sentence
   until the next capture (`MainViewModel.ApplyStatus`, `stop_text`).
 - Before a capture starts, `pin_check_output` reports `low_space` (free space

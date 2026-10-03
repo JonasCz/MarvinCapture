@@ -57,7 +57,6 @@ pinctl deck <id> play|pause|stop|ff|rew|state|timecode
 pinctl preview-dump <id> [-n N] [-o prefix]     # save preview frames
 pinctl preview-rate <id> [seconds]              # preview frame rate
 pinctl monitor <id> [seconds] [T:in=dv|svideo|composite] [T:std=pal|ntsc]
-pinctl actions <id> --actions a,b,c [...]
 ```
 
 On failure it prints `pinctl: device not ready: <engine error text>`. Its log

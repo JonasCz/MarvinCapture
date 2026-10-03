@@ -51,10 +51,14 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   save and the per-platform default config file path, plus
   `pin_settings_device_key` (the `dev_<GUID>.` per-device key prefix).
 
-- **`pin_cmdline.[ch]`** — the command-line parser shared by every GUI and
-  by `pinctl`: one-shot capture presets (optionally seeded from an INI file
-  via `--preset`, with explicit flags overriding it) plus an ordered action
-  list (`--actions rewind,play,capture`) for a core action sequencer.
+- **`pin_script.[ch]`, `pin_script_eval.[ch]`** — the command-line language of
+  [docs/cli.md](../../docs/cli.md), shared by every front end: the parser
+  (settings and actions left to right into a script, all validation that needs
+  no device), timecode/duration parsing, the file-extension to format table,
+  the help text, and the pure wait-condition evaluation (`idle`, `nosignal`,
+  `signal`, timecode, duration; driven by a made-up clock in the tests).
+  The sequencer that runs a script against a session is `pin_script_run.c`
+  (below).
 
 ## Session engine (needs libusb/FFmpeg: not part of `pinnacle_engine_pure`)
 
@@ -64,9 +68,21 @@ behind `pin_api.h`: device open/prepare, capture start/stop, deck control,
 scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
 `dv_on_unit()`'s two branches) and preview decode.
 
+- **Script sequencer** (`pin_script_run.c`, `pin_script_run()` / `pin_script_cancel()`):
+  a helper thread per session that performs a parsed script. It waits after each
+  deck command until the worker took it and `deck_busy` cleared (the command
+  mailbox has one slot), closes an open capture before any transport action,
+  recognises *its* capture ending (`capture_end_seq` in the session; the
+  snapshot's `stop_reason` can still be the previous capture's) and aborts with
+  exit code 4 on an abnormal end, and ends with `PIN_EVT_DONE` (`a` = exit
+  code, `text` = reason). `pin_session_close()` cancels and joins it.
+  The collision check for `--capture` looks at the file name of every kind that
+  could arrive, because `pin_check_output` only knows the kind once data flows
+  (a stopped deck sends none).
+
 - **Replay (virtual device)**, `PIN_REPLAY=<file>` or `pin_set_replay_file()`
   (also reachable as `--device <path to an existing file>` on any front end
-  built on `pin_cmdline.c`, or by passing that path straight to `pin_open()`):
+  built on `pin_script.c`, or by passing that path straight to `pin_open()`):
   plays a recorded source back through the whole pipeline with no hardware,
   so the engine (and any GUI built on it) can be developed and tested end to
   end -- see `pin_session.c`'s `replay_run()`. Its
