@@ -10,6 +10,31 @@ public sealed partial class DeviceItemViewModel
     public PinDevState State { get; }
     public uint OwnerPid { get; }
 
+    /// <summary>Hubs between the computer and the device (core's pin_device_info_t.hub_depth): 0 direct, &gt;0 behind a hub, -1 unknown.</summary>
+    public int HubDepth { get; }
+
+    /// <summary>Plugged in through a USB hub, where it shares bandwidth (advisory; unknown = false).</summary>
+    public bool IsBehindHub => HubDepth > 0;
+
+    /// <summary>Line under the id in the picker for a device behind a hub.</summary>
+    public string HubLine => "(⚠ connected via USB hub)";
+
+    /// <summary>The core's advice for a device behind a hub (pin_usb_hub_hint), else null: the entry's tooltip.</summary>
+    public string? HubHint => IsBehindHub ? HubHintText.Value : null;
+
+    private static readonly Lazy<string?> HubHintText = new(() =>
+    {
+        try
+        {
+            var t = Native.UsbHubHint();
+            return t.Length > 0 ? t : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    });
+
     /// <summary>Whether this process can open it (free, or already open here).</summary>
     public bool IsUsable => State is PinDevState.Ready or PinDevState.OpenHere;
 
@@ -19,9 +44,9 @@ public sealed partial class DeviceItemViewModel
             ? b as Microsoft.UI.Xaml.Media.Brush
             : null;
 
-    public string AutomationName => UnavailableReason is null
+    public string AutomationName => (UnavailableReason is null
         ? $"{Name}, {ShortId}, {StatusText}"
-        : $"{Name}, {ShortId}, {UnavailableReason}";
+        : $"{Name}, {ShortId}, {UnavailableReason}") + (IsBehindHub ? ", connected via USB hub" : "");
 
     public string Serial { get; }
 
@@ -78,5 +103,6 @@ public sealed partial class DeviceItemViewModel
         State = info.State;
         OwnerPid = info.OwnerPid;
         Serial = info.Serial;
+        HubDepth = info.HubDepth;
     }
 }

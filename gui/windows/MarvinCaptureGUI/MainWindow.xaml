@@ -87,9 +87,10 @@
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <!-- Fixed height: the two-line selection box must not shrink while the
-                                     dropdown is open (the selected item moves into the popup then). -->
+                                     dropdown is open (the selected item moves into the popup then).
+                                     Taller for a device behind a USB hub (third line). -->
                                 <controls:DeviceComboBox x:Name="DeviceCombo"
-                                          HorizontalAlignment="Stretch" Height="56"
+                                          HorizontalAlignment="Stretch" Height="{x:Bind VM.DeviceComboHeight, Mode=OneWay}"
                                           VerticalContentAlignment="Center"
                                           ItemsSource="{x:Bind VM.Devices}"
                                           SelectedItem="{x:Bind VM.SelectedDevice, Mode=TwoWay}"
@@ -100,7 +101,8 @@
                                           AutomationProperties.HelpText="Disabled while capturing. Devices used by another window can't be picked.">
                                     <ComboBox.ItemTemplate>
                                         <DataTemplate x:DataType="vm:DeviceItemViewModel">
-                                            <Grid ColumnSpacing="8" MinHeight="40" AutomationProperties.Name="{x:Bind AutomationName}">
+                                            <Grid ColumnSpacing="8" MinHeight="40" AutomationProperties.Name="{x:Bind AutomationName}"
+                                                  ToolTipService.ToolTip="{x:Bind HubHint}">
                                                 <Grid.ColumnDefinitions>
                                                     <ColumnDefinition Width="*" />
                                                     <ColumnDefinition Width="Auto" />
@@ -109,6 +111,10 @@
                                                     <TextBlock Text="{x:Bind Name}" TextTrimming="CharacterEllipsis" />
                                                     <TextBlock Text="{x:Bind ShortId}" Style="{StaticResource CaptionTextBlockStyle}"
                                                                Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                                               TextTrimming="CharacterEllipsis" />
+                                                    <TextBlock Text="{x:Bind HubLine}" Style="{StaticResource CaptionTextBlockStyle}"
+                                                               Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                                                               Visibility="{x:Bind IsBehindHub}"
                                                                TextTrimming="CharacterEllipsis" />
                                                 </StackPanel>
                                                 <Border Grid.Column="1" VerticalAlignment="Center" CornerRadius="10" Padding="8,2"

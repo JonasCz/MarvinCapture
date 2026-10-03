@@ -110,6 +110,14 @@ terminal and printed once per second when stderr is not a terminal or with
 gracefully (`Stopping: finalising files...`), a second Ctrl-C exits at once
 with 130.
 
+A device plugged in through a USB hub (it shares the hub's bandwidth) is marked
+`(behind USB hub)` in the `--help` device list, and the opened device gets a
+`warning:` line after the `Device:` line, with the advice and the tool that
+shows the USB tree (Windows: USBTreeView, Linux: `lsusb -t`, macOS: System
+Information > USB). The core reports it (`pin_device_info_t.hub_depth`,
+`pin_usb_hub_hint()`); where the USB backend can't tell, nothing is shown.
+Advisory only: some mainboards route their own ports through a built-in hub.
+
 ### Debug log
 
 Without `--debug` only warnings and errors from the core are printed (as

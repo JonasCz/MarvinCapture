@@ -32,6 +32,7 @@ public unsafe struct PinDeviceInfo
     public PinDevState State;
     public uint OwnerPid;
     public uint Tested;
+    public int HubDepth; // hubs between the computer and the device: 0 direct, >0 behind a hub, -1 unknown
 
     public string Id { get { fixed (byte* p = IdBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
     public string Name { get { fixed (byte* p = NameBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }

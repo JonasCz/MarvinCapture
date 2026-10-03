@@ -32,11 +32,13 @@
 #include "../engine/pin_settings.h"
 #include "../engine/pin_script.h"
 #include "../engine/pin_stop.h"
+#include "../engine/pin_usb_topology.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pin_log.h"
 
 #include <math.h>
+#include <stddef.h> /* offsetof */
 #include <pthread.h>
 #include <stdio.h>
 #include <unistd.h> /* getpid (MinGW provides it too) */
@@ -150,24 +152,45 @@ static void probe_guid(guid_cache_entry_t *c)
     pinnacle_lock_release(lock);
 }
 
+/* The caller's array stride: its sizeof(pin_device_info_t) as compiled
+ * (out[0].size), so a caller built before an appended field still gets its
+ * own layout; 0 or anything below the oldest layout means ours. */
+static size_t device_info_stride(const pin_device_info_t *out)
+{
+    size_t s = out->size;
+    return s >= offsetof(pin_device_info_t, hub_depth) ? s : sizeof(pin_device_info_t);
+}
+
+/* Copies a filled entry into the caller's slot, no more than it has room for. */
+static void device_info_store(pin_device_info_t *out, int index, size_t stride, pin_device_info_t *d)
+{
+    d->size = (uint32_t)stride;
+    memcpy((char *)out + (size_t)index * stride, d, stride < sizeof(*d) ? stride : sizeof(*d));
+}
+
+const char *pin_usb_hub_hint(void) { return pin_usb_hub_hint_text(); }
+
 int pin_enumerate(pin_device_info_t *out, int max)
 {
     pinnacle_enum_entry_t entries[16];
     int n = pinnacle_enumerate(entries, 16);
     int total = n > 16 ? 16 : n;
     int written = 0;
+    size_t stride = out && max > 0 ? device_info_stride(out) : sizeof(pin_device_info_t);
+    if (!out)
+        max = 0;
 
     for (int i = 0; i < total && written < max; i++) {
-        pin_device_info_t *d = &out[written];
-        uint32_t caller_size = d->size;
+        pin_device_info_t dev_buf;
+        pin_device_info_t *d = &dev_buf;
         memset(d, 0, sizeof(*d));
-        d->size = caller_size ? caller_size : sizeof(*d);
         strncpy(d->id, entries[i].id, sizeof(d->id) - 1);
         strncpy(d->name, entries[i].name, sizeof(d->name) - 1);
         d->vid = entries[i].vid;
         d->pid = entries[i].pid;
         d->owner_pid = entries[i].owner_pid;
         d->tested = (uint32_t)entries[i].tested;
+        d->hub_depth = pin_usb_hub_depth(entries[i].ports, entries[i].port_count);
         switch (entries[i].state) {
         case PINNACLE_ENUM_READY: d->state = PIN_DEV_READY; break;
         case PINNACLE_ENUM_IN_USE: d->state = PIN_DEV_IN_USE; break;
@@ -200,6 +223,7 @@ int pin_enumerate(pin_device_info_t *out, int max)
         }
         if (gknown)
             snprintf(d->serial, sizeof(d->serial), "%08X%08X", (unsigned)ghi, (unsigned)glo);
+        device_info_store(out, written, stride, d);
         written++;
     }
     int total_out = total;
@@ -214,10 +238,9 @@ int pin_enumerate(pin_device_info_t *out, int max)
     if (replay && replay[0]) {
         total_out++;
         if (written < max) {
-            pin_device_info_t *d = &out[written];
-            uint32_t caller_size = d->size;
+            pin_device_info_t dev_buf;
+            pin_device_info_t *d = &dev_buf;
             memset(d, 0, sizeof(*d));
-            d->size = caller_size ? caller_size : sizeof(*d);
             const char *base = strrchr(replay, '/');
             const char *base2 = strrchr(replay, '\\');
             if (base2 && (!base || base2 > base)) base = base2;
@@ -229,6 +252,8 @@ int pin_enumerate(pin_device_info_t *out, int max)
             strncpy(d->serial, "REPLAY", sizeof(d->serial) - 1);
             d->state = PIN_DEV_READY;
             d->tested = 1;
+            d->hub_depth = -1;   /* a file, not a USB device */
+            device_info_store(out, written, stride, d);
             written++;
         }
     }

@@ -187,11 +187,11 @@ static void print_device_table(FILE *f)
         return;
     }
     int shown = n > 16 ? 16 : n;
-    int no_driver = 0;
-    fprintf(f, "Devices:\n  %-14s %-26s %-9s %-16s %s\n", "id", "name", "vid:pid", "serial", "state");
+    int no_driver = 0, behind_hub = 0;
+    fprintf(f,"Devices:\n  %-14s %-26s %-9s %-16s %s\n", "id", "name", "vid:pid", "serial", "state");
     for (int i = 0; i < shown; i++) {
         const pin_device_info_t *d = &devs[i];
-        char state[64];
+        char state[96];
         snprintf(state, sizeof(state), "%s", dev_state_name(d->state));
         if (d->state == PIN_DEV_IN_USE || d->state == PIN_DEV_PREPARING) {
             size_t l = strlen(state);
@@ -203,6 +203,11 @@ static void print_device_table(FILE *f)
         }
         if (d->state == PIN_DEV_NO_DRIVER)
             no_driver = 1;
+        if (d->hub_depth > 0) {
+            size_t l = strlen(state);
+            snprintf(state + l, sizeof(state) - l, " (behind USB hub)");
+            behind_hub = 1;
+        }
         fprintf(f, "  %-14s %-26s %04x:%04x %-16s %s\n", d->id, d->name, d->vid, d->pid,
                 d->serial[0] ? d->serial : "-", state);
     }
@@ -210,6 +215,8 @@ static void print_device_table(FILE *f)
         fprintf(f, "  (%d more device(s) not shown)\n", n - shown);
     if (no_driver)
         fprintf(f, "A device has no driver: bind WinUSB to it (e.g. with Zadig), see docs/usage.md.\n");
+    if (behind_hub)
+        fprintf(f, "Warning, device behind a USB hub: %s\n", pin_usb_hub_hint());
 }
 
 /* ---- main --------------------------------------------------------------- */
@@ -298,6 +305,8 @@ int main(int argc, char **argv)
             if (devs[i].state == PIN_DEV_OPEN_HERE) { d = &devs[i]; break; }
         if (d)
             say("Device: %s (%s)%s%s", d->name, d->id, d->serial[0] ? ", serial " : "", d->serial);
+        if (d && d->hub_depth > 0)
+            say("warning: %s", pin_usb_hub_hint());
     }
 
     st = pin_script_run(s, sc);

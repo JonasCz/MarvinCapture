@@ -86,6 +86,11 @@ typedef struct {
     uint32_t owner_pid;                /* PINNACLE_ENUM_IN_USE: the other process; else 0 */
     int tested;                        /* model verified end to end on real hardware (pinnacle_model_t.tested) */
     uint8_t usb_address;               /* changes on every replug: with id, keys a per-plug cache */
+    /* Hub port chain from the root hub (libusb_get_port_numbers): ports[0]
+     * is the root hub port, one more entry per hub in between. port_count
+     * <= 0 = the backend couldn't tell (error code or no chain). */
+    uint8_t ports[8];
+    int port_count;
 } pinnacle_enum_entry_t;
 
 

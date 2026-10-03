@@ -145,6 +145,7 @@ int pinnacle_enumerate(pinnacle_enum_entry_t *out, int max)
         entry.pid = desc.idProduct;
         entry.tested = model->tested;
         entry.usb_address = libusb_get_device_address(list[i]);
+        entry.port_count = libusb_get_port_numbers(list[i], entry.ports, (int)sizeof(entry.ports));
 
         if (!model->supported) {
             entry.state = PINNACLE_ENUM_UNSUPPORTED;

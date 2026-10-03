@@ -57,6 +57,18 @@ The device needs about 5.5 s of bring-up before the first byte arrives, and the
 camera must actually be transmitting; see [docs/usage.md](docs/usage.md) for how
 to tell a fault from a quiet camera and how to check that nothing was dropped.
 
+### Connection via USB hub
+
+Plug the device directly into a USB port of the computer, not into a hub
+(including front-panel hubs, docks and monitor hubs): behind a hub it shares
+the hub's bandwidth with the other devices on it, which can drop frames. The
+GUI and CLI warn when they detect a hub between the computer and the device
+("connected via USB hub"). To see where it is plugged in: Windows,
+[USBTreeView](https://www.uwe-sieber.de/usbtreeview_e.html) (Uwe Sieber);
+Linux, `lsusb -t`; macOS, System Information > USB (`system_profiler
+SPUSBDataType`). The warning is advisory: some computers wire their own ports
+through a built-in hub, and then it can be ignored.
+
 ## How it is put together
 
 ```

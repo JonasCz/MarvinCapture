@@ -54,6 +54,19 @@ than 1, the app shows an error window instead of the UI and logs the details.
 Crashes and unhandled exceptions go to `%LOCALAPPDATA%\PinnacleOSS\crash.log`.
 If the app runs cleanly, that file doesn't exist.
 
+### Connection via USB hub
+
+"(⚠ connected via USB hub)" under a device in the device list, and "Ready
+(connection via USB hub detected, see readme)" in the status bar, mean the
+device is plugged in through a USB hub and shares the hub's bandwidth with the
+other devices on it, which can drop frames. Plug it directly into a USB port of
+the computer (not a hub, front-panel hub, dock or monitor). Check where it is
+connected with [USBTreeView](https://www.uwe-sieber.de/usbtreeview_e.html)
+(Uwe Sieber). Some computers route their own ports through a built-in hub;
+then the warning can be ignored. Hover over the entry for the same advice.
+(The core reports it: `pin_device_info_t.hub_depth > 0`, text from
+`pin_usb_hub_hint()`; see also the [main README](../../README.md#connection-via-usb-hub).)
+
 ## Command line
 
 The core parses the command line (`pin_script_parse`), so every front-end

@@ -129,6 +129,13 @@ typedef struct {
     pin_dev_state_t state;
     uint32_t owner_pid;         /* PREPARING / IN_USE: the other process, else 0 */
     uint32_t tested;            /* 1 = model verified on real hardware, 0 = supported but untested */
+    /* Appended (a caller compiled without it passes the old size and gets
+     * the old layout). Hubs between the computer's root hub port and the
+     * device: 0 = plugged straight into the computer, >0 = behind that many
+     * hubs (it shares their bandwidth: show pin_usb_hub_hint()), -1 =
+     * unknown (backend can't tell, replay device). Advisory only: some
+     * mainboards wire their own ports through a built-in hub. */
+    int32_t hub_depth;
 } pin_device_info_t;
 
 /* Lists devices without opening them. Cheap enough to call on every OS
@@ -137,6 +144,11 @@ typedef struct {
  * Includes the virtual replay device (id "replay:<basename>") whenever the
  * PIN_REPLAY environment variable or pin_set_replay_file() names a file. */
 PIN_API int pin_enumerate(pin_device_info_t *out, int max);
+
+/* One short paragraph for a device with hub_depth > 0: it shares the hub's
+ * bandwidth, plug it straight into the computer, and the platform's tool to
+ * check (USBTreeView / lsusb -t / System Information). Static, never NULL. */
+PIN_API const char *pin_usb_hub_hint(void);
 
 /* Sets (or, with NULL/"", clears) the process-wide replay source: a file
  * pin_enumerate() lists as a virtual "replay:<basename>" device and

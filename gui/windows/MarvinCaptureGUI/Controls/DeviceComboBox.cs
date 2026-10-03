@@ -22,7 +22,10 @@ public sealed partial class DeviceComboBox : ComboBox
         {
             var reason = device.UnavailableReason;
             container.IsEnabled = reason is null;
-            ToolTipService.SetToolTip(container, reason);
+            // An enabled entry shows the USB hub advice from its template; a disabled one can't,
+            // so its tooltip carries both.
+            ToolTipService.SetToolTip(container, reason is not null && device.HubHint is not null
+                ? $"{reason}\n\n{device.HubHint}" : reason);
             AutomationProperties.SetHelpText(container, reason ?? string.Empty);
         }
     }

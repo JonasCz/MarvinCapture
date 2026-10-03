@@ -66,6 +66,12 @@ public static unsafe partial class Native
     }
 
     [LibraryImport(Lib)]
+    private static partial nint pin_usb_hub_hint();
+
+    /// <summary>The core's advice for a device behind a USB hub (platform tool included).</summary>
+    public static string UsbHubHint() => PtrToUtf8(pin_usb_hub_hint());
+
+    [LibraryImport(Lib)]
     private static partial int pin_devices_wait(int timeoutMs);
 
     [LibraryImport(Lib)]

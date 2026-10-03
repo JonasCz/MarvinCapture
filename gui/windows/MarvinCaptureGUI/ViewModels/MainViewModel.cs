@@ -31,8 +31,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<DeviceItemViewModel> Devices { get; } = new();
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(HasSelectedDevice))]
+    [NotifyPropertyChangedFor(nameof(HasSelectedDevice), nameof(DeviceComboHeight))]
     private DeviceItemViewModel? _selectedDevice;
+
+    /// <summary>The picker's fixed height: one caption line more for a device behind a USB hub.</summary>
+    public double DeviceComboHeight => SelectedDevice is { IsBehindHub: true } ? 72 : 56;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DeviceSelectEnabled))]
@@ -892,6 +895,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    private const string ReadyBehindHubText = "Ready (connection via USB hub detected, see readme)";
+
+    /// <summary>The open device's list entry (the selection, if the list doesn't have it).</summary>
+    private DeviceItemViewModel? OpenDevice =>
+        Devices.FirstOrDefault(d => d.Id == _openedDeviceId) ?? SelectedDevice;
+
+    /// <summary>The open device is plugged in through a USB hub (core hub_depth &gt; 0; advisory).</summary>
+    private bool OpenDeviceBehindHub => OpenDevice is { IsBehindHub: true };
+
     private void ApplyStatus(in PinStatusSnapshot st)
     {
         SessionState = st.State;
@@ -922,12 +934,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                   st.StopText.Length > 0
                 ? st.StopText
                 : string.IsNullOrEmpty(file) || st.State != PinState.Capturing
-                ? SessionStateText
+                ? (st.State == PinState.Ready && OpenDeviceBehindHub ? ReadyBehindHubText : SessionStateText)
                 : st.Passes > 1 ? $"{file}  \u00B7  pass {st.Pass}/{st.Passes}" : file;
         }
         StatusSubText = IsCapturingState(st.State) ? SessionStateText : "";
         StatusTip = StatusSubText.Length > 0 && StatusSubText != StatusShortText
             ? $"{StatusSubText}\n{StatusShortText}" : StatusShortText;
+        if (StatusShortText == ReadyBehindHubText && OpenDevice?.HubHint is { } hint)
+        {
+            StatusTip = hint;
+        }
 
         Timecode = string.IsNullOrEmpty(st.Timecode) ? "--:--:--:--" : st.Timecode;
         if (st.Input == PinInput.Dv)
