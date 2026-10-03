@@ -240,6 +240,27 @@ capture starts (not for the user's own stop).
 A capture that drives the deck (`start_deck`) stops the tape when it ends for
 any reason except a lost device or camera.
 
+**No video.** A capture that ends without a single video frame having been
+written (an empty tape: the wait conditions are met or the capture is stopped
+while nothing ever arrived) leaves no file behind: no output file, no
+`--keep-raw` file, no temporary file, and an existing file that `--overwrite`
+would have replaced is not touched. The sinks create a file only when its first
+video unit is written (`pin_sink_lazy`, `src/sinks/sink_lazy.c`; audio that
+arrives before the first video is dropped), a rewrapped HDV capture's temporary
+`.rawts.tmp` is removed when empty, and a pass or scene file that gets no unit is
+never created. The core reports it as `stop_no_video` in the status (1 until the
+next capture starts) and, when the end was not abnormal, as
+`PIN_EVT_NO_VIDEO` right after `PIN_EVT_CAPTURE_ENDED`; `stop_text` and the
+`CAPTURE_ENDED` text are then "No video received; nothing was captured to PATH."
+(to standard output for `-`), plus " The capture stopped because ..." when it
+was not the user's stop. The GUI shows it as a warning bar and in the status bar;
+`MarvinCaptureCLI` prints the sentence and, once the script has run to its end,
+exits 5 (a more severe error code wins; see [cli.md](cli.md)). An abnormal end
+without video (device lost, disk full) keeps its dialog / exit 4 and only sets
+`stop_no_video`. A capture whose output file or directory cannot be created is
+now noticed when the capture starts only for a missing directory; any other
+failure shows at the first frame, as a write error.
+
 ### The USB thread must never wait on the disk
 
 Found while chasing sporadic single holes in HDV captures; it applies equally

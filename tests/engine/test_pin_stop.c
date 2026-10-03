@@ -63,6 +63,19 @@ int main(void)
     pin_stop_message(PIN_STOP_PIPE_CLOSED, 30, NULL, b, sizeof(b));
     CHECK(strcmp(b, "Capture stopped after capturing 30s, because the program reading the output "
                     "exited.") == 0, "pipe closed wording");
+    pin_stop_message_no_video(PIN_STOP_USER, "tape.dv", NULL, b, sizeof(b));
+    CHECK(strcmp(b, "No video received; nothing was captured to tape.dv.") == 0, "no video, user stop");
+    pin_stop_message_no_video(PIN_STOP_USER, "tape.", NULL, b, sizeof(b));
+    CHECK(strcmp(b, "No video received; nothing was captured to tape.") == 0, "trailing dot dropped");
+    pin_stop_message_no_video(PIN_STOP_NO_SIGNAL, "clips/tape", "there was no video signal for 2 minutes",
+                              b, sizeof(b));
+    CHECK(strcmp(b, "No video received; nothing was captured to clips/tape. The capture stopped "
+                    "because there was no video signal for 2 minutes.") == 0, "no video, caller's detail");
+    pin_stop_message_no_video(PIN_STOP_END_OF_TAPE, "-", NULL, b, sizeof(b));
+    CHECK(strcmp(b, "No video received; nothing was captured to standard output. The capture stopped "
+                    "because the end of the tape was reached.") == 0, "no video, stdout, default detail");
+    pin_stop_message_no_video(PIN_STOP_USER, NULL, NULL, b, sizeof(b));
+    CHECK(strstr(b, "standard output") != NULL, "no video, no path");
     CHECK(pin_stop_disk_reserve(0, 0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
     CHECK(pin_stop_disk_reserve(10, 20, 30) == 60, "margin + backlog + remux");
 

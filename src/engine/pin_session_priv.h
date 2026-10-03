@@ -208,6 +208,11 @@ struct pin_session {
     pin_stop_reason_t stop_reason;
     double stop_captured_s;
     char stop_text[PIN_TEXT_MAX];
+    int stop_no_video;       /* the capture ended without a single video unit written */
+    uint64_t units_total;    /* video units written by this capture's closed files */
+    uint64_t last_close_units; /* ... by the file closed last */
+    int file_announced;      /* PIN_EVT_FILE_OPENED was sent for the open file (it is created
+                                by its first video unit, see sink_lazy.c) */
     char naming_base[PIN_PATH_MAX]; /* extension-stripped */
     char naming_ext[16];
 

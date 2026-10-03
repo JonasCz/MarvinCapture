@@ -711,6 +711,12 @@ public sealed partial class MainWindow : Window
         {
             _ = ShowDialogAsync("Capture stopped", e.Text, null, "OK");
         }
+        // A capture that received no video at all (an empty tape): no file was written. A
+        // warning bar; a command-line script reports it itself through its exit code (Done).
+        if (e.Kind == PinEventKind.NoVideo && !_closing && !_finalizingForClose && !_scriptRunning)
+        {
+            VM.ShowInfo("No video received", e.Text, 2);
+        }
     }
 
     // ================================================================== devices

@@ -51,3 +51,7 @@ add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap
 add_executable(test_stdout_sinks test_stdout_sinks.c)
 target_link_libraries(test_stdout_sinks PRIVATE pinnacle_sinks)
 add_test(NAME test_stdout_sinks COMMAND test_stdout_sinks)
+
+add_executable(test_lazy_sink test_lazy_sink.c)
+target_link_libraries(test_lazy_sink PRIVATE pinnacle_sinks)
+add_test(NAME test_lazy_sink COMMAND test_lazy_sink)

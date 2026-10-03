@@ -718,6 +718,12 @@ static pin_status_t close_sink_counted(pin_session_t *s)
     } else {
         s->bytes_closed += s->bytes_written;
     }
+    s->last_close_units = sst.units_written;
+    s->units_total += sst.units_written;
+    if (sst.units_written > 0 && !s->file_announced) {   /* a capture shorter than one status tick */
+        s->file_announced = 1;
+        pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, s->current_file);
+    }
     return s->sink->close(s->sink);
 }
 
@@ -974,7 +980,9 @@ static void open_sink_for_scene(pin_session_t *s)
         return;
     }
 
-    s->sink = to_stdout ? pin_sink_create_stdout(s->stream_kind) : pin_sink_create(s->active_format);
+    /* a file is created by its first video unit (pin_sink_lazy): no video, no file */
+    s->sink = to_stdout ? pin_sink_create_stdout(s->stream_kind)
+                        : pin_sink_lazy(pin_sink_create(s->active_format));
     if (!s->sink) {
         set_error(s, PIN_ERR_ARG, "unsupported output format");
         return;
@@ -1047,7 +1055,25 @@ static void open_sink_for_scene(pin_session_t *s)
     /* the clip counters restart with every file (frames still held back by a
      * pending split were counted into the previous clip: at most ~1 s) */
     s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = 0;
-    pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, path);
+    /* a file is announced when its first unit has been written; stdout has no file to wait for */
+    s->file_announced = to_stdout;
+    if (to_stdout)
+        pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, path);
+}
+
+/* Sends PIN_EVT_FILE_OPENED once the open file has received its first video
+ * unit (it does not exist before). Caller holds the lock. */
+static void file_announce(pin_session_t *s)
+{
+    if (!s->sink || s->file_announced || !s->sink->get_status)
+        return;
+    pin_sink_status_t sst;
+    memset(&sst, 0, sizeof(sst));
+    s->sink->get_status(s->sink, &sst);
+    if (sst.units_written > 0) {
+        s->file_announced = 1;
+        pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, s->current_file);
+    }
 }
 
 /* ========================================================================
@@ -1485,9 +1511,17 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
 {
     s->stop_reason = why;
     s->stop_captured_s = captured_seconds(s);
-    pin_stop_message(why, s->stop_captured_s, detail, s->stop_text, sizeof(s->stop_text));
+    /* no unit reached any file (they are closed by now): there is nothing to keep */
+    s->stop_no_video = s->units_total == 0;
+    int say_no_video = s->stop_no_video && !pin_stop_abnormal(why);
+    if (say_no_video)
+        pin_stop_message_no_video(why, s->capture_opts.path, detail, s->stop_text, sizeof(s->stop_text));
+    else
+        pin_stop_message(why, s->stop_captured_s, detail, s->stop_text, sizeof(s->stop_text));
     pin_logf(why == PIN_STOP_USER ? PIN_LOG_INFO : PIN_LOG_WARN, "session: %s\n", s->stop_text);
     pin_session_push_event(s, PIN_EVT_CAPTURE_ENDED, (int32_t)why, s->stop_text);
+    if (say_no_video)
+        pin_session_push_event(s, PIN_EVT_NO_VIDEO, (int32_t)why, s->stop_text);
     s->capture_began = 0;
     s->capture_end_seq++;
 }
@@ -1517,7 +1551,9 @@ static void finish_file(pin_session_t *s)
     if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
     pin_status_t st = close_sink_counted(s);
     s->sink = NULL;
-    pin_session_push_event(s, PIN_EVT_FILE_CLOSED, (int32_t)st, s->current_file);
+    /* a file that never received a unit was never created: nothing to report */
+    if (s->last_close_units > 0 || st != PIN_OK)
+        pin_session_push_event(s, PIN_EVT_FILE_CLOSED, (int32_t)st, s->current_file);
 }
 
 /* Ends the running capture (or the wait for one to start): finishes the
@@ -1734,6 +1770,9 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
             s->capture_opts.first_number = 0;
         }
         s->stop_reason = PIN_STOP_NONE;
+        s->stop_no_video = 0;
+        s->units_total = 0;
+        s->last_close_units = 0;
         s->stop_captured_s = 0;
         s->stop_text[0] = 0;
         s->capture_began = 0;
@@ -1932,6 +1971,7 @@ static void dv_tick(void *user)
         } else {
             s->bytes_written = wst.bytes_pushed;
         }
+        file_announce(s);
         rate_sample(s);
         capture_guard(s, auto_stop_node(s, node));
     }
@@ -2255,6 +2295,7 @@ static int analog_tick(void *user)
         } else {
             s->bytes_written = wst.bytes_pushed;
         }
+        file_announce(s);
         rate_sample(s);
         capture_guard(s, 0);
     }
@@ -3172,6 +3213,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     }
     out->camera_present = s->camera_present;
     out->stop_reason = s->stop_reason;
+    out->stop_no_video = s->stop_no_video;
     out->stop_captured_s = s->stop_captured_s;
     strncpy(out->stop_text, s->stop_text, sizeof(out->stop_text) - 1);
     if (s->stream_kind == PIN_KIND_HDV) {

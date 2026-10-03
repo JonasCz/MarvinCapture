@@ -932,7 +932,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             StatusShortText = st.State == PinState.Preparing && st.Detail.Length > 0
                 ? "Preparing: " + st.Detail
                 // why the last capture stopped (not after the user's own stop), until the next one
-                : st.State == PinState.Ready && st.StopReason is not (PinStopReason.None or PinStopReason.User) &&
+                : st.State == PinState.Ready &&
+                  (st.StopReason is not (PinStopReason.None or PinStopReason.User) || st.StopNoVideo) &&
                   st.StopText.Length > 0
                 ? st.StopText
                 : string.IsNullOrEmpty(file) || st.State != PinState.Capturing

@@ -88,6 +88,7 @@ add_library(pinnacle_sinks STATIC
     sink_avi.c
     sink_ffv1.c
     sink_rewrap.c
+    sink_lazy.c
 )
 target_include_directories(pinnacle_sinks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     ${PIN_FFMPEG_STATIC_INCLUDE_DIRS})

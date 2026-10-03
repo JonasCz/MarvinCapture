@@ -153,6 +153,7 @@ public enum PinEventKind : int
     Devices,
     CaptureEnded,   // A = PinStopReason, Text = ready-made sentence
     Step,           // command-line script: A = step index, Text = its description
+    NoVideo,        // a capture that did not end abnormally got no video: A = PinStopReason, Text = sentence
 }
 
 /// <summary>Why a capture ended (pin_stop_reason_t).</summary>

@@ -400,7 +400,7 @@ static void test_help_and_empty(void)
     CHECK(strstr(h, "--capture") && strstr(h, "--wait-any") && strstr(h, "--wait-all") && strstr(h, "captured=") &&
               strstr(h, "nosignal") && strstr(h, "--debug") &&
               strstr(h, "--overwrite") && strstr(h, "not precise"), "help covers the language and the winding note");
-    CHECK(strstr(h, "Exit codes"), "help lists exit codes");
+    CHECK(strstr(h, "Exit codes") && strstr(h, "5 a capture received no video"), "help lists exit codes incl. 5");
 }
 
 static void test_errors(void)

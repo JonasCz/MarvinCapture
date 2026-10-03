@@ -200,6 +200,12 @@ MarvinCaptureGUI/
   runs (its `PIN_EVT_DONE` reports the failure instead). A normal end by a limit (no signal, time limit,
   end of tape) only replaces "Ready" in the status bar with that sentence
   until the next capture (`MainViewModel.ApplyStatus`, `stop_text`).
+- A capture that received no video at all (an empty tape; the core's
+  `stop_no_video`, event `PIN_EVT_NO_VIDEO`) leaves no file. Unless it ended
+  abnormally, `MainWindow.VM_EngineEvent` shows the warning bar "No video
+  received" with the core's sentence ("No video received; nothing was captured to
+  PATH.") and the status bar shows it instead of "Ready" (also after the user's
+  own stop). A command-line script reports it through its exit code 5 (`Done`).
 - Before a capture starts, `pin_check_output` reports `low_space` (free space
   known and under 25 GiB, `PIN_LOW_SPACE_BYTES`); the window then asks "Only X
   free on D:\. Continue?" with OK / Cancel, for analog, DV and HDV alike.

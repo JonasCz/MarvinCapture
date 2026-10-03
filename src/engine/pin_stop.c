@@ -18,6 +18,7 @@
 
 #include "pin_stop.h"
 #include <stdio.h>
+#include <string.h>
 
 uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_t remux_bytes)
 {
@@ -68,6 +69,23 @@ static const char *default_detail(pin_stop_reason_t reason)
     case PIN_STOP_PIPE_CLOSED: return "the program reading the output exited";
     default:                   return NULL;
     }
+}
+
+void pin_stop_message_no_video(pin_stop_reason_t reason, const char *path, const char *detail,
+                               char *out, size_t cap)
+{
+    if (!out || !cap)
+        return;
+    int n;
+    if (!path || !path[0] || (path[0] == '-' && !path[1]))
+        n = snprintf(out, cap, "No video received; nothing was captured to standard output.");
+    else   /* a script hands over "name." (extension stripped: it is not known yet) */
+        n = snprintf(out, cap, "No video received; nothing was captured to %.*s.",
+                     (int)(strlen(path) - (path[strlen(path) - 1] == '.' ? 1 : 0)), path);
+    if (!detail || !detail[0])
+        detail = default_detail(reason);
+    if (reason != PIN_STOP_USER && detail && n > 0 && (size_t)n < cap)
+        snprintf(out + n, cap - (size_t)n, " The capture stopped because %s.", detail);
 }
 
 void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *detail,

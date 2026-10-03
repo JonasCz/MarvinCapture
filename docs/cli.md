@@ -205,7 +205,19 @@ Rules:
 | 2 | Device or bring-up error |
 | 3 | Deck error (no camera, no tape, command refused, timecode wait failed) |
 | 4 | Capture ended abnormally (disk full, camera lost, write error, pipe too slow or closed) |
+| 5 | A capture received no video at all (for example an empty tape): nothing was captured and no file was left |
 | 130 | Ctrl-C: the capture is finalised and the tape stopped |
+
+A capture that gets no video is not an error while the script runs: its closing
+prints "No video received; nothing was captured to PATH." (to standard output for
+`--capture -`), the later steps still run, and the script ends with 5. A more
+severe failure (1 to 4, 130) takes precedence over 5. With several captures, one
+without video is enough for 5. A capture that did get video is unaffected; the
+files of the others are kept. Without video no output file is created (and no
+`--keep-raw` file or temporary file): a file is created by its first frame, so an
+existing file that `--overwrite` would replace is left alone too. Where the
+capture ends without a frame because of a failure (disk, device lost) that failure's
+code is used.
 
 When a script ends with 3, 4 or 130 after it moved the tape (and its last
 transport command was not `--stop`), the tape is stopped, so nothing is left

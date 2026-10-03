@@ -54,6 +54,9 @@ typedef struct {
     int steps[16];
     int nsteps;
     char step_text[16][PIN_PATH_MAX];
+    int no_video_events;            /* PIN_EVT_NO_VIDEO seen */
+    char no_video_text[PIN_PATH_MAX];
+    int file_events;                /* PIN_EVT_FILE_OPENED / _CLOSED seen */
 } outcome_t;
 
 static pin_script_t *parse(const char *const *argv, int argc)
@@ -81,6 +84,11 @@ static void wait_done(pin_session_t *s, outcome_t *o, int timeout_ms)
                 o->steps[o->nsteps] = ev.a;
                 snprintf(o->step_text[o->nsteps], sizeof(o->step_text[0]), "%s", ev.text);
                 o->nsteps++;
+            } else if (ev.kind == PIN_EVT_NO_VIDEO) {
+                o->no_video_events++;
+                snprintf(o->no_video_text, sizeof(o->no_video_text), "%s", ev.text);
+            } else if (ev.kind == PIN_EVT_FILE_OPENED || ev.kind == PIN_EVT_FILE_CLOSED) {
+                o->file_events++;
             } else if (ev.kind == PIN_EVT_DONE) {
                 o->done = 1;
                 o->code = ev.a;
@@ -213,23 +221,33 @@ int main(int argc, char **argv)
     CHECK(file_size("script_pre.dv") < 0);
     printf("OK: existing file is found before any step runs\n");
 
+    /* a replay plays its file once and then sits stopped, so a capture that must see video
+     * gets a fresh session (a capture on a stopped tape gets none: see 8.) */
+    pin_close(s);
+    s = pin_test_open_replay(trace);
     sc = PARSE("--overwrite", "--capture", "script_a.dv", "--wait", "wallclock=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
+    if (o.code != 0)
+        fprintf(stderr, "DONE %d: %s\n", o.code, o.text);
     CHECK(o.done && o.code == 0);
     printf("OK: --overwrite\n");
 
-    /* 3. two captures in a row: the next --capture closes the previous one */
+    /* 3. two captures in a row: the next --capture closes the previous one. The replay has played
+     * out by the second, so that one gets no video, leaves no file and makes the exit code 5 */
+    pin_close(s);
+    s = pin_test_open_replay(trace);
     sc = PARSE("--capture", "script_b.dv", "--wait", "wallclock=00:00:01", "--capture", "script_c.dv", "--wait",
                "wallclock=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
     CHECK(o.done);
-    CHECK_EQ_I(o.code, 0);
-    CHECK(file_size("script_b.dv") >= 0 && file_size("script_c.dv") >= 0);
-    printf("OK: two captures in one script\n");
+    CHECK_EQ_I(o.code, 5);
+    CHECK_EQ_I(o.nsteps, 4);
+    CHECK(file_size("script_b.dv") > 0 && file_size("script_c.dv") < 0);
+    printf("OK: two captures in one script (the second without video: exit 5, no file)\n");
 
     /* 4. no-op wait (no deck movement asked for) and signal: the replay has a signal */
     sc = PARSE("--wait", "signal=00:00:01");
@@ -293,6 +311,8 @@ int main(int argc, char **argv)
     /* 6. Ctrl-C while a script waits (the short fixture ends the replay capture by itself,
      * so what is checked is: cancel is honoured, DONE 130, nothing left open) */
     remove("script_a.dv");
+    pin_close(s);
+    s = pin_test_open_replay(trace);
     sc = PARSE("--capture", "script_a.dv", "--wait", "wallclock=01:00:00");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
@@ -321,5 +341,105 @@ int main(int argc, char **argv)
     remove("script_a.dv");
     remove("script_b.dv");
     remove("script_c.dv");
+
+    /* 8. a tape without any video (a replay file of blank data, no frames): the capture leaves no
+     * file, the script runs to its end and exits 5 */
+    {
+        const char *empty = "blank_tape.bin";
+        FILE *ef = fopen(empty, "wb");
+        CHECK(ef);
+        for (int i = 0; i < 16; i++) {
+            static const char zeros[16384];
+            fwrite(zeros, 1, sizeof(zeros), ef);
+        }
+        fclose(ef);
+        remove("nv_a.dv");
+        remove("nv_b.dv");
+        pin_session_t *es = pin_test_open_replay(empty);
+
+        sc = PARSE("--capture", "nv_a.dv", "--wait", "wallclock=00:00:01");
+        CHECK(pin_script_run(es, sc) == PIN_OK);
+        pin_script_free(sc);
+        wait_done(es, &o, 30000);
+        CHECK(o.done);
+        CHECK_EQ_I(o.code, 5);
+        CHECK(strstr(o.text, "No video received; nothing was captured to nv_a."));
+        CHECK_EQ_I(o.no_video_events, 1);
+        CHECK(strcmp(o.no_video_text, o.text) == 0);
+        CHECK_EQ_I(o.file_events, 0);                  /* no file was opened or closed */
+        CHECK(file_size("nv_a.dv") < 0);
+        pin_get_status(es, &snap);
+        CHECK_EQ_I(snap.state, PIN_STATE_READY);
+        CHECK_EQ_I(snap.stop_no_video, 1);
+        CHECK_EQ_I(snap.stop_reason, PIN_STOP_USER);
+        CHECK(strstr(snap.stop_text, "No video received"));
+        printf("OK: capture without video: exit 5, no file (%s)\n", o.text);
+
+        /* the later steps still run; a second capture without video is the same exit code */
+        sc = PARSE("--capture", "nv_a.dv", "--wait", "wallclock=00:00:01", "--capture", "nv_b.dv", "--wait",
+                   "wallclock=00:00:01");
+        CHECK(pin_script_run(es, sc) == PIN_OK);
+        pin_script_free(sc);
+        wait_done(es, &o, 30000);
+        CHECK(o.done);
+        CHECK_EQ_I(o.code, 5);
+        CHECK_EQ_I(o.nsteps, 4);                       /* both captures and both waits ran */
+        CHECK_EQ_I(o.no_video_events, 2);
+        CHECK(file_size("nv_a.dv") < 0 && file_size("nv_b.dv") < 0);
+        printf("OK: two captures without video: all steps ran, exit 5\n");
+
+        /* --overwrite does not touch the existing file when no video arrives */
+        FILE *kf = fopen("nv_keep.dv", "wb");
+        CHECK(kf);
+        fwrite("old take", 1, 8, kf);
+        fclose(kf);
+        sc = PARSE("--overwrite", "--capture", "nv_keep.dv", "--wait", "wallclock=00:00:01");
+        CHECK(pin_script_run(es, sc) == PIN_OK);
+        pin_script_free(sc);
+        wait_done(es, &o, 30000);
+        CHECK(o.done);
+        CHECK_EQ_I(o.code, 5);
+        CHECK_EQ_I(file_size("nv_keep.dv"), 8);
+        remove("nv_keep.dv");
+        printf("OK: --overwrite leaves the existing file alone without video\n");
+
+        /* a more severe error wins: the existing file without --overwrite is exit 1 */
+        FILE *xf = fopen("nv_keep.dv", "wb");
+        CHECK(xf);
+        fclose(xf);
+        sc = PARSE("--capture", "nv_a.dv", "--wait", "wallclock=00:00:01", "--capture", "nv_keep.dv");
+        CHECK(pin_script_run(es, sc) == PIN_OK);
+        pin_script_free(sc);
+        wait_done(es, &o, 30000);
+        CHECK(o.done);
+        CHECK_EQ_I(o.code, 1);
+        remove("nv_keep.dv");
+
+        /* --capture - : no file, same outcome */
+        {
+            int fd = OPEN_NEW("nv_stdout.out");
+            CHECK(fd >= 0);
+            int saved = DUP(1);
+            CHECK(saved >= 0);
+            fflush(stdout);
+            CHECK(DUP2(fd, 1) >= 0);
+            CLOSE(fd);
+            sc = PARSE("--capture", "-", "--wait", "wallclock=00:00:01");
+            CHECK(pin_script_run(es, sc) == PIN_OK);
+            pin_script_free(sc);
+            wait_done(es, &o, 30000);
+            fflush(stdout);
+            CHECK(DUP2(saved, 1) >= 0);
+            CLOSE(saved);
+            CHECK(o.done);
+            CHECK_EQ_I(o.code, 5);
+            CHECK(strstr(o.text, "nothing was captured to standard output"));
+            CHECK_EQ_I(file_size("nv_stdout.out"), 0);
+            remove("nv_stdout.out");
+            printf("OK: --capture - without video: exit 5 (%s)\n", o.text);
+        }
+        pin_close(es);
+        remove(empty);
+    }
     return 0;
 }

@@ -57,6 +57,7 @@
 #define EXIT_DEVICE 2
 #define EXIT_DECK 3
 #define EXIT_CAPTURE 4
+#define EXIT_NO_VIDEO 5
 #define EXIT_CANCELLED 130
 
 #define POLL_MS 100
@@ -73,6 +74,10 @@ typedef struct {
     double cap_t0;                  /* when the capture command was issued */
     const pin_script_capture_t *cap;
     int ext_checked;
+
+    int no_video;                   /* a capture of this script ended without any video: exit 5 at the end,
+                                       unless something more severe happens */
+    char no_video_text[PIN_TEXT_MAX];
 
     int moved_tape;                 /* a transport command was sent */
     pin_deck_cmd_t last_cmd;
@@ -116,12 +121,14 @@ static const char *kind_default_ext(int kind)
 }
 
 /* The capture of this script ended (by itself or on our stop): consumes it and
- * returns the exit code if it was abnormal, else 0. */
+ * returns the exit code if it was abnormal, else 0. A capture that got no video
+ * is remembered (the script goes on; its exit code becomes 5 at the end). */
 static int collect_capture_end(run_t *r)
 {
     pin_session_lock(r->s);
     unsigned seq = r->s->capture_end_seq;
     pin_stop_reason_t why = r->s->stop_reason;
+    int no_video = r->s->stop_no_video;
     char text[PIN_TEXT_MAX];
     snprintf(text, sizeof(text), "%s", r->s->stop_text);
     pin_session_unlock(r->s);
@@ -130,6 +137,10 @@ static int collect_capture_end(run_t *r)
     r->capture_open = 0;
     if (pin_stop_abnormal(why))
         return failf(r, EXIT_CAPTURE, "%s", text[0] ? text : "the capture ended abnormally");
+    if (no_video) {
+        r->no_video = 1;
+        snprintf(r->no_video_text, sizeof(r->no_video_text), "%s", text);
+    }
     return 0;
 }
 
@@ -525,6 +536,11 @@ static void *script_main(void *arg)
     if (code == 0 && rc2) {
         code = rc2;
         snprintf(reason, sizeof(reason), "%s", r->reason);
+    }
+    /* every step ran, but a capture got no video: the least severe failure */
+    if (code == 0 && r->no_video) {
+        code = EXIT_NO_VIDEO;
+        snprintf(reason, sizeof(reason), "%s", r->no_video_text);
     }
     /* Ctrl-C, a deck error or a capture that ended abnormally: stop the tape too if this
      * script moved it, so nothing is left playing. */

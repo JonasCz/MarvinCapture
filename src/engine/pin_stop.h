@@ -52,6 +52,13 @@ void pin_stop_format_duration(double seconds, char *out, size_t cap);
 void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *detail,
                       char *out, size_t cap);
 
+/* "No video received; nothing was captured to PATH." for a capture that ended
+ * without a single frame (path "-" or NULL: "... to standard output"), then, unless
+ * reason is PIN_STOP_USER, " The capture stopped because <detail>." (detail as for
+ * pin_stop_message()). */
+void pin_stop_message_no_video(pin_stop_reason_t reason, const char *path, const char *detail,
+                               char *out, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

@@ -105,6 +105,12 @@ struct pin_sink {
  * see each sink_*.c). */
 pin_sink_t *pin_sink_create(pin_format_t format);
 
+/* Wraps a file sink (from pin_sink_create(), not yet open()ed) so its file is created by the
+ * first video unit instead of by open(): a capture that gets no video leaves no file and does
+ * not touch one that is already there. Takes over `inner` (close() closes it); NULL if inner is NULL.
+ * get_status().units_written counts the video units the real sink accepted. See sink_lazy.c. */
+pin_sink_t *pin_sink_lazy(pin_sink_t *inner);
+
 /* The sink for `--capture -` (open() it with the path "-"): DV raw DIF, HDV
  * MPEG-TS, analog NUT (rawvideo YUY2 + pcm_s16le). NULL for an unknown kind. */
 pin_sink_t *pin_sink_create_stdout(pin_kind_t kind);

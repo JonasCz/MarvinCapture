@@ -236,9 +236,11 @@ public unsafe struct PinStatusSnapshot
     public PinStopReason StopReason;
     public double StopCapturedS;
     public fixed byte StopTextBuf[PinLimits.TextMax];
+    public int StopNoVideoValue;    // 1: the capture ended without any video; no file was left
 
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string VideoLabel { get { fixed (byte* p = VideoLabelBuf) return Utf8Fixed.Get(p, 16); } }
+    public bool StopNoVideo => StopNoVideoValue != 0;
     public string StopText { get { fixed (byte* p = StopTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Detail { get { fixed (byte* p = DetailBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string Timecode { get { fixed (byte* p = TimecodeBuf) return Utf8Fixed.Get(p, 16); } }

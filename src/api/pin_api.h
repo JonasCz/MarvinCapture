@@ -576,6 +576,14 @@ typedef struct {
     pin_stop_reason_t stop_reason;
     double stop_captured_s;
     char stop_text[PIN_TEXT_MAX];
+
+    /* Appended. 1 if the last capture ended without a single video frame having been
+     * written (e.g. an empty tape): whatever the reason, no output file was left
+     * behind (a file is created by its first frame, never before). When the end was
+     * not abnormal (pin_stop_reason_abnormal), stop_text then says so instead of
+     * "Capture stopped after capturing 0s ..." and PIN_EVT_NO_VIDEO was sent. Cleared
+     * when a capture starts. */
+    int stop_no_video;
 } pin_status_snapshot_t;
 
 /* Non-blocking. */
@@ -636,6 +644,10 @@ typedef enum {
     PIN_EVT_CAPTURE_ENDED,  /* a capture ended (after its files were closed): a = pin_stop_reason_t,
                                text = "Capture stopped after capturing 12m30s, because ..." */
     PIN_EVT_STEP,           /* pin_script_run: a step starts: a = step index, text = its description */
+    PIN_EVT_NO_VIDEO,       /* a capture ended that was not abnormal but received no video at all (sent
+                               right after PIN_EVT_CAPTURE_ENDED): a = pin_stop_reason_t, text =
+                               "No video received; nothing was captured to PATH." No file was
+                               left. Appended. */
 } pin_event_kind_t;
 
 typedef struct {
@@ -811,7 +823,9 @@ PIN_API pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_sett
  *   - PIN_EVT_DONE at the end: a = the exit code (0 ok, 1 usage-type error found
  *     at run time, e.g. an existing file without --overwrite or --capture - which is
  *     not supported yet, 2 device or bring-up error, 3 deck error, 4 a capture ended
- *     abnormally, 130 cancelled); text = a one-line reason when a != 0.
+ *     abnormally, 5 a capture got no video at all (no file was left; the script
+ *     still ran to its end, any more severe code wins), 130 cancelled);
+ *     text = a one-line reason when a != 0.
  * Capture: a manual capture with the current settings; it is closed (and
  * finalised) by the next transport action, the next --capture or the end of the
  * script. Returns PIN_ERR_STATE if a script is already running in this session. */

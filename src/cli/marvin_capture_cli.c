@@ -359,6 +359,9 @@ int main(int argc, char **argv)
             case PIN_EVT_CAPTURE_ENDED:
                 say("%s", ev.text);
                 break;
+            case PIN_EVT_NO_VIDEO:   /* the same sentence was just printed as the capture's end */
+                snprintf(last_error, sizeof(last_error), "%s", ev.text);   /* ... and is the exit-5 reason: not twice */
+                break;
             case PIN_EVT_DONE:
                 exit_code = ev.a;
                 if (ev.a != 0 && ev.text[0] && strcmp(ev.text, last_error) != 0)
