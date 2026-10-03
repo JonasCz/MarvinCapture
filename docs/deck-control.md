@@ -14,6 +14,9 @@ the same commands):
 - The capture flow (rewind first, multi-pass, time limit, no-signal stop) was
   also verified on a Pinnacle 510-USB with a DV camcorder (short tape), see
   "Capture flow in the session engine" and "Verified on the DV camcorder".
+- A Canon HDV camcorder with an HDV tape was tested again on a Pinnacle 510-USB
+  (2026-10-03): rewind, FF, PLAY, STOP, capture with timecode waits, see
+  "Verified on the Canon HDV camcorder".
 
 The transport lives in the core library:
 [`src/core/pinnacle_1394.c`](../src/core/pinnacle_1394.c) provides
@@ -140,11 +143,11 @@ into those ranges:
 | stop | `00 20 c4 60` | ACCEPTED; the stream drops to 0 within ~1 s |
 | ff | `00 20 c4 75` | ACCEPTED; state `0b … c4 75` (IN_TRANSITION) while winding |
 | rew | `00 20 c4 65` | ACCEPTED; likewise |
-| search (time code control) | `00 20 51 20 FF SS MM HH` | NOT_IMPLEMENTED on the DV camcorder (see below) |
+| search (time code control) | `00 20 51 20 FF SS MM HH` | NOT_IMPLEMENTED on the DV camcorder and on the Canon HDV (see below) |
 | state (status) | `01 20 d0 7f` | `0c 20 <transport opcode> <mode>` |
 | unit info | `01 ff 30 ff ff ff ff ff` | `0c ff 30 07 20 00 00 85` (VCR, Canon) |
-| subunit info | `01 ff 31 07 ff ff ff ff` | NOT_IMPLEMENTED (Canon HDV); `0c ff 31 07 20 38 ff ff` (DV camcorder) |
-| time code (status) | `01 20 51 71 ff ff ff ff` | `0c 20 51 71 FF SS MM HH` (BCD) while playing |
+| subunit info | `01 ff 31 07 ff ff ff ff` | `0c ff 31 07 20 38 ff ff` on the DV camcorder and on the Canon HDV camcorder of 2026-10-03; an earlier Canon HDV unit (first tests, `pindeck`) was recorded as NOT_IMPLEMENTED, so it varies by unit |
+| time code (status) | `01 20 51 71 ff ff ff ff` | `0c 20 51 71 FF SS MM HH` (BCD) while playing; on the Canon HDV also while winding, REJECTED at the start of the tape |
 
 ## Camera behaviour (Canon HDV)
 
@@ -264,6 +267,10 @@ signal is arriving, and once more after the winding stopped. An IN_TRANSITION
 answer or `ff` (no readable time code) leaves the last value on screen. While a
 stream with its own timecode runs, the stream's value is used instead.
 
+On the Canon HDV camcorder TIME CODE answers while winding in both directions
+(see "Verified on the Canon HDV camcorder"). While an HDV stream plays whose GOP
+headers carry no timecode (all zeros), the same poll runs during PLAY and capture.
+
 On the DV camcorder TIME CODE answers during PLAY and when stopped mid-tape,
 and is REJECTED (0a) during FF, at the start/end of the tape and in blank
 sections. During REW a single poll was REJECTED, but the engine's alternating
@@ -297,6 +304,37 @@ recording):
   time limit (pass 1 about 60 s, rewind, pass 2; the rewind time is not
   counted); no-signal stop (the capture stopped 1 min after the recording
   ended and the deck was stopped).
+
+## Verified on the Canon HDV camcorder
+
+Pinnacle 510-USB on Windows, Canon HDV camcorder (company ID `0x000085`), HDV
+tape (1440x1080 25 fps, 7+ minutes recorded), 2026-10-03:
+
+- **TRANSPORT STATE** answers: REW accepted with `09` (ACCEPTED), then state
+  `0b 20 c4 65` (IN_TRANSITION) for about 2 s, then `0c 20 c4 65`; FF `0b`/`0c 20
+  c4 75`; PLAY `0b`/`0c 20 c3 75`; PAUSE `0c 20 c3 7d`; stopped `0b` right after
+  STOP, then `0c 20 c4 60`.
+- **TIME CODE** (`01 20 51 71 ff ff ff ff`) answers while winding and counts down
+  during REW (and up during FF, where the first poll right after the command was
+  REJECTED), and is REJECTED (`0a`) at the start of the tape. Unlike the DV
+  camcorder's FF, it keeps answering while winding. The engine's alternating
+  TRANSPORT STATE / TIME CODE poll therefore shows a live timecode while winding.
+- **The HDV stream's GOP timecode is 00:00:00:00 in every GOP** on this camera, so
+  the status line showed a constant zero while capturing. The engine uses the GOP
+  timecode only once it has shown a non-zero value and otherwise keeps polling TIME
+  CODE (0.5 s, alternating with TRANSPORT STATE) while the HDV plays, so timecode
+  waits (`--wait HH:MM:SS:FF`) work during capture. See [hdv.md](hdv.md).
+- **SUBUNIT INFO** is implemented on this unit: `0c ff 31 07 20 38 ff ff`.
+- **No seek.** TIME CODE control (`00 20 51 20 FF SS MM HH`, several variants) and
+  ABSOLUTE TRACK NUMBER control are NOT_IMPLEMENTED; ABSOLUTE TRACK NUMBER status
+  works (`0c 20 52 71 ...`).
+- **Conclusion:** neither tested deck (the DV camcorder, this Canon HDV) supports
+  AV/C search, so there is no `--seek`; position the tape by FF/REW plus timecode
+  polling.
+- Capture flow verified: `--rew --wait --play --wait 00:00:20:00 --capture t.ts
+  --wait 00:00:40:00 --stop` (the capture started at the deck's 00:00:20, the wait
+  for 00:00:40 ended the capture after about 19 s, exit 0), and repeated
+  `--ff --wait +00:00:40:00 --stop --rew --wait` rounds.
 
 ## Tool
 

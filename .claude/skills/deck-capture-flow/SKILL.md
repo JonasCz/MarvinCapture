@@ -51,7 +51,10 @@ session engine"). The traps:
   decides about deck Stop independent of `start_deck`; the GUI's two stop buttons
   use NO / YES.
 - Timecode while winding comes from the TIME CODE status poll, only when no
-  stream timecode is arriving.
+  stream timecode is arriving. HDV from a camera whose GOP timecode is always
+  00:00:00:00 (the Canon) counts as "none" (`hdv_tc_live`): the poll keeps running
+  during play and capture and `deck_timecode_wanted()` lets its answer set the
+  displayed timecode; the GOP value takes over once it is non-zero.
 - Mirroring a new status field: `pin_api.h` (appended, ABI-compatible) ->
   `Interop/NativeStructs.cs` same order.
 - **Watching it on hardware:** `MarvinCaptureCLI --debug` logs every AV/C command

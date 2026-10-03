@@ -57,6 +57,11 @@ File extension to format, per detected kind:
 If the kind that arrives cannot use the extension, that kind's default format
 is used (DV raw, HDV TS, analog AVI) and a warning is printed.
 
+A name ending in `.m2t` keeps that extension for a raw HDV capture (the same
+bytes as `.ts`). Rewrapped HDV files (`.mov`, `.mkv`) start at time 0; a raw
+`.ts` and the stdout stream are byte-exact copies and keep the tape's own
+timestamps.
+
 ## Actions
 
 | Action | Effect |
@@ -87,7 +92,10 @@ deck's wind speed, so the position reached is not precise; do not rely on it
 for positioning. Many decks answer the
 timecode query only while playing or stopped, not while winding (see
 [deck-control.md](deck-control.md)), so timecode waits are most reliable
-during `--play`.
+during `--play`. On the Canon HDV camcorder the deck reports the timecode while
+winding too, and during an HDV capture the status line and `--wait HH:MM:SS:FF`
+follow the deck's timecode, since that camera's stream carries none (see
+[deck-control.md](deck-control.md)).
 
 On analog inputs only `signal`, `nosignal` and durations are allowed.
 
@@ -216,6 +224,12 @@ conditions: `pin_script_eval.c`, sequencer: `pin_script_run.c`).
 - **Existing files** are checked for every `--capture` before the first step
   runs (for the kinds the selected input can deliver), so a script that would
   fail on its last capture does not first start the tape.
+- **Verified on hardware** (510-USB, 2026-10-03, Canon HDV camcorder and a composite
+  PAL source): HDV capture to `.ts`, `.m2t`, `.mkv`, `.mov` and stdout, and the
+  timecode-driven `--rew --wait --play --wait 00:00:20:00 --capture t.ts --wait
+  00:00:40:00 --stop`; analog composite PAL to AVI, FFV1 MKV, NUT on stdout and a live
+  pipe into `ffmpeg -c:v libx264`, 8 s each (720x576, 25 fps, exit 0). `--wait
+  signal,+00:00:10:00` on a locked analog source ends as soon as the signal is seen.
 - **Verified on hardware** (510-USB + DV camcorder): rewind with live
   timecode, `--ff --wait HH:MM:SS:FF` (this deck reports the timecode while
   winding too; with a timecode beyond the end of the tape the wait ends when the

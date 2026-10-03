@@ -7,6 +7,10 @@ stereo PCM, or FFV1 in MKV from the GUI. NTSC S-video and the other colour
 standards are implemented from the vendor driver's tables but have not been
 tested against a real source yet.
 
+Verified again on 2026-10-03 (510-USB, composite PAL source): AVI (uncompressed
+YUY2), FFV1 in MKV, the NUT stream on stdout and a live pipe into `ffmpeg -c:v
+libx264 -c:a aac`, 8 s each: 720x576, 25 fps, 48 kHz PCM, durations 8.04-8.12 s.
+
 How the vendor driver, the other Marvin models and the three FPGA
 bitstreams fit together is in the last section.
 

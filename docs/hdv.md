@@ -76,6 +76,25 @@ Independent check on the file:
 ffmpeg -v error -i out.ts -map 0:v:0 -f null -    # a healthy file prints nothing or one join warning
 ```
 
+## Capture verified on hardware
+
+Pinnacle 510-USB with a Canon HDV camcorder (2026-10-03): `--capture` to `.ts`,
+`.m2t`, `.mkv`, `.mov` and to stdout (`--capture -`) all produce files ffprobe
+reads, with timecode-driven starts and stops (`--wait HH:MM:SS:FF`).
+
+- **Timecode.** The GOP header `time_code` of this camera is always 00:00:00:00, so
+  it is ignored until it shows a non-zero value; until then the deck's AV/C TIME
+  CODE poll provides the timecode during capture ([deck-control.md](deck-control.md)).
+  A stream with a real GOP timecode (other cameras) is used as before.
+- **Timestamps.** A raw `.ts` (and the stdout stream) is a byte-exact copy, so its
+  PTS starts wherever the tape's clock was (a `.ts` of a capture at tape position
+  21 s starts at 21.3 s). The rewrapped `.mov` / `.mkv` are rebased to start at 0
+  (`sink_rewrap.c`, all streams moved by the earliest start).
+- **File names.** `.m2t` is kept for a raw capture (the format is the same as `.ts`).
+- **Startup noise.** The preview decoder is not fed before the first MPEG-2 sequence
+  header any more; FFmpeg's "Invalid frame dimensions 0x0" at the start of every
+  capture is gone (and demoted to debug if it still appears).
+
 ## Known behaviour
 
 - **A clean 5-minute run exists**: 7,487 pictures, 0 CC errors, 0 DBC discontinuities, ffmpeg decodes it
