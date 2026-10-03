@@ -203,9 +203,10 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   nothing, so the stream kind is unknown until PLAY: REW must not wait for it
   and PLAY goes out right after BOT). BOT is accepted only 3 s after REW was
   acknowledged, because a status query right after REW can still say
-  "stopped". The session is REWINDING during the rewind, then READY (PLAY sent,
-  waiting for the first frame) before CAPTURING; buttons follow `IsCapturing`,
-  so they are usable in that READY gap. `last_data_s` (no-signal timer) is
+  "stopped". The session is REWINDING during the rewind, then internally READY
+  (PLAY sent, waiting for the first frame) before CAPTURING. The API reports
+  CAPTURING for that gap (`visible_state()`: READY with `capture_want_start`),
+  so no UI or script sees an idle session. `last_data_s` (no-signal timer) is
   reset when the capture or the next pass starts, so the minutes of rewinding
   never count as "no signal".
 - **NOT_IMPLEMENTED is never a deck state.** The answer (08) echoes the
@@ -248,7 +249,7 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   the recording (it keeps PLAY into blank tape), so the no-signal timeout is the
   only end-of-recording detection.
 - **Blank section at the start.** A capture started while the deck is already
-  in a blank section never gets a first frame and stays READY; the no-signal
+  in a blank section never gets a first frame and stays "capturing" (internally READY); the no-signal
   limit only applies after the first frame.
 - Not yet verified on hardware: `pin_capture_stop_ex` variants (GUI only) and
   bus reset / camera loss during a capture.

@@ -173,6 +173,16 @@ static double g_prepare_expected_s[2] = { 7.0, 4.0 };
 
 static void rate_persist(pin_session_t *s);
 
+/* The state the API reports. A requested capture that has not begun yet (after
+ * the rewind: PLAY sent, waiting for the first frame / the stream kind) is
+ * internally READY, but it is a running capture to the caller: it must not
+ * look idle, or a UI would offer "start" for three seconds and a script would
+ * think the capture was over. */
+static pin_state_t visible_state(const pin_session_t *s)
+{
+    return s->state == PIN_STATE_READY && s->capture_want_start ? PIN_STATE_CAPTURING : s->state;
+}
+
 static void set_state(pin_session_t *s, pin_state_t st)
 {
     int kind = s->input == PIN_INPUT_DV ? 0 : 1;
@@ -202,7 +212,7 @@ static void set_state(pin_session_t *s, pin_state_t st)
             ls = PINNACLE_LOCK_CAPTURING;
         pinnacle_lock_update(s->lock, ls, s->dev.guid_hi, s->dev.guid_lo);
     }
-    pin_session_push_event(s, PIN_EVT_STATE, (int32_t)st, NULL);
+    pin_session_push_event(s, PIN_EVT_STATE, (int32_t)visible_state(s), NULL);
 }
 
 static void set_error(pin_session_t *s, pin_status_t err, const char *msg)
@@ -3111,7 +3121,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     memset(out, 0, sizeof(*out));
     out->size = sizeof(*out);
     pin_session_lock(s);
-    out->state = s->state;
+    out->state = visible_state(s);
     out->last_error = s->last_error;
     strncpy(out->error_text, s->error_text, sizeof(out->error_text) - 1);
     out->input = s->input;
