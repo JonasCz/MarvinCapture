@@ -119,7 +119,7 @@ static void test_avi(void)
 {
     printf("== sink_avi ==\n");
     pin_sink_params_t p;
-    common_params(&p, "pinnacle-oss-core analog AVI test");
+    common_params(&p, "marvin-core analog AVI test");
 
     pin_sink_t *s = pin_sink_create(PIN_FMT_ANALOG_AVI);
     CHECK(s);
@@ -245,7 +245,7 @@ static void test_ffv1_correctness(void)
 {
     printf("== sink_ffv1 (correctness) ==\n");
     pin_sink_params_t p;
-    common_params(&p, "pinnacle-oss-core FFV1 test");
+    common_params(&p, "marvin-core FFV1 test");
 
     pin_sink_t *s = pin_sink_create(PIN_FMT_ANALOG_FFV1_MKV);
     CHECK(s);

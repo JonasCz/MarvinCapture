@@ -100,7 +100,7 @@ Env vars (set in the same shell before running):
 | `PIN_REPLAY=<file>` | virtual replay device (no hardware) |
 | `PINNACLE_LOG_LEVEL=0` | GUI/engine: include debug lines |
 
-To read the GUI's console log, launch `build\dist\PinnacleCapture.exe` yourself
+To read the GUI's console log, launch `build\dist\MarvinCaptureGUI.exe` yourself
 with stdout redirected to a file.
 
 ## Diagnosing "USB error" / device not ready

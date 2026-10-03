@@ -22,7 +22,7 @@
  * through pin_api.h against the replay (virtual device) source, exactly as
  * a real GUI or pinctl would use it -- no libusb, no device, no rig.
  *
- * Every test in this directory links only pinnacle-oss-core (the shared
+ * Every test in this directory links only marvin-core (the shared
  * pin_api.h library) plus whatever else it specifically needs (libavformat
  * to probe a muxed output, pinnacle_engine_pure to build a synthetic DV
  * frame for the scene-split test). None of them talk to src/engine's

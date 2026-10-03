@@ -24,11 +24,11 @@ It needs MSYS2 UCRT64 (`C:\msys64`) and, for the GUI, the .NET 10 SDK. It puts
 Quick native-only iteration (no script): in PowerShell with
 `$env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"`, then
 `cmake --build build/core` and `ctest --test-dir build/core`. This does **not**
-update `build\dist`; either rerun the script or copy `pinnacle-oss-core.dll` and
+update `build\dist`; either rerun the script or copy `marvin-core.dll` and
 the changed exes from `build\core` into `build\dist\cli`.
 
 Output: `build\dist` (GUI + core DLL + `firmware\`) and `build\dist\cli`
-(`pincli pinanalog pindeck pinlist pinctl` + `pinnacle-oss-core.dll`,
+(`pincli pinanalog pindeck pinlist pinctl` + `marvin-core.dll`,
 `libusb-1.0.dll`, `libwinpthread-1.dll`, `firmware\`). Run the CLIs from
 `build\dist\cli` (they default to `firmware\` in the cwd).
 

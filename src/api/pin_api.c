@@ -17,7 +17,7 @@
  */
 
 /*
- * pinnacle-oss-core: the exported ABI (pin_api.h). Every function here is a
+ * marvin-core: the exported ABI (pin_api.h). Every function here is a
  * thin wrapper over src/engine (mostly pin_session.h) and the hardware-free
  * engine modules (pin_settings.h, pin_cmdline.h) -- no logic of its own
  * beyond argument checking and translating between this library's frozen
@@ -55,7 +55,7 @@ const char *pin_version_string(void)
 #ifndef PIN_GIT_DESCRIBE
 #define PIN_GIT_DESCRIBE "unknown"
 #endif
-    return "pinnacle-oss-core 0.1 (" PIN_GIT_DESCRIBE ")";
+    return "marvin-core 0.1 (" PIN_GIT_DESCRIBE ")";
 }
 
 const char *pin_strerror(pin_status_t s)

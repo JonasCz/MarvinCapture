@@ -2,7 +2,7 @@
 # scripts/build-ffmpeg.sh
 #
 # Downloads, verifies and builds a minimal, static, LGPL-only FFmpeg for
-# pinnacle-oss-core. Only the codecs/muxers/demuxers/parsers/protocol that
+# marvin-core. Only the codecs/muxers/demuxers/parsers/protocol that
 # the core actually uses are enabled -- no GPL or nonfree code, no network,
 # no autodetected external libraries.
 #
@@ -108,7 +108,7 @@ fi
 mkdir -p "${BUILD_DIR}"
 cd "${BUILD_DIR}"
 
-# Components actually used by pinnacle-oss-core:
+# Components actually used by marvin-core:
 #   encode:  FFV1 (analog capture) + PCM s16le
 #   decode:  FFV1, DV (dvvideo), MPEG-2 video (HDV), PCM s16le/s16be, MP2 (HDV audio)
 #   mux:     Matroska (FFV1+PCM sink), MOV, AVI, DV, MPEG-TS

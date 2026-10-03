@@ -193,12 +193,12 @@ if ($uninstallHits) {
 Write-Section "7. Any vendor user-mode process currently running"
 
 $procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue |
-    Where-Object { $_.Name -match 'Pinnacle|Marvin|Dazzle' -and $_.Name -notmatch 'PinnacleCapture' }
+    Where-Object { $_.Name -match 'Pinnacle|Marvin|Dazzle' -and $_.Name -notmatch 'MarvinCaptureGUI' }
 if ($procs) {
     $procs | Select-Object ProcessId, Name, ExecutablePath | Format-Table -AutoSize | Out-String | Write-Host
     Write-Host "NOTE: a running vendor process could hold the device open and compete with libusb." -ForegroundColor DarkYellow
 } else {
-    Write-Host "None found. (PinnacleCapture.exe, if listed elsewhere, is this repo's own GUI, not vendor software.)"
+    Write-Host "None found. (MarvinCaptureGUI.exe, if listed elsewhere, is this repo's own GUI, not vendor software.)"
 }
 
 Write-Host ""

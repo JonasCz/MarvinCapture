@@ -25,11 +25,11 @@ No device is needed to build or to run the tests.
 build\
   core\            CMake build tree: static libraries, the DLL, the CLIs, the test executables
   dist\            what you run and ship
-    PinnacleCapture.exe, *.dll, *.xbf ...    the GUI (self-contained, unpackaged)
-    pinnacle-oss-core.dll, libusb-1.0.dll    the native core
+    MarvinCaptureGUI.exe, *.dll, *.xbf ...    the GUI (self-contained, unpackaged)
+    marvin-core.dll, libusb-1.0.dll    the native core
     firmware\                                FPGA bitstreams
     cli\                                     pincli pinanalog pindeck pinlist pinctl
-                                             + pinnacle-oss-core.dll, libusb-1.0.dll, firmware\
+                                             + marvin-core.dll, libusb-1.0.dll, firmware\
 ```
 
 The GUI and the CLIs find `firmware\` next to the core library, so `build\dist`
@@ -43,10 +43,10 @@ current directory, so run them from `build\dist\cli`.
    [../third_party/README.md](../third_party/README.md).
 2. **Core**: `cmake -G Ninja -B build\core` then `cmake --build`. Targets:
    `pinnacle_core` (hardware layer), `pinnacle_engine` / `pinnacle_engine_pure`
-   (session engine), `pinnacle_sinks` (file writers), `pinnacle-oss-core` (the
+   (session engine), `pinnacle_sinks` (file writers), `marvin-core` (the
    DLL, `src/api/pin_api.h`) and the CLIs.
 3. **Tests**: `ctest --test-dir build\core --output-on-failure`.
-4. **GUI**: `dotnet build gui\windows\PinnacleCapture -c Release -p:Platform=x64
+4. **GUI**: `dotnet build gui\windows\MarvinCaptureGUI -c Release -p:Platform=x64
    -p:PinnacleCoreDir=build\core -p:OutDir=build\dist\`. Details in
    [../gui/windows/README.md](../gui/windows/README.md).
 

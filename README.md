@@ -21,7 +21,7 @@ implements it on libusb.
   48 kHz stereo PCM, frame-exact, audio locked to video. S-video and NTSC are
   implemented but untested.
 - **Deck control**: play, pause, stop, FF, REW, timecode over AV/C.
-- **PinnacleCapture**, a WinUI 3 app: live preview, capture with scene splitting,
+- **MarvinCaptureGUI**, a WinUI 3 app: live preview, capture with scene splitting,
   DV/AVI/MOV/MKV/FFV1 outputs, deck control, audio monitoring.
 
 ## Quick start
@@ -34,15 +34,15 @@ builds everything (needs MSYS2 UCRT64 and the .NET 10 SDK; see
 [docs/building.md](docs/building.md)) into `build\dist`:
 
 ```
-build\dist\PinnacleCapture.exe        the GUI
-build\dist\pinnacle-oss-core.dll      the core library
+build\dist\MarvinCaptureGUI.exe        the GUI
+build\dist\marvin-core.dll      the core library
 build\dist\firmware\                  FPGA bitstreams
 build\dist\cli\                       pincli pinanalog pindeck pinlist pinctl
 ```
 
 The device has to be bound to WinUSB, not the vendor driver
 ([docs/windows-driver.md](docs/windows-driver.md)). Then either run
-`PinnacleCapture.exe`, or from `build\dist\cli`:
+`MarvinCaptureGUI.exe`, or from `build\dist\cli`:
 
 ```powershell
 .\pincli.exe -o out.dv -t 300         # DV/HDV capture (.dv, or .ts for HDV)
@@ -57,10 +57,10 @@ to tell a fault from a quiet camera and how to check that nothing was dropped.
 ## How it is put together
 
 ```
-PinnacleCapture (WinUI 3)  ──┐
-pinctl                     ──┼──▶  pinnacle-oss-core.dll  (src/api/pin_api.h)
-                             │        └─ session engine (src/engine), file writers (src/sinks)
-pincli, pinanalog, pindeck ──┴──▶  hardware layer (src/core) ──▶ libusb ──▶ device
+MarvinCaptureGUI (WinUI 3)  ──┐
+pinctl                      ──┼──▶  marvin-core.dll  (src/api/pin_api.h)
+                              │        └─ session engine (src/engine), file writers (src/sinks)
+pincli, pinanalog, pindeck  ──┴──▶  hardware layer (src/core) ──▶ libusb ──▶ device
 ```
 
 **The interesting finding:** the FPGA implements a standard OHCI-1394 host

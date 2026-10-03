@@ -10,7 +10,7 @@ namespace PinnacleCapture;
 /// <summary>
 /// Mirrors every engine event and core log line to the console when the app
 /// was started from one. A GUI-subsystem exe gets no console of its own, so:
-/// if stdout was redirected (<c>PinnacleCapture.exe &gt; log.txt</c>, or a
+/// if stdout was redirected (<c>MarvinCaptureGUI.exe &gt; log.txt</c>, or a
 /// pipe) that is used as is; otherwise the parent's console, if there is
 /// one, is attached. Started from Explorer there is neither and this does
 /// nothing. PINNACLE_LOG_LEVEL=0 adds the core's debug lines.

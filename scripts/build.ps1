@@ -4,13 +4,13 @@
 
 .DESCRIPTION
   1. (first time only) builds the minimal static FFmpeg into third_party\.
-  2. Configures and builds the native core (pinnacle-oss-core.dll, the CLIs)
+  2. Configures and builds the native core (marvin-core.dll, the CLIs)
      with MSYS2 UCRT64 gcc into build\core, and runs the ctest suite.
   3. Builds the WinUI 3 app against that core.
   4. Assembles build\dist:
 
-       build\dist\PinnacleCapture.exe        the GUI
-       build\dist\pinnacle-oss-core.dll      the core library (+ libusb-1.0.dll)
+       build\dist\MarvinCaptureGUI.exe       the GUI
+       build\dist\marvin-core.dll            the core library (+ libusb-1.0.dll)
        build\dist\firmware\                  FPGA bitstreams
        build\dist\cli\                       pincli, pinanalog, pindeck, pinlist,
                                              pinctl, with their DLLs and firmware\
@@ -86,7 +86,7 @@ New-Item -ItemType Directory -Force $cli | Out-Null
 foreach ($f in 'pincli', 'pinanalog', 'pindeck', 'pinlist', 'pinctl') {
     Copy-Item (Join-Path $core "$f.exe") $cli -Force
 }
-Copy-Item (Join-Path $core 'pinnacle-oss-core.dll') $cli -Force
+Copy-Item (Join-Path $core 'marvin-core.dll') $cli -Force
 Copy-Item (Join-Path $core 'libusb-1.0.dll') $cli -Force
 # the CLIs import libwinpthread-1.dll; without a copy next to them Windows picks up
 # whatever else is on PATH (Git's mingw64, ...) and they die with 0xC0000139
@@ -97,19 +97,19 @@ Copy-Item (Join-Path $root 'firmware') (Join-Path $cli 'firmware') -Recurse
 # --- 4. GUI --------------------------------------------------------------------
 if (-not $SkipGui) {
     Step 'Building the GUI'
-    $proj = Join-Path $root 'gui\windows\PinnacleCapture\PinnacleCapture.csproj'
+    $proj = Join-Path $root 'gui\windows\MarvinCaptureGUI\MarvinCaptureGUI.csproj'
     Run dotnet @('build', $proj, '-c', $Config, '-p:Platform=x64',
                  "-p:PinnacleCoreDir=$core", "-p:OutDir=$dist\")
 }
 
 # --- Check ---------------------------------------------------------------------
 Step 'Checking build\dist'
-$expect = @('cli\pincli.exe', 'cli\pinctl.exe', 'cli\pinnacle-oss-core.dll',
+$expect = @('cli\pincli.exe', 'cli\pinctl.exe', 'cli\marvin-core.dll',
             'cli\libusb-1.0.dll', 'cli\libwinpthread-1.dll',
             'cli\firmware\fpga-ohci.bin', 'cli\firmware\fpga-capture.bin',
             'cli\firmware\fx2-marvin.bin')
 if (-not $SkipGui) {
-    $expect += 'PinnacleCapture.exe', 'pinnacle-oss-core.dll', 'libusb-1.0.dll',
+    $expect += 'MarvinCaptureGUI.exe', 'marvin-core.dll', 'libusb-1.0.dll',
                'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin',
                'firmware\fx2-marvin.bin'
 }

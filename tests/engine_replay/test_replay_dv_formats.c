@@ -91,11 +91,11 @@ int main(int argc, char **argv)
         return 0;
     }
 
-    capture_one(trace_path, PIN_FMT_DV_AVI, "dv_fmt_test_avi", "pinnacle-oss-core replay AVI test");
-    check_with_libavformat("dv_fmt_test_avi.avi", "pinnacle-oss-core replay AVI test");
+    capture_one(trace_path, PIN_FMT_DV_AVI, "dv_fmt_test_avi", "marvin-core replay AVI test");
+    check_with_libavformat("dv_fmt_test_avi.avi", "marvin-core replay AVI test");
 
-    capture_one(trace_path, PIN_FMT_DV_MOV, "dv_fmt_test_mov", "pinnacle-oss-core replay MOV test");
-    check_with_libavformat("dv_fmt_test_mov.mov", "pinnacle-oss-core replay MOV test");
+    capture_one(trace_path, PIN_FMT_DV_MOV, "dv_fmt_test_mov", "marvin-core replay MOV test");
+    check_with_libavformat("dv_fmt_test_mov.mov", "marvin-core replay MOV test");
 
     return 0;
 }

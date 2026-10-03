@@ -324,7 +324,7 @@ static void run_one(const char *trace_path, const char *tag)
         .sample_aspect_den = sar_den,
         .colour_matrix = PIN_MATRIX_BT601,
     };
-    snprintf(params.title, sizeof(params.title), "pinnacle-oss-core sink test (%s)", tag);
+    snprintf(params.title, sizeof(params.title), "marvin-core sink test (%s)", tag);
 
     write_via_sink(PIN_FMT_DV_AVI, avi_path, &params, &frames);
     write_via_sink(PIN_FMT_DV_MOV, mov_path, &params, &frames);

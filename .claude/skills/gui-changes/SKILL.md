@@ -1,6 +1,6 @@
 ---
 name: gui-changes
-description: Make changes to the Pinnacle Capture GUI (WinUI 3 / C#, gui/windows/PinnacleCapture): where things live, how settings and capture options flow, the core-first rule, build/lock gotchas. Use before editing GUI XAML, view models or the native interop.
+description: Make changes to the Pinnacle Capture GUI (WinUI 3 / C#, gui/windows/MarvinCaptureGUI): where things live, how settings and capture options flow, the core-first rule, build/lock gotchas. Use before editing GUI XAML, view models or the native interop.
 ---
 
 # GUI changes
@@ -22,7 +22,7 @@ header, expose through `src/api/pin_api.[ch]` if the GUI needs it, add a test in
 API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
 `pin_check_output` already returns a message the GUI shows) over a new export.
 
-## Where things are (gui/windows/PinnacleCapture)
+## Where things are (gui/windows/MarvinCaptureGUI)
 
 - `MainWindow.xaml` / `.xaml.cs`: the one window. Analog panel is `[0]`, DV/HDV
   panel is `[1]` inside `PanelSwitch`. Click handlers, dialogs, pickers.
@@ -87,10 +87,10 @@ computed in C#. Low-disk uses two copies of the storage elements toggled by
 - Crashes / unhandled exceptions: `%LOCALAPPDATA%\PinnacleOSS\crash.log`
   (absent = clean run). If the core DLL fails to load or reports an API
   version other than 1, the app shows an error window instead of the UI.
-- Quick GUI-only build: `dotnet build gui\windows\PinnacleCapture -c Debug
+- Quick GUI-only build: `dotnet build gui\windows\MarvinCaptureGUI -c Debug
   -p:Platform=x64`; the run target is `bind\Debug
 et10.0-windows10.0.19041.0\win-x64\`
-  and needs `pinnacle-oss-core.dll` copied from `build\core` (done by the csproj).
+  and needs `marvin-core.dll` copied from `build\core` (done by the csproj).
 - Hardware/replay testing of capture behaviour: see test-with-hardware-device.
 - Packages: WindowsAppSDK 2.5.1, CommunityToolkit.Mvvm 8.4.2, Vortice D3D11.
   App is unpackaged, self-contained, x64, JIT (field-style `[ObservableProperty]`
@@ -151,7 +151,7 @@ et10.0-windows10.0.19041.0\win-x64\`
 
 Use `scripts\build.ps1` (see the build-and-test skill). It builds the core,
 runs ctest, then the GUI. The XAML/C# compiler errors appear before the copy
-step. If it fails with MSB3027 "file is locked by PinnacleCapture (pid)", the
+step. If it fails with MSB3027 "file is locked by MarvinCaptureGUI (pid)", the
 app is running from `build\dist`: the code compiled fine, but ask the user to
 close it (don't kill it) and re-run. Don't run `ctest` directly from
 `build\core` (exit 0xc0000139 = DLL path not set); the script sets PATH.

@@ -17,8 +17,8 @@
  */
 
 /*
- * pinctl -- the API-only CLI/debug tool for pinnacle-oss-core. Links
- * nothing but pin_api.h/pinnacle-oss-core, so it doubles as the API's
+ * pinctl -- the API-only CLI/debug tool for marvin-core. Links
+ * nothing but pin_api.h/marvin-core, so it doubles as the API's
  * integration test (same promise pincli/pindeck/pinanalog made for
  * src/core, one layer up). Subcommands:
  *

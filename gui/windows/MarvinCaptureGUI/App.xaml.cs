@@ -7,7 +7,7 @@ namespace PinnacleCapture;
 /// <summary>
 /// Application entry point. Installs a global unhandled-exception handler that
 /// logs to %LOCALAPPDATA%\PinnacleOSS\crash.log before anything else runs, so
-/// even a P/Invoke DllNotFoundException from a missing pinnacle-oss-core.dll
+/// even a P/Invoke DllNotFoundException from a missing marvin-core.dll
 /// gets recorded instead of producing a silent hard crash.
 /// </summary>
 public partial class App : Application
@@ -87,7 +87,7 @@ public partial class App : Application
     protected override void OnLaunched(LaunchActivatedEventArgs args)
     {
         // Probe the core before building any UI: a missing / mismatched
-        // pinnacle-oss-core.dll becomes a logged, readable error window
+        // marvin-core.dll becomes a logged, readable error window
         // rather than a hard crash from deep inside a view-model constructor.
         string? problem = null;
         try
@@ -95,13 +95,13 @@ public partial class App : Application
             uint v = Interop.Native.ApiVersion();
             if (v != 2)
             {
-                problem = $"pinnacle-oss-core.dll implements API version {v}, but this app needs version 2.";
+                problem = $"marvin-core.dll implements API version {v}, but this app needs version 2.";
             }
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)
         {
             LogCrash("OnLaunched (core library probe)", ex, false);
-            problem = "pinnacle-oss-core.dll could not be loaded. It must sit next to PinnacleCapture.exe " +
+            problem = "marvin-core.dll could not be loaded. It must sit next to MarvinCaptureGUI.exe " +
                       $"(with libwinpthread-1.dll for MinGW builds).\n\n{ex.Message}";
         }
 

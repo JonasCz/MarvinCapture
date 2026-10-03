@@ -79,7 +79,7 @@ int main(int argc, char **argv)
     params.top_field_first = 1;
     params.aspect = PIN_ASPECT_16_9;
     params.colour_matrix = PIN_MATRIX_BT709;
-    snprintf(params.title, sizeof(params.title), "pinnacle-oss-core HDV rewrap test");
+    snprintf(params.title, sizeof(params.title), "marvin-core HDV rewrap test");
 
     pin_sink_t *s = pin_sink_create(PIN_FMT_HDV_MOV);
     CHECK(s);

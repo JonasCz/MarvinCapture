@@ -5,7 +5,7 @@
     <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
     <RootNamespace>PinnacleCapture</RootNamespace>
-    <AssemblyName>PinnacleCapture</AssemblyName>
+    <AssemblyName>MarvinCaptureGUI</AssemblyName>
     <UseWinUI>true</UseWinUI>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -25,7 +25,7 @@
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
 
-    <!-- Where pinnacle-oss-core.dll (built by the top-level CMake build) lives.
+    <!-- Where marvin-core.dll (built by the top-level CMake build) lives.
          Override with: dotnet build -p:PinnacleCoreDir=C:\path\to\dir -->
     <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\build\core</PinnacleCoreDir>
     <!-- The MinGW-built core needs libwinpthread-1.dll at runtime; copied from here if present. -->
@@ -49,16 +49,16 @@
   </ItemGroup>
 
   <!--
-    Copy pinnacle-oss-core.dll next to the built exe if it exists at build time.
+    Copy marvin-core.dll next to the built exe if it exists at build time.
     This does not fail the build when the DLL is missing (the core has not been
     built yet); the Condition="Exists(...)" just makes the target a no-op.
     scripts/build.ps1 builds the core first.
   -->
   <Target Name="CopyPinnacleCore" AfterTargets="Build;Publish">
     <ItemGroup>
-      <PinnacleCoreFiles Include="$(PinnacleCoreDir)\pinnacle-oss-core.dll" Condition="Exists('$(PinnacleCoreDir)\pinnacle-oss-core.dll')" />
+      <PinnacleCoreFiles Include="$(PinnacleCoreDir)\marvin-core.dll" Condition="Exists('$(PinnacleCoreDir)\marvin-core.dll')" />
       <PinnacleCoreFiles Include="$(PinnacleCoreDir)\libusb-1.0.dll" Condition="Exists('$(PinnacleCoreDir)\libusb-1.0.dll')" />
-      <PinnacleCoreFiles Include="$(PinnacleRuntimeDllDir)\libwinpthread-1.dll" Condition="Exists('$(PinnacleCoreDir)\pinnacle-oss-core.dll') And Exists('$(PinnacleRuntimeDllDir)\libwinpthread-1.dll')" />
+      <PinnacleCoreFiles Include="$(PinnacleRuntimeDllDir)\libwinpthread-1.dll" Condition="Exists('$(PinnacleCoreDir)\marvin-core.dll') And Exists('$(PinnacleRuntimeDllDir)\libwinpthread-1.dll')" />
     </ItemGroup>
     <Copy SourceFiles="@(PinnacleCoreFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(PinnacleCoreFiles)' != ''" />
     <!-- The FPGA bitstreams: the core build puts them in firmware/ next to the

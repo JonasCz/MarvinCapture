@@ -7,7 +7,7 @@ namespace PinnacleCapture.Interop;
 
 /// <summary>
 /// Source-generated P/Invoke bindings for every function in
-/// src/api/pin_api.h ("pinnacle-oss-core", per the Windows app naming in
+/// src/api/pin_api.h ("marvin-core", per the Windows app naming in
 /// the plan's "Changes after your review"). Raw [LibraryImport] declarations
 /// are private/internal; each has a friendlier public wrapper that deals
 /// with pinning, SafeHandle, and the fixed-size embedded UTF-8 strings.
@@ -19,7 +19,7 @@ namespace PinnacleCapture.Interop;
 /// </summary>
 public static unsafe partial class Native
 {
-    private const string Lib = "pinnacle-oss-core.dll";
+    private const string Lib = "marvin-core.dll";
 
     // ---- basics -----------------------------------------------------
 

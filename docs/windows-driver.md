@@ -59,8 +59,8 @@ Pinnacle-specific). Nothing sits between the device and its function driver,
 so a Zadig replace is a clean single-driver swap.
 
 **No vendor user-mode service or tray app was found running or registered.**
-`PinnacleCapture.exe` seen in the process list is this repo's own GUI
-(`gui/windows/PinnacleCapture`), not vendor software. So there is nothing at
+`MarvinCaptureGUI.exe` seen in the process list is this repo's own GUI
+(`gui/windows/MarvinCaptureGUI`), not vendor software. So there is nothing at
 the user-mode level to fight over the device — only the kernel driver itself,
 and only while it's bound.
 

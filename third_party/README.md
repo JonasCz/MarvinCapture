@@ -2,7 +2,7 @@
 
 ## FFmpeg (vendored, built from source)
 
-`pinnacle-oss-core` links a small slice of FFmpeg statically: `libavformat`,
+`marvin-core` links a small slice of FFmpeg statically: `libavformat`,
 `libavcodec` and `libavutil` only (no `libavdevice`, `libavfilter`,
 `libswscale` or `libswresample` -- colour conversion happens on the GPU in
 the GUI, not in the core).
@@ -12,7 +12,7 @@ the GUI, not in the core).
 - **License:** LGPL-2.1-or-later. The build has `--enable-gpl` and
   `--enable-nonfree` both **off**, and only LGPL-safe components are
   compiled in, so the resulting static libraries can be linked into the
-  AGPL-3.0 `pinnacle-oss-core` without a license conflict.
+  AGPL-3.0 `marvin-core` without a license conflict.
 - **Components enabled** (everything else is `--disable-everything`):
   - Encoders: `ffv1`, `pcm_s16le`
   - Decoders: `ffv1`, `dvvideo`, `mpeg2video`, `pcm_s16le`, `pcm_s16be`,
@@ -29,7 +29,7 @@ the GUI, not in the core).
 ### Where the source comes from
 
 Only the *installed* static libraries (`third_party/ffmpeg-<os>-<arch>/`) are
-needed to build `pinnacle-oss-core`. The FFmpeg source is **not** kept in the
+needed to build `marvin-core`. The FFmpeg source is **not** kept in the
 repo or needed afterwards; `scripts/build-ffmpeg.sh` downloads it on demand:
 
 - Tarball: <https://ffmpeg.org/releases/ffmpeg-8.1.3.tar.xz> (release list and
@@ -61,14 +61,14 @@ third_party/ffmpeg-<os>-<arch>-build/    out-of-tree configure/build directory
 third_party/ffmpeg-<os>-<arch>/          install prefix (include/, lib/*.a, lib/pkgconfig/)
 ```
 
-`pinnacle-oss-core`'s build picks up the static libs via
+`marvin-core`'s build picks up the static libs via
 `PKG_CONFIG_PATH=third_party/ffmpeg-<os>-<arch>/lib/pkgconfig` and
 `pkg-config --static --cflags --libs libavformat libavcodec libavutil`.
 
 ### Static linking
 
-The project links these libraries **statically** into `pinnacle-oss-core`
-(`pinnacle-oss-core.dll` / `libpinnacle-oss-core.so` / `.dylib`); no FFmpeg
+The project links these libraries **statically** into `marvin-core`
+(`marvin-core.dll` / `libmarvin-core.so` / `.dylib`); no FFmpeg
 shared libraries are shipped or required at runtime. Per LGPL-2.1 section 6,
 the pinned version and this document record exactly what was built and how,
 and `scripts/build-ffmpeg.sh` lets anyone reproduce or relink against a

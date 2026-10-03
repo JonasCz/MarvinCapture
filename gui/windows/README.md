@@ -1,7 +1,7 @@
 # Pinnacle Capture (Windows)
 
 WinUI 3 front-end for the Pinnacle Studio 500-USB open driver. It is a thin
-GUI over the `pinnacle-oss-core` C library: device list, option rules, file
+GUI over the `marvin-core` C library: device list, option rules, file
 naming, status text and settings all come from the core through
 `src/api/pin_api.h`. The app holds widgets, the Direct3D 11 preview, the file
 dialogs and the window lifecycle.
@@ -17,7 +17,7 @@ Requires the .NET 10 SDK. NuGet packages come from nuget.org through
 `gui/windows/nuget.config`.
 
 ```powershell
-cd gui\windows\PinnacleCapture
+cd gui\windows\MarvinCaptureGUI
 dotnet build -c Debug -p:Platform=x64
 ```
 
@@ -26,14 +26,14 @@ For a release build, use `-c Release`.
 
 ### Where the core DLL comes from (`PinnacleCoreDir`)
 
-After every build, `pinnacle-oss-core.dll` is copied next to
-`PinnacleCapture.exe` from the directory in the `PinnacleCoreDir` MSBuild
+After every build, `marvin-core.dll` is copied next to
+`MarvinCaptureGUI.exe` from the directory in the `PinnacleCoreDir` MSBuild
 property. If the DLL isn't there, the build still succeeds and simply skips the
 copy.
 
 | Property | Default | Purpose |
 |---|---|---|
-| `PinnacleCoreDir` | `..\..\..\build\core` | Folder with `pinnacle-oss-core.dll` (and `libusb-1.0.dll` if present) |
+| `PinnacleCoreDir` | `..\..\..\build\core` | Folder with `marvin-core.dll` (and `libusb-1.0.dll` if present) |
 | `PinnacleRuntimeDllDir` | `C:\msys64\ucrt64\bin` | Where `libwinpthread-1.dll` is taken from. MinGW/UCRT64 builds of the core need it. |
 
 To build against a core built elsewhere:
@@ -45,10 +45,10 @@ dotnet build -c Debug -p:Platform=x64 -p:PinnacleCoreDir=C:\path\to\core\build
 ## Run
 
 ```powershell
-.\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\PinnacleCapture.exe
+.\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
 ```
 
-If `pinnacle-oss-core.dll` can't be loaded, or it reports an API version other
+If `marvin-core.dll` can't be loaded, or it reports an API version other
 than 1, the app shows an error window instead of the UI and logs the details.
 
 Crashes and unhandled exceptions go to `%LOCALAPPDATA%\PinnacleOSS\crash.log`.
@@ -62,16 +62,16 @@ run once the device is ready.
 
 ```powershell
 # open a specific device on the composite input, PAL, 16:9 anamorphic
-PinnacleCapture.exe --device usb:1-4 --input composite --std PAL --aspect 16:9
+MarvinCaptureGUI.exe --device usb:1-4 --input composite --std PAL --aspect 16:9
 
 # DV tape: split scenes, capture twice, stop after 3 min without data
-PinnacleCapture.exe --input dv --output D:\tapes\holiday --format dv-avi --split --passes 2 --idle-min 3
+MarvinCaptureGUI.exe --input dv --output D:\tapes\holiday --format dv-avi --split --passes 2 --idle-min 3
 
 # unattended: rewind, capture the whole tape, close the window when finished
-PinnacleCapture.exe --device first --input dv --output D:\tapes\tape07 --actions rewind,capture --exit-when-done
+MarvinCaptureGUI.exe --device first --input dv --output D:\tapes\tape07 --actions rewind,capture --exit-when-done
 
 # show the option list (also under "..." > "Command-line help")
-PinnacleCapture.exe --help
+MarvinCaptureGUI.exe --help
 ```
 
 Actions are `rewind`, `play`, `stop`, `capture` and `wait-eot`. The `--help`
@@ -131,13 +131,13 @@ without changing Windows, start it with `PIN_THEME=dark` (or `light`):
 
 ```powershell
 $env:PIN_THEME = "dark"; .ind\Debug
-et10.0-windows10.0.19041.0\win-x64\PinnacleCapture.exe
+et10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
 ```
 
 ## Layout
 
 ```
-PinnacleCapture/
+MarvinCaptureGUI/
   Interop/      Native.cs ([LibraryImport] bindings for all of pin_api.h),
                 NativeStructs.cs / NativeEnums.cs (blittable mirrors),
                 PinSessionHandle.cs (SafeHandle -> pin_close), Win32.cs

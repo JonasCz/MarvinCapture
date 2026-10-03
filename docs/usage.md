@@ -2,7 +2,7 @@
 
 Two ways in, both on the same core library:
 
-- **The GUI**, `PinnacleCapture.exe` ([gui/windows/README.md](../gui/windows/README.md)):
+- **The GUI**, `MarvinCaptureGUI.exe` ([gui/windows/README.md](../gui/windows/README.md)):
   device list, live preview, deck control, DV/HDV/analog capture with scene
   splitting and the same integrity checks. It remembers its window position
   and size, and keeps a separate set of settings (output folders and names,

@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-# Top-level build: the native core (pinnacle-oss-core), the CLIs and the ctest
+# Top-level build: the native core (marvin-core), the CLIs and the ctest
 # suite. scripts/build.ps1 drives this and then builds the GUI; see
 # docs/building.md.
 
@@ -24,7 +24,7 @@ project(pinnacle-oss C)
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 # The static core/engine/sinks libraries are linked into the shared
-# pinnacle-oss-core library, which needs them built as PIC on ELF.
+# marvin-core library, which needs them built as PIC on ELF.
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_C_EXTENSIONS ON)   # gnu11, not c11: strict c11 hides POSIX
                               # declarations (nanosleep, clock_gettime, ...)
@@ -46,7 +46,7 @@ find_package(Threads REQUIRED)
 # --- pinnacle_core: the hardware layer (device, cfg, 1394, stream, analog,
 # DV/HDV reassembly, logging), everything under src/core. Static on purpose:
 # it's linked straight into each CLI today, and later into the shared
-# pinnacle-oss-core library and pinctl by a future phase, unchanged. ---
+# marvin-core library and pinctl by a future phase, unchanged. ---
 file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
@@ -108,7 +108,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
         # pin_session.c: dladdr() finds the core library's own directory.
         target_link_libraries(pinnacle_engine PUBLIC ${CMAKE_DL_LIBS})
     endif()
-    # This target is only ever linked into the pinnacle-oss-core DLL, never
+    # This target is only ever linked into the marvin-core DLL, never
     # a consumer of it, so pin_api.h's functions must not be seen as
     # dllimport here (PIN_API => dllexport) -- see src/api/pin_api.h.
     target_compile_definitions(pinnacle_engine PUBLIC PIN_BUILDING_LIBRARY)
@@ -123,46 +123,46 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     add_test(NAME test_pin_deck COMMAND test_pin_deck)
 endif()
 
-# --- Public API: the pinnacle-oss-core shared library (pin_api.c, a thin
+# --- Public API: the marvin-core shared library (pin_api.c, a thin
 # wrapper over src/engine) and pinctl, the API-only CLI/integration test
 # that links nothing but it. ---
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
-    add_library(pinnacle-oss-core SHARED src/api/pin_api.c)
-    target_compile_definitions(pinnacle-oss-core PRIVATE PIN_BUILDING_LIBRARY)
-    target_include_directories(pinnacle-oss-core PUBLIC ${CMAKE_SOURCE_DIR}/src/api)
-    target_link_libraries(pinnacle-oss-core PRIVATE pinnacle_engine pinnacle_engine_pure
+    add_library(marvin-core SHARED src/api/pin_api.c)
+    target_compile_definitions(marvin-core PRIVATE PIN_BUILDING_LIBRARY)
+    target_include_directories(marvin-core PUBLIC ${CMAKE_SOURCE_DIR}/src/api)
+    target_link_libraries(marvin-core PRIVATE pinnacle_engine pinnacle_engine_pure
         pinnacle_sinks pinnacle_core Threads::Threads)
     if(WIN32)
         # winpthread and libgcc statically linked in where possible, so the
         # only extra runtime DLL the GUI needs to ship is libusb-1.0.dll.
-        target_link_options(pinnacle-oss-core PRIVATE -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
+        target_link_options(marvin-core PRIVATE -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
         # Front-ends load it by this exact name; MinGW would add "lib".
-        set_target_properties(pinnacle-oss-core PROPERTIES PREFIX "")
+        set_target_properties(marvin-core PROPERTIES PREFIX "")
         # Put libusb-1.0.dll next to the core so the build directory is a
         # complete runtime set a GUI (or pinctl) can load from.
         find_file(PIN_LIBUSB_DLL libusb-1.0.dll PATHS ENV PATH NO_DEFAULT_PATH)
         if(PIN_LIBUSB_DLL)
-            add_custom_command(TARGET pinnacle-oss-core POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PIN_LIBUSB_DLL} $<TARGET_FILE_DIR:pinnacle-oss-core>)
+            add_custom_command(TARGET marvin-core POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PIN_LIBUSB_DLL} $<TARGET_FILE_DIR:marvin-core>)
         endif()
     else()
-        target_link_options(pinnacle-oss-core PRIVATE -static-libgcc)
-        set_target_properties(pinnacle-oss-core PROPERTIES C_VISIBILITY_PRESET hidden)
+        target_link_options(marvin-core PRIVATE -static-libgcc)
+        set_target_properties(marvin-core PROPERTIES C_VISIBILITY_PRESET hidden)
     endif()
 
     # The FPGA bitstreams go in firmware/ next to the core library, where
     # the core looks for them first (see pin_set_firmware_dir()).
-    add_custom_command(TARGET pinnacle-oss-core POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:pinnacle-oss-core>/firmware
+    add_custom_command(TARGET marvin-core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:marvin-core>/firmware
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             ${CMAKE_SOURCE_DIR}/firmware/fpga-ohci.bin
             ${CMAKE_SOURCE_DIR}/firmware/fpga-capture.bin
             ${CMAKE_SOURCE_DIR}/firmware/fx2-marvin.bin
             ${CMAKE_SOURCE_DIR}/firmware/README.md
-            $<TARGET_FILE_DIR:pinnacle-oss-core>/firmware)
+            $<TARGET_FILE_DIR:marvin-core>/firmware)
 
     add_executable(pinctl src/cli/pinctl.c)
-    target_link_libraries(pinctl PRIVATE pinnacle-oss-core)
+    target_link_libraries(pinctl PRIVATE marvin-core)
 
     # Hardware-free ctest coverage of the session engine, driven through
     # pin_api.h against the replay (virtual device) source -- see

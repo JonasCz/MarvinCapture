@@ -17,7 +17,7 @@
  */
 
 /*
- * pinnacle-oss-core public API.
+ * marvin-core public API.
  *
  * This is the only header a front-end (the WinUI app, a future macOS or
  * Linux GUI, pinctl) includes. It is a flat C ABI on purpose: opaque
@@ -99,7 +99,7 @@ typedef enum {
 } pin_status_t;
 
 PIN_API uint32_t pin_api_version(void);          /* == PIN_API_VERSION */
-PIN_API const char *pin_version_string(void);    /* "pinnacle-oss-core 0.x (git ...)" */
+PIN_API const char *pin_version_string(void);    /* "marvin-core 0.x (git ...)" */
 PIN_API const char *pin_strerror(pin_status_t s);
 
 /* Optional. Where the FPGA bitstreams live. Searched in order: this dir,
