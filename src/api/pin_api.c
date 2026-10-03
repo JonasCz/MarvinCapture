@@ -538,12 +538,12 @@ void pin_format_window_title(const pin_status_snapshot_t *st, const char *device
 {
     if (!st || !out || cap == 0)
         return;
-    const char *dot = st->state == PIN_STATE_CAPTURING ? "\xe2\x97\x8f REC " : "";
-    char tc[32] = "";
-    if (st->timecode[0])
-        snprintf(tc, sizeof(tc), "%s ", st->timecode);
-    /* the dash only separates something from the name */
-    snprintf(out, cap, "%s%s%s%s", dot, tc, (dot[0] || tc[0]) ? "\xe2\x80\x94 " : "",
+    /* "Capturing <timecode> - <device> - MarvinCapture"; the leading part is dropped when empty */
+    char lead[48] = "";
+    snprintf(lead, sizeof(lead), "%s%s%s",
+             st->state == PIN_STATE_CAPTURING ? "Capturing" : "",
+             (st->state == PIN_STATE_CAPTURING && st->timecode[0]) ? " " : "", st->timecode);
+    snprintf(out, cap, "%s%s%s - MarvinCapture", lead, lead[0] ? " - " : "",
              device_name ? device_name : "Pinnacle 500-USB");
 }
 

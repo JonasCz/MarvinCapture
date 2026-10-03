@@ -70,7 +70,7 @@ public sealed partial class MainWindow : Window
         _taskbar.StartClicked += () => DispatcherQueue.TryEnqueue(() => _ = TaskbarStartAsync());
         _taskbar.StopClicked += () => DispatcherQueue.TryEnqueue(TaskbarStop);
 
-        Title = "Pinnacle Capture";
+        Title = "MarvinCapture";
         ExtendsContentIntoTitleBar = true;
         SetTitleBar(AppTitleBar);
         if (Microsoft.UI.Composition.SystemBackdrops.MicaController.IsSupported())
@@ -901,11 +901,11 @@ public sealed partial class MainWindow : Window
     private async void About_Click(object sender, RoutedEventArgs e)
     {
         var appVersion = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
-        var text = $"Pinnacle Capture {appVersion}\n" +
+        var text = $"MarvinCapture {appVersion}\n" +
                    $"{Native.VersionString()} (API {Native.ApiVersion()})\n\n" +
                    "Open driver for the Pinnacle Studio 500-USB.\n" +
                    "Licensed under the GNU Affero General Public License v3.0.";
-        await ShowDialogAsync("About Pinnacle Capture", text, null, "Close");
+        await ShowDialogAsync("About MarvinCapture", text, null, "Close");
     }
 
     private async void Help_Click(object sender, RoutedEventArgs e) => await ShowHelpAsync(null);

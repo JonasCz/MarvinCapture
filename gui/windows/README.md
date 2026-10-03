@@ -1,4 +1,4 @@
-# Pinnacle Capture (Windows)
+# MarvinCapture (Windows)
 
 WinUI 3 front-end for the Pinnacle Studio 500-USB open driver. It is a thin
 GUI over the `marvin-core` C library: device list, option rules, file

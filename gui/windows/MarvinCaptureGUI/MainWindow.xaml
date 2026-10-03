@@ -565,8 +565,14 @@
                 <StackPanel Grid.Column="1" x:Name="StatusDeckHost" Margin="24,0,0,0" VerticalAlignment="Center">
                     <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Deck status">
                         <FontIcon Glyph="&#xEC58;" Style="{StaticResource StatusIconStyle}" />
-                        <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
-                                   AutomationProperties.Name="{x:Bind local:MainWindow.Label('Deck', VM.DeckStateText), Mode=OneWay}" />
+                        <!-- the invisible busy-width text reserves room for the trailing " …" -->
+                        <Grid>
+                            <TextBlock Text="{x:Bind VM.DeckStateReserveText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                                       Opacity="0" AutomationProperties.AccessibilityView="Raw" />
+                            <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                                       HorizontalAlignment="Left"
+                                       AutomationProperties.Name="{x:Bind local:MainWindow.Label('Deck', VM.DeckStateText), Mode=OneWay}" />
+                        </Grid>
                     </StackPanel>
                 </StackPanel>
 

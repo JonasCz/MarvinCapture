@@ -376,6 +376,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _statusTimeText = "--:--:--:--";
     [ObservableProperty] private string _statusTimeTip = "Tape timecode";
     [ObservableProperty] private string _deckStateText = "Deck: —";
+    /// <summary>DeckStateText as if busy: the status bar lays it out invisibly so the " …" never shifts its neighbours.</summary>
+    [ObservableProperty] private string _deckStateReserveText = "Deck: — …";
     [ObservableProperty] private bool _signalLocked;
     [ObservableProperty] private string _signalLockText = "No signal";
     [ObservableProperty] private string _signalTypeText = "";
@@ -392,7 +394,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private double _audioHoldLeft = MeterFloorDb;
     [ObservableProperty] private double _audioHoldRight = MeterFloorDb;
     private readonly PeakHold _holdLeft = new(MeterFloorDb), _holdRight = new(MeterFloorDb);
-    [ObservableProperty] private string _windowTitle = "Pinnacle Capture";
+    [ObservableProperty] private string _windowTitle = "MarvinCapture";
     [ObservableProperty] private int _tapePercent = -1;
     [ObservableProperty] private string _lastLogLine = "";
 

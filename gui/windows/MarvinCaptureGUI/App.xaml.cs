@@ -105,7 +105,7 @@ public partial class App : Application
 
         if (problem is not null)
         {
-            _window = new Window { Title = "Pinnacle Capture" };
+            _window = new Window { Title = "MarvinCapture" };
             _window.Content = new Microsoft.UI.Xaml.Controls.TextBlock
             {
                 Text = problem,

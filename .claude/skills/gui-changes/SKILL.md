@@ -1,6 +1,6 @@
 ---
 name: gui-changes
-description: Make changes to the Pinnacle Capture GUI (WinUI 3 / C#, gui/windows/MarvinCaptureGUI): where things live, how settings and capture options flow, the core-first rule, build/lock gotchas. Use before editing GUI XAML, view models or the native interop.
+description: Make changes to the MarvinCapture GUI (WinUI 3 / C#, gui/windows/MarvinCaptureGUI): where things live, how settings and capture options flow, the core-first rule, build/lock gotchas. Use before editing GUI XAML, view models or the native interop.
 ---
 
 # GUI changes
