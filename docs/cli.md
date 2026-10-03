@@ -77,8 +77,14 @@ is used (DV raw, HDV TS, analog AVI) and a warning is printed.
 
 Timecodes and durations share one format; a leading `+` makes it a duration.
 
-Winding for a duration (`--rew --wait +00:00:30:00`) depends on the deck's
-speed; do not rely on it for precise positioning. Many decks answer the
+A duration counts from the moment the wait starts, not from the first captured
+frame. After `--play --capture f --wait +00:00:15:00` the file is shorter by the
+time the deck needs to start playing (seen: about 3 s on a DV camcorder; a 15 s
+wait gave about 12 s of video).
+
+Winding for a duration (`--rew --wait +00:00:30:00` or `--ff`) depends on the
+deck's wind speed, so the position reached is not precise; do not rely on it
+for positioning. Many decks answer the
 timecode query only while playing or stopped, not while winding (see
 [deck-control.md](deck-control.md)), so timecode waits are most reliable
 during `--play`.
