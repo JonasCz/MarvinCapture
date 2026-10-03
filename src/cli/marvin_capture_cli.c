@@ -273,8 +273,6 @@ int main(int argc, char **argv)
             if (devs[i].state == PIN_DEV_OPEN_HERE) { d = &devs[i]; break; }
         if (d)
             say("Device: %s (%s)%s%s", d->name, d->id, d->serial[0] ? ", serial " : "", d->serial);
-        else
-            say("Device opened.");
     }
 
     st = pin_script_run(s, sc);
@@ -285,6 +283,7 @@ int main(int argc, char **argv)
         return 2;
     }
 
+    char last_error[PIN_PATH_MAX] = "";
     int exit_code = 2;
     int done = 0, cancelled = 0;
     double next_status = 0;
@@ -308,11 +307,17 @@ int main(int argc, char **argv)
                 say("[%d/%d] %s", ev.a + 1, pin_script_step_count(sc), ev.text);
                 break;
             case PIN_EVT_LOG:
-                if (debug || ev.a >= 2)
-                    say("%s: %s", log_level_name(ev.a), ev.text);
+                if (debug || ev.a >= 2) {
+                    size_t n = strlen(ev.text);
+                    while (n > 0 && (ev.text[n - 1] == '\n' || ev.text[n - 1] == '\r'))
+                        ev.text[--n] = '\0';
+                    if (n > 0)
+                        say("%s: %s", log_level_name(ev.a), ev.text);
+                }
                 break;
             case PIN_EVT_ERROR:
                 say("error: %s", ev.text);
+                snprintf(last_error, sizeof(last_error), "%s", ev.text);
                 break;
             case PIN_EVT_FILE_OPENED:
                 say("Writing %s", ev.text);
@@ -328,7 +333,7 @@ int main(int argc, char **argv)
                 break;
             case PIN_EVT_DONE:
                 exit_code = ev.a;
-                if (ev.a != 0 && ev.text[0])
+                if (ev.a != 0 && ev.text[0] && strcmp(ev.text, last_error) != 0)
                     say(ev.a == 130 ? "%s" : "error: %s", ev.text);
                 done = 1;
                 break;

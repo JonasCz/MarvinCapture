@@ -155,6 +155,17 @@ conditions: `pin_script_eval.c`, sequencer: `pin_script_run.c`).
   every kind that could arrive (a stopped deck has not told us DV from HDV yet).
   `--std` and the analog controls on the DV input are ignored with a warning,
   not rejected.
+- **Existing files** are checked for every `--capture` before the first step
+  runs (for the kinds the selected input can deliver), so a script that would
+  fail on its last capture does not first start the tape.
+- **Verified on hardware** (510-USB + DV camcorder): rewind with live
+  timecode, `--ff --wait HH:MM:SS:FF` (this deck reports the timecode while
+  winding too; with a timecode beyond the end of the tape the wait ends when the
+  deck stops at the end of the tape, exit 3), timecode-driven capture (20 s =
+  72 MB of NTSC DV), a duration wait, `--pause --wait`, the whole-tape example
+  (capture ends 1 min after the recording, tape rewound, exit 0) and Ctrl-C
+  during a capture (file finalised, tape stopped, exit 130). FFmpeg's own
+  messages go to the core log (debug level; warnings for errors), not stderr.
 - **Capture is manual** (no deck driving, one pass, no limits). It is READY
   until the first frame arrives; that is normal. A capture that ends by itself
   normally (end of a replay file) just stops being open; an abnormal end aborts

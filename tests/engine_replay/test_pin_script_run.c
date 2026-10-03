@@ -136,6 +136,19 @@ int main(int argc, char **argv)
     CHECK(strstr(o.text, "script_a.dv") && strstr(o.text, "--overwrite"));
     printf("OK: existing file without --overwrite: exit 1 (%s)\n", o.text);
 
+    /* ... and found before the first step runs, so an earlier step (a tape command on
+     * a real deck) is not started for nothing */
+    remove("script_pre.dv");
+    sc = PARSE("--capture", "script_pre.dv", "--wait", "+00:00:01:00", "--capture", "script_a.dv");
+    CHECK(pin_script_run(s, sc) == PIN_OK);
+    pin_script_free(sc);
+    wait_done(s, &o, 30000);
+    CHECK(o.done);
+    CHECK_EQ_I(o.code, 1);
+    CHECK_EQ_I(o.nsteps, 0);
+    CHECK(file_size("script_pre.dv") < 0);
+    printf("OK: existing file is found before any step runs\n");
+
     sc = PARSE("--overwrite", "--capture", "script_a.dv", "--wait", "+00:00:01:00");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);

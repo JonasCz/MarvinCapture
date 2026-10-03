@@ -382,6 +382,41 @@ static int do_wait(run_t *r, const pin_script_item_t *it)
     }
 }
 
+/* A --capture whose file exists (and no --overwrite) fails when its step is reached,
+ * by which time earlier steps may have started the tape. Check them all up front,
+ * before the first command, for the kinds that can arrive with the input that is
+ * selected at that point of the script. Returns an exit code, 0 if fine. */
+static int precheck_targets(run_t *r, pin_input_t start_input)
+{
+    pin_script_t *sc = r->sc;
+    pin_input_t input = start_input;
+    for (int i = 0; i < sc->nitems; i++) {
+        const pin_script_item_t *it = &sc->items[i];
+        if (it->kind == PIN_SITEM_INPUT) {
+            input = it->input;
+            continue;
+        }
+        if (it->kind != PIN_SITEM_STEP || it->step_kind != PIN_SSTEP_CAPTURE || it->cap.overwrite)
+            continue;
+        pin_format_t cand[2];
+        int ncand = 0;
+        if (input != PIN_INPUT_DV) {
+            cand[ncand++] = it->cap.format[PIN_KIND_ANALOG];
+        } else {
+            cand[ncand++] = it->cap.format[PIN_KIND_DV];
+            cand[ncand++] = it->cap.format[PIN_KIND_HDV];
+        }
+        for (int k = 0; k < ncand; k++) {
+            pin_format_info_t fi = { .size = sizeof(fi) };
+            char match[PIN_PATH_MAX];
+            if (pin_session_format_info(cand[k], &fi) == PIN_OK &&
+                pin_naming_collides(it->cap.base, fi.extension, match, sizeof(match)) > 0)
+                return failf(r, EXIT_USAGE, "%s already exists (use --overwrite to replace it)", match);
+        }
+    }
+    return 0;
+}
+
 static int run_items(run_t *r)
 {
     pin_script_t *sc = r->sc;
@@ -403,7 +438,9 @@ static int run_items(run_t *r)
         }
     pin_status_snapshot_t st = { .size = sizeof(st) };
     pin_session_get_status(s, &st);
-    int rc;
+    int rc = precheck_targets(r, have_pre || st.state == PIN_STATE_CLOSED ? pre : st.input);
+    if (rc)
+        return rc;
     if (have_pre || st.state == PIN_STATE_CLOSED)
         rc = ensure_input(r, pre);
     else

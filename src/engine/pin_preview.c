@@ -20,9 +20,13 @@
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
+#include <libavutil/log.h>
 #include <libavutil/pixfmt.h>
 
+#include "../core/pin_log.h"
+
 #include <pthread.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -72,8 +76,28 @@ struct pin_preview {
     size_t hdv_es_cap;
 };
 
+/* FFmpeg writes its own messages ("Concealing bitstream errors", "Detected
+ * timecode is invalid", ...) straight to stderr, which clutters a command line
+ * and is invisible in a GUI. Route them into the core log instead: errors as
+ * warnings, everything else at debug level (the log level decides what shows). */
+static void pv_av_log(void *avcl, int level, const char *fmt, va_list vl)
+{
+    if (level > AV_LOG_INFO)
+        return;
+    static __thread int in_line_prefix;
+    char line[512];
+    int prefix = in_line_prefix;
+    av_log_format_line(avcl, level, fmt, vl, line, (int)sizeof(line), &prefix);
+    in_line_prefix = prefix;
+    pin_logf(level <= AV_LOG_ERROR ? PIN_LOG_WARN : PIN_LOG_DEBUG, "ffmpeg: %s", line);
+}
+
+static pthread_once_t g_av_log_once = PTHREAD_ONCE_INIT;
+static void av_log_install(void) { av_log_set_callback(pv_av_log); }
+
 pin_preview_t *pin_previewer_create(void)
 {
+    pthread_once(&g_av_log_once, av_log_install);
     pin_preview_t *p = calloc(1, sizeof(*p));
     if (!p)
         return NULL;
