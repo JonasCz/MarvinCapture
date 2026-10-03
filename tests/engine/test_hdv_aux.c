@@ -225,6 +225,20 @@ static void test_aux_datetime_scan(void)
     CHECK(!info.timecode.valid, "no TC pack present -> invalid");
 }
 
+static void test_gop_time_nonzero(void)
+{
+    hdv_gop_time_t g;
+    memset(&g, 0, sizeof(g));
+    CHECK(!hdv_gop_time_nonzero(&g), "not found: not usable");
+    g.found = 1;
+    CHECK(!hdv_gop_time_nonzero(&g), "all zero (a camera that writes no timecode)");
+    g.pictures = 3;
+    CHECK(hdv_gop_time_nonzero(&g), "frames set");
+    g.pictures = 0; g.hours = 1;
+    CHECK(hdv_gop_time_nonzero(&g), "hours set");
+    CHECK(!hdv_gop_time_nonzero(NULL), "NULL");
+}
+
 static void test_find_sequence_header(void)
 {
     const uint8_t mid[] = { 0x12, 0x34, 0x00, 0x00, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x01, 0xb8 };
@@ -239,6 +253,7 @@ static void test_find_sequence_header(void)
 int main(void)
 {
     test_find_sequence_header();
+    test_gop_time_nonzero();
     test_pat_pmt_discovery();
     test_gop_header_decode();
     test_no_gop_header();

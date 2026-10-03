@@ -261,3 +261,8 @@ size_t hdv_find_sequence_header(const uint8_t *es, size_t len)
             return i;
     return (size_t)-1;
 }
+
+int hdv_gop_time_nonzero(const hdv_gop_time_t *g)
+{
+    return g && g->found && (g->hours || g->minutes || g->seconds || g->pictures);
+}

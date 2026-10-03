@@ -217,6 +217,10 @@ struct pin_session {
     double last_transport_poll_s;
     int poll_tc_next;             /* the next 1 Hz poll asks TIME CODE instead of TRANSPORT STATE */
     int tc_after_wind;            /* one more TIME CODE poll after the tape stopped winding */
+    int hdv_tc_live;              /* the HDV stream's GOP timecode has shown a non-zero value since
+                                     the stream began: only then is it used; some cameras (the
+                                     Canon HDV) write 00:00:00:00 in every GOP header, and the
+                                     deck's TIME CODE poll supplies the timecode instead */
     int deck_q_valid;             /* a command waiting for the in-flight one (deck_send()) */
     pin_deck_cmd_t deck_q_cmd;
     double deck_cmd_done_s;       /* when the last transport command was answered */

@@ -1333,8 +1333,13 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         int disc = 0;
         memset(&gop, 0, sizeof(gop));
         if (vpid > 0 && hdv_parse_picture(data, len / 188, vpid, &gop, &disc) == 0 && gop.found) {
-            snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
-                     gop.hours, gop.minutes, gop.seconds, gop.drop_frame ? ';' : ':', gop.pictures);
+            /* A stream that says 00:00:00:00 all the time carries no timecode: leave
+             * the display to the deck's TIME CODE poll (dv_tick) until it shows a real one. */
+            if (hdv_gop_time_nonzero(&gop))
+                s->hdv_tc_live = 1;
+            if (s->hdv_tc_live)
+                snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
+                         gop.hours, gop.minutes, gop.seconds, gop.drop_frame ? ';' : ':', gop.pictures);
         }
         s->ts_errors += hdv_ts_discontinuity_count(data, len / 188);
         hdv_unit_errors_t herr;
@@ -1756,6 +1761,14 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
     return 0;
 }
 
+/* Whether the deck's TIME CODE answer may set the displayed timecode: when no stream
+ * is arriving (winding, stopped), or the HDV stream has none of its own (see hdv_tc_live).
+ * Caller holds the session lock. */
+static int deck_timecode_wanted(const pin_session_t *s)
+{
+    return !s->signal || (s->stream_kind == PIN_KIND_HDV && !s->hdv_tc_live);
+}
+
 static void dv_tick(void *user)
 {
     dv_ctx_t *ctx = user;
@@ -1773,6 +1786,7 @@ static void dv_tick(void *user)
     /* "signal" for DV/HDV means data arrived recently */
     if (s->signal && tnow - s->last_data_s > 1.0) {
         s->signal = 0;
+        s->hdv_tc_live = 0;
         pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
     }
 
@@ -1848,7 +1862,7 @@ static void dv_tick(void *user)
                  * carries its own timecode (winding, stopped). */
                 pin_deck_timecode_t tc;
                 if (pin_deck_parse_timecode(s->deck_async.resp, s->deck_async.resp_len, &tc) == 0 &&
-                    !s->signal)
+                    deck_timecode_wanted(s))
                     snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
                              tc.hour, tc.minute, tc.second, tc.drop_frame ? ';' : ':', tc.frame);
                 if (s->deck != PIN_DECK_REWINDING && s->deck != PIN_DECK_FAST_FORWARD)
@@ -1876,9 +1890,11 @@ static void dv_tick(void *user)
          * instead, so the timecode display follows the tape (2 Hz polling). */
         double now = pin_session_now();
         int winding = s->deck == PIN_DECK_REWINDING || s->deck == PIN_DECK_FAST_FORWARD;
-        if (now - s->last_transport_poll_s > (winding ? 0.5 : 1.0)) {
+        /* HDV that carries no timecode of its own: ask the deck while it plays, too */
+        int hdv_from_deck = s->signal && s->stream_kind == PIN_KIND_HDV && !s->hdv_tc_live;
+        if (now - s->last_transport_poll_s > (winding || hdv_from_deck ? 0.5 : 1.0)) {
             s->last_transport_poll_s = now;
-            int want_tc = !s->signal && (winding || s->tc_after_wind);
+            int want_tc = (!s->signal && (winding || s->tc_after_wind)) || hdv_from_deck;
             pin_deck_query_t q = s->poll_tc_next && want_tc ? PIN_DECK_QUERY_TIMECODE
                                                               : PIN_DECK_QUERY_STATE;
             s->poll_tc_next = q == PIN_DECK_QUERY_STATE && want_tc;
@@ -2643,6 +2659,7 @@ static void *worker_main(void *arg)
             s->input = cmd.input;
             s->stream_kind_known = 0;
             s->signal = 0;
+            s->hdv_tc_live = 0;
             reset_frame_counters(s);
             s->camera_present = -1;
             s->reconnecting = 0;
