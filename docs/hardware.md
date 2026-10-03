@@ -18,7 +18,7 @@ it treats two PIDs alike they share a row's behaviour here.
 | PID | internal name | product | status |
 |---|---|---|---|
 | `0213` | Marvin-Lite | Studio **500-USB** | supported, tested |
-| `0223` | Marvin-510 | Studio **510-USB** | supported; DV/analog bring-up verified on hardware (no camera attached), capture untested |
+| `0223` | Marvin-510 | Studio **510-USB** | supported, tested (Windows: bring-up, DV capture, deck control, stdout streaming) |
 | `0212` | Marvin-CR | Studio **700-USB** | supported, **untested** (same code path as the 500) |
 | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | supported, **untested** (same code path as the 700) |
 | `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; host-side FX2 firmware download implemented as a best guess (see below) |

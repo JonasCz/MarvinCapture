@@ -23,10 +23,10 @@
 /* Every PID but the Pro (0x211) takes the same three embedded bitstreams
  * (vendor FUN_0002c280). The 510-USB (0223) is handled exactly like the
  * 500-USB, the 700-USB (0212) and 710-USB (0224) like each other. All but
- * the 500-USB are flagged untested: see docs/hardware.md, "Models". */
+ * the 500-USB and 510-USB are flagged untested: see docs/hardware.md, "Models". */
 const pinnacle_model_t pinnacle_model_table[] = {
     { 0x0213, "Pinnacle Studio 500-USB",      1, 1, "fpga-ohci.bin", "fpga-capture.bin", 0x4a, 1, NULL }, /* Marvin-Lite */
-    { 0x0223, "Pinnacle Studio 510-USB",      1, 0, "fpga-ohci.bin", "fpga-capture.bin", 0x4a, 1, NULL }, /* Marvin-510; bring-up verified */
+    { 0x0223, "Pinnacle Studio 510-USB",      1, 1, "fpga-ohci.bin", "fpga-capture.bin", 0x4a, 1, NULL }, /* Marvin-510; verified (Windows: bring-up, DV capture, deck control, stdout) */
     { 0x0212, "Pinnacle Studio 700-USB",      1, 0, "fpga-ohci.bin", "fpga-capture.bin", 0x4a, 1, NULL }, /* Marvin-CR */
     { 0x0224, "Pinnacle MovieBox Plus / 710-USB", 1, 0, "fpga-ohci.bin", "fpga-capture.bin", 0x4a, 1, NULL }, /* Marvin-710 */
     { 0x0206, "Pinnacle MovieBox Deluxe",     1, 0, "fpga-ohci.bin", "fpga-capture.bin", 0x4a, 0, "fx2-marvin.bin" }, /* Marvin-classic */
