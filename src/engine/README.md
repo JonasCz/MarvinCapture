@@ -55,8 +55,8 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   [docs/cli.md](../../docs/cli.md), shared by every front end: the parser
   (settings and actions left to right into a script, all validation that needs
   no device), timecode/duration parsing, the file-extension to format table,
-  the help text, and the pure wait-condition evaluation (`idle`, `nosignal`,
-  `signal`, timecode, duration; driven by a made-up clock in the tests).
+  the help text, and the pure wait-condition evaluation (`idle`, `signal`, `nosignal`,
+  `timecode`, `wallclock`, `captured`; driven by a made-up clock in the tests).
   The sequencer that runs a script against a session is `pin_script_run.c`
   (below).
 

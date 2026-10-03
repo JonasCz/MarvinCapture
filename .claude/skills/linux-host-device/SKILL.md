@@ -37,10 +37,10 @@ the CLI says `device already open in another process` (that is EACCES).
 No camera is attached, so only bring-up can be tested. Quick checks from `~/marvin-main`:
 
 - `./build/MarvinCaptureCLI` (no arguments): help and the device table -- model name, `(untested)` flag, GUID serial.
-- DV bring-up to "ready": `timeout 60 ./build/MarvinCaptureCLI --debug --wait +00:00:05:00 2> d.log`
+- DV bring-up to "ready": `timeout 60 ./build/MarvinCaptureCLI --debug --wait wallclock=00:00:05 2> d.log`
   (the first action is a wait, so the session comes up as DV) expects `NodeID 0xc000ffc0 ... node 0 of 1`
   and "no camera answered on the 1394 bus" in the log.
-- Analog bring-up: `timeout 40 ./build/MarvinCaptureCLI --debug -i composite --wait +00:00:05:00 2> a.log`
+- Analog bring-up: `timeout 40 ./build/MarvinCaptureCLI --debug -i composite --wait wallclock=00:00:05 2> a.log`
   (decoder answers, "no signal", exit 0). **Always** wrap the CLI in `timeout`: a capture without a
   terminating `--wait` runs until Ctrl-C and hangs the ssh call (then `pkill MarvinCaptureCLI`).
 - Crash hunting: `gdb -batch -ex run -ex bt --args ./build/MarvinCaptureCLI ...` (gdb is installed).

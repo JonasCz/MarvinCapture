@@ -44,8 +44,8 @@ driver: see [windows-driver.md](windows-driver.md).
 ## Running a capture
 
 ```
-MarvinCaptureCLI --rew --wait --play --capture out.dv --wait idle,nosignal --rew --wait
-MarvinCaptureCLI --capture out.dv --wait +00:05:00:00 --stop      # 5 minutes of whatever the camera sends
+MarvinCaptureCLI --rew --wait --play --capture out.dv --wait --rew --wait
+MarvinCaptureCLI --capture out.dv --wait wallclock=00:05:00 --stop      # 5 minutes of whatever the camera sends
 ```
 
 The first rewinds the tape, plays it, captures until the deck goes idle or the

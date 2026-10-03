@@ -19,7 +19,7 @@ Arguments are processed **left to right**.
 - **Settings** change state for the steps that follow (`--input`, `--format`,
   `--brightness`, ...).
 - **Actions** do one thing each. Transport actions return as soon as the deck
-  accepted the command; only `--wait` blocks.
+  accepted the command; only the waits block.
 
 An action's argument is the next word unless it starts with `--`; `--wait=idle`
 also works.
@@ -67,37 +67,59 @@ timestamps.
 | Action | Effect |
 |---|---|
 | `--rew` `--ff` `--play` `--pause` `--stop` | Transport command. Any transport action first closes an open capture (tape keeps running); `--stop` also stops the tape. Not available on analog inputs. |
-| `--capture PATH` | Start capturing to PATH. The capture stays open until the next transport action, the next `--capture`, or the end of the arguments. `-` writes the stream to stdout (see below). |
-| `--wait [COND[,COND...]]` | Block until the first of the conditions is met. Default `idle`. |
+| `--capture PATH` | Start capturing to PATH. The capture stays open across any number of waits and closes at the next transport action, the next `--capture`, or the end of the arguments, whichever comes first. A wait after `--capture` is required, otherwise the end of the arguments is reached at once and the capture closes immediately. `-` writes the stream to stdout (see below). |
+| `--wait-any COND[,COND...]` | Block until any of the conditions is met. |
+| `--wait-all COND[,COND...]` | Block until all of the conditions are met. |
+| `--wait [COND[,COND...]]` | Same as `--wait-any`; a bare `--wait` is `--wait-any idle`. |
+
+Any number of waits can follow each other; they run one after another. The
+inline form works too: `--wait-any=idle,signal`.
 
 ### Wait conditions
 
+`DUR` is `HH:MM:SS` or `HH:MM:SS:FF` (frames at the video's frame rate, 25 fps
+when unknown), without a leading `+`.
+
 | Condition | Met when |
 |---|---|
-| `idle` | The deck was moving after the last transport command and is now stopped or paused (stable ~3 s). Covers "at the start" after `--rew`, "at the end" after `--ff`, end of tape after `--play`. Already idle with no transport command since: met at once. |
-| `nosignal[=+HH:MM:SS:FF]` | No signal (no DV data / no analog lock) for that long, counted from the start of the wait. Default `+00:01:00:00`. |
-| `signal` | A signal is present. |
-| `HH:MM:SS:FF` | The deck timecode reaches or passes this value in the direction the tape moves. Fails (exit 3) if the deck goes idle first. |
-| `+HH:MM:SS:FF` | That much time has passed. |
+| `idle[=DUR]` | The deck was moving after the last transport command and is now stopped or paused, and has stood still for `DUR` (default one minute, never less than about 3 s). Covers "at the start" after `--rew`, "at the end" after `--ff`, end of tape after `--play`. Already idle with no transport command since: met at once. DV/HDV input only. |
+| `signal[=DUR]` | A signal has been present for `DUR` without a break. Default one minute. |
+| `nosignal[=DUR]` | No signal (no DV data / no analog lock) for `DUR` without a break. Default one minute. |
+| `timecode=HH:MM:SS:FF` | The deck timecode reaches or passes this value in the direction the tape moves. Fails (exit 3) if the deck goes idle first. The value is required. DV/HDV input only. |
+| `wallclock=DUR` | `DUR` of real time has passed since the wait started. |
+| `captured=DUR` | The file of the open capture is `DUR` long: the frames written, divided by the frame rate. Time without a signal does not count. Counted over the whole capture, not from the start of the wait. Needs an open `--capture` before it (a parse error otherwise); works on every input. |
 
-Timecodes and durations share one format; a leading `+` makes it a duration.
+On analog inputs `idle` and `timecode` are refused; `signal`, `nosignal`,
+`wallclock` and `captured` are allowed.
 
-A duration counts from the moment the wait starts, not from the first captured
-frame. After `--play --capture f --wait +00:00:15:00` the file is shorter by the
-time the deck needs to start playing (seen: about 3 s on a DV camcorder; a 15 s
-wait gave about 12 s of video).
+How a wait is evaluated (polled about 10 times a second):
 
-Winding for a duration (`--rew --wait +00:00:30:00` or `--ff`) depends on the
-deck's wind speed, so the position reached is not precise; do not rely on it
+- `wallclock`, `timecode` and `captured` latch: once met they stay met for the
+  rest of that wait.
+- `idle`, `signal` and `nosignal` are states that must hold at the moment of
+  the check. Their durations count only inside the current wait: from the start
+  of the wait or from when the state began, whichever is later. Under
+  `--wait-all` they must all be true at the same check.
+- `--wait-any`: a condition that is met beats one that failed (a `timecode`
+  fails when the deck goes idle first), whatever the order; the wait fails only
+  when every condition has failed. `--wait-all`: one failure fails the wait.
+  No camera or no tape fails `idle` and `timecode` at once, in both.
+
+`wallclock` counts from the start of the wait, not from the first captured
+frame. After `--play --capture f --wait wallclock=00:00:15` the file is shorter
+by the time the deck needs to start playing (seen: about 3 s on a DV camcorder;
+a 15 s wait gave about 12 s of video). Use `captured=` for the length of the
+file.
+
+Winding for a duration (`--rew --wait wallclock=00:00:30` or `--ff`) depends on
+the deck's wind speed, so the position reached is not precise; do not rely on it
 for positioning. Many decks answer the
 timecode query only while playing or stopped, not while winding (see
 [deck-control.md](deck-control.md)), so timecode waits are most reliable
 during `--play`. On the Canon HDV camcorder the deck reports the timecode while
-winding too, and during an HDV capture the status line and `--wait HH:MM:SS:FF`
-follow the deck's timecode, since that camera's stream carries none (see
-[deck-control.md](deck-control.md)).
-
-On analog inputs only `signal`, `nosignal` and durations are allowed.
+winding too, and during an HDV capture the status line and `--wait-any
+timecode=HH:MM:SS:FF` follow the deck's timecode, since that camera's stream
+carries none (see [deck-control.md](deck-control.md)).
 
 ## Output
 
@@ -192,10 +214,11 @@ playing.
 ## Examples
 
 ```
-MarvinCaptureCLI --rew --wait --play --capture tape01.avi --wait idle,nosignal --rew --wait
-MarvinCaptureCLI --rew --wait --play --wait 00:14:30:00 --capture clip.dv --wait 00:21:00:00 --stop
+MarvinCaptureCLI --rew --wait --play --capture tape01.avi --wait
+MarvinCaptureCLI --rew --wait --play --wait-any timecode=00:14:30:00 --capture clip.dv --wait-any timecode=00:21:00:00 --stop
 MarvinCaptureCLI --play --capture - --wait idle | ffmpeg -f dv -i - out.mp4
-MarvinCaptureCLI -i svideo --std pal --capture vhs.mkv --wait signal --wait nosignal=+00:00:30:00,+04:00:00:00
+MarvinCaptureCLI -i svideo --std pal --capture vhs.mkv --wait-any signal=00:00:05 --wait-any nosignal=00:00:30,captured=04:00:00
+MarvinCaptureCLI --rew --wait --play --capture t.avi --wait-all idle,nosignal=00:00:10
 ```
 
 Multi-pass capture is written out: repeat the steps with another file name.
@@ -206,7 +229,7 @@ Where the implementation had to choose (parser: `src/engine/pin_script.c`,
 conditions: `pin_script_eval.c`, sequencer: `pin_script_run.c`).
 
 - **Syntax.** Every long option also accepts `--name=value`. A setting's value is
-  the next word whatever it looks like (`--hue -10`); `--capture` and `--wait`
+  the next word whatever it looks like (`--hue -10`); `--capture` and the waits
   take the next word only if it does not start with `--`. `-h` / `--help`
   anywhere, or no arguments at all, ask for help and the rest of the line is not
   checked. Timecodes are exactly `HH:MM:SS:FF` (two digits each; `;` before FF
@@ -234,12 +257,12 @@ conditions: `pin_script_eval.c`, sequencer: `pin_script_run.c`).
   fail on its last capture does not first start the tape.
 - **Verified on hardware** (510-USB, 2026-10-03, Canon HDV camcorder and a composite
   PAL source): HDV capture to `.ts`, `.m2t`, `.mkv`, `.mov` and stdout, and the
-  timecode-driven `--rew --wait --play --wait 00:00:20:00 --capture t.ts --wait
-  00:00:40:00 --stop`; analog composite PAL to AVI, FFV1 MKV, NUT on stdout and a live
-  pipe into `ffmpeg -c:v libx264`, 8 s each (720x576, 25 fps, exit 0). `--wait
-  signal,+00:00:10:00` on a locked analog source ends as soon as the signal is seen.
+  timecode-driven `--rew --wait --play --wait timecode=00:00:20:00 --capture t.ts
+  --wait timecode=00:00:40:00 --stop`; analog composite PAL to AVI, FFV1 MKV, NUT on stdout and a live
+  pipe into `ffmpeg -c:v libx264`, 8 s each (720x576, 25 fps, exit 0). a wait with `signal` and a duration condition
+  on a locked analog source ends as soon as the signal condition is met.
 - **Verified on hardware** (510-USB + DV camcorder): rewind with live
-  timecode, `--ff --wait HH:MM:SS:FF` (this deck reports the timecode while
+  timecode, `--ff --wait timecode=HH:MM:SS:FF` (this deck reports the timecode while
   winding too; with a timecode beyond the end of the tape the wait ends when the
   deck stops at the end of the tape, exit 3), timecode-driven capture (20 s =
   72 MB of NTSC DV), a duration wait, `--pause --wait`, the whole-tape example

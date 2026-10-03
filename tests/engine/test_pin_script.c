@@ -100,24 +100,87 @@ static void test_timecodes(void)
     CHECK(fabs(pin_tc_seconds(&a, 0) - 1.6) < 1e-9, "seconds default 25 fps");
 }
 
+static int cond_is(const pin_script_cond_t *c, pin_cond_kind_t kind, int h, int m, int sec, int f)
+{
+    return c->kind == kind && c->tc.h == h && c->tc.m == m && c->tc.s == sec && c->tc.f == f;
+}
+
+static void expect_cond_text(const char *tok, const char *want)
+{
+    pin_script_cond_t c;
+    char buf[64];
+    if (!pin_script_cond_parse(tok, &c, NULL, 0)) {
+        printf("FAIL condition \"%s\" does not parse\n", tok);
+        g_failures++;
+        return;
+    }
+    pin_script_cond_text(&c, buf, sizeof(buf));
+    if (strcmp(buf, want) != 0) {
+        printf("FAIL condition text \"%s\" != \"%s\"\n", buf, want);
+        g_failures++;
+    }
+}
+
 static void test_conditions(void)
 {
     pin_script_cond_t c;
-    char why[96];
-    CHECK(pin_script_cond_parse("idle", &c, why, sizeof(why)) && c.kind == PIN_COND_IDLE, "idle");
-    CHECK(pin_script_cond_parse("signal", &c, why, sizeof(why)) && c.kind == PIN_COND_SIGNAL, "signal");
-    CHECK(pin_script_cond_parse("nosignal", &c, why, sizeof(why)) && c.kind == PIN_COND_NOSIGNAL &&
-              c.tc.m == 1 && c.tc.s == 0 && c.tc.h == 0, "nosignal default 1 min");
-    CHECK(pin_script_cond_parse("nosignal=+00:00:30:00", &c, why, sizeof(why)) && c.tc.s == 30, "nosignal=30s");
-    CHECK(!pin_script_cond_parse("nosignal=00:00:30:00", &c, why, sizeof(why)), "nosignal= needs +");
-    CHECK(!pin_script_cond_parse("nosignal=+00:99:00:00", &c, why, sizeof(why)), "nosignal bad value");
+    char why[160];
+    pin_tc_t d;
+    CHECK(pin_dur_parse("01:02:03", &d, why, sizeof(why)) && d.h == 1 && d.m == 2 && d.s == 3 && d.f == 0, "dur HH:MM:SS");
+    CHECK(pin_dur_parse("01:02:03:04", &d, why, sizeof(why)) && d.f == 4, "dur HH:MM:SS:FF");
+    CHECK(!pin_dur_parse("01:02", &d, why, sizeof(why)), "dur too short");
+    CHECK(!pin_dur_parse("+01:02:03", &d, why, sizeof(why)), "dur with +");
+    CHECK(!pin_dur_parse("00:00:61", &d, why, sizeof(why)) && strstr(why, "seconds"), "dur seconds 61");
+
+    /* without a value: one minute for the states */
+    CHECK(pin_script_cond_parse("idle", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_IDLE, 0, 1, 0, 0), "idle default");
+    CHECK(pin_script_cond_parse("signal", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_SIGNAL, 0, 1, 0, 0), "signal default");
+    CHECK(pin_script_cond_parse("nosignal", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_NOSIGNAL, 0, 1, 0, 0),
+          "nosignal default");
+    /* with a value, both DUR forms */
+    CHECK(pin_script_cond_parse("idle=00:00:10", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_IDLE, 0, 0, 10, 0), "idle=DUR");
+    CHECK(pin_script_cond_parse("signal=00:00:05:12", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_SIGNAL, 0, 0, 5, 12),
+          "signal=DUR:FF");
+    CHECK(pin_script_cond_parse("nosignal=00:00:30", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_NOSIGNAL, 0, 0, 30, 0),
+          "nosignal=30s");
+    CHECK(pin_script_cond_parse("nosignal=00:00:30:10", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_NOSIGNAL, 0, 0, 30, 10),
+          "nosignal=30s+10f");
+    CHECK(pin_script_cond_parse("timecode=00:14:30:00", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_TIMECODE, 0, 14, 30, 0),
+          "timecode");
+    CHECK(pin_script_cond_parse("timecode=01:02:03;04", &c, why, sizeof(why)) && c.tc.sep == ';', "timecode drop-frame");
+    CHECK(pin_script_cond_parse("wallclock=00:00:15", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_WALLCLOCK, 0, 0, 15, 0),
+          "wallclock=DUR");
+    CHECK(pin_script_cond_parse("wallclock=04:00:00:00", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_WALLCLOCK, 4, 0, 0, 0),
+          "wallclock=DUR:FF");
+    CHECK(pin_script_cond_parse("captured=04:00:00", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_CAPTURED, 4, 0, 0, 0),
+          "captured=DUR");
+    CHECK(pin_script_cond_parse("captured=00:00:01:05", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_CAPTURED, 0, 0, 1, 5),
+          "captured=DUR:FF");
+
+    /* values that are required, malformed, or the old spellings */
+    CHECK(!pin_script_cond_parse("timecode", &c, why, sizeof(why)) && strstr(why, "needs a value"), "timecode needs a value");
+    CHECK(!pin_script_cond_parse("wallclock", &c, why, sizeof(why)) && strstr(why, "needs a value"), "wallclock needs a value");
+    CHECK(!pin_script_cond_parse("captured", &c, why, sizeof(why)) && strstr(why, "needs a value"), "captured needs a value");
+    CHECK(!pin_script_cond_parse("timecode=00:14:30", &c, why, sizeof(why)), "timecode needs frames");
+    CHECK(!pin_script_cond_parse("timecode=00:60:00:00", &c, why, sizeof(why)), "timecode minutes 60");
+    CHECK(!pin_script_cond_parse("idle=", &c, why, sizeof(why)), "idle= empty");
+    CHECK(!pin_script_cond_parse("idle=+00:00:10", &c, why, sizeof(why)), "no leading +");
+    CHECK(!pin_script_cond_parse("nosignal=+00:00:30:00", &c, why, sizeof(why)), "old nosignal=+DUR");
+    CHECK(!pin_script_cond_parse("nosignal=00:99:00", &c, why, sizeof(why)), "nosignal bad value");
+    CHECK(!pin_script_cond_parse("wallclock=00:00:00:30", &c, why, sizeof(why)), "duration frames 30");
+    CHECK(!pin_script_cond_parse("+00:00:10:00", &c, why, sizeof(why)), "old +HH:MM:SS:FF");
+    CHECK(!pin_script_cond_parse("00:21:00:00", &c, why, sizeof(why)), "old bare timecode");
     CHECK(!pin_script_cond_parse("nosignals", &c, why, sizeof(why)), "nosignals unknown");
-    CHECK(pin_script_cond_parse("00:14:30:00", &c, why, sizeof(why)) && c.kind == PIN_COND_TIMECODE, "timecode");
-    CHECK(pin_script_cond_parse("+04:00:00:00", &c, why, sizeof(why)) && c.kind == PIN_COND_DURATION &&
-              c.tc.h == 4, "duration");
-    CHECK(!pin_script_cond_parse("+00:00:00:30", &c, why, sizeof(why)), "duration frames 30");
+    CHECK(!pin_script_cond_parse("idles=00:00:10", &c, why, sizeof(why)), "idles unknown");
     CHECK(!pin_script_cond_parse("bogus", &c, why, sizeof(why)), "bogus");
     CHECK(!pin_script_cond_parse("", &c, why, sizeof(why)), "empty");
+
+    expect_cond_text("idle", "idle=00:01:00");
+    expect_cond_text("signal=00:00:05:12", "signal=00:00:05:12");
+    expect_cond_text("nosignal=00:00:30:00", "nosignal=00:00:30");
+    expect_cond_text("timecode=00:14:30:00", "timecode=00:14:30:00");
+    expect_cond_text("wallclock=00:00:15", "wallclock=00:00:15");
+    expect_cond_text("captured=04:00:00", "captured=04:00:00");
 }
 
 static void test_extensions(void)
@@ -151,55 +214,120 @@ static void test_cli_examples(void)
     char err[256];
 
     /* the first example of docs/cli.md */
-    CHECK(PARSE(sc, err, "--rew", "--wait", "--play", "--capture", "tape01.avi", "--wait", "idle,nosignal",
-                "--rew", "--wait") == PIN_OK, "example 1");
+    CHECK(PARSE(sc, err, "--rew", "--wait", "--play", "--capture", "tape01.avi", "--wait") == PIN_OK, "example 1");
     expect_text(sc, 0, "rew");
-    expect_text(sc, 1, "wait idle");
+    expect_text(sc, 1, "wait-any idle=00:01:00");
     expect_text(sc, 2, "play");
     expect_text(sc, 3, "capture tape01.avi");
-    expect_text(sc, 4, "wait idle,nosignal=+00:01:00:00");
-    expect_text(sc, 5, "rew");
-    expect_text(sc, 6, "wait idle");
-    CHECK(sc->nsteps == 7, "example 1 has 7 steps");
+    expect_text(sc, 4, "wait-any idle=00:01:00");
+    CHECK(sc->nsteps == 5, "example 1 has 5 steps");
     CHECK(!sc->help, "no help");
     pin_script_destroy(sc);
 
     /* example 2 */
-    CHECK(PARSE(sc, err, "--rew", "--wait", "--play", "--wait", "00:14:30:00", "--capture", "clip.dv", "--wait",
-                "00:21:00:00", "--stop") == PIN_OK, "example 2");
+    CHECK(PARSE(sc, err, "--rew", "--wait", "--play", "--wait-any", "timecode=00:14:30:00", "--capture", "clip.dv",
+                "--wait-any", "timecode=00:21:00:00", "--stop") == PIN_OK, "example 2");
     CHECK(sc->nsteps == 7, "example 2 steps");
-    expect_text(sc, 3, "wait 00:14:30:00");
-    expect_text(sc, 5, "wait 00:21:00:00");
+    expect_text(sc, 3, "wait-any timecode=00:14:30:00");
+    expect_text(sc, 5, "wait-any timecode=00:21:00:00");
     expect_text(sc, 6, "stop");
     const pin_script_item_t *cap = find_step(sc, 4);
     CHECK(cap && cap->step_kind == PIN_SSTEP_CAPTURE && strcmp(cap->cap.base, "clip") == 0 &&
               cap->cap.format[1] == PIN_FMT_DV_RAW && cap->cap.warn_mask == (1u | 4u), "clip.dv capture");
+    const pin_script_item_t *w = find_step(sc, 3);
+    CHECK(w && !w->wait_all && w->nconds == 1 && w->conds[0].kind == PIN_COND_TIMECODE, "wait-any item");
     pin_script_destroy(sc);
 
     /* example 4: analog */
-    CHECK(PARSE(sc, err, "-i", "svideo", "--std", "pal", "--capture", "vhs.mkv", "--wait", "signal", "--wait",
-                "nosignal=+00:00:30:00,+04:00:00:00") == PIN_OK, "example 4");
+    CHECK(PARSE(sc, err, "-i", "svideo", "--std", "pal", "--capture", "vhs.mkv", "--wait-any", "signal=00:00:05",
+                "--wait-any", "nosignal=00:00:30,captured=04:00:00") == PIN_OK, "example 4");
     CHECK(sc->nsteps == 3, "example 4 steps");
-    expect_text(sc, 2, "wait nosignal=+00:00:30:00,+04:00:00:00");
+    expect_text(sc, 1, "wait-any signal=00:00:05");
+    expect_text(sc, 2, "wait-any nosignal=00:00:30,captured=04:00:00");
     CHECK(sc->initial.has_input && sc->initial.input == PIN_INPUT_SVIDEO && sc->initial.has_std &&
               sc->initial.std == PIN_STD_PAL, "initial settings");
     cap = find_step(sc, 0);
     CHECK(cap && cap->cap.format[0] == PIN_FMT_ANALOG_FFV1_MKV, "vhs.mkv is FFV1");
     pin_script_destroy(sc);
 
+    /* wait-all */
+    CHECK(PARSE(sc, err, "--rew", "--wait", "--play", "--capture", "t.avi", "--wait-all", "idle,nosignal=00:00:10")
+              == PIN_OK, "wait-all example");
+    w = find_step(sc, 4);
+    CHECK(w && w->wait_all && w->nconds == 2, "wait-all item");
+    expect_text(sc, 4, "wait-all idle=00:01:00,nosignal=00:00:10");
+    pin_script_destroy(sc);
+
     /* streaming to stdout parses and carries the flag */
-    CHECK(PARSE(sc, err, "--play", "--capture", "-", "--wait", "idle") == PIN_OK, "example 3");
+    CHECK(PARSE(sc, err, "--play", "--capture", "-", "--wait") == PIN_OK, "example 3");
     cap = find_step(sc, 1);
     CHECK(cap && cap->cap.to_stdout, "stdout flag");
     expect_text(sc, 1, "capture -");
     pin_script_destroy(sc);
 
     /* one stream, no scene split */
-    EXPECT_ERROR("only once", "--capture", "-", "--wait", "+00:00:01:00", "--capture", "-");
+    EXPECT_ERROR("only once", "--capture", "-", "--wait", "wallclock=00:00:01", "--capture", "-");
     EXPECT_ERROR("--split", "--split", "--capture", "-");
-    CHECK(PARSE(sc, err, "--capture", "-", "--wait", "+00:00:01:00", "--capture", "a.dv") == PIN_OK,
+    CHECK(PARSE(sc, err, "--capture", "-", "--wait", "wallclock=00:00:01", "--capture", "a.dv") == PIN_OK,
           "a file after the stream is fine");
     pin_script_destroy(sc);
+}
+
+static void test_wait_forms(void)
+{
+    pin_script_t *sc;
+    char err[256];
+    const pin_script_item_t *w;
+
+    /* --wait is --wait-any; with a list too; bare is idle */
+    CHECK(PARSE(sc, err, "--wait", "signal,wallclock=00:00:10", "--wait") == PIN_OK, "--wait with a list");
+    w = find_step(sc, 0);
+    CHECK(w && !w->wait_all && w->nconds == 2, "--wait is wait-any");
+    expect_text(sc, 0, "wait-any signal=00:01:00,wallclock=00:00:10");
+    expect_text(sc, 1, "wait-any idle=00:01:00");
+    pin_script_destroy(sc);
+
+    /* inline forms */
+    CHECK(PARSE(sc, err, "--wait-any=idle,signal", "--wait-all=signal,nosignal=00:00:02:10", "--wait=idle") == PIN_OK,
+          "inline = forms");
+    expect_text(sc, 0, "wait-any idle=00:01:00,signal=00:01:00");
+    expect_text(sc, 1, "wait-all signal=00:01:00,nosignal=00:00:02:10");
+    expect_text(sc, 2, "wait-any idle=00:01:00");
+    pin_script_destroy(sc);
+
+    /* chaining, any number */
+    CHECK(PARSE(sc, err, "--play", "--wait-any", "wallclock=00:00:01", "--wait-all", "signal=00:00:01",
+                "--wait", "wallclock=00:00:02", "--wait-any", "idle") == PIN_OK && sc->nsteps == 5, "chained waits");
+    pin_script_destroy(sc);
+
+    /* the list is mandatory for --wait-any / --wait-all, and a following option is not a list */
+    EXPECT_ERROR("--wait-any needs a condition list", "--wait-any");
+    EXPECT_ERROR("--wait-all needs a condition list", "--wait-all", "--stop");
+    EXPECT_ERROR("--wait-any idle,: empty condition", "--wait-any", "idle,");
+
+    /* the removed forms */
+    EXPECT_ERROR("--wait +00:00:10:00", "--wait", "+00:00:10:00");
+    EXPECT_ERROR("--wait-any 00:21:00:00", "--wait-any", "00:21:00:00");
+    EXPECT_ERROR("--wait-all nosignal=+00:00:30:00", "--wait-all", "nosignal=+00:00:30:00");
+    EXPECT_ERROR("timecode needs a value", "--wait", "timecode");
+
+    /* captured needs an open capture */
+    EXPECT_ERROR("captured needs an open capture", "--wait-any", "captured=00:00:10");
+    EXPECT_ERROR("captured needs an open capture", "--play", "--wait", "signal,captured=00:00:10");
+    EXPECT_ERROR("captured needs an open capture", "--capture", "a.dv", "--stop", "--wait", "captured=00:00:10");
+    CHECK(PARSE(sc, err, "--capture", "a.dv", "--wait-all", "signal=00:00:01,captured=00:00:10", "--wait-any",
+                "captured=00:00:20") == PIN_OK, "captured after a capture, over several waits");
+    pin_script_destroy(sc);
+    CHECK(PARSE(sc, err, "-i", "svideo", "--capture", "a.avi", "--wait", "captured=04:00:00") == PIN_OK,
+          "captured on an analog input");
+    pin_script_destroy(sc);
+    /* a new --capture opens a new one */
+    CHECK(PARSE(sc, err, "--capture", "a.dv", "--wait", "wallclock=00:00:01", "--capture", "b.dv", "--wait",
+                "captured=00:00:05") == PIN_OK, "captured after the second capture");
+    pin_script_destroy(sc);
+
+    /* too many conditions */
+    EXPECT_ERROR("too many conditions", "--wait", "signal,signal,signal,signal,signal,signal,signal,signal,signal");
 }
 
 static void test_settings_state(void)
@@ -208,7 +336,7 @@ static void test_settings_state(void)
     char err[256];
     CHECK(PARSE(sc, err, "-d", "usb:2-1", "--aspect", "16:9", "--split", "--title", "My tape", "--keep-raw",
                 "--overwrite", "--format", "dv-avi", "--format=hdv-mov", "--brightness", "-10", "--hue=5",
-                "--audio-gain", "30", "--debug", "--capture", "a.mov", "--wait", "+00:00:05:00",
+                "--audio-gain", "30", "--debug", "--capture", "a.mov", "--wait", "wallclock=00:00:05",
                 "--capture", "b.avi") == PIN_OK, "settings");
     CHECK(sc->has_device && strcmp(sc->device, "usb:2-1") == 0, "device");
     CHECK(sc->debug, "debug");
@@ -253,7 +381,7 @@ static void test_settings_state(void)
 
     /* a bare "--capture x" after "--wait" with the equals form */
     CHECK(PARSE(sc, err, "--play", "--wait=idle", "--capture=z.ts") == PIN_OK && sc->nsteps == 3, "= forms");
-    expect_text(sc, 1, "wait idle");
+    expect_text(sc, 1, "wait-any idle=00:01:00");
     expect_text(sc, 2, "capture z.ts");
     pin_script_destroy(sc);
 }
@@ -269,7 +397,8 @@ static void test_help_and_empty(void)
     CHECK(PARSE(sc, err, "--rew", "--help", "--bogus") == PIN_OK && sc->help, "--help anywhere wins");
     pin_script_destroy(sc);
     const char *h = pin_script_help_text();
-    CHECK(strstr(h, "--capture") && strstr(h, "--wait") && strstr(h, "nosignal") && strstr(h, "--debug") &&
+    CHECK(strstr(h, "--capture") && strstr(h, "--wait-any") && strstr(h, "--wait-all") && strstr(h, "captured=") &&
+              strstr(h, "nosignal") && strstr(h, "--debug") &&
               strstr(h, "--overwrite") && strstr(h, "not precise"), "help covers the language and the winding note");
     CHECK(strstr(h, "Exit codes"), "help lists exit codes");
 }
@@ -292,9 +421,9 @@ static void test_errors(void)
     EXPECT_ERROR("cannot tell the format", "--capture", "clip");
     EXPECT_ERROR("cannot tell the format", "--capture", "clip.mp4");
     EXPECT_ERROR("--wait bogus", "--wait", "bogus");
-    EXPECT_ERROR("--wait 00:00:60:00", "--wait", "00:00:60:00");
-    EXPECT_ERROR("--wait +00:00:00:30", "--wait", "+00:00:00:30");
-    EXPECT_ERROR("--wait nosignal=00:01:00:00", "--wait", "nosignal=00:01:00:00");
+    EXPECT_ERROR("--wait timecode=00:00:60:00", "--wait", "timecode=00:00:60:00");
+    EXPECT_ERROR("--wait wallclock=00:00:00:30", "--wait", "wallclock=00:00:00:30");
+    EXPECT_ERROR("--wait nosignal=00:01", "--wait", "nosignal=00:01");
     EXPECT_ERROR("--wait idle,", "--wait", "idle,");
     EXPECT_ERROR("must come before the first action", "--play", "-d", "usb:1-1");
     EXPECT_ERROR("must come before the first action", "--wait", "--device", "x");
@@ -307,15 +436,16 @@ static void test_errors(void)
     EXPECT_ERROR("--rew needs the DV input", "-i", "svideo", "--rew");
     EXPECT_ERROR("--play needs the DV input", "-i", "composite", "--play");
     EXPECT_ERROR("--wait idle: idle needs the DV input", "-i", "svideo", "--wait", "idle");
-    EXPECT_ERROR("a timecode needs the DV input", "-i", "svideo", "--wait", "signal,00:00:10:00");
+    EXPECT_ERROR("idle needs the DV input", "-i", "svideo", "--wait-all", "signal,idle=00:00:10");
+    EXPECT_ERROR("timecode needs the DV input", "-i", "svideo", "--wait", "signal,timecode=00:00:10:00");
     EXPECT_ERROR("--stop needs the DV input", "--input=composite", "--stop");
 
     /* but the analog-only conditions are fine, and so is dv again after svideo */
     pin_script_t *sc;
     char err[128];
-    CHECK(PARSE(sc, err, "-i", "svideo", "--wait", "signal,nosignal,+00:00:10:00") == PIN_OK, "analog waits");
+    CHECK(PARSE(sc, err, "-i", "svideo", "--wait", "signal,nosignal,wallclock=00:00:10") == PIN_OK, "analog waits");
     pin_script_destroy(sc);
-    CHECK(PARSE(sc, err, "-i", "svideo", "--capture", "a.avi", "--wait", "+00:00:10:00", "-i", "dv" ) == PIN_ERR_ARG,
+    CHECK(PARSE(sc, err, "-i", "svideo", "--capture", "a.avi", "--wait", "wallclock=00:00:10", "-i", "dv" ) == PIN_ERR_ARG,
           "input cannot change while capturing");
     CHECK(PARSE(sc, err, "-i", "svideo", "--wait", "signal", "-i", "dv", "--rew") == PIN_OK, "dv again");
     pin_script_destroy(sc);
@@ -329,7 +459,7 @@ static void test_clone_and_text_range(void)
     c = pin_script_clone(sc);
     pin_script_destroy(sc);
     CHECK(c && c->nsteps == 2, "clone survives the original");
-    expect_text(c, 1, "wait idle");
+    expect_text(c, 1, "wait-any idle=00:01:00");
     CHECK(pin_script_step_description(c, 2, buf, sizeof(buf)) == PIN_ERR_ARG, "index out of range");
     CHECK(pin_script_step_description(c, -1, buf, sizeof(buf)) == PIN_ERR_ARG, "negative index");
     pin_script_destroy(c);
@@ -341,6 +471,7 @@ int main(void)
     test_conditions();
     test_extensions();
     test_cli_examples();
+    test_wait_forms();
     test_settings_state();
     test_help_and_empty();
     test_errors();

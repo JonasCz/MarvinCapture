@@ -26,6 +26,7 @@ void pin_script_track_init(pin_script_track_t *t)
     memset(t, 0, sizeof(*t));
     t->still_since = -1;
     t->nosig_since = -1;
+    t->sig_since = -1;
 }
 
 void pin_script_track_transport(pin_script_track_t *t, pin_deck_cmd_t cmd, double now)
@@ -64,10 +65,15 @@ void pin_script_track_observe(pin_script_track_t *t, const pin_script_obs_t *o)
     } else {
         t->still_since = -1; /* unknown / no tape: not a settled state */
     }
-    if (o->signal)
+    if (o->signal) {
         t->nosig_since = -1;
-    else if (t->nosig_since < 0)
-        t->nosig_since = o->now;
+        if (t->sig_since < 0)
+            t->sig_since = o->now;
+    } else {
+        t->sig_since = -1;
+        if (t->nosig_since < 0)
+            t->nosig_since = o->now;
+    }
 }
 
 void pin_script_track_wait_begin(pin_script_track_t *t, const pin_script_obs_t *o)
@@ -75,16 +81,23 @@ void pin_script_track_wait_begin(pin_script_track_t *t, const pin_script_obs_t *
     pin_script_track_observe(t, o);
     t->wait_start = o->now;
     t->nosig_since = o->signal ? -1 : o->now;
+    t->sig_since = o->signal ? o->now : -1;
+    t->latched = 0;
 }
 
-/* The "idle" rule of docs/cli.md. */
-static int idle_met(const pin_script_track_t *t, const pin_script_obs_t *o)
+/* The "idle" rule of docs/cli.md: the deck is stopped or paused, after motion that
+ * followed the last transport command (or long enough after it), and has stood still
+ * for `window` seconds, counted inside the current wait. */
+static int idle_met(const pin_script_track_t *t, const pin_script_obs_t *o, double window)
 {
     if (!deck_still(o->deck))
         return 0;
     if (!t->transport_valid)
         return 1; /* nothing was started since: already idle */
-    if (t->still_since < 0 || o->now - t->still_since < PIN_SCRIPT_IDLE_STABLE_S)
+    if (t->still_since < 0)
+        return 0;
+    double since = t->still_since > t->wait_start ? t->still_since : t->wait_start;
+    if (o->now - since < window)
         return 0;
     return t->motion_seen || o->now - t->transport_t >= PIN_SCRIPT_IDLE_NO_MOTION_S;
 }
@@ -103,64 +116,117 @@ static int deck_unavailable(const pin_script_obs_t *o, char *why, size_t cap)
     return 0;
 }
 
-pin_eval_result_t pin_script_eval(const pin_script_cond_t *conds, int n, const pin_script_obs_t *o,
-                                  pin_script_track_t *t, int *met_index, char *why, size_t why_cap)
+enum { C_PENDING = 0, C_MET, C_FAILED, C_FAILED_HARD };
+
+/* A state held continuously since `since` (-1 = not held) for dur seconds, inside this wait. */
+static int state_held(const pin_script_track_t *t, const pin_script_obs_t *o, double since, double dur)
 {
-    char buf[128];
+    if (since < 0)
+        return 0;
+    if (since < t->wait_start)
+        since = t->wait_start;
+    return o->now - since >= dur;
+}
+
+static int cond_check(const pin_script_cond_t *c, const pin_script_obs_t *o, const pin_script_track_t *t,
+                      char *why, size_t cap)
+{
+    double dur = pin_tc_seconds(&c->tc, o->fps);
+    switch (c->kind) {
+    case PIN_COND_IDLE:
+        if (deck_unavailable(o, why, cap))
+            return C_FAILED_HARD;
+        return idle_met(t, o, dur > PIN_SCRIPT_IDLE_STABLE_S ? dur : PIN_SCRIPT_IDLE_STABLE_S) ? C_MET : C_PENDING;
+    case PIN_COND_SIGNAL:
+        return state_held(t, o, t->sig_since, dur) ? C_MET : C_PENDING;
+    case PIN_COND_NOSIGNAL:
+        return state_held(t, o, t->nosig_since, dur) ? C_MET : C_PENDING;
+    case PIN_COND_WALLCLOCK:
+        return o->now - t->wait_start >= dur ? C_MET : C_PENDING;
+    case PIN_COND_CAPTURED:
+        /* frames written, as time: it stands still while no frames arrive */
+        return o->capture_active && (double)o->capture_frames / (o->fps > 0 ? o->fps : 25.0) >= dur ? C_MET
+                                                                                                      : C_PENDING;
+    case PIN_COND_TIMECODE: {
+        if (deck_unavailable(o, why, cap))
+            return C_FAILED_HARD;
+        pin_tc_t cur;
+        if (o->timecode[0] && pin_tc_parse(o->timecode, &cur, NULL, 0)) {
+            int cmp = pin_tc_compare(&cur, &c->tc);
+            if (t->dir_down ? cmp <= 0 : cmp >= 0)
+                return C_MET;
+        }
+        if (idle_met(t, o, PIN_SCRIPT_IDLE_STABLE_S)) {
+            char want[16];
+            pin_tc_format(&c->tc, want, sizeof(want));
+            snprintf(why, cap, "the deck stopped at %s before reaching %s",
+                     o->timecode[0] ? o->timecode : "an unknown position", want);
+            return C_FAILED;
+        }
+        return C_PENDING;
+    }
+    }
+    return C_PENDING;
+}
+
+pin_eval_result_t pin_script_eval(const pin_script_cond_t *conds, int n, int wait_all,
+                                  const pin_script_obs_t *o, pin_script_track_t *t, unsigned *met_mask,
+                                  char *why, size_t why_cap)
+{
+    char msg[128], first_soft[128] = "", first_hard[128] = "";
+    unsigned met = 0, soft = 0, hard = 0;
     if (why && why_cap)
         why[0] = 0;
+    if (met_mask)
+        *met_mask = 0;
     pin_script_track_observe(t, o);
     for (int i = 0; i < n; i++) {
-        const pin_script_cond_t *c = &conds[i];
-        if (met_index)
-            *met_index = i;
-        switch (c->kind) {
-        case PIN_COND_IDLE:
-            if (deck_unavailable(o, buf, sizeof(buf))) {
-                if (why) snprintf(why, why_cap, "%s", buf);
-                return PIN_EVAL_ERROR;
-            }
-            if (idle_met(t, o)) {
+        unsigned bit = 1u << i;
+        int r;
+        msg[0] = 0;
+        if (t->latched & bit) {
+            r = C_MET;
+        } else {
+            r = cond_check(&conds[i], o, t, msg, sizeof(msg));
+            if (r == C_MET && (conds[i].kind == PIN_COND_WALLCLOCK || conds[i].kind == PIN_COND_TIMECODE ||
+                               conds[i].kind == PIN_COND_CAPTURED))
+                t->latched |= bit;
+        }
+        if (r == C_MET) {
+            met |= bit;
+        } else if (r == C_FAILED_HARD) {
+            if (!hard) snprintf(first_hard, sizeof(first_hard), "%s", msg);
+            hard |= bit;
+        } else if (r == C_FAILED) {
+            if (!soft) snprintf(first_soft, sizeof(first_soft), "%s", msg);
+            soft |= bit;
+        }
+    }
+    unsigned all_bits = n >= 32 ? ~0u : (1u << n) - 1;
+    unsigned failed = hard | soft;
+    int done;
+    if (wait_all)
+        done = failed ? 0 : met == all_bits;
+    else
+        done = met != 0;
+    if (done) {
+        for (int i = 0; i < n; i++)
+            if ((met & (1u << i)) && conds[i].kind == PIN_COND_IDLE) {
                 t->transport_valid = 0;
                 t->motion_seen = 0;
-                return PIN_EVAL_MET;
+                break;
             }
-            break;
-        case PIN_COND_SIGNAL:
-            if (o->signal)
-                return PIN_EVAL_MET;
-            break;
-        case PIN_COND_NOSIGNAL:
-            if (t->nosig_since >= 0 &&
-                o->now - t->nosig_since >= pin_tc_seconds(&c->tc, o->fps))
-                return PIN_EVAL_MET;
-            break;
-        case PIN_COND_DURATION:
-            if (o->now - t->wait_start >= pin_tc_seconds(&c->tc, o->fps))
-                return PIN_EVAL_MET;
-            break;
-        case PIN_COND_TIMECODE: {
-            if (deck_unavailable(o, buf, sizeof(buf))) {
-                if (why) snprintf(why, why_cap, "%s", buf);
-                return PIN_EVAL_ERROR;
-            }
-            pin_tc_t cur;
-            if (o->timecode[0] && pin_tc_parse(o->timecode, &cur, NULL, 0)) {
-                int cmp = pin_tc_compare(&cur, &c->tc);
-                if (t->dir_down ? cmp <= 0 : cmp >= 0)
-                    return PIN_EVAL_MET;
-            }
-            if (idle_met(t, o)) {
-                char want[16];
-                pin_tc_format(&c->tc, want, sizeof(want));
-                if (why)
-                    snprintf(why, why_cap, "the deck stopped at %s before reaching %s",
-                             o->timecode[0] ? o->timecode : "an unknown position", want);
-                return PIN_EVAL_ERROR;
-            }
-            break;
-        }
-        }
+        if (met_mask)
+            *met_mask = met;
+        return PIN_EVAL_MET;
+    }
+    /* ALL: any failure; ANY: a deck that is not there, or every condition failed */
+    if (wait_all ? failed != 0 : (hard != 0 || failed == all_bits)) {
+        if (met_mask)
+            *met_mask = failed;
+        if (why)
+            snprintf(why, why_cap, "%s", hard ? first_hard : first_soft);
+        return PIN_EVAL_ERROR;
     }
     return PIN_EVAL_PENDING;
 }

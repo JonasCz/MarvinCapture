@@ -123,7 +123,7 @@ static int files_equal_prefix(const char *a, const char *b, long n)
 }
 
 /* Replays the trace in a fresh session (a replay plays its file once) with
- * "--capture - --wait +00:00:03:00" and fd 1 pointed at `path`; returns the file's size.
+ * "--capture - --wait wallclock=00:00:03" and fd 1 pointed at `path`; returns the file's size.
  * The capture ends by itself at the end of the file. */
 static long stdout_run(const char *trace, const char *path)
 {
@@ -135,7 +135,7 @@ static long stdout_run(const char *trace, const char *path)
     fflush(stdout);
     CHECK(DUP2(fd, 1) >= 0);
     CLOSE(fd);
-    pin_script_t *sc = PARSE("--capture", "-", "--wait", "+00:00:03:00");
+    pin_script_t *sc = PARSE("--capture", "-", "--wait", "wallclock=00:00:03");
     CHECK(pin_script_run(rs, sc) == PIN_OK);
     pin_script_free(sc);
     outcome_t o;
@@ -167,7 +167,7 @@ int main(int argc, char **argv)
     outcome_t o;
 
     /* 1. capture, closed by the duration wait and by the end of the script */
-    pin_script_t *sc = PARSE("--capture", "script_a.dv", "--wait", "+00:00:02:00");
+    pin_script_t *sc = PARSE("--capture", "script_a.dv", "--wait", "wallclock=00:00:02");
     CHECK(pin_script_needs_session(sc));
     CHECK_EQ_I(pin_script_step_count(sc), 2);
     CHECK(pin_script_run(s, sc) == PIN_OK);
@@ -182,16 +182,16 @@ int main(int argc, char **argv)
     CHECK_EQ_I(o.steps[0], 0);
     CHECK_EQ_I(o.steps[1], 1);
     CHECK(strcmp(o.step_text[0], "capture script_a.dv") == 0);
-    CHECK(strcmp(o.step_text[1], "wait +00:00:02:00") == 0);
+    CHECK(strcmp(o.step_text[1], "wait-any wallclock=00:00:02") == 0);
     CHECK(file_size("script_a.dv") >= 0);
     pin_status_snapshot_t snap = { .size = sizeof(snap) };
     pin_get_status(s, &snap);
     CHECK_EQ_I(snap.state, PIN_STATE_READY); /* the capture was finalised */
     CHECK(snap.stop_reason == PIN_STOP_USER || snap.stop_reason == PIN_STOP_END_OF_TAPE);
-    printf("OK: --capture script_a.dv --wait +00:00:02:00 (%ld bytes)\n", file_size("script_a.dv"));
+    printf("OK: --capture script_a.dv --wait wallclock=00:00:02 (%ld bytes)\n", file_size("script_a.dv"));
 
     /* 2. the same name again: an error without --overwrite, fine with it */
-    sc = PARSE("--capture", "script_a.dv", "--wait", "+00:00:01:00");
+    sc = PARSE("--capture", "script_a.dv", "--wait", "wallclock=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
@@ -203,7 +203,7 @@ int main(int argc, char **argv)
     /* ... and found before the first step runs, so an earlier step (a tape command on
      * a real deck) is not started for nothing */
     remove("script_pre.dv");
-    sc = PARSE("--capture", "script_pre.dv", "--wait", "+00:00:01:00", "--capture", "script_a.dv");
+    sc = PARSE("--capture", "script_pre.dv", "--wait", "wallclock=00:00:01", "--capture", "script_a.dv");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
@@ -213,7 +213,7 @@ int main(int argc, char **argv)
     CHECK(file_size("script_pre.dv") < 0);
     printf("OK: existing file is found before any step runs\n");
 
-    sc = PARSE("--overwrite", "--capture", "script_a.dv", "--wait", "+00:00:01:00");
+    sc = PARSE("--overwrite", "--capture", "script_a.dv", "--wait", "wallclock=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
@@ -221,8 +221,8 @@ int main(int argc, char **argv)
     printf("OK: --overwrite\n");
 
     /* 3. two captures in a row: the next --capture closes the previous one */
-    sc = PARSE("--capture", "script_b.dv", "--wait", "+00:00:01:00", "--capture", "script_c.dv", "--wait",
-               "+00:00:01:00");
+    sc = PARSE("--capture", "script_b.dv", "--wait", "wallclock=00:00:01", "--capture", "script_c.dv", "--wait",
+               "wallclock=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
@@ -232,7 +232,7 @@ int main(int argc, char **argv)
     printf("OK: two captures in one script\n");
 
     /* 4. no-op wait (no deck movement asked for) and signal: the replay has a signal */
-    sc = PARSE("--wait", "signal");
+    sc = PARSE("--wait", "signal=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);
@@ -248,7 +248,7 @@ int main(int argc, char **argv)
         CHECK_EQ_I(n1 % (12 * 12000), 0);   /* whole PAL frames */
         pin_session_t *rs = pin_test_open_replay(trace);
         remove("script_ref.dv");
-        sc = PARSE("--capture", "script_ref.dv", "--wait", "+00:00:03:00");
+        sc = PARSE("--capture", "script_ref.dv", "--wait", "wallclock=00:00:03");
         CHECK(pin_script_run(rs, sc) == PIN_OK);
         pin_script_free(sc);
         wait_done(rs, &o, 30000);
@@ -272,7 +272,7 @@ int main(int argc, char **argv)
         CHECK(saved >= 0);
         fflush(stdout);
         CHECK(DUP2(fds[1], 1) >= 0);
-        sc = PARSE("--capture", "-", "--wait", "+00:00:10:00");
+        sc = PARSE("--capture", "-", "--wait", "wallclock=00:00:10");
         CHECK(pin_script_run(rs, sc) == PIN_OK);
         pin_script_free(sc);
         wait_done(rs, &o, 30000);
@@ -293,7 +293,7 @@ int main(int argc, char **argv)
     /* 6. Ctrl-C while a script waits (the short fixture ends the replay capture by itself,
      * so what is checked is: cancel is honoured, DONE 130, nothing left open) */
     remove("script_a.dv");
-    sc = PARSE("--capture", "script_a.dv", "--wait", "+01:00:00:00");
+    sc = PARSE("--capture", "script_a.dv", "--wait", "wallclock=01:00:00");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     pin_test_sleep_ms(500);
@@ -308,7 +308,7 @@ int main(int argc, char **argv)
     printf("OK: cancel: exit 130\n");
 
     /* 7. an analog script on the replay device (DV only) fails with a device error */
-    sc = PARSE("-i", "svideo", "--wait", "+00:00:01:00");
+    sc = PARSE("-i", "svideo", "--wait", "wallclock=00:00:01");
     CHECK(pin_script_run(s, sc) == PIN_OK);
     pin_script_free(sc);
     wait_done(s, &o, 30000);

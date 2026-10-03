@@ -39,9 +39,9 @@ on PATH, rebuild with the script).
 ```
 MarvinCaptureCLI                         # help + device table (id, name, vid:pid, serial, state)
 MarvinCaptureCLI --rew --wait            # deck control, left to right
-MarvinCaptureCLI --rew --wait --play --capture tape.dv --wait idle,nosignal --rew --wait
-MarvinCaptureCLI -d <id|serial|file> -i svideo --capture a.avi --wait +00:00:10:00
-MarvinCaptureCLI -i composite --wait +00:00:05:00     # analog bring-up + signal check only
+MarvinCaptureCLI --rew --wait --play --capture tape.dv --wait --rew --wait
+MarvinCaptureCLI -d <id|serial|file> -i svideo --capture a.avi --wait wallclock=00:00:10
+MarvinCaptureCLI -i composite --wait wallclock=00:00:05     # analog bring-up + signal check only
 ```
 
 Exit codes: 0 ok, 1 usage, 2 device, 3 deck, 4 capture ended abnormally, 130

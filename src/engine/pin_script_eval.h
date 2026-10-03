@@ -51,6 +51,8 @@ typedef struct {
     int signal;
     char timecode[16];          /* deck timecode or "" */
     double fps;                 /* frame rate for durations with frames, <= 0 means 25 */
+    int capture_active;         /* an open capture has begun writing (its first frame arrived) */
+    uint64_t capture_frames;    /* ... and has written this many frames so far (pin_status_snapshot_t.frames) */
 } pin_script_obs_t;
 
 typedef struct {
@@ -64,6 +66,8 @@ typedef struct {
     /* per wait */
     double wait_start;
     double nosig_since;         /* no signal continuously since, -1 = there is signal */
+    double sig_since;           /* signal continuously since, -1 = there is none */
+    unsigned latched;           /* bit per condition of the wait: met once, stays met */
 } pin_script_track_t;
 
 typedef enum {
@@ -78,14 +82,20 @@ void pin_script_track_transport(pin_script_track_t *t, pin_deck_cmd_t cmd, doubl
 /* Feeds an observation (the evaluator does this itself; call it too while
  * waiting for something else, so motion is not missed). */
 void pin_script_track_observe(pin_script_track_t *t, const pin_script_obs_t *o);
-/* A wait starts: durations and "nosignal" count from here. */
+/* A wait starts: durations and the signal states count from here; latches clear. */
 void pin_script_track_wait_begin(pin_script_track_t *t, const pin_script_obs_t *o);
 
-/* Evaluates the conditions in order; the first that is met (or fails) wins.
- * *met_index is its index when MET or ERROR. An idle condition that is met
- * consumes the transport command (see pin_script_track_t). */
-pin_eval_result_t pin_script_eval(const pin_script_cond_t *conds, int n, const pin_script_obs_t *o,
-                                  pin_script_track_t *t, int *met_index, char *why, size_t why_cap);
+/* Evaluates the conditions of one wait: wait_all = all must be met, else any.
+ * Conditions are classed met / pending / failed at this check (wallclock,
+ * timecode and captured latch once met; idle, signal and nosignal are states
+ * that must hold now). ANY: met beats failed whatever the order, so it fails
+ * only when every condition has failed (no camera / no tape fails at once).
+ * ALL: one failure fails the wait. *met_mask has a bit per condition: the ones
+ * that are met on MET, the failed ones on ERROR. A met idle consumes the
+ * transport command (see pin_script_track_t). */
+pin_eval_result_t pin_script_eval(const pin_script_cond_t *conds, int n, int wait_all,
+                                  const pin_script_obs_t *o, pin_script_track_t *t, unsigned *met_mask,
+                                  char *why, size_t why_cap);
 
 #ifdef __cplusplus
 }

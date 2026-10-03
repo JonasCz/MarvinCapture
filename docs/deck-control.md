@@ -324,7 +324,7 @@ tape (1440x1080 25 fps, 7+ minutes recorded), 2026-10-03:
   the status line showed a constant zero while capturing. The engine uses the GOP
   timecode only once it has shown a non-zero value and otherwise keeps polling TIME
   CODE (0.5 s, alternating with TRANSPORT STATE) while the HDV plays, so timecode
-  waits (`--wait HH:MM:SS:FF`) work during capture. See [hdv.md](hdv.md).
+  waits (`--wait timecode=HH:MM:SS:FF`) work during capture. See [hdv.md](hdv.md).
 - **SUBUNIT INFO** is implemented on this unit: `0c ff 31 07 20 38 ff ff`.
 - **No seek.** TIME CODE control (`00 20 51 20 FF SS MM HH`, several variants) and
   ABSOLUTE TRACK NUMBER control are NOT_IMPLEMENTED; ABSOLUTE TRACK NUMBER status
@@ -332,10 +332,10 @@ tape (1440x1080 25 fps, 7+ minutes recorded), 2026-10-03:
 - **Conclusion:** neither tested deck (the DV camcorder, this Canon HDV) supports
   AV/C search, so there is no `--seek`; position the tape by FF/REW plus timecode
   polling.
-- Capture flow verified: `--rew --wait --play --wait 00:00:20:00 --capture t.ts
-  --wait 00:00:40:00 --stop` (the capture started at the deck's 00:00:20, the wait
+- Capture flow verified: `--rew --wait --play --wait timecode=00:00:20:00 --capture t.ts
+  --wait timecode=00:00:40:00 --stop` (the capture started at the deck's 00:00:20, the wait
   for 00:00:40 ended the capture after about 19 s, exit 0), and repeated
-  `--ff --wait +00:00:40:00 --stop --rew --wait` rounds.
+  `--ff --wait wallclock=00:00:40 --stop --rew --wait` rounds.
 
 ## Tool
 

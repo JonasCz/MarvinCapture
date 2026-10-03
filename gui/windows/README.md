@@ -85,7 +85,7 @@ them like any other capture. The old `--preset`, `--actions`, `--output`,
 MarvinCaptureGUI.exe --device usb:1-4 --input composite --std pal --aspect 16:9
 
 # DV tape: rewind, play, capture until the tape ends (or 1 minute without signal)
-MarvinCaptureGUI.exe --rew --wait --play --capture D:	apes	ape07.dv --wait idle,nosignal
+MarvinCaptureGUI.exe --rew --wait --play --capture D:	apes	ape07.dv --wait
 
 # show the option list (also under "..." > "Command-line help")
 MarvinCaptureGUI.exe --help

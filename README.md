@@ -46,8 +46,8 @@ The device has to be bound to WinUSB, not the vendor driver
 
 ```powershell
 .\MarvinCaptureCLI.exe                                   # help and the device list
-.\MarvinCaptureCLI.exe --rew --wait --play --capture out.dv --wait idle,nosignal --rew --wait
-.\MarvinCaptureCLI.exe -i composite --capture out.avi --wait +00:01:00:00   # analog, 60 s
+.\MarvinCaptureCLI.exe --rew --wait --play --capture out.dv --wait --rew --wait
+.\MarvinCaptureCLI.exe -i composite --capture out.avi --wait wallclock=00:01:00   # analog, 60 s
 ```
 
 The command language is in [docs/cli.md](docs/cli.md); add `--debug` to see the

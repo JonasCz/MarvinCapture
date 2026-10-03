@@ -745,12 +745,12 @@ PIN_API pin_status_t pin_device_settings_key(const char *serial, const char *id,
 
 /* The command-line language shared by every front end (MarvinCaptureCLI, the
  * GUI): settings and actions, processed left to right, e.g.
- *     --rew --wait --play --capture tape01.avi --wait idle,nosignal --rew --wait
+ *     --rew --wait --play --capture tape01.avi --wait --rew --wait
  * The core parses it (pin_script_parse), checks it as far as it can without a
  * device (unknown options, bad values, malformed timecodes, transport actions
  * on an analog input, ...), and runs it as a sequence of steps on a helper
  * thread (pin_script_run). A "step" is one action: --rew --ff --play --pause
- * --stop --capture PATH --wait [CONDS]. Settings (--input, --std, --format,
+ * --stop --capture PATH --wait-any|--wait-all|--wait CONDS. Settings (--input, --std, --format,
  * ...) are not steps; they change what the steps after them do. */
 
 typedef struct pin_script pin_script_t;
@@ -776,7 +776,7 @@ PIN_API const char *pin_script_device(const pin_script_t *sc);
 PIN_API int pin_script_debug(const pin_script_t *sc);
 /* Number of steps (actions). */
 PIN_API int pin_script_step_count(const pin_script_t *sc);
-/* Printable description of step i, e.g. "rew", "wait idle,nosignal=+00:01:00:00",
+/* Printable description of step i, e.g. "rew", "wait-any idle=00:01:00,nosignal=00:01:00",
  * "capture tape01.avi". PIN_ERR_ARG for an index out of range. */
 PIN_API pin_status_t pin_script_step_text(const pin_script_t *sc, int index, char *out, size_t cap);
 /* 1 if running the script needs an open session (it has at least one step). */

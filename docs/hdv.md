@@ -80,7 +80,7 @@ ffmpeg -v error -i out.ts -map 0:v:0 -f null -    # a healthy file prints nothin
 
 Pinnacle 510-USB with a Canon HDV camcorder (2026-10-03): `--capture` to `.ts`,
 `.m2t`, `.mkv`, `.mov` and to stdout (`--capture -`) all produce files ffprobe
-reads, with timecode-driven starts and stops (`--wait HH:MM:SS:FF`).
+reads, with timecode-driven starts and stops (`--wait timecode=HH:MM:SS:FF`).
 
 - **Timecode.** The GOP header `time_code` of this camera is always 00:00:00:00, so
   it is ignored until it shows a non-zero value; until then the deck's AV/C TIME

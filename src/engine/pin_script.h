@@ -18,7 +18,7 @@
 
 /*
  * The command-line language of docs/cli.md: a left-to-right list of settings
- * and actions ("--rew --wait --play --capture tape.avi --wait idle ..."),
+ * and actions ("--rew --wait --play --capture tape.avi --wait ..."),
  * parsed into a script that pin_script_run.c (the sequencer) executes.
  *
  * This file is the hardware-free half: the parser (pin_script_parse_args),
@@ -58,11 +58,12 @@ int pin_tc_compare(const pin_tc_t *a, const pin_tc_t *b);
 double pin_tc_seconds(const pin_tc_t *tc, double fps);
 
 typedef enum {
-    PIN_COND_IDLE = 0,
-    PIN_COND_NOSIGNAL,      /* tc = how long (duration) */
-    PIN_COND_SIGNAL,
-    PIN_COND_TIMECODE,      /* tc = the deck timecode to reach */
-    PIN_COND_DURATION,      /* tc = how much time has to pass */
+    PIN_COND_IDLE = 0,      /* tc = how long the deck has to stay still (state) */
+    PIN_COND_NOSIGNAL,      /* tc = how long without a signal (state) */
+    PIN_COND_SIGNAL,        /* tc = how long with a signal, unbroken (state) */
+    PIN_COND_TIMECODE,      /* tc = the deck timecode to reach (latches) */
+    PIN_COND_WALLCLOCK,     /* tc = time since the wait started (latches) */
+    PIN_COND_CAPTURED,      /* tc = length of the open capture's file, frames / fps (latches) */
 } pin_cond_kind_t;
 
 typedef struct {
@@ -70,9 +71,15 @@ typedef struct {
     pin_tc_t tc;
 } pin_script_cond_t;
 
-/* Parses one wait condition (see docs/cli.md). */
+/* Parses a duration: "HH:MM:SS" or "HH:MM:SS:FF" (frames 0 for the short form).
+ * Returns 1 on success, else 0 and, if why is not NULL, a short reason. */
+int pin_dur_parse(const char *s, pin_tc_t *out, char *why, size_t why_cap);
+
+/* Parses one wait condition: idle[=DUR], signal[=DUR], nosignal[=DUR],
+ * timecode=HH:MM:SS:FF, wallclock=DUR, captured=DUR (see docs/cli.md). */
 int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, size_t why_cap);
-/* Canonical text: "idle", "nosignal=+00:01:00:00", "signal", "00:14:30:00", "+00:00:30:00". */
+/* Canonical text: "idle=00:01:00", "nosignal=00:00:30", "timecode=00:14:30:00",
+ * "wallclock=00:00:30", "captured=04:00:00:12" (":FF" only when frames are not 0). */
 void pin_script_cond_text(const pin_script_cond_t *c, char *out, size_t cap);
 
 /* File extension -> formats. out[] is indexed by pin_kind_t (analog, DV, HDV);
@@ -120,6 +127,7 @@ typedef struct {
     int32_t value;              /* CONTROL */
     pin_sstep_kind_t step_kind; /* STEP */
     pin_script_capture_t cap;   /* STEP: CAPTURE */
+    int wait_all;               /* STEP: WAIT: all conditions (--wait-all), else any */
     int nconds;                 /* STEP: WAIT */
     pin_script_cond_t conds[PIN_SCRIPT_MAX_CONDS];
 } pin_script_item_t;
@@ -141,7 +149,7 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
                                    char *err, size_t err_cap);
 void pin_script_destroy(pin_script_t *sc);
 pin_script_t *pin_script_clone(const pin_script_t *sc);
-/* Text of action `step` ("rew", "capture tape01.avi", "wait idle,nosignal=+00:01:00:00"). */
+/* Text of action `step` ("rew", "capture tape01.avi", "wait-any idle=00:01:00,nosignal=00:01:00"). */
 pin_status_t pin_script_step_description(const pin_script_t *sc, int step, char *out, size_t cap);
 const char *pin_script_help_text(void);
 

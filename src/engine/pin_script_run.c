@@ -70,6 +70,7 @@ typedef struct {
 
     int capture_open;
     unsigned end_seq0;              /* capture_end_seq before the capture was started */
+    double cap_t0;                  /* when the capture command was issued */
     const pin_script_capture_t *cap;
     int ext_checked;
 
@@ -171,6 +172,14 @@ static int poll(run_t *r, pin_status_snapshot_t *st)
     snprintf(r->obs.timecode, sizeof(r->obs.timecode), "%s", st->timecode);
     r->obs.fps = st->video_fps_num > 0 && st->video_fps_den > 0
                      ? (double)st->video_fps_num / st->video_fps_den : 25.0;
+    /* "captured=": frames written since the open capture began (st->frames, the total that restarts
+     * at capture start). capture_start_s is set when the file is opened on the first frame; an older
+     * value belongs to an earlier capture. */
+    pin_session_lock(r->s);
+    double cstart = r->s->capture_start_s;
+    pin_session_unlock(r->s);
+    r->obs.capture_active = r->capture_open && cstart > r->cap_t0;
+    r->obs.capture_frames = r->obs.capture_active ? st->frames : 0;
     pin_script_track_observe(&r->track, &r->obs);
     return 0;
 }
@@ -339,6 +348,7 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     pin_session_lock(r->s);
     r->end_seq0 = r->s->capture_end_seq;
     pin_session_unlock(r->s);
+    r->cap_t0 = pin_session_now();
     pin_status_t ps = pin_session_capture_start(r->s, &o, c->overwrite);
     if (ps == PIN_ERR_EXISTS)
         return failf(r, EXIT_USAGE, "%s already exists (use --overwrite to replace it)", c->path);
@@ -375,8 +385,9 @@ static int do_wait(run_t *r, const pin_script_item_t *it)
         if (rc)
             return rc;
         char why[160];
-        int idx = 0;
-        pin_eval_result_t res = pin_script_eval(it->conds, it->nconds, &r->obs, &r->track, &idx, why, sizeof(why));
+        unsigned mask = 0;
+        pin_eval_result_t res = pin_script_eval(it->conds, it->nconds, it->wait_all, &r->obs, &r->track, &mask,
+                                                why, sizeof(why));
         if (res == PIN_EVAL_MET)
             return 0;
         if (res == PIN_EVAL_ERROR)

@@ -60,8 +60,8 @@ static pin_script_obs_t obs(double now, pin_deck_state_t deck, int signal, const
 static pin_eval_result_t ev1(const char *c, const pin_script_obs_t *o, pin_script_track_t *t, char *why, size_t cap)
 {
     pin_script_cond_t cc = cond(c);
-    int idx;
-    return pin_script_eval(&cc, 1, o, t, &idx, why, cap);
+    unsigned mask;
+    return pin_script_eval(&cc, 1, 0, o, t, &mask, why, cap);
 }
 
 static void test_idle_with_motion(void)
@@ -72,19 +72,19 @@ static void test_idle_with_motion(void)
     pin_script_track_transport(&t, PIN_DECK_CMD_REW, 100.0);
     pin_script_obs_t o = obs(100.5, PIN_DECK_UNKNOWN, 0, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "unknown state: pending");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "unknown state: pending");
     o = obs(102, PIN_DECK_REWINDING, 0, "00:10:00:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "moving: pending");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "moving: pending");
     o = obs(160, PIN_DECK_STOPPED, 0, "00:00:00:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "just stopped: pending (not stable)");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "just stopped: pending (not stable)");
     o = obs(162.9, PIN_DECK_STOPPED, 0, "00:00:00:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stopped 2.9 s: pending");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stopped 2.9 s: pending");
     o = obs(163.1, PIN_DECK_STOPPED, 0, "00:00:00:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "stopped 3.1 s after motion: met");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "stopped 3.1 s after motion: met");
     CHECK(!t.transport_valid, "an idle wait consumes the transport command");
     /* nothing started since: met at once */
     o = obs(164, PIN_DECK_STOPPED, 0, "00:00:00:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "idle again: met at once");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "idle again: met at once");
 }
 
 static void test_idle_motion_restarts_the_stable_clock(void)
@@ -95,17 +95,17 @@ static void test_idle_motion_restarts_the_stable_clock(void)
     pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 10.0);
     pin_script_obs_t o = obs(11, PIN_DECK_PLAYING, 1, "00:00:01:00");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "playing");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "playing");
     o = obs(20, PIN_DECK_PAUSED, 1, "00:00:10:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "paused: not yet stable");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "paused: not yet stable");
     o = obs(22, PIN_DECK_PLAYING, 1, "00:00:10:00");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "moves again");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "moves again");
     o = obs(24, PIN_DECK_STOPPED, 0, "");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stopped, the clock restarted at 24");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stopped, the clock restarted at 24");
     o = obs(26.5, PIN_DECK_STOPPED, 0, "");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "2.5 s");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "2.5 s");
     o = obs(27.1, PIN_DECK_STOPPED, 0, "");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "3.1 s: met");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "3.1 s: met");
 }
 
 static void test_idle_early_stopped(void)
@@ -118,11 +118,11 @@ static void test_idle_early_stopped(void)
     pin_script_track_transport(&t, PIN_DECK_CMD_REW, 50.0);
     pin_script_obs_t o = obs(50.2, PIN_DECK_STOPPED, 0, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stale stopped right after the command");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stale stopped right after the command");
     o = obs(53.5, PIN_DECK_STOPPED, 0, "");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stable 3 s but only 3.5 s after the command");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stable 3 s but only 3.5 s after the command");
     o = obs(55.1, PIN_DECK_STOPPED, 0, "");
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "5 s and stable: met without motion");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "5 s and stable: met without motion");
 }
 
 static void test_idle_stopped_before_command_does_not_count(void)
@@ -137,7 +137,7 @@ static void test_idle_stopped_before_command_does_not_count(void)
     pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 20.0);
     o = obs(20.1, PIN_DECK_STOPPED, 0, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "the stillness before the command is not counted");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "the stillness before the command is not counted");
 }
 
 static void test_idle_deck_errors(void)
@@ -147,18 +147,18 @@ static void test_idle_deck_errors(void)
     char why[128] = "";
     pin_script_obs_t o = obs(1, PIN_DECK_NO_TAPE, 0, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_ERROR && strstr(why, "no tape"), "no tape: error");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_ERROR && strstr(why, "no tape"), "no tape: error");
     o = obs(2, PIN_DECK_UNKNOWN, 0, "");
     o.camera_present = 0;
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_ERROR && strstr(why, "camera"), "no camera: error");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_ERROR && strstr(why, "camera"), "no camera: error");
     /* signal/duration conditions do not need a deck */
     o = obs(3, PIN_DECK_NO_TAPE, 1, "");
-    CHECK(ev1("signal", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "signal needs no deck");
+    CHECK(ev1("signal=00:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "signal needs no deck");
     /* idle with no transport and the deck unknown keeps waiting */
     pin_script_track_init(&t);
     o = obs(4, PIN_DECK_UNKNOWN, 0, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("idle", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "unknown deck, no transport: pending");
+    CHECK(ev1("idle=00:00:03", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "unknown deck, no transport: pending");
 }
 
 static void test_timecode_up_and_down(void)
@@ -170,24 +170,25 @@ static void test_timecode_up_and_down(void)
     pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
     pin_script_obs_t o = obs(5, PIN_DECK_PLAYING, 1, "00:14:29:24");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "just before");
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "just before");
     o = obs(6, PIN_DECK_PLAYING, 1, "00:14:30:00");
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "reached");
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "reached");
     o = obs(7, PIN_DECK_PLAYING, 1, "00:14:31;05");
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "passed (drop-frame timecode)");
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "passed (drop-frame timecode)");
     o = obs(8, PIN_DECK_PLAYING, 1, "");
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "unreadable timecode: pending");
+    pin_script_track_wait_begin(&t, &o); /* a met timecode latches; a new wait forgets it */
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "unreadable timecode: pending");
 
     /* rewinding: going down */
     pin_script_track_transport(&t, PIN_DECK_CMD_REW, 10);
     o = obs(11, PIN_DECK_REWINDING, 0, "00:30:00:00");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("00:20:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "rewinding, still above");
+    CHECK(ev1("timecode=00:20:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "rewinding, still above");
     o = obs(20, PIN_DECK_REWINDING, 0, "00:19:59:10");
-    CHECK(ev1("00:20:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "rewinding, passed downwards");
+    CHECK(ev1("timecode=00:20:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "rewinding, passed downwards");
     /* and a time ahead of a rewinding deck is already "passed" */
     o = obs(21, PIN_DECK_REWINDING, 0, "00:19:00:00");
-    CHECK(ev1("00:25:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "target above while going down: reached");
+    CHECK(ev1("timecode=00:25:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "target above while going down: reached");
 }
 
 static void test_idle_before_timecode(void)
@@ -198,16 +199,16 @@ static void test_idle_before_timecode(void)
     pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
     pin_script_obs_t o = obs(2, PIN_DECK_PLAYING, 1, "00:01:00:00");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "playing");
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "playing");
     o = obs(30, PIN_DECK_STOPPED, 0, "00:02:00:00");
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stopped, not yet stable");
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "stopped, not yet stable");
     o = obs(33.5, PIN_DECK_STOPPED, 0, "00:02:00:00");
-    pin_eval_result_t r = ev1("00:14:30:00", &o, &t, why, sizeof(why));
+    pin_eval_result_t r = ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why));
     CHECK(r == PIN_EVAL_ERROR && strstr(why, "stopped at 00:02:00:00") && strstr(why, "00:14:30:00"),
           "the deck went idle before the timecode: error");
     /* a timecode that is reached wins over the idle check */
     o = obs(34, PIN_DECK_STOPPED, 0, "00:15:00:00");
-    CHECK(ev1("00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "reached while stopped: met");
+    CHECK(ev1("timecode=00:14:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "reached while stopped: met");
 }
 
 static void test_nosignal(void)
@@ -218,26 +219,26 @@ static void test_nosignal(void)
     /* signal present at the start of the wait */
     pin_script_obs_t o = obs(100, PIN_DECK_PLAYING, 1, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "signal: pending");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "signal: pending");
     o = obs(110, PIN_DECK_PLAYING, 0, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "signal lost at 110");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "signal lost at 110");
     o = obs(139, PIN_DECK_PLAYING, 0, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "29 s of no signal");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "29 s of no signal");
     o = obs(141, PIN_DECK_PLAYING, 0, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "31 s of no signal");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "31 s of no signal");
 
     /* a blip of signal restarts the count */
     pin_script_track_init(&t);
     o = obs(0, PIN_DECK_PLAYING, 0, "");
     pin_script_track_wait_begin(&t, &o);
     o = obs(20, PIN_DECK_PLAYING, 0, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "20 s");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "20 s");
     o = obs(25, PIN_DECK_PLAYING, 1, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "signal back");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "signal back");
     o = obs(50, PIN_DECK_PLAYING, 0, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "count restarted at 50");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "count restarted at 50");
     o = obs(81, PIN_DECK_PLAYING, 0, "");
-    CHECK(ev1("nosignal=+00:00:30:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "31 s later");
+    CHECK(ev1("nosignal=00:00:30", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "31 s later");
 
     /* no signal long before the wait: counted from the start of the wait (a capture
      * in READY with no first frame yet counts as no signal too) */
@@ -260,68 +261,309 @@ static void test_signal_and_duration(void)
     char why[64];
     pin_script_obs_t o = obs(10, PIN_DECK_STOPPED, 0, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("signal", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "no signal yet");
+    CHECK(ev1("signal=00:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "no signal yet");
     o = obs(11, PIN_DECK_STOPPED, 1, "");
-    CHECK(ev1("signal", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "signal");
+    CHECK(ev1("signal=00:00:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "signal");
 
     pin_script_track_init(&t);
     o = obs(100, PIN_DECK_STOPPED, 1, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(ev1("+00:00:02:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "0 s of 2 s");
+    CHECK(ev1("wallclock=00:00:02", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "0 s of 2 s");
     o = obs(101.9, PIN_DECK_STOPPED, 1, "");
-    CHECK(ev1("+00:00:02:00", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "1.9 s");
+    CHECK(ev1("wallclock=00:00:02", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "1.9 s");
     o = obs(102.0, PIN_DECK_STOPPED, 1, "");
-    CHECK(ev1("+00:00:02:00", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "2.0 s");
+    CHECK(ev1("wallclock=00:00:02", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "2.0 s");
     /* frames use the current frame rate */
     pin_script_track_init(&t);
     o = obs(0, PIN_DECK_STOPPED, 1, "");
     o.fps = 30000.0 / 1001.0;
     pin_script_track_wait_begin(&t, &o);
     o.now = 0.49;
-    CHECK(ev1("+00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "15 frames of NTSC = 0.5 s: 0.49");
+    CHECK(ev1("wallclock=00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "15 frames of NTSC = 0.5 s: 0.49");
     o.now = 0.51;
-    CHECK(ev1("+00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "0.51");
+    CHECK(ev1("wallclock=00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "0.51");
     pin_script_track_init(&t);
     o = obs(0, PIN_DECK_STOPPED, 1, "");
     o.fps = 0; /* unknown: 25 fps */
     pin_script_track_wait_begin(&t, &o);
     o.now = 0.59;
-    CHECK(ev1("+00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "15 frames at 25 fps = 0.6 s: 0.59");
+    CHECK(ev1("wallclock=00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_PENDING, "15 frames at 25 fps = 0.6 s: 0.59");
     o.now = 0.61;
-    CHECK(ev1("+00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "0.61");
+    CHECK(ev1("wallclock=00:00:00:15", &o, &t, why, sizeof(why)) == PIN_EVAL_MET, "0.61");
 }
 
-static void test_combined_first_wins(void)
+/* n conditions evaluated as ANY (all = 0) or ALL; mask and why are locals of the test */
+#define EVAL(cs, n, all, o, t) pin_script_eval(cs, n, all, o, t, &mask, why, sizeof(why))
+
+static void test_any_combined(void)
 {
     pin_script_track_t t;
     pin_script_track_init(&t);
-    pin_script_cond_t cs[3] = { cond("idle"), cond("nosignal=+00:00:10:00"), cond("+00:00:20:00") };
+    pin_script_cond_t cs[3] = { cond("idle=00:00:03"), cond("nosignal=00:00:10"), cond("wallclock=00:00:20") };
     char why[64];
-    int idx = -1;
+    unsigned mask = 0;
     pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
     pin_script_obs_t o = obs(1, PIN_DECK_PLAYING, 1, "");
     pin_script_track_wait_begin(&t, &o);
-    CHECK(pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why)) == PIN_EVAL_PENDING, "playing with signal");
-    /* signal lost at 5; at 16 the nosignal (10 s) is met, the duration (20 s from 1) is not */
+    CHECK(EVAL(cs, 3, 0, &o, &t) == PIN_EVAL_PENDING, "playing with signal");
+    /* signal lost at 5; at 16 the nosignal (10 s) is met, the wallclock (20 s from 1) is not */
     o = obs(5, PIN_DECK_PLAYING, 0, "");
-    pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why));
+    EVAL(cs, 3, 0, &o, &t);
     o = obs(16, PIN_DECK_PLAYING, 0, "");
-    CHECK(pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why)) == PIN_EVAL_MET && idx == 1, "nosignal first");
-    /* both nosignal and duration met in the same poll: the first listed wins */
+    CHECK(EVAL(cs, 3, 0, &o, &t) == PIN_EVAL_MET && mask == 2u, "nosignal alone");
+    /* nosignal and wallclock met in the same poll: both are in the mask */
     o = obs(22, PIN_DECK_PLAYING, 0, "");
-    CHECK(pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why)) == PIN_EVAL_MET && idx == 1, "list order decides");
-    pin_script_cond_t cs2[2] = { cond("+00:00:20:00"), cond("nosignal=+00:00:10:00") };
-    CHECK(pin_script_eval(cs2, 2, &o, &t, &idx, why, sizeof(why)) == PIN_EVAL_MET && idx == 0, "reversed order");
-    /* idle met together with a later duration */
+    CHECK(EVAL(cs, 3, 0, &o, &t) == PIN_EVAL_MET && mask == 6u, "both in the mask");
+    /* idle met together with a later wallclock */
     pin_script_track_init(&t);
     pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
     o = obs(1, PIN_DECK_PLAYING, 1, "");
     pin_script_track_wait_begin(&t, &o);
-    pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why));
+    EVAL(cs, 3, 0, &o, &t);
     o = obs(8, PIN_DECK_STOPPED, 1, "");
-    pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why));
+    EVAL(cs, 3, 0, &o, &t);
     o = obs(12, PIN_DECK_STOPPED, 1, "");
-    CHECK(pin_script_eval(cs, 3, &o, &t, &idx, why, sizeof(why)) == PIN_EVAL_MET && idx == 0, "idle wins");
+    CHECK(EVAL(cs, 3, 0, &o, &t) == PIN_EVAL_MET && (mask & 1u), "idle met");
+}
+
+static void test_any_met_beats_failed(void)
+{
+    char why[128];
+    unsigned mask = 0;
+    /* the deck goes idle before the timecode (timecode fails) while the signal condition is met:
+     * the order in the list must not matter */
+    for (int order = 0; order < 2; order++) {
+        pin_script_track_t t;
+        pin_script_track_init(&t);
+        pin_script_cond_t cs[2];
+        cs[order] = cond("timecode=00:14:30:00");
+        cs[1 - order] = cond("signal=00:00:32");
+        pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+        pin_script_obs_t o = obs(1, PIN_DECK_PLAYING, 1, "00:01:00:00");
+        pin_script_track_wait_begin(&t, &o);
+        CHECK(EVAL(cs, 2, 0, &o, &t) == PIN_EVAL_PENDING, "pending at the start");
+        o = obs(30, PIN_DECK_STOPPED, 1, "00:02:00:00");
+        CHECK(EVAL(cs, 2, 0, &o, &t) == PIN_EVAL_PENDING, "stopped, not yet stable");
+        o = obs(34, PIN_DECK_STOPPED, 1, "00:02:00:00");
+        CHECK(EVAL(cs, 2, 0, &o, &t) == PIN_EVAL_MET && mask == (1u << (1 - order)),
+              "met signal beats the failed timecode");
+    }
+    /* some failed, one still pending: it goes on; every condition failed: the wait fails */
+    pin_script_track_t t;
+    pin_script_track_init(&t);
+    pin_script_cond_t cs[3] = { cond("timecode=00:14:30:00"), cond("timecode=00:20:00:00"), cond("signal=00:10:00") };
+    pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+    pin_script_obs_t o = obs(1, PIN_DECK_PLAYING, 1, "00:01:00:00");
+    pin_script_track_wait_begin(&t, &o);
+    EVAL(cs, 3, 0, &o, &t);
+    o = obs(30, PIN_DECK_STOPPED, 1, "00:02:00:00");
+    EVAL(cs, 3, 0, &o, &t);
+    o = obs(34, PIN_DECK_STOPPED, 1, "00:02:00:00");
+    CHECK(EVAL(cs, 3, 0, &o, &t) == PIN_EVAL_PENDING, "two failed, one pending: pending");
+    CHECK(EVAL(cs, 2, 0, &o, &t) == PIN_EVAL_ERROR && mask == 3u && strstr(why, "stopped at"), "all failed: error");
+    /* no camera fails at once, even with a pending condition */
+    o = obs(35, PIN_DECK_UNKNOWN, 1, "");
+    o.camera_present = 0;
+    pin_script_cond_t cs2[2] = { cond("idle"), cond("signal=00:10:00") };
+    CHECK(EVAL(cs2, 2, 0, &o, &t) == PIN_EVAL_ERROR && strstr(why, "camera"), "no camera: error");
+}
+
+static void test_all(void)
+{
+    char why[128];
+    unsigned mask = 0;
+    pin_script_track_t t;
+    pin_script_track_init(&t);
+    /* states must hold at the same check: idle and nosignal for 10 s */
+    pin_script_cond_t cs[2] = { cond("idle=00:00:03"), cond("nosignal=00:00:10") };
+    pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+    pin_script_obs_t o = obs(1, PIN_DECK_PLAYING, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    CHECK(EVAL(cs, 2, 1, &o, &t) == PIN_EVAL_PENDING, "playing");
+    o = obs(5, PIN_DECK_STOPPED, 0, "");
+    EVAL(cs, 2, 1, &o, &t);
+    o = obs(8.5, PIN_DECK_STOPPED, 0, "");
+    CHECK(EVAL(cs, 2, 1, &o, &t) == PIN_EVAL_PENDING, "idle holds, nosignal 3.5 s of 10");
+    o = obs(12, PIN_DECK_PLAYING, 0, "");
+    CHECK(EVAL(cs, 2, 1, &o, &t) == PIN_EVAL_PENDING, "deck moves again: idle no longer holds");
+    o = obs(16, PIN_DECK_STOPPED, 0, "");
+    CHECK(EVAL(cs, 2, 1, &o, &t) == PIN_EVAL_PENDING, "nosignal holds, idle just restarted");
+    o = obs(19.5, PIN_DECK_STOPPED, 0, "");
+    CHECK(EVAL(cs, 2, 1, &o, &t) == PIN_EVAL_MET && mask == 3u, "both hold at the same time");
+
+    /* a state that was true once but is not now does not count; a latched wallclock stays */
+    pin_script_track_init(&t);
+    pin_script_cond_t cs3[2] = { cond("signal=00:00:05"), cond("wallclock=00:00:20") };
+    o = obs(0, PIN_DECK_STOPPED, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    o = obs(6, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(cs3, 2, 1, &o, &t) == PIN_EVAL_PENDING, "signal held, wallclock not yet");
+    o = obs(21, PIN_DECK_STOPPED, 0, "");
+    CHECK(EVAL(cs3, 2, 1, &o, &t) == PIN_EVAL_PENDING, "wallclock met, but the signal is gone now");
+    o = obs(22, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(cs3, 2, 1, &o, &t) == PIN_EVAL_PENDING, "signal back: its 5 s start again");
+    o = obs(27.5, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(cs3, 2, 1, &o, &t) == PIN_EVAL_MET && mask == 3u, "signal held 5 s, wallclock still met");
+
+    /* one failure fails the wait, whatever else is met or pending */
+    pin_script_track_init(&t);
+    pin_script_cond_t cs4[2] = { cond("signal"), cond("timecode=00:14:30:00") };
+    pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+    o = obs(1, PIN_DECK_PLAYING, 1, "00:01:00:00");
+    pin_script_track_wait_begin(&t, &o);
+    EVAL(cs4, 2, 1, &o, &t);
+    o = obs(30, PIN_DECK_STOPPED, 1, "00:02:00:00");
+    CHECK(EVAL(cs4, 2, 1, &o, &t) == PIN_EVAL_PENDING, "stopped, not yet stable");
+    o = obs(34, PIN_DECK_STOPPED, 1, "00:02:00:00");
+    CHECK(EVAL(cs4, 2, 1, &o, &t) == PIN_EVAL_ERROR && mask == 2u && strstr(why, "stopped at"),
+          "timecode failed: the wait fails");
+    pin_script_cond_t cs5[2] = { cond("idle"), cond("signal=00:10:00") };
+    o = obs(35, PIN_DECK_NO_TAPE, 1, "");
+    CHECK(EVAL(cs5, 2, 1, &o, &t) == PIN_EVAL_ERROR && strstr(why, "no tape"), "no tape fails ALL too");
+}
+
+static void test_latching(void)
+{
+    char why[64];
+    unsigned mask = 0;
+    pin_script_track_t t;
+    pin_script_track_init(&t);
+    /* wallclock, timecode and captured stay met; signal does not */
+    pin_script_cond_t cs[4] = { cond("wallclock=00:00:05"), cond("timecode=00:10:00:00"), cond("captured=00:00:02"),
+                                cond("signal=00:00:02") };
+    pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+    pin_script_obs_t o = obs(0, PIN_DECK_PLAYING, 0, "00:09:00:00");
+    pin_script_track_wait_begin(&t, &o);
+    o = obs(6, PIN_DECK_PLAYING, 0, "00:10:00:01");
+    o.capture_active = 1;
+    o.capture_frames = 60; /* 2.4 s */
+    CHECK(EVAL(cs, 4, 1, &o, &t) == PIN_EVAL_PENDING, "three met, the signal is not");
+    CHECK((t.latched & 7u) == 7u && !(t.latched & 8u), "three latched");
+    /* the timecode backs off and the capture is gone; they stay met */
+    o = obs(8, PIN_DECK_PLAYING, 1, "00:05:00:00");
+    CHECK(EVAL(cs, 4, 1, &o, &t) == PIN_EVAL_PENDING, "signal 0 s");
+    o = obs(10.5, PIN_DECK_PLAYING, 1, "00:05:00:00");
+    CHECK(EVAL(cs, 4, 1, &o, &t) == PIN_EVAL_MET && mask == 15u, "latched ones still met");
+    /* a new wait clears the latches */
+    pin_script_track_wait_begin(&t, &o);
+    CHECK(t.latched == 0, "wait_begin clears the latches");
+}
+
+static void test_captured(void)
+{
+    char why[64];
+    unsigned mask = 0;
+    pin_script_track_t t;
+    pin_script_track_init(&t);
+    pin_script_cond_t c = cond("captured=00:00:10");
+    pin_script_obs_t o = obs(0, PIN_DECK_PLAYING, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    /* no capture writing yet */
+    o = obs(100, PIN_DECK_PLAYING, 1, "");
+    o.capture_frames = 999;
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "no capture: pending");
+    /* frames, not time: the clock runs on without frames */
+    o = obs(101, PIN_DECK_PLAYING, 1, "");
+    o.capture_active = 1;
+    o.capture_frames = 200; /* 8 s at 25 fps */
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "8 s of frames");
+    o = obs(500, PIN_DECK_PLAYING, 0, "");
+    o.capture_active = 1;
+    o.capture_frames = 200; /* no signal for ages, no frames: still 8 s */
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "time without frames does not count");
+    o = obs(501, PIN_DECK_PLAYING, 1, "");
+    o.capture_active = 1;
+    o.capture_frames = 249;
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "9.96 s");
+    o.capture_frames = 250;
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_MET, "10 s");
+    /* counted over the whole capture, not from the start of the wait */
+    pin_script_track_init(&t);
+    o = obs(600, PIN_DECK_PLAYING, 1, "");
+    o.capture_active = 1;
+    o.capture_frames = 300;
+    pin_script_track_wait_begin(&t, &o);
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_MET, "frames from before the wait count");
+    /* NTSC rate; the frames of the duration use it too */
+    pin_script_track_init(&t);
+    pin_script_cond_t c2 = cond("captured=00:00:10:15");
+    o = obs(0, PIN_DECK_PLAYING, 1, "");
+    o.fps = 30000.0 / 1001.0;
+    o.capture_active = 1;
+    o.capture_frames = 314; /* 10.48 s */
+    pin_script_track_wait_begin(&t, &o);
+    CHECK(EVAL(&c2, 1, 0, &o, &t) == PIN_EVAL_PENDING, "10.48 s of 10.51 s");
+    o.capture_frames = 316;
+    CHECK(EVAL(&c2, 1, 0, &o, &t) == PIN_EVAL_MET, "10.54 s");
+}
+
+static void test_signal_resets_on_break(void)
+{
+    char why[64];
+    unsigned mask = 0;
+    pin_script_track_t t;
+    pin_script_track_init(&t);
+    pin_script_cond_t c = cond("signal=00:00:10");
+    pin_script_obs_t o = obs(0, PIN_DECK_STOPPED, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    o = obs(8, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "8 s");
+    o = obs(9, PIN_DECK_STOPPED, 0, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "break");
+    o = obs(10, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "back at 10");
+    o = obs(19.5, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "9.5 s since the break");
+    o = obs(20.1, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_MET, "10.1 s since the break");
+    /* a signal that began before the wait counts from the wait's start */
+    pin_script_track_init(&t);
+    o = obs(0, PIN_DECK_STOPPED, 1, "");
+    pin_script_track_observe(&t, &o);
+    o = obs(50, PIN_DECK_STOPPED, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "signal older than the wait: counted from the wait");
+    o = obs(60.1, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_MET, "10 s into the wait");
+}
+
+static void test_idle_duration(void)
+{
+    char why[64];
+    unsigned mask = 0;
+    pin_script_track_t t;
+    pin_script_track_init(&t);
+    pin_script_cond_t c = cond("idle=00:00:30");
+    pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+    pin_script_obs_t o = obs(1, PIN_DECK_PLAYING, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "playing");
+    o = obs(10, PIN_DECK_STOPPED, 1, "");
+    EVAL(&c, 1, 0, &o, &t);
+    o = obs(39, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "still 29 s: more than the 3 s floor is needed");
+    /* motion restarts the window */
+    o = obs(40, PIN_DECK_PLAYING, 1, "");
+    EVAL(&c, 1, 0, &o, &t);
+    o = obs(41, PIN_DECK_PAUSED, 1, "");
+    EVAL(&c, 1, 0, &o, &t);
+    o = obs(70, PIN_DECK_PAUSED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_PENDING, "29 s since the new stop");
+    o = obs(71.1, PIN_DECK_PAUSED, 1, "");
+    CHECK(EVAL(&c, 1, 0, &o, &t) == PIN_EVAL_MET, "30 s");
+    /* a short duration is raised to the 3 s floor */
+    pin_script_track_init(&t);
+    pin_script_cond_t c1 = cond("idle=00:00:01");
+    pin_script_track_transport(&t, PIN_DECK_CMD_PLAY, 0);
+    o = obs(1, PIN_DECK_PLAYING, 1, "");
+    pin_script_track_wait_begin(&t, &o);
+    EVAL(&c1, 1, 0, &o, &t);
+    o = obs(10, PIN_DECK_STOPPED, 1, "");
+    EVAL(&c1, 1, 0, &o, &t);
+    o = obs(12, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c1, 1, 0, &o, &t) == PIN_EVAL_PENDING, "idle=1 s still waits 3 s");
+    o = obs(13.1, PIN_DECK_STOPPED, 1, "");
+    CHECK(EVAL(&c1, 1, 0, &o, &t) == PIN_EVAL_MET, "3.1 s");
 }
 
 int main(void)
@@ -335,7 +577,13 @@ int main(void)
     test_idle_before_timecode();
     test_nosignal();
     test_signal_and_duration();
-    test_combined_first_wins();
+    test_any_combined();
+    test_any_met_beats_failed();
+    test_all();
+    test_latching();
+    test_captured();
+    test_signal_resets_on_break();
+    test_idle_duration();
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

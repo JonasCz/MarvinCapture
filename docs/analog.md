@@ -29,8 +29,8 @@ bitstreams fit together is in the last section.
 ## Quick start
 
 ```powershell
-MarvinCaptureCLI -i composite --capture out.avi --wait +00:01:00:00   # 60 s, uses firmware\fpga-capture.bin
-MarvinCaptureCLI -i composite --wait +00:00:05:00                      # bring-up and signal check only
+MarvinCaptureCLI -i composite --capture out.avi --wait wallclock=00:01:00   # 60 s, uses firmware\fpga-capture.bin
+MarvinCaptureCLI -i composite --wait wallclock=00:00:05                      # bring-up and signal check only
 ```
 
 Options (settings, [cli.md](cli.md)): `-i composite|svideo`,

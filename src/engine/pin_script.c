@@ -93,7 +93,23 @@ double pin_tc_seconds(const pin_tc_t *tc, double fps)
 
 /* ---- wait conditions ---------------------------------------------------------- */
 
-static const char *k_default_nosignal = "+00:01:00:00";
+int pin_dur_parse(const char *s, pin_tc_t *out, char *why, size_t why_cap)
+{
+    char buf[16];
+    size_t n = s ? strlen(s) : 0;
+    if (n == 8) {
+        snprintf(buf, sizeof(buf), "%s:00", s);
+    } else if (n == 11) {
+        snprintf(buf, sizeof(buf), "%s", s);
+    } else {
+        why_set(why, why_cap, "malformed (expected HH:MM:SS or HH:MM:SS:FF)");
+        return 0;
+    }
+    return pin_tc_parse(buf, out, why, why_cap);
+}
+
+/* Default duration of idle, signal and nosignal: one minute. */
+static const char *k_default_dur = "00:01:00";
 
 int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, size_t why_cap)
 {
@@ -104,38 +120,34 @@ int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, si
         why_set(why, why_cap, "empty condition");
         return 0;
     }
-    if (strcmp(tok, "idle") == 0) {
-        c.kind = PIN_COND_IDLE;
-    } else if (strcmp(tok, "signal") == 0) {
-        c.kind = PIN_COND_SIGNAL;
-    } else if (strncmp(tok, "nosignal", 8) == 0 && (tok[8] == 0 || tok[8] == '=')) {
-        c.kind = PIN_COND_NOSIGNAL;
-        const char *d = tok[8] == '=' ? tok + 9 : k_default_nosignal;
-        if (*d != '+') {
-            why_set(why, why_cap, "nosignal= needs a duration with a leading + (+HH:MM:SS:FF)");
-            return 0;
-        }
-        if (!pin_tc_parse(d + 1, &c.tc, inner, sizeof(inner))) {
-            if (why && why_cap)
-                snprintf(why, why_cap, "bad nosignal duration: %s", inner);
-            return 0;
-        }
-    } else if (tok[0] == '+') {
-        c.kind = PIN_COND_DURATION;
-        if (!pin_tc_parse(tok + 1, &c.tc, inner, sizeof(inner))) {
-            if (why && why_cap)
-                snprintf(why, why_cap, "bad duration: %s", inner);
-            return 0;
-        }
-    } else if (isdigit((unsigned char)tok[0])) {
-        c.kind = PIN_COND_TIMECODE;
-        if (!pin_tc_parse(tok, &c.tc, inner, sizeof(inner))) {
-            if (why && why_cap)
-                snprintf(why, why_cap, "bad timecode: %s", inner);
-            return 0;
-        }
-    } else {
-        why_set(why, why_cap, "expected idle, signal, nosignal[=+HH:MM:SS:FF], HH:MM:SS:FF or +HH:MM:SS:FF");
+    const char *eq = strchr(tok, '=');
+    size_t n = eq ? (size_t)(eq - tok) : strlen(tok);
+    const char *val = eq ? eq + 1 : NULL;
+    int optional = 0;   /* the value may be left out (default one minute) */
+    int is_tc = 0;      /* the value is a timecode, not a duration */
+    if (n == 4 && strncmp(tok, "idle", n) == 0) { c.kind = PIN_COND_IDLE; optional = 1; }
+    else if (n == 6 && strncmp(tok, "signal", n) == 0) { c.kind = PIN_COND_SIGNAL; optional = 1; }
+    else if (n == 8 && strncmp(tok, "nosignal", n) == 0) { c.kind = PIN_COND_NOSIGNAL; optional = 1; }
+    else if (n == 8 && strncmp(tok, "timecode", n) == 0) { c.kind = PIN_COND_TIMECODE; is_tc = 1; }
+    else if (n == 9 && strncmp(tok, "wallclock", n) == 0) c.kind = PIN_COND_WALLCLOCK;
+    else if (n == 8 && strncmp(tok, "captured", n) == 0) c.kind = PIN_COND_CAPTURED;
+    else {
+        why_set(why, why_cap, "expected idle, signal, nosignal, timecode=HH:MM:SS:FF, wallclock=DUR or captured=DUR "
+                              "(DUR is HH:MM:SS or HH:MM:SS:FF)");
+        return 0;
+    }
+    char name[16];
+    snprintf(name, sizeof(name), "%.*s", (int)n, tok);
+    if (!val && optional) {
+        val = k_default_dur;
+    } else if (!val) {
+        if (why && why_cap)
+            snprintf(why, why_cap, "%s needs a value (%s=%s)", name, name, is_tc ? "HH:MM:SS:FF" : "HH:MM:SS");
+        return 0;
+    }
+    if (is_tc ? !pin_tc_parse(val, &c.tc, inner, sizeof(inner)) : !pin_dur_parse(val, &c.tc, inner, sizeof(inner))) {
+        if (why && why_cap)
+            snprintf(why, why_cap, "bad %s %s: %s", name, is_tc ? "timecode" : "duration", inner);
         return 0;
     }
     if (out)
@@ -145,15 +157,12 @@ int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, si
 
 void pin_script_cond_text(const pin_script_cond_t *c, char *out, size_t cap)
 {
+    static const char *const names[] = { "idle", "nosignal", "signal", "timecode", "wallclock", "captured" };
     char tc[16];
     pin_tc_format(&c->tc, tc, sizeof(tc));
-    switch (c->kind) {
-    case PIN_COND_IDLE: snprintf(out, cap, "idle"); break;
-    case PIN_COND_SIGNAL: snprintf(out, cap, "signal"); break;
-    case PIN_COND_NOSIGNAL: snprintf(out, cap, "nosignal=+%s", tc); break;
-    case PIN_COND_TIMECODE: snprintf(out, cap, "%s", tc); break;
-    case PIN_COND_DURATION: snprintf(out, cap, "+%s", tc); break;
-    }
+    if (c->kind != PIN_COND_TIMECODE && c->tc.f == 0)
+        tc[8] = 0; /* HH:MM:SS */
+    snprintf(out, cap, "%s=%s", names[c->kind], tc);
 }
 
 /* ---- extensions and formats ------------------------------------------------------ */
@@ -258,44 +267,80 @@ const char *pin_script_help_text(void)
         "                           DV/HDV input only.\n"
         "  --capture PATH           start capturing to PATH; the file format comes\n"
         "                           from the extension (.dv .avi .mov .ts .m2t .mkv).\n"
-        "                           It stays open until the next transport action,\n"
-        "                           the next --capture or the end of the arguments.\n"
+        "                           It stays open across any number of waits and\n"
+        "                           closes at the next transport action, the next\n"
+        "                           --capture or the end of the arguments, whichever\n"
+        "                           comes first. Put a wait after it, or the end of\n"
+        "                           the arguments is reached at once and the capture\n"
+        "                           closes immediately.\n"
         "                           PATH - writes the stream to stdout (pipe it into\n"
         "                           a program): DV as raw DIF, HDV as MPEG-TS, analog\n"
         "                           as NUT (YUY2 + PCM). --format is ignored; --split\n"
         "                           is refused; once per command line. If the reader\n"
         "                           exits or cannot keep up the capture stops, exit 4.\n"
-        "  --wait [COND[,COND...]]  block until the first condition is met; default\n"
-        "                           idle\n"
+        "  --wait-any COND[,COND...]\n"
+        "                           block until any condition is met\n"
+        "  --wait-all COND[,COND...]\n"
+        "                           block until all conditions are met\n"
+        "  --wait [COND[,COND...]]  same as --wait-any; bare --wait is --wait-any idle\n"
+        "  Any number of waits can follow each other; they run one after another.\n"
         "\n"
-        "Wait conditions:\n"
-        "  idle                     the deck was moving after the last transport\n"
-        "                           command and is now stopped or paused (stable\n"
-        "                           about 3 s); met at once if already idle\n"
-        "  nosignal[=+HH:MM:SS:FF]  no signal for that long, counted from the start\n"
-        "                           of the wait (default +00:01:00:00)\n"
-        "  signal                   a signal is present\n"
-        "  HH:MM:SS:FF              the deck timecode reaches or passes this value\n"
+        "Wait conditions (DUR is HH:MM:SS or HH:MM:SS:FF, no leading +):\n"
+        "  idle[=DUR]               the deck was moving after the last transport\n"
+        "                           command and is now stopped or paused, and has\n"
+        "                           stayed still for DUR (default 00:01:00; never\n"
+        "                           less than about 3 s). Met at once if no transport\n"
+        "                           command was sent since the last idle wait and the\n"
+        "                           deck is stopped or paused. DV/HDV input only.\n"
+        "  signal[=DUR]             a signal has been present without a break for\n"
+        "                           DUR (default 00:01:00)\n"
+        "  nosignal[=DUR]           no signal without a break for DUR (default\n"
+        "                           00:01:00)\n"
+        "  timecode=HH:MM:SS:FF     the deck timecode reaches or passes this value\n"
         "                           in the direction the tape moves; fails if the\n"
-        "                           deck goes idle first\n"
-        "  +HH:MM:SS:FF             that much time has passed\n"
-        "  Analog inputs only allow signal, nosignal and durations.\n"
-        "  A duration counts from the moment the wait starts, not from the first\n"
-        "  captured frame: after --play --capture f --wait +00:00:15:00 the file is\n"
-        "  shorter by the time the deck needs to start playing (about 3 s seen).\n"
-        "  Winding for a duration (--rew/--ff --wait +00:00:30:00) depends on the\n"
-        "  deck's wind speed, so the position reached is not precise; do not use\n"
-        "  it to position the tape. Many decks\n"
-        "  report the timecode only while playing or stopped, so timecode waits\n"
-        "  are most reliable during --play.\n"
+        "                           deck goes idle first. DV/HDV input only.\n"
+        "  wallclock=DUR            DUR of real time has passed since the wait began\n"
+        "  captured=DUR             the file of the open capture is DUR long: frames\n"
+        "                           written, divided by the frame rate. Time without\n"
+        "                           a signal does not count. Counted over the whole\n"
+        "                           capture, not from the start of the wait. Needs\n"
+        "                           an open --capture before it in the arguments;\n"
+        "                           works on every input.\n"
+        "  Analog inputs only allow signal, nosignal, wallclock and captured.\n"
+        "\n"
+        "How a wait is evaluated (polled about 10 times a second):\n"
+        "  - wallclock, timecode and captured latch: once met they stay met for the\n"
+        "    rest of that wait.\n"
+        "  - idle, signal and nosignal are states: the durations count only inside\n"
+        "    the current wait (from its start or from when the state began, if\n"
+        "    later), and under --wait-all they must all be true at the same moment.\n"
+        "  - --wait-any: a condition that is met beats one that failed (timecode\n"
+        "    when the deck went idle first), whatever the order; the wait fails\n"
+        "    only when every condition has failed. --wait-all: one failure fails\n"
+        "    the wait. No camera or no tape fails idle and timecode at once.\n"
+        "  - wallclock counts from the start of the wait, not from the first\n"
+        "    captured frame: after --play --capture f --wait wallclock=00:00:15 the\n"
+        "    file is shorter by the time the deck needs to start playing (about 3 s\n"
+        "    seen). Use captured= for the length of the file.\n"
+        "  - Winding for a duration (--rew/--ff --wait wallclock=00:00:30) depends on\n"
+        "    the deck's wind speed, so the position reached is not precise; do not\n"
+        "    use it to position the tape. Many decks report the timecode only while\n"
+        "    playing or stopped, so timecode waits are most reliable during --play.\n"
         "\n"
         "Exit codes: 0 ok, 1 usage error, 2 device or bring-up error, 3 deck error,\n"
         "4 capture ended abnormally, 130 cancelled (Ctrl-C).\n"
         "\n"
         "Examples:\n"
-        "  --rew --wait --play --capture tape01.avi --wait idle,nosignal --rew --wait\n"
-        "  --rew --wait --play --wait 00:14:30:00 --capture clip.dv --wait 00:21:00:00 --stop\n"
-        "  -i svideo --std pal --capture vhs.mkv --wait signal --wait nosignal=+00:00:30:00,+04:00:00:00\n"
+        "  Capture the whole tape; stops once the deck reaches the end:\n"
+        "  --rew --wait --play --capture tape01.avi --wait\n"
+        "  A clip between two timecodes, then stop the tape:\n"
+        "  --rew --wait --play --wait-any timecode=00:14:30:00 --capture clip.dv\n"
+        "  --wait-any timecode=00:21:00:00 --stop\n"
+        "  Analog: wait for a signal, stop 30 s after it is lost or after 4 hours:\n"
+        "  -i svideo --std pal --capture vhs.mkv --wait-any signal=00:00:05\n"
+        "  --wait-any nosignal=00:00:30,captured=04:00:00\n"
+        "  Stop when the deck is idle and the picture has been gone for 10 s:\n"
+        "  --rew --wait --play --capture t.avi --wait-all idle,nosignal=00:00:10\n"
         "\n"
         "-h, --help, or no arguments at all: this text.\n";
 }
@@ -670,36 +715,45 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             }
             p.started = 1;
             p.capture_open = 1;
-        } else if (strcmp(name, "--wait") == 0) {
+        } else if (strcmp(name, "--wait") == 0 || strcmp(name, "--wait-any") == 0 ||
+                   strcmp(name, "--wait-all") == 0) {
+            int bare_ok = strcmp(name, "--wait") == 0;
             if (!inl && i + 1 < argc && !(argv[i + 1][0] == '-' && argv[i + 1][1] == '-'))
                 inl = argv[++i];
+            if (!inl && !bare_ok)
+                FAIL("%s needs a condition list", name);
             pin_script_item_t *it = item_add(&p);
             if (!it) { rc = PIN_ERR_NOMEM; break; }
             it->kind = PIN_SITEM_STEP;
             it->step = sc->nsteps++;
             it->step_kind = PIN_SSTEP_WAIT;
+            it->wait_all = strcmp(name, "--wait-all") == 0;
             if (!inl) {
                 it->nconds = 1;
                 it->conds[0].kind = PIN_COND_IDLE;
+                pin_dur_parse(k_default_dur, &it->conds[0].tc, NULL, 0);
             } else {
                 char buf[256];
                 if (strlen(inl) >= sizeof(buf))
-                    FAIL("--wait: condition list too long");
+                    FAIL("%s: condition list too long", name);
                 snprintf(buf, sizeof(buf), "%s", inl);
                 char *save = buf;
                 for (;;) {
                     char *comma = strchr(save, ',');
                     if (comma)
                         *comma = 0;
-                    char why[96];
+                    char why[160];
                     if (it->nconds >= PIN_SCRIPT_MAX_CONDS)
-                        FAIL("--wait: too many conditions (max %d)", PIN_SCRIPT_MAX_CONDS);
+                        FAIL("%s: too many conditions (max %d)", name, PIN_SCRIPT_MAX_CONDS);
                     if (!pin_script_cond_parse(save, &it->conds[it->nconds], why, sizeof(why)))
-                        FAIL("--wait %s: %s", inl, why);
+                        FAIL("%s %s: %s", name, inl, why);
                     pin_script_cond_t *cd = &it->conds[it->nconds++];
                     if (is_analog(&p) && (cd->kind == PIN_COND_IDLE || cd->kind == PIN_COND_TIMECODE))
-                        FAIL("--wait %s: %s needs the DV input; analog inputs only allow signal, nosignal "
-                             "and durations", inl, cd->kind == PIN_COND_IDLE ? "idle" : "a timecode");
+                        FAIL("%s %s: %s needs the DV input; analog inputs only allow signal, nosignal, "
+                             "wallclock and captured", name, inl, cd->kind == PIN_COND_IDLE ? "idle" : "timecode");
+                    if (cd->kind == PIN_COND_CAPTURED && !p.capture_open)
+                        FAIL("%s %s: captured needs an open capture (a --capture before it, with no "
+                             "transport action in between)", name, inl);
                     if (!comma)
                         break;
                     save = comma + 1;
@@ -766,7 +820,7 @@ pin_status_t pin_script_step_description(const pin_script_t *sc, int step, char 
         case PIN_SSTEP_STOP: snprintf(out, cap, "stop"); break;
         case PIN_SSTEP_CAPTURE: snprintf(out, cap, "capture %s", it->cap.path); break;
         case PIN_SSTEP_WAIT: {
-            size_t n = (size_t)snprintf(out, cap, "wait ");
+            size_t n = (size_t)snprintf(out, cap, "%s ", it->wait_all ? "wait-all" : "wait-any");
             for (int k = 0; k < it->nconds && n < cap; k++) {
                 char t[32];
                 pin_script_cond_text(&it->conds[k], t, sizeof(t));
