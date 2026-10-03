@@ -133,15 +133,6 @@ with the preview frame's rectangle in client pixels (XAML position x rasterizati
 layout changes (checked on every status tick, the shell is only called when the rectangle changes) and
 cleared (whole window) when there is no preview area.
 
-## Theme testing
-
-The app follows the Windows light/dark setting. To check the other theme
-without changing Windows, start it with `PIN_THEME=dark` (or `light`):
-
-```powershell
-$env:PIN_THEME = "dark"; .\bin\Debug\net10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
-```
-
 ## Layout
 
 ```

@@ -80,7 +80,6 @@ public sealed partial class MainWindow : Window
         }
         // else (Windows 10): keep the solid SolidBackgroundFillColorBaseBrush theme background.
 
-        ApplyDebugThemeOverride();
 
         // The two "Settings for" pages share one cell with the same collapse rules as the input panels.
         _dvView = new KindSettingsView(VM.DvSettings);
@@ -129,22 +128,6 @@ public sealed partial class MainWindow : Window
         3 => InfoBarSeverity.Error,
         _ => InfoBarSeverity.Informational,
     };
-
-    /// <summary>
-    /// Testing aid only: PIN_THEME=dark|light forces the app theme so both
-    /// themes can be checked without changing the Windows setting. Normal
-    /// runs follow the system theme.
-    /// </summary>
-    private void ApplyDebugThemeOverride()
-    {
-        var theme = Environment.GetEnvironmentVariable("PIN_THEME")?.Trim().ToLowerInvariant();
-        if (theme is not ("dark" or "light"))
-        {
-            return;
-        }
-        RootGrid.RequestedTheme = theme == "dark" ? ElementTheme.Dark : ElementTheme.Light;
-        AppWindow.TitleBar.PreferredTheme = theme == "dark" ? TitleBarTheme.Dark : TitleBarTheme.Light;
-    }
 
     // ================================================================== window setup
 

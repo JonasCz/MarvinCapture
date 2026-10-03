@@ -1525,21 +1525,6 @@ static uint16_t auto_stop_node(const pin_session_t *s, uint16_t node)
     return s->capture_opts.start_deck ? node : 0;
 }
 
-/* Extra space kept free on the output drive, from PINNACLE_DISK_RESERVE_MB
- * (for testing the disk-full stop on a big drive), else PIN_STOP_DISK_MARGIN. */
-static uint64_t disk_margin(void)
-{
-    static int loaded;
-    static uint64_t margin;
-    if (!loaded) {
-        loaded = 1;
-        const char *e = getenv("PINNACLE_DISK_RESERVE_MB");
-        if (e && *e)
-            margin = (uint64_t)strtoull(e, NULL, 10) << 20;
-    }
-    return margin;
-}
-
 /* While a file is open, once a second: ends the capture while the output
  * drive still has room to finish the file (pin_stop_disk_reserve()), and at
  * once when writing failed. deck_node as for auto_stop_node(). Caller holds
@@ -1580,7 +1565,7 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
     int known = fat32_and_free(dir, &free_bytes, &fat32) == 0;
     /* HDV to MOV / MKV remuxes the whole temp .ts when the file is closed */
     int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
-    uint64_t reserve = pin_stop_disk_reserve(disk_margin(), wst.backlog_bytes,
+    uint64_t reserve = pin_stop_disk_reserve(0, wst.backlog_bytes,
                                              remux ? s->bytes_written : 0);
     char detail[PIN_TEXT_MAX];
     pin_stop_reason_t why;
