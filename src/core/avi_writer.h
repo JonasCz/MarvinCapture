@@ -37,15 +37,10 @@ typedef struct avi_writer avi_writer_t;
 
 /* aspect_num:aspect_den is the display aspect of the whole frame (4:3 for
  * analog SD); it goes into the OpenDML vprp header, from which players
- * derive the pixel aspect. */
-avi_writer_t *avi_open(const char *path, unsigned width, unsigned height, unsigned fps_num,
-                       unsigned fps_den, unsigned aspect_num, unsigned aspect_den,
-                       unsigned audio_rate, unsigned audio_channels);
-
-/* Same as avi_open(), plus a UTF-8 title written as a "LIST INFO"/"INAM"
+ * derive the pixel aspect. Also takes a UTF-8 title written as a "LIST INFO"/"INAM"
  * chunk in the header list (so it appears in the first RIFF, ahead of any
  * frame data, exactly where the OpenDML spec expects file-level metadata).
- * title may be NULL or "" for no title, matching plain avi_open(). */
+ * title may be NULL or "" for no title. */
 avi_writer_t *avi_open_titled(const char *path, unsigned width, unsigned height,
                               unsigned fps_num, unsigned fps_den, unsigned aspect_num,
                               unsigned aspect_den, unsigned audio_rate, unsigned audio_channels,

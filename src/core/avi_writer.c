@@ -407,14 +407,6 @@ avi_writer_t *avi_open_titled(const char *path, unsigned width, unsigned height,
     return w;
 }
 
-avi_writer_t *avi_open(const char *path, unsigned width, unsigned height, unsigned fps_num,
-                       unsigned fps_den, unsigned aspect_num, unsigned aspect_den,
-                       unsigned audio_rate, unsigned audio_channels)
-{
-    return avi_open_titled(path, width, height, fps_num, fps_den, aspect_num, aspect_den,
-                           audio_rate, audio_channels, NULL);
-}
-
 int avi_write_video(avi_writer_t *w, const uint8_t *frame, size_t len)
 {
     int r = write_chunk(w, 0, frame, len);

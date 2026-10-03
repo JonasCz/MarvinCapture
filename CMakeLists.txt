@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
-# Top-level build: the native core (marvin-core), the CLIs and the ctest
+# Top-level build: the native core (marvin-core), MarvinCaptureCLI and the ctest
 # suite. scripts/build.ps1 drives this and then builds the GUI; see
 # docs/building.md.
 
@@ -45,8 +45,7 @@ find_package(Threads REQUIRED)
 
 # --- pinnacle_core: the hardware layer (device, cfg, 1394, stream, analog,
 # DV/HDV reassembly, logging), everything under src/core. Static on purpose:
-# it's linked straight into each CLI today, and later into the shared
-# marvin-core library by a later phase, unchanged. ---
+# it's linked into the shared marvin-core library. ---
 file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
@@ -56,20 +55,6 @@ if(WIN32)
     # MMCSS, for the analog read loop's thread priority
     target_link_libraries(pinnacle_core PUBLIC avrt)
 endif()
-
-# --- Low-level CLIs: talk to src/core directly (capture, analog, deck
-# control, device list). MarvinCaptureCLI (below) is the API-level one. ---
-add_executable(pincli src/cli/pincli.c)
-target_link_libraries(pincli PRIVATE pinnacle_core)
-
-add_executable(pindeck src/cli/pindeck.c)
-target_link_libraries(pindeck PRIVATE pinnacle_core)
-
-add_executable(pinanalog src/cli/pinanalog.c)
-target_link_libraries(pinanalog PRIVATE pinnacle_core)
-
-add_executable(pinlist src/cli/pinlist.c)
-target_link_libraries(pinlist PRIVATE pinnacle_core)
 
 # --- Hardware-free regression tests. ---
 enable_testing()
