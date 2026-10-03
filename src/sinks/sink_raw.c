@@ -25,6 +25,7 @@
 #include "pin_sink.h"
 #include "../engine/dv_subcode.h"
 #include "../core/pin_log.h"
+#include "pin_stdout.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -32,6 +33,7 @@
 
 typedef struct {
     FILE *f;
+    int to_stdout;            /* path "-": pin_stdout_write(), no file */
     pin_kind_t kind;
     pin_sink_status_t st;
 } raw_priv_t;
@@ -46,6 +48,11 @@ static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_par
 {
     raw_priv_t *p = s->priv;
     p->kind = params->kind;
+    if (pin_path_is_stdout(path)) {
+        pin_stdout_prepare();
+        p->to_stdout = 1;
+        return PIN_OK;
+    }
     p->f = fopen(path, "wb");
     if (!p->f) {
         p->st.last_error = PIN_ERR_IO;
@@ -58,7 +65,7 @@ static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_par
 static pin_status_t raw_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
 {
     raw_priv_t *p = s->priv;
-    if (!p->f)
+    if (!p->f && !p->to_stdout)
         return PIN_ERR_STATE;
 
     /* HDV pictures vary in size (a GOP's worth of TS packets); only DV
@@ -72,7 +79,14 @@ static pin_status_t raw_write_unit(pin_sink_t *s, const uint8_t *data, size_t le
         return PIN_OK;
     }
 
-    if (fwrite(data, 1, len, p->f) != len) {
+    if (p->to_stdout) {
+        int rc = pin_stdout_write(data, len);
+        if (rc != PIN_STDOUT_OK) {
+            p->st.pipe_closed = rc == PIN_STDOUT_CLOSED;
+            p->st.last_error = PIN_ERR_IO;
+            return PIN_ERR_IO;
+        }
+    } else if (fwrite(data, 1, len, p->f) != len) {
         p->st.last_error = PIN_ERR_IO;
         return PIN_ERR_IO;
     }

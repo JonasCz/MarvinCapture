@@ -20,7 +20,7 @@
  * ctest: the command-line sequencer (pin_script_parse / pin_script_run /
  * pin_script_cancel, docs/cli.md) against the replay device: a capture closed
  * by a duration wait, STEP and DONE events, an existing target without
- * --overwrite, "--capture -" not being supported yet, an analog script on the
+ * --overwrite, "--capture -" streaming to a redirected stdout (equal to the .dv sink) and a closed pipe (exit 4), an analog script on the
  * replay device failing with exit code 2, and Ctrl-C (cancel) finalising an
  * open capture with exit code 130.
  *
@@ -28,6 +28,24 @@
  */
 
 #include "replay_test_util.h"
+
+#if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
+#define PIPE(fds) _pipe(fds, 1 << 16, _O_BINARY)
+#define DUP _dup
+#define DUP2 _dup2
+#define CLOSE _close
+#define OPEN_NEW(path) _open(path, _O_WRONLY | _O_CREAT | _O_TRUNC | _O_BINARY, 0600)
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#define PIPE(fds) pipe(fds)
+#define DUP dup
+#define DUP2 dup2
+#define CLOSE close
+#define OPEN_NEW(path) open(path, O_WRONLY | O_CREAT | O_TRUNC, 0600)
+#endif
 
 typedef struct {
     int done;
@@ -84,6 +102,52 @@ static long file_size(const char *path)
     long n = ftell(f);
     fclose(f);
     return n;
+}
+
+static int files_equal_prefix(const char *a, const char *b, long n)
+{
+    FILE *fa = fopen(a, "rb"), *fb = fopen(b, "rb");
+    if (!fa || !fb) {
+        if (fa) fclose(fa);
+        if (fb) fclose(fb);
+        return 0;
+    }
+    int same = 1;
+    for (long i = 0; i < n && same; i++) {
+        int ca = fgetc(fa), cb = fgetc(fb);
+        same = ca == cb && ca != EOF;
+    }
+    fclose(fa);
+    fclose(fb);
+    return same;
+}
+
+/* Replays the trace in a fresh session (a replay plays its file once) with
+ * "--capture - --wait +00:00:03:00" and fd 1 pointed at `path`; returns the file's size.
+ * The capture ends by itself at the end of the file. */
+static long stdout_run(const char *trace, const char *path)
+{
+    pin_session_t *rs = pin_test_open_replay(trace);
+    int fd = OPEN_NEW(path);
+    CHECK(fd >= 0);
+    int saved = DUP(1);
+    CHECK(saved >= 0);
+    fflush(stdout);
+    CHECK(DUP2(fd, 1) >= 0);
+    CLOSE(fd);
+    pin_script_t *sc = PARSE("--capture", "-", "--wait", "+00:00:03:00");
+    CHECK(pin_script_run(rs, sc) == PIN_OK);
+    pin_script_free(sc);
+    outcome_t o;
+    wait_done(rs, &o, 30000);
+    fflush(stdout);
+    CHECK(DUP2(saved, 1) >= 0);
+    CLOSE(saved);
+    if (!o.done || o.code != 0)
+        fprintf(stderr, "stdout run: done %d code %d: %s\n", o.done, o.code, o.text);
+    CHECK(o.done && o.code == 0);
+    pin_close(rs);
+    return file_size(path);
 }
 
 int main(int argc, char **argv)
@@ -175,16 +239,56 @@ int main(int argc, char **argv)
     CHECK(o.done && o.code == 0);
     printf("OK: --wait signal\n");
 
-    /* 5. stdout streaming is not supported yet: fails before doing anything */
-    sc = PARSE("--capture", "-", "--wait", "+00:00:01:00");
-    CHECK(pin_script_run(s, sc) == PIN_OK);
-    pin_script_free(sc);
-    wait_done(s, &o, 10000);
-    CHECK(o.done);
-    CHECK_EQ_I(o.code, 1);
-    CHECK(strstr(o.text, "not supported yet"));
-    CHECK_EQ_I(o.nsteps, 0);
-    printf("OK: --capture - : %s\n", o.text);
+    /* 5. --capture - : the stream goes to the process's stdout (redirected to a file here,
+     * with dup2 on fd 1: the core writes to whatever the process's stdout is). Replaying the
+     * same trace to a file with the .dv sink gives the same bytes. */
+    {
+        long n1 = stdout_run(trace, "stream1.dv");
+        CHECK(n1 > 0);
+        CHECK_EQ_I(n1 % (12 * 12000), 0);   /* whole PAL frames */
+        pin_session_t *rs = pin_test_open_replay(trace);
+        remove("script_ref.dv");
+        sc = PARSE("--capture", "script_ref.dv", "--wait", "+00:00:03:00");
+        CHECK(pin_script_run(rs, sc) == PIN_OK);
+        pin_script_free(sc);
+        wait_done(rs, &o, 30000);
+        CHECK(o.done && o.code == 0);
+        pin_close(rs);
+        long nr = file_size("script_ref.dv");
+        CHECK_EQ_I(n1, nr);
+        CHECK(files_equal_prefix("stream1.dv", "script_ref.dv", nr));
+        printf("OK: --capture - : %ld bytes, identical to the .dv sink\n", n1);
+        remove("stream1.dv");
+        remove("script_ref.dv");
+    }
+
+    /* 5b. the reading program exits: the capture ends with exit 4 */
+    {
+        int fds[2];
+        CHECK(PIPE(fds) == 0);
+        CLOSE(fds[0]);   /* nobody reads */
+        pin_session_t *rs = pin_test_open_replay(trace);
+        int saved = DUP(1);
+        CHECK(saved >= 0);
+        fflush(stdout);
+        CHECK(DUP2(fds[1], 1) >= 0);
+        sc = PARSE("--capture", "-", "--wait", "+00:00:10:00");
+        CHECK(pin_script_run(rs, sc) == PIN_OK);
+        pin_script_free(sc);
+        wait_done(rs, &o, 30000);
+        fflush(stdout);
+        CHECK(DUP2(saved, 1) >= 0);
+        CLOSE(saved);
+        CLOSE(fds[1]);
+        CHECK(o.done);
+        CHECK_EQ_I(o.code, 4);
+        CHECK(strstr(o.text, "reading the output"));
+        pin_get_status(rs, &snap);
+        CHECK_EQ_I(snap.stop_reason, PIN_STOP_PIPE_CLOSED);
+        CHECK(pin_stop_reason_abnormal(snap.stop_reason));
+        printf("OK: closed pipe: exit 4 (%s)\n", o.text);
+        pin_close(rs);
+    }
 
     /* 6. Ctrl-C while a script waits (the short fixture ends the replay capture by itself,
      * so what is checked is: cancel is honoured, DONE 130, nothing left open) */

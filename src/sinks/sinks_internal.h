@@ -29,6 +29,7 @@ extern "C" {
 #endif
 
 pin_sink_t *sink_raw_create(void);
+pin_sink_t *sink_nut_create(void);        /* analog to stdout: NUT, YUY2 + PCM */
 pin_sink_t *sink_avi_create(void);        /* PIN_FMT_ANALOG_AVI */
 pin_sink_t *sink_ffv1_create(void);       /* PIN_FMT_ANALOG_FFV1_MKV */
 pin_sink_t *sink_rewrap_create(pin_format_t format); /* DV_AVI, DV_MOV, HDV_MOV, HDV_MKV */

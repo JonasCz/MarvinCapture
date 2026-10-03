@@ -111,8 +111,8 @@ cd "${BUILD_DIR}"
 # Components actually used by marvin-core:
 #   encode:  FFV1 (analog capture) + PCM s16le
 #   decode:  FFV1, DV (dvvideo), MPEG-2 video (HDV), PCM s16le/s16be, MP2 (HDV audio)
-#   mux:     Matroska (FFV1+PCM sink), MOV, AVI, DV, MPEG-TS
-#   demux:   DV, MPEG-TS, Matroska, MOV, AVI (rewrap sources / smoke test readback)
+#   mux:     Matroska (FFV1+PCM sink), MOV, AVI, DV, MPEG-TS, NUT (analog to stdout)
+#   demux:   DV, MPEG-TS, Matroska, MOV, AVI, NUT (rewrap sources / smoke test readback)
 #   parse:   mpegvideo (MPEG-2), mpegaudio (MP2)
 #   proto:   file
 CONFIGURE_ARGS=(
@@ -160,12 +160,14 @@ CONFIGURE_ARGS=(
     --enable-muxer=avi
     --enable-muxer=dv
     --enable-muxer=mpegts
+    --enable-muxer=nut
 
     --enable-demuxer=dv
     --enable-demuxer=mpegts
     --enable-demuxer=matroska
     --enable-demuxer=mov
     --enable-demuxer=avi
+    --enable-demuxer=nut
 
     --enable-parser=mpegvideo
     --enable-parser=mpegaudio
@@ -196,6 +198,10 @@ grep -iE "requires|selecting|error" ffbuild/config.log 2>/dev/null | tail -40 ||
 # ---------------------------------------------------------------------------
 make -j"${NPROC}"
 make install
+
+# scripts/build.ps1 rebuilds FFmpeg when this stamp no longer matches this script
+# (the script holds the whole component list).
+sha256sum "${SCRIPT_DIR}/build-ffmpeg.sh" | awk '{print $1}' > "${PREFIX_DIR}/build-script.sha256"
 
 # ---------------------------------------------------------------------------
 # Report

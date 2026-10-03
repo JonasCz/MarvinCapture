@@ -168,6 +168,8 @@ public enum PinStopReason : int
     DiskFull,
     WriteError,
     Error,
+    PipeSlow,       // output to stdout: the reading program could not keep up
+    PipeClosed,     // output to stdout: the reading program exited
 }
 
 public enum PinMatrix : int

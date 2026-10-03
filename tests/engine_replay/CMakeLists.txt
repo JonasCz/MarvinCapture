@@ -87,6 +87,7 @@ endif()
 # 1f: pin_script_run() against the replay device (the command-line sequencer).
 if(EXISTS "${PIN_TRACE_PAL}")
     pin_engine_replay_test(test_pin_script_run "${PIN_TRACE_PAL}")
+    set_tests_properties(test_pin_script_run PROPERTIES TIMEOUT 120)
 endif()
 
 # 1g: pin_check_output() collision detection and free space, plus the

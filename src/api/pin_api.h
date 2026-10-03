@@ -303,7 +303,12 @@ typedef enum {
 
 typedef struct {
     uint32_t size;
-    char path[PIN_PATH_MAX];    /* base output path; extension optional */
+    char path[PIN_PATH_MAX];    /* base output path; extension optional. "-" = standard output:
+                                   DV raw DIF, HDV MPEG-TS, analog NUT (rawvideo YUY2 + PCM s16le);
+                                   the format_* fields, scene_split, keep_raw and passes > 1 are
+                                   ignored, naming, collision and disk checks do not apply, and the
+                                   capture ends with PIN_STOP_PIPE_SLOW / PIN_STOP_PIPE_CLOSED if the
+                                   reader cannot keep up / exits. */
     pin_format_t format_analog; /* used when the input is analog */
     pin_format_t format_dv;     /* used when the stream turns out to be DV */
     pin_format_t format_hdv;    /* ... or HDV */
@@ -408,6 +413,9 @@ typedef enum {
                                    was still room to finish the file */
     PIN_STOP_WRITE_ERROR,       /* writing or opening an output file failed */
     PIN_STOP_ERROR,             /* any other error (see last_error / error_text) */
+    PIN_STOP_PIPE_SLOW,         /* output to stdout ("-"): the program reading it could not keep up
+                                   and the queue in front of the pipe filled. Appended. */
+    PIN_STOP_PIPE_CLOSED,       /* output to stdout ("-"): the reading program exited. Appended. */
 } pin_stop_reason_t;
 
 typedef struct {

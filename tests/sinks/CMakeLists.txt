@@ -47,3 +47,7 @@ add_executable(test_hdv_rewrap test_hdv_rewrap.c)
 target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
 add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap
     "${PROJECT_SOURCE_DIR}/tests/data/hdv.ts")
+
+add_executable(test_stdout_sinks test_stdout_sinks.c)
+target_link_libraries(test_stdout_sinks PRIVATE pinnacle_sinks)
+add_test(NAME test_stdout_sinks COMMAND test_stdout_sinks)

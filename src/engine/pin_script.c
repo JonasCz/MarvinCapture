@@ -260,7 +260,11 @@ const char *pin_script_help_text(void)
         "                           from the extension (.dv .avi .mov .ts .m2t .mkv).\n"
         "                           It stays open until the next transport action,\n"
         "                           the next --capture or the end of the arguments.\n"
-        "                           PATH - (stdout) is not supported yet.\n"
+        "                           PATH - writes the stream to stdout (pipe it into\n"
+        "                           a program): DV as raw DIF, HDV as MPEG-TS, analog\n"
+        "                           as NUT (YUY2 + PCM). --format is ignored; --split\n"
+        "                           is refused; once per command line. If the reader\n"
+        "                           exits or cannot keep up the capture stops, exit 4.\n"
         "  --wait [COND[,COND...]]  block until the first condition is met; default\n"
         "                           idle\n"
         "\n"
@@ -308,6 +312,7 @@ typedef struct {
     int overwrite;
     int started;
     int capture_open;
+    int stdout_used;            /* a --capture - was seen: only one per script */
 } parser_t;
 
 static pin_status_t fail(parser_t *p, const char *fmt, ...)
@@ -632,6 +637,11 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             for (int k = 0; k < 3; k++)
                 c->format[k] = p.fmt[k];
             if (strcmp(inl, "-") == 0) {
+                if (p.split)
+                    FAIL("--capture -: --split does not apply to a stream on stdout");
+                if (p.stdout_used)
+                    FAIL("--capture - can be used only once (the stream has one stdout)");
+                p.stdout_used = 1;
                 c->to_stdout = 1;
             } else {
                 char ext[16];

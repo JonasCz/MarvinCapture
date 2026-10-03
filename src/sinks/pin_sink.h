@@ -62,6 +62,7 @@ typedef struct {
     uint64_t units_damaged;      /* e.g. a DV/HDV unit that didn't pass the sequence-count check */
     uint64_t audio_padded_samples; /* silence inserted to keep audio in sync with video */
     int encoder_behind;          /* sink_ffv1: the encode thread's queue is backing up */
+    int pipe_closed;             /* stdout sinks: the reading program is gone (not a disk error) */
     pin_status_t last_error;
 } pin_sink_status_t;
 
@@ -103,6 +104,10 @@ struct pin_sink {
  * (which frees *sink too, matching how open() failures are handled --
  * see each sink_*.c). */
 pin_sink_t *pin_sink_create(pin_format_t format);
+
+/* The sink for `--capture -` (open() it with the path "-"): DV raw DIF, HDV
+ * MPEG-TS, analog NUT (rawvideo YUY2 + pcm_s16le). NULL for an unknown kind. */
+pin_sink_t *pin_sink_create_stdout(pin_kind_t kind);
 
 #ifdef __cplusplus
 }

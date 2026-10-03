@@ -40,6 +40,7 @@
 #include "pin_session_priv.h"
 #include "pin_stop.h"
 #include "../core/pin_log.h"
+#include "../sinks/pin_stdout.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -287,7 +288,7 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
 
     pin_capture_opts_t o;
     pin_capture_opts_defaults(&o);
-    snprintf(o.path, sizeof(o.path), "%s", c->base);
+    snprintf(o.path, sizeof(o.path), "%s", c->to_stdout ? "-" : c->base);
     o.format_analog = c->format[PIN_KIND_ANALOG];
     o.format_dv = c->format[PIN_KIND_DV];
     o.format_hdv = c->format[PIN_KIND_HDV];
@@ -305,7 +306,7 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     pin_status_t cs = pin_session_check_output(r->s, &o, &chk);
     if (cs == PIN_ERR_ARG)
         return failf(r, EXIT_USAGE, "--capture %s: %s", c->path, chk.message[0] ? chk.message : "unusable file name");
-    if (!c->overwrite) {
+    if (!c->overwrite && !c->to_stdout) {
         /* pin_check_output() looks at the kind that is arriving, which a stopped deck has
          * not told us yet: check the file name of every kind that could arrive. */
         pin_status_snapshot_t st;
@@ -396,7 +397,8 @@ static int precheck_targets(run_t *r, pin_input_t start_input)
             input = it->input;
             continue;
         }
-        if (it->kind != PIN_SITEM_STEP || it->step_kind != PIN_SSTEP_CAPTURE || it->cap.overwrite)
+        if (it->kind != PIN_SITEM_STEP || it->step_kind != PIN_SSTEP_CAPTURE || it->cap.overwrite ||
+            it->cap.to_stdout)
             continue;
         pin_format_t cand[2];
         int ncand = 0;
@@ -424,8 +426,11 @@ static int run_items(run_t *r)
 
     for (int i = 0; i < sc->nitems; i++) {
         const pin_script_item_t *it = &sc->items[i];
-        if (it->kind == PIN_SITEM_STEP && it->step_kind == PIN_SSTEP_CAPTURE && it->cap.to_stdout)
-            return failf(r, EXIT_USAGE, "--capture -: writing to stdout is not supported yet");
+        if (it->kind == PIN_SITEM_STEP && it->step_kind == PIN_SSTEP_CAPTURE && it->cap.to_stdout) {
+            char why[160];
+            if (pin_stdout_check(why, sizeof(why)) != 0)
+                return failf(r, EXIT_USAGE, "--capture -: %s", why);
+        }
     }
 
     /* the input the first step needs: the script's, else DV if the session was never brought up */
@@ -507,8 +512,9 @@ static void *script_main(void *arg)
         code = rc2;
         snprintf(reason, sizeof(reason), "%s", r->reason);
     }
-    /* Ctrl-C: stop the tape too if this script moved it. */
-    if (code == EXIT_CANCELLED && r->moved_tape && r->last_cmd != PIN_DECK_CMD_STOP) {
+    /* Ctrl-C, a deck error or a capture that ended abnormally: stop the tape too if this
+     * script moved it, so nothing is left playing. */
+    if ((code == EXIT_CANCELLED || code == EXIT_DECK || code == EXIT_CAPTURE) && r->moved_tape && r->last_cmd != PIN_DECK_CMD_STOP) {
         pin_status_snapshot_t st = { .size = sizeof(st) };
         pin_session_get_status(s, &st);
         if (st.camera_present != 0 && st.state != PIN_STATE_ERROR) {

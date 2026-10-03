@@ -38,3 +38,16 @@ pin_sink_t *pin_sink_create(pin_format_t format)
         return NULL;
     }
 }
+
+pin_sink_t *pin_sink_create_stdout(pin_kind_t kind)
+{
+    switch (kind) {
+    case PIN_KIND_ANALOG:
+        return sink_nut_create();
+    case PIN_KIND_DV:
+    case PIN_KIND_HDV:
+        return sink_raw_create();
+    default:
+        return NULL;
+    }
+}

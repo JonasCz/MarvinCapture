@@ -32,6 +32,8 @@ int pin_stop_abnormal(pin_stop_reason_t reason)
     case PIN_STOP_DISK_FULL:
     case PIN_STOP_WRITE_ERROR:
     case PIN_STOP_ERROR:
+    case PIN_STOP_PIPE_SLOW:
+    case PIN_STOP_PIPE_CLOSED:
         return 1;
     default:
         return 0;
@@ -62,6 +64,8 @@ static const char *default_detail(pin_stop_reason_t reason)
     case PIN_STOP_DISK_FULL:   return "the output drive is almost full";
     case PIN_STOP_WRITE_ERROR: return "writing the file failed";
     case PIN_STOP_ERROR:       return "of an error";
+    case PIN_STOP_PIPE_SLOW:   return "the program reading the output can't keep up";
+    case PIN_STOP_PIPE_CLOSED: return "the program reading the output exited";
     default:                   return NULL;
     }
 }

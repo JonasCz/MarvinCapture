@@ -55,7 +55,14 @@ int main(void)
               !pin_stop_abnormal(PIN_STOP_NONE), "normal ends");
     CHECK(pin_stop_abnormal(PIN_STOP_DEVICE_LOST) && pin_stop_abnormal(PIN_STOP_CAMERA_LOST) &&
               pin_stop_abnormal(PIN_STOP_DISK_FULL) && pin_stop_abnormal(PIN_STOP_WRITE_ERROR) &&
-              pin_stop_abnormal(PIN_STOP_ERROR), "abnormal ends");
+              pin_stop_abnormal(PIN_STOP_ERROR) && pin_stop_abnormal(PIN_STOP_PIPE_SLOW) &&
+              pin_stop_abnormal(PIN_STOP_PIPE_CLOSED), "abnormal ends");
+    pin_stop_message(PIN_STOP_PIPE_SLOW, 30, NULL, b, sizeof(b));
+    CHECK(strcmp(b, "Capture stopped after capturing 30s, because the program reading the output "
+                    "can't keep up.") == 0, "pipe slow wording");
+    pin_stop_message(PIN_STOP_PIPE_CLOSED, 30, NULL, b, sizeof(b));
+    CHECK(strcmp(b, "Capture stopped after capturing 30s, because the program reading the output "
+                    "exited.") == 0, "pipe closed wording");
     CHECK(pin_stop_disk_reserve(0, 0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
     CHECK(pin_stop_disk_reserve(10, 20, 30) == 60, "margin + backlog + remux");
 

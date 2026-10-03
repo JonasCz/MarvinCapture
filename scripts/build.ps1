@@ -61,8 +61,12 @@ if ($Clean -and (Test-Path $build)) {
 
 # --- 1. FFmpeg ---------------------------------------------------------------
 $ffmpeg = Join-Path $root 'third_party\ffmpeg-windows-x86_64\lib\pkgconfig'
-if (-not (Test-Path $ffmpeg)) {
-    Step 'Building the minimal static FFmpeg (first time only)'
+# rebuilt when scripts\build-ffmpeg.sh changed since the installed build (a component was added)
+$ffStamp = Join-Path $root 'third_party\ffmpeg-windows-x86_64\build-script.sha256'
+$ffHash = (Get-FileHash (Join-Path $root 'scripts\build-ffmpeg.sh') -Algorithm SHA256).Hash.ToLower()
+$ffStale = (Test-Path $ffmpeg) -and -not ((Test-Path $ffStamp) -and ((Get-Content $ffStamp -Raw).Trim() -eq $ffHash))
+if ($ffStale -or -not (Test-Path $ffmpeg)) {
+    Step 'Building the minimal static FFmpeg (first time, or build-ffmpeg.sh changed)'
     $sh = Join-Path $Msys2 'usr\bin\bash.exe'
     $env:MSYSTEM = 'UCRT64'
     $env:CHERE_INVOKING = '1'

@@ -83,6 +83,8 @@ add_library(pinnacle_sinks STATIC
     pin_sink_factory.c
     sink_sar.c
     sink_raw.c
+    sink_nut.c
+    pin_stdout.c
     sink_avi.c
     sink_ffv1.c
     sink_rewrap.c

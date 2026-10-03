@@ -248,6 +248,9 @@ int main(int argc, char **argv)
         return 0;
     }
 
+#if !defined(_WIN32)
+    signal(SIGPIPE, SIG_IGN);   /* --capture -: a reader that exits is an error return, not a kill */
+#endif
     const int debug = pin_script_debug(sc);
     const int tty = ISATTY_STDERR() ? 1 : 0;
     const int inplace = tty && !debug;

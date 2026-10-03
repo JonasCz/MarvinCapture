@@ -10,8 +10,7 @@ the same syntax.
 > the core (`pin_script_parse`, `pin_script_run`, `pin_script_cancel`,
 > `pin_script_help`, API version 3), used by `MarvinCaptureCLI`
 > (`src/cli/marvin_capture_cli.c`, in `build\dist` next to the GUI) and by the
-> GUI's command line. Only sections marked *(planned)* are not built yet:
-> `--capture -` parses but fails at run time with "not supported yet".
+> GUI's command line.
 
 ## Model
 
@@ -63,7 +62,7 @@ is used (DV raw, HDV TS, analog AVI) and a warning is printed.
 | Action | Effect |
 |---|---|
 | `--rew` `--ff` `--play` `--pause` `--stop` | Transport command. Any transport action first closes an open capture (tape keeps running); `--stop` also stops the tape. Not available on analog inputs. |
-| `--capture PATH` | Start capturing to PATH. The capture stays open until the next transport action, the next `--capture`, or the end of the arguments. `-` writes the stream to stdout *(planned)*. |
+| `--capture PATH` | Start capturing to PATH. The capture stays open until the next transport action, the next `--capture`, or the end of the arguments. `-` writes the stream to stdout (see below). |
 | `--wait [COND[,COND...]]` | Block until the first of the conditions is met. Default `idle`. |
 
 ### Wait conditions
@@ -97,12 +96,33 @@ terminal and printed once per second when stderr is not a terminal or with
 gracefully (`Stopping: finalising files...`), a second Ctrl-C exits at once
 with 130.
 
-### Streaming to stdout *(planned)*
+### Streaming to stdout
 
-`--capture -` writes DV as raw DIF, HDV as MPEG-TS, analog as NUT (YUY2 +
-PCM). `--format` is ignored. The pipe gets a large queue; if the reading
-program cannot keep up and the queue fills, or it exits, the capture stops with
-an error (exit 4) instead of silently dropping frames.
+`--capture -` writes the capture to stdout so another program can take it:
+
+| Input | Stream |
+|---|---|
+| DV | raw DIF, the same bytes as a `.dv` file (`ffmpeg -f dv -i -`) |
+| HDV | MPEG-TS, the same bytes as a `.ts` file (`ffmpeg -f mpegts -i -`) |
+| Analog | NUT container: rawvideo YUY2 (`yuyv422`) + `pcm_s16le` 48 kHz stereo (`ffmpeg -i -`, which finds the format itself). Timestamps are exact (25 or 30000/1001 frames per second, 1/48000 for audio), the sample aspect ratio follows `--aspect`. |
+
+Rules:
+
+- `--format` and `--keep-raw` are ignored. `--split` before `--capture -` is a
+  usage error (there are no files to split into).
+- Only one `--capture -` per command line (there is one stdout); a usage error
+  otherwise. Other `--capture PATH` steps are fine.
+- Nothing else is printed to stdout while streaming: the help and the device
+  table only appear with `--help`.
+- If stdout is a terminal (or there is none) the script is refused before any
+  step runs, exit 1: "refusing to write video to the terminal; pipe it into a
+  program".
+- The pipe has its own queue of 256 MiB (a file's is 64 MiB). The USB side
+  cannot be paused, so nothing is dropped silently: if the queue fills because
+  the reading program cannot keep up, the capture stops with "the program
+  reading the output can't keep up" (exit 4); if the reading program exits, with
+  "the program reading the output exited" (exit 4). Data queued before that is
+  discarded when the reader is too slow. The tape is stopped (below).
 
 ## Exit codes
 
@@ -112,8 +132,12 @@ an error (exit 4) instead of silently dropping frames.
 | 1 | Usage error |
 | 2 | Device or bring-up error |
 | 3 | Deck error (no camera, no tape, command refused, timecode wait failed) |
-| 4 | Capture ended abnormally (disk full, camera lost, write error, pipe) |
+| 4 | Capture ended abnormally (disk full, camera lost, write error, pipe too slow or closed) |
 | 130 | Ctrl-C: the capture is finalised and the tape stopped |
+
+When a script ends with 3, 4 or 130 after it moved the tape (and its last
+transport command was not `--stop`), the tape is stopped, so nothing is left
+playing.
 
 ## Examples
 
@@ -151,7 +175,7 @@ conditions: `pin_script_eval.c`, sequencer: `pin_script_run.c`).
   core appends the format's own.
 - **Exit codes.** 1 is also used by the sequencer for a failure that is
   really a usage problem (target file exists without `--overwrite`, `--capture -`
-  not supported yet). An existing file is detected by checking the file name of
+  with stdout a terminal). An existing file is detected by checking the file name of
   every kind that could arrive (a stopped deck has not told us DV from HDV yet).
   `--std` and the analog controls on the DV input are ignored with a warning,
   not rejected.
@@ -186,4 +210,10 @@ conditions: `pin_script_eval.c`, sequencer: `pin_script_run.c`).
   idle first is exit 3. Durations with frames use the video frame rate, else 25.
 - **Ctrl-C** (`pin_script_cancel`): the open capture is finalised, the tape is
   stopped if the script moved it and its last command was not `--stop`, and the
-  script ends with exit 130.
+  script ends with exit 130. A script that ends with exit 3 or 4 stops the tape
+  the same way.
+- **Stdout** is the process's own (binary mode on Windows, SIGPIPE ignored on
+  POSIX so a closed pipe is an error return). In the core the capture path `-`
+  means stdout: no naming, collision or disk-space checks, no disk-full stop;
+  scene split, keep-raw and passes are ignored. The stop reasons
+  `PIN_STOP_PIPE_SLOW` and `PIN_STOP_PIPE_CLOSED` are abnormal.

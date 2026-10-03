@@ -35,6 +35,7 @@
 #include "../core/pinnacle_cfg.h"
 #include "../core/pin_log.h"
 #include "../sinks/sinks_internal.h"
+#include "../sinks/pin_stdout.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -945,12 +946,15 @@ static void open_sink_for_scene(pin_session_t *s)
         .pass = s->pass_index,
     };
     char path[PIN_PATH_MAX];
-    if (pin_naming_build(s->naming_base, &nopts, s->naming_ext, path, sizeof(path)) != 0) {
+    const int to_stdout = pin_path_is_stdout(s->capture_opts.path);
+    if (to_stdout) {
+        snprintf(path, sizeof(path), "-");
+    } else if (pin_naming_build(s->naming_base, &nopts, s->naming_ext, path, sizeof(path)) != 0) {
         set_error(s, PIN_ERR_ARG, "output path too long");
         return;
     }
 
-    s->sink = pin_sink_create(s->active_format);
+    s->sink = to_stdout ? pin_sink_create_stdout(s->stream_kind) : pin_sink_create(s->active_format);
     if (!s->sink) {
         set_error(s, PIN_ERR_ARG, "unsupported output format");
         return;
@@ -1015,7 +1019,9 @@ static void open_sink_for_scene(pin_session_t *s)
         s->sink = NULL;
         return;
     }
-    s->writer = pin_writer_start(0, writer_consume, s);
+    s->writer = to_stdout ? pin_writer_start_ex(PIN_WRITER_PIPE_CAPACITY, writer_consume, s,
+                                                PIN_WRITER_OVERFLOW_FATAL)
+                          : pin_writer_start(0, writer_consume, s);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
     pin_split_new_file(&s->split);
     /* the clip counters restart with every file (frames still held back by a
@@ -1538,6 +1544,25 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         return 0;
     pin_writer_stats_t wst;
     pin_writer_get_stats(s->writer, &wst);
+    if (pin_path_is_stdout(s->capture_opts.path)) {
+        /* a pipe: no disk to run out of, and the reader cannot be waited for */
+        pin_stop_reason_t pwhy;
+        if (wst.overflowed) {
+            pwhy = PIN_STOP_PIPE_SLOW;
+            pin_writer_abort(s->writer); /* do not wait for a stalled reader to drain the queue */
+        } else if (wst.failed) {
+            pin_sink_status_t sst;
+            memset(&sst, 0, sizeof(sst));
+            if (s->sink->get_status)
+                s->sink->get_status(s->sink, &sst);
+            pwhy = sst.pipe_closed ? PIN_STOP_PIPE_CLOSED : PIN_STOP_WRITE_ERROR;
+        } else {
+            return 0;
+        }
+        capture_end(s, pwhy, NULL, deck_node);
+        set_state(s, PIN_STATE_READY);
+        return 1;
+    }
     double now = pin_session_now();
     if (!wst.failed && now - s->disk_check_s < 1.0)
         return 0;
@@ -1603,6 +1628,9 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->active_format = s->stream_kind == PIN_KIND_HDV ? s->capture_opts.format_hdv
                       : s->stream_kind == PIN_KIND_ANALOG ? s->capture_opts.format_analog
                       : s->capture_opts.format_dv;
+    if (pin_path_is_stdout(s->capture_opts.path))     /* stdout: raw DIF / TS / NUT, see open_sink_for_scene() */
+        s->active_format = s->stream_kind == PIN_KIND_HDV ? PIN_FMT_HDV_TS
+                           : s->stream_kind == PIN_KIND_ANALOG ? PIN_FMT_ANALOG_AVI : PIN_FMT_DV_RAW;
     char ext[16];
     format_ext(s->active_format, ext, sizeof(ext));
     pin_naming_strip_extension(s->capture_opts.path, ext, s->naming_base, sizeof(s->naming_base));
@@ -1688,6 +1716,13 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
 
     if (kind == PIN_CMD_CAPTURE_START) {
         s->capture_opts = s->cmd.capture;
+        if (pin_path_is_stdout(s->capture_opts.path)) {
+            /* a stream has no files to split, keep or number, and one pass */
+            s->capture_opts.scene_split = 0;
+            s->capture_opts.keep_raw = 0;
+            s->capture_opts.passes = 1;
+            s->capture_opts.first_number = 0;
+        }
         s->stop_reason = PIN_STOP_NONE;
         s->stop_captured_s = 0;
         s->stop_text[0] = 0;
@@ -2960,6 +2995,11 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     memset(out, 0, sizeof(*out));
     out->size = sizeof(*out);
 
+    if (pin_path_is_stdout(o->path)) {
+        /* standard output: no name, collision or disk to check */
+        snprintf(out->first_path, sizeof(out->first_path), "-");
+        return PIN_OK;
+    }
     if (!pin_naming_validate(o->path, out->message, sizeof(out->message)))
         return PIN_ERR_ARG;
 
@@ -3027,6 +3067,8 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     pin_status_t cs = pin_session_check_output(s, o, &chk);
     if (cs == PIN_ERR_ARG)
         return cs; /* unusable file name */
+    if (pin_path_is_stdout(o->path) && pin_stdout_check(NULL, 0) != 0)
+        return PIN_ERR_ARG; /* a terminal, or no standard output */
     if (!overwrite && cs == PIN_OK && chk.collision)
         return PIN_ERR_EXISTS;
     pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_START, .capture = *o, .overwrite = overwrite };
@@ -3163,10 +3205,12 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     const char *hint_path = NULL;
     pin_kind_t hint_kind = s->stream_kind;
     pin_format_t hint_fmt = PIN_FMT_DV_RAW;
-    if (s->state == PIN_STATE_CAPTURING && s->current_file[0]) {
+    if (s->state == PIN_STATE_CAPTURING && pin_path_is_stdout(s->capture_opts.path)) {
+        /* a pipe: no disk to report on */
+    } else if (s->state == PIN_STATE_CAPTURING && s->current_file[0]) {
         hint_path = s->current_file;
         hint_fmt = s->active_format;
-    } else if (s->have_output_hint && s->output_hint.path[0]) {
+    } else if (s->have_output_hint && s->output_hint.path[0] && !pin_path_is_stdout(s->output_hint.path)) {
         hint_path = s->output_hint.path;
         hint_fmt = hint_kind == PIN_KIND_HDV ? s->output_hint.format_hdv
                   : hint_kind == PIN_KIND_ANALOG ? s->output_hint.format_analog

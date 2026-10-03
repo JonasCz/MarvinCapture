@@ -38,7 +38,8 @@ struct pin_writer {
     size_t unit_head, unit_tail;      /* monotonic counters, mod array size */
 
     pin_writer_stats_t stats;
-    int closed, failed;
+    int closed, failed, overflowed, aborted;
+    unsigned flags;
 
     pthread_mutex_t lock;
     pthread_cond_t wake;
@@ -60,9 +61,9 @@ static void *writer_thread(void *arg)
 
     pthread_mutex_lock(&w->lock);
     for (;;) {
-        while (w->unit_head == w->unit_tail && !w->closed)
+        while (w->unit_head == w->unit_tail && !w->closed && !w->aborted)
             pthread_cond_wait(&w->wake, &w->lock);
-        if (w->unit_head == w->unit_tail)
+        if (w->aborted || w->unit_head == w->unit_tail)
             break;                              /* closed and fully drained */
 
         unit_hdr_t u = w->units[w->unit_tail % PIN_WRITER_MAX_QUEUED_UNITS];
@@ -108,6 +109,12 @@ static void *writer_thread(void *arg)
 
 pin_writer_t *pin_writer_start(size_t capacity_bytes, pin_writer_consume_fn consume, void *user)
 {
+    return pin_writer_start_ex(capacity_bytes, consume, user, 0);
+}
+
+pin_writer_t *pin_writer_start_ex(size_t capacity_bytes, pin_writer_consume_fn consume, void *user,
+                                  unsigned flags)
+{
     if (!capacity_bytes)
         capacity_bytes = PIN_WRITER_DEFAULT_CAPACITY;
     pin_writer_t *w = calloc(1, sizeof(*w));
@@ -120,6 +127,7 @@ pin_writer_t *pin_writer_start(size_t capacity_bytes, pin_writer_consume_fn cons
     }
     w->capacity = capacity_bytes;
     w->consume = consume;
+    w->flags = flags;
     w->user = user;
     pthread_mutex_init(&w->lock, NULL);
     pthread_cond_init(&w->wake, NULL);
@@ -137,7 +145,7 @@ int pin_writer_push(pin_writer_t *w, pin_unit_kind_t kind, uint64_t index,
     if (!w)
         return 0;
     pthread_mutex_lock(&w->lock);
-    if (w->closed || w->failed) {
+    if (w->closed || w->failed || w->overflowed || w->aborted) {
         pthread_mutex_unlock(&w->lock);
         return 0;
     }
@@ -145,6 +153,8 @@ int pin_writer_push(pin_writer_t *w, pin_unit_kind_t kind, uint64_t index,
     size_t units_fill = w->unit_head - w->unit_tail;
     if (len > w->capacity - fill || units_fill >= PIN_WRITER_MAX_QUEUED_UNITS) {
         w->stats.overflow_count++;
+        if (w->flags & PIN_WRITER_OVERFLOW_FATAL)
+            w->overflowed = 1;
         pthread_mutex_unlock(&w->lock);
         return 0;
     }
@@ -180,6 +190,17 @@ void pin_writer_get_stats(pin_writer_t *w, pin_writer_stats_t *out)
     pthread_mutex_lock(&w->lock);
     *out = w->stats;
     out->failed = w->failed;
+    out->overflowed = w->overflowed;
+    pthread_mutex_unlock(&w->lock);
+}
+
+void pin_writer_abort(pin_writer_t *w)
+{
+    if (!w)
+        return;
+    pthread_mutex_lock(&w->lock);
+    w->aborted = 1;
+    pthread_cond_signal(&w->wake);
     pthread_mutex_unlock(&w->lock);
 }
 

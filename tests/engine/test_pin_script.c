@@ -193,6 +193,13 @@ static void test_cli_examples(void)
     CHECK(cap && cap->cap.to_stdout, "stdout flag");
     expect_text(sc, 1, "capture -");
     pin_script_destroy(sc);
+
+    /* one stream, no scene split */
+    EXPECT_ERROR("only once", "--capture", "-", "--wait", "+00:00:01:00", "--capture", "-");
+    EXPECT_ERROR("--split", "--split", "--capture", "-");
+    CHECK(PARSE(sc, err, "--capture", "-", "--wait", "+00:00:01:00", "--capture", "a.dv") == PIN_OK,
+          "a file after the stream is fine");
+    pin_script_destroy(sc);
 }
 
 static void test_settings_state(void)

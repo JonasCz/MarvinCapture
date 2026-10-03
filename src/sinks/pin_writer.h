@@ -52,6 +52,7 @@ typedef enum {
 } pin_unit_kind_t;
 
 #define PIN_WRITER_DEFAULT_CAPACITY (64u << 20)
+#define PIN_WRITER_PIPE_CAPACITY (256u << 20)   /* queue in front of a pipe (stdout) */
 #define PIN_WRITER_MAX_QUEUED_UNITS 4096
 
 typedef struct pin_writer pin_writer_t;
@@ -70,11 +71,21 @@ typedef struct {
     uint64_t units_consumed;
     uint64_t bytes_pushed;
     int failed;                 /* the consumer returned an error: nothing more reaches the file */
+    int overflowed;             /* PIN_WRITER_OVERFLOW_FATAL: the queue was full once; nothing was
+                                   queued since (a hole in the stream must not be papered over) */
 } pin_writer_stats_t;
+
+/* pin_writer_start_ex() flags. */
+#define PIN_WRITER_OVERFLOW_FATAL 1u   /* a full queue is an error, not a counted drop: for a
+                                          pipe, where the reader cannot be waited for and a gap
+                                          would corrupt the stream. The units queued before the
+                                          overflow are still delivered; later pushes are refused. */
 
 /* capacity_bytes == 0 means PIN_WRITER_DEFAULT_CAPACITY. Starts the consumer
  * thread; returns NULL on allocation/thread-creation failure. */
 pin_writer_t *pin_writer_start(size_t capacity_bytes, pin_writer_consume_fn consume, void *user);
+pin_writer_t *pin_writer_start_ex(size_t capacity_bytes, pin_writer_consume_fn consume, void *user,
+                                  unsigned flags);
 
 /* Never blocks. Copies data in and wakes the consumer, or -- if there is not
  * room for it (byte capacity or PIN_WRITER_MAX_QUEUED_UNITS units already
@@ -92,6 +103,12 @@ void pin_writer_get_stats(pin_writer_t *w, pin_writer_stats_t *out);
  * was queued was consumed without the callback ever returning non-zero, -1
  * otherwise. Safe with NULL. */
 int pin_writer_stop(pin_writer_t *w);
+
+/* Discards what is still queued and refuses further pushes; the consumer thread
+ * ends after the unit it is in. For a pipe whose reader stalled: draining the
+ * queue into it would block the capture's end for as long as the reader sleeps.
+ * pin_writer_stop() still has to be called. Safe with NULL. */
+void pin_writer_abort(pin_writer_t *w);
 
 #ifdef __cplusplus
 }
