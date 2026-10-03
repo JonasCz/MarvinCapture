@@ -908,10 +908,14 @@ pin_status_t pin_session_format_info(pin_format_t f, pin_format_info_t *out)
     return PIN_OK;
 }
 
-static void format_ext(pin_format_t f, char *out, size_t out_size)
+/* The file name extension of format f for these options: the format's own, except
+ * that a raw HDV transport stream keeps the user's .m2t when they asked for it. */
+static void format_ext(const pin_capture_opts_t *o, pin_format_t f, char *out, size_t out_size)
 {
     pin_format_info_t fi;
-    if (pin_session_format_info(f, &fi) == PIN_OK)
+    if (f == PIN_FMT_HDV_TS && o && o->ts_extension[0])
+        snprintf(out, out_size, "%.7s", o->ts_extension);
+    else if (pin_session_format_info(f, &fi) == PIN_OK)
         strncpy(out, fi.extension, out_size - 1);
     else
         strncpy(out, "dat", out_size - 1);
@@ -1623,7 +1627,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
         s->active_format = s->stream_kind == PIN_KIND_HDV ? PIN_FMT_HDV_TS
                            : s->stream_kind == PIN_KIND_ANALOG ? PIN_FMT_ANALOG_AVI : PIN_FMT_DV_RAW;
     char ext[16];
-    format_ext(s->active_format, ext, sizeof(ext));
+    format_ext(&s->capture_opts, s->active_format, ext, sizeof(ext));
     pin_naming_strip_extension(s->capture_opts.path, ext, s->naming_base, sizeof(s->naming_base));
     strncpy(s->naming_ext, ext, sizeof(s->naming_ext) - 1);
     s->scene_index = first_scene_number(s);
@@ -3003,7 +3007,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     pin_format_t fmt = kind == PIN_KIND_HDV ? o->format_hdv
                        : kind == PIN_KIND_DV ? o->format_dv : o->format_analog;
     char ext[16];
-    format_ext(fmt, ext, sizeof(ext));
+    format_ext(o, fmt, ext, sizeof(ext));
 
     char base[PIN_PATH_MAX];
     pin_naming_strip_extension(o->path, ext, base, sizeof(base));

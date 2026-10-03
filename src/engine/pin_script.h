@@ -99,6 +99,7 @@ typedef enum {
 typedef struct {
     char path[PIN_PATH_MAX];    /* exactly as given ("-" = stdout) */
     char base[PIN_PATH_MAX];    /* without a recognised extension */
+    char ts_ext[8];             /* "m2t" when the name ended in .m2t (kept for a raw HDV file), else "" */
     int to_stdout;
     pin_format_t format[3];     /* by pin_kind_t */
     unsigned warn_mask;         /* kinds whose format fell back to the default because

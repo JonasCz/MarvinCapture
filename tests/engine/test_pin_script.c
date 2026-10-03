@@ -243,6 +243,14 @@ static void test_settings_state(void)
     CHECK(sc->nsteps == 0, "settings only: no steps");
     pin_script_destroy(sc);
 
+    /* .m2t is kept as the extension of a raw HDV file, .ts leaves the default */
+    CHECK(PARSE(sc, err, "--capture", "a.m2t", "--stop", "--capture", "b.ts") == PIN_OK, "m2t parse");
+    a = find_step(sc, 0);
+    b = find_step(sc, 2);
+    CHECK(a && strcmp(a->cap.ts_ext, "m2t") == 0 && strcmp(a->cap.base, "a") == 0, ".m2t kept");
+    CHECK(b && b->cap.ts_ext[0] == 0, ".ts is the default extension");
+    pin_script_destroy(sc);
+
     /* a bare "--capture x" after "--wait" with the equals form */
     CHECK(PARSE(sc, err, "--play", "--wait=idle", "--capture=z.ts") == PIN_OK && sc->nsteps == 3, "= forms");
     expect_text(sc, 1, "wait idle");

@@ -332,6 +332,9 @@ typedef struct {
                                     expires the pass ends like a no-signal timeout (rewind and
                                     next pass, or end of the capture in the last pass).
                                     Appended field, ABI-compatible. */
+    char ts_extension[8];       /* extension of a raw HDV transport stream file (PIN_FMT_HDV_TS),
+                                    without the dot: "" = "ts", or "m2t" to keep the name the user
+                                    gave. Appended field, ABI-compatible. */
 } pin_capture_opts_t;
 
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);

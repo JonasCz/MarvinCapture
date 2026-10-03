@@ -292,6 +292,7 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     o.format_analog = c->format[PIN_KIND_ANALOG];
     o.format_dv = c->format[PIN_KIND_DV];
     o.format_hdv = c->format[PIN_KIND_HDV];
+    snprintf(o.ts_extension, sizeof(o.ts_extension), "%s", c->ts_ext);
     snprintf(o.title, sizeof(o.title), "%s", c->title);
     o.aspect = c->aspect;
     o.scene_split = c->split;
@@ -329,7 +330,8 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
             pin_format_info_t fi = { .size = sizeof(fi) };
             char match[PIN_PATH_MAX];
             if (pin_session_format_info(cand[i], &fi) == PIN_OK &&
-                pin_naming_collides(c->base, fi.extension, match, sizeof(match)) > 0)
+                pin_naming_collides(c->base, cand[i] == PIN_FMT_HDV_TS && c->ts_ext[0] ? c->ts_ext : fi.extension,
+                                    match, sizeof(match)) > 0)
                 return failf(r, EXIT_USAGE, "%s already exists (use --overwrite to replace it)", match);
         }
     }
@@ -412,7 +414,8 @@ static int precheck_targets(run_t *r, pin_input_t start_input)
             pin_format_info_t fi = { .size = sizeof(fi) };
             char match[PIN_PATH_MAX];
             if (pin_session_format_info(cand[k], &fi) == PIN_OK &&
-                pin_naming_collides(it->cap.base, fi.extension, match, sizeof(match)) > 0)
+                pin_naming_collides(it->cap.base, cand[k] == PIN_FMT_HDV_TS && it->cap.ts_ext[0] ? it->cap.ts_ext : fi.extension,
+                                    match, sizeof(match)) > 0)
                 return failf(r, EXIT_USAGE, "%s already exists (use --overwrite to replace it)", match);
         }
     }

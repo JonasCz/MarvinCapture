@@ -107,6 +107,7 @@ public unsafe struct PinCaptureOpts
     public int RewindFirst;     // "Play and capture": rewind to the start of the tape first
     public uint FirstNumber;    // >= 1: every file is "base-NNNN.ext", counting up per scene from here
     public int MaxDurationMinutes; // stop after this long of capture time, signal/data or not; 0 = never
+    public fixed byte TsExtensionBuf[8]; // raw HDV file extension: empty = "ts" (the GUI leaves it empty)
 
     public string Path
     {

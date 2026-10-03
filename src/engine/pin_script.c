@@ -650,6 +650,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             } else {
                 char ext[16];
                 pin_script_split_ext(inl, c->base, sizeof(c->base), ext, sizeof(ext));
+                if (strcmp(ext, "m2t") == 0)
+                    snprintf(c->ts_ext, sizeof(c->ts_ext), "m2t");
                 pin_format_t extfmt[3];
                 unsigned unsupp = 0;
                 int known = ext[0] && pin_script_ext_formats(ext, extfmt, &unsupp);

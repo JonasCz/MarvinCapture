@@ -123,5 +123,24 @@ int main(int argc, char **argv)
     CHECK(!pin_test_file_exists("hdv_replay_out-0002.ts"));
     printf("OK: %llu HDV picture(s) captured, no spurious scene split\n",
            (unsigned long long)snap.frames);
+
+    /* a user path ending in .m2t keeps that extension for the raw transport stream */
+    s = pin_test_open_replay(slice_path);
+    pin_test_prepare_dv(s);
+    pin_capture_opts_defaults(&opts);
+    strncpy(opts.path, "hdv_replay_m2t", sizeof(opts.path) - 1);
+    strncpy(opts.ts_extension, "m2t", sizeof(opts.ts_extension) - 1);
+    opts.format_hdv = PIN_FMT_HDV_TS;
+    CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
+    pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 3000, &snap);
+    pin_test_wait_state(s, PIN_STATE_READY, PIN_STATE_ERROR, 15000, &snap);
+    if (snap.state == PIN_STATE_CAPTURING) {
+        pin_capture_stop(s);
+        pin_test_wait_state(s, PIN_STATE_READY, -1, 3000, &snap);
+    }
+    pin_close(s);
+    CHECK(pin_test_file_exists("hdv_replay_m2t.m2t"));
+    CHECK(!pin_test_file_exists("hdv_replay_m2t.ts"));
+    printf("OK: .m2t extension kept\n");
     return 0;
 }
