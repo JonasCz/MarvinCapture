@@ -298,7 +298,7 @@ int main(int argc, char **argv)
     pinnacle_tuning_from_env(&dev.tuning);
 
     /* Cross-process ownership (pinnacle_lock.h): refuse to fight another
-     * pincli/pindeck/pinanalog -- or a future pinctl -- over this device. */
+     * pincli/pindeck/pinanalog -- or MarvinCaptureCLI -- over this device. */
     char device_id[PINNACLE_ENUM_ID_MAX];
     pinnacle_enum_build_id(libusb_get_device(dev.handle), device_id, sizeof(device_id));
     pinnacle_lock_t *lock = NULL;

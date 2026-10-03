@@ -27,8 +27,8 @@ Quick native-only iteration (no script): in PowerShell with
 update `build\dist`; either rerun the script or copy `marvin-core.dll` and
 the changed exes from `build\core` into `build\dist\cli`.
 
-Output: `build\dist` (GUI + core DLL + `firmware\`) and `build\dist\cli`
-(`pincli pinanalog pindeck pinlist pinctl` + `marvin-core.dll`,
+Output: `build\dist` (GUI + `MarvinCaptureCLI.exe` + core DLL + `firmware\`) and `build\dist\cli`
+(`pincli pinanalog pindeck pinlist` + `marvin-core.dll`,
 `libusb-1.0.dll`, `libwinpthread-1.dll`, `firmware\`). Run the CLIs from
 `build\dist\cli` (they default to `firmware\` in the cwd).
 

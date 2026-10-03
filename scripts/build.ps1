@@ -10,10 +10,11 @@
   4. Assembles build\dist:
 
        build\dist\MarvinCaptureGUI.exe       the GUI
+       build\dist\MarvinCaptureCLI.exe       the command-line program
        build\dist\marvin-core.dll            the core library (+ libusb-1.0.dll)
        build\dist\firmware\                  FPGA bitstreams
        build\dist\cli\                       pincli, pinanalog, pindeck, pinlist,
-                                             pinctl, with their DLLs and firmware\
+                                             with their DLLs and firmware\
 
   Requires MSYS2 (UCRT64: gcc, cmake, ninja, libusb, pkgconf, nasm, make,
   diffutils) and the .NET 10 SDK. See docs\building.md.
@@ -83,7 +84,7 @@ if (-not $SkipTests) {
 Step 'Assembling build\dist\cli'
 $cli = Join-Path $dist 'cli'
 New-Item -ItemType Directory -Force $cli | Out-Null
-foreach ($f in 'pincli', 'pinanalog', 'pindeck', 'pinlist', 'pinctl') {
+foreach ($f in 'pincli', 'pinanalog', 'pindeck', 'pinlist') {
     Copy-Item (Join-Path $core "$f.exe") $cli -Force
 }
 Copy-Item (Join-Path $core 'marvin-core.dll') $cli -Force
@@ -93,6 +94,16 @@ Copy-Item (Join-Path $core 'libusb-1.0.dll') $cli -Force
 Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $cli -Force
 Remove-Item -Recurse -Force (Join-Path $cli 'firmware') -ErrorAction SilentlyContinue
 Copy-Item (Join-Path $root 'firmware') (Join-Path $cli 'firmware') -Recurse
+
+# MarvinCaptureCLI.exe goes next to the GUI: they share marvin-core.dll and firmware\
+# (the GUI build below copies the same files again).
+New-Item -ItemType Directory -Force $dist | Out-Null
+Copy-Item (Join-Path $core 'MarvinCaptureCLI.exe') $dist -Force
+Copy-Item (Join-Path $core 'marvin-core.dll') $dist -Force
+Copy-Item (Join-Path $core 'libusb-1.0.dll') $dist -Force
+Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $dist -Force
+Remove-Item -Recurse -Force (Join-Path $dist 'firmware') -ErrorAction SilentlyContinue
+Copy-Item (Join-Path $root 'firmware') (Join-Path $dist 'firmware') -Recurse
 
 # --- 4. GUI --------------------------------------------------------------------
 if (-not $SkipGui) {
@@ -104,14 +115,14 @@ if (-not $SkipGui) {
 
 # --- Check ---------------------------------------------------------------------
 Step 'Checking build\dist'
-$expect = @('cli\pincli.exe', 'cli\pinctl.exe', 'cli\marvin-core.dll',
+$expect = @('MarvinCaptureCLI.exe', 'marvin-core.dll', 'libusb-1.0.dll',
+            'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin', 'firmware\fx2-marvin.bin',
+            'cli\pincli.exe', 'cli\marvin-core.dll',
             'cli\libusb-1.0.dll', 'cli\libwinpthread-1.dll',
             'cli\firmware\fpga-ohci.bin', 'cli\firmware\fpga-capture.bin',
             'cli\firmware\fx2-marvin.bin')
 if (-not $SkipGui) {
-    $expect += 'MarvinCaptureGUI.exe', 'marvin-core.dll', 'libusb-1.0.dll',
-               'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin',
-               'firmware\fx2-marvin.bin'
+    $expect += 'MarvinCaptureGUI.exe'
 }
 $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dist $_)) }
 if ($missing) { throw "missing from build\dist: $($missing -join ', ')" }

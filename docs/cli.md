@@ -6,13 +6,12 @@ end over `marvin-core`: the argument parser, the step sequencer and the help
 text live in the core (`pin_api.h`), so the GUI's command line accepts exactly
 the same syntax.
 
-> Status: the parser, the step sequencer and the help text are implemented in
+> Status: implemented. The parser, the step sequencer and the help text are in
 > the core (`pin_script_parse`, `pin_script_run`, `pin_script_cancel`,
-> `pin_script_help`, API version 3) and used by the GUI's command line; verified
-> by unit tests and a replay-device test, not yet on hardware. The
-> `MarvinCaptureCLI` program itself and sections marked *(planned)* are not
-> built yet (`--capture -` parses but fails at run time with "not supported
-> yet").
+> `pin_script_help`, API version 3), used by `MarvinCaptureCLI`
+> (`src/cli/marvin_capture_cli.c`, in `build\dist` next to the GUI) and by the
+> GUI's command line. Only sections marked *(planned)* are not built yet:
+> `--capture -` parses but fails at run time with "not supported yet".
 
 ## Model
 
@@ -27,7 +26,7 @@ An action's argument is the next word unless it starts with `--`; `--wait=idle`
 also works.
 
 Run without arguments, or with `-h` / `--help`: print the help, then the device
-table (id, name, vid:pid, serial, state, owner pid).
+table (id, name, vid:pid, serial, state, owner pid), to stdout, exit 0.
 
 ## Settings
 
@@ -89,9 +88,14 @@ On analog inputs only `signal`, `nosignal` and durations are allowed.
 
 ## Output
 
-All human output goes to stderr: one line per step as it starts, then a status
-line (timecode while winding, REC line while capturing), redrawn in place on a
-terminal and printed once per second otherwise or with `--debug`.
+All human output goes to stderr (except the help text): the device, one
+`[i/n] step` line per step as it starts, warnings and errors from the core,
+file opened/closed lines, why a capture ended, then a status line (timecode
+while winding, REC line while capturing), redrawn in place at about 5 Hz on a
+terminal and printed once per second when stderr is not a terminal or with
+`--debug` (which also prints the core's debug log). Ctrl-C once stops
+gracefully (`Stopping: finalising files...`), a second Ctrl-C exits at once
+with 130.
 
 ### Streaming to stdout *(planned)*
 

@@ -33,7 +33,7 @@ the CLIs say `device already open in another process` (that is EACCES).
 
 No camera is attached, so only bring-up can be tested. Quick checks from `~/pin-ng`:
 
-- `./build/pinlist` / `./build/pinctl list` -- model name, `(untested)` flag, GUID serial.
+- `./build/pinlist` / `./build/MarvinCaptureCLI --help` -- model name, `(untested)` flag, GUID serial.
 - DV bring-up to "ready": `PINNACLE_DEBUG_1394=2 PINNACLE_PROBE=1 timeout 60 ./build/pindeck -vv state`
   expects `NodeID 0xc000ffc0 ... node 0 of 1` and "no camera on the 1394 bus".
 - Analog bring-up: `timeout 40 ./build/pinanalog --status` (decoder answers, "NO SIGNAL").

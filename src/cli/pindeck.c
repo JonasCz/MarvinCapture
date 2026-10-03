@@ -238,7 +238,7 @@ int main(int argc, char **argv)
     g_t0 = now_s();
 
     /* Cross-process ownership (pinnacle_lock.h): refuse to fight another
-     * pincli/pindeck/pinanalog -- or a future pinctl -- over this device. */
+     * pincli/pindeck/pinanalog -- or MarvinCaptureCLI -- over this device. */
     pinnacle_lock_t *lock = NULL;
     pinnacle_status_t st = pinnacle_open(&g_dev);
     if (st == PINNACLE_OK)

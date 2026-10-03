@@ -20,7 +20,7 @@
  * Shared helpers for tests/engine_replay: hardware-free ctest coverage of
  * the session engine (pin_session/pin_deck/pin_preview) driven entirely
  * through pin_api.h against the replay (virtual device) source, exactly as
- * a real GUI or pinctl would use it -- no libusb, no device, no rig.
+ * a real GUI or MarvinCaptureCLI would use it -- no libusb, no device, no rig.
  *
  * Every test in this directory links only marvin-core (the shared
  * pin_api.h library) plus whatever else it specifically needs (libavformat

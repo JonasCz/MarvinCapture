@@ -8,7 +8,7 @@ ID `0x000085`, 1080i/25 HDV tape) with `pindeck`:
   milliseconds, and takes effect immediately.
 - That is confirmed independently of the camera's replies by the EP 0x88
   stream: about 3.6 MB/s of HDV while the tape moves, 0 when stopped.
-- The GUI and `pinctl` use it through the session engine (`pin_deck`);
+- The GUI and `MarvinCaptureCLI` use it through the session engine (`pin_deck`);
   `pincli` does not.
 - The capture flow (rewind first, multi-pass, time limit, no-signal stop) was
   also verified on a Pinnacle 510-USB with a DV camcorder (short tape), see

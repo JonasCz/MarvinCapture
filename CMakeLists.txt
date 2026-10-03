@@ -46,7 +46,7 @@ find_package(Threads REQUIRED)
 # --- pinnacle_core: the hardware layer (device, cfg, 1394, stream, analog,
 # DV/HDV reassembly, logging), everything under src/core. Static on purpose:
 # it's linked straight into each CLI today, and later into the shared
-# marvin-core library and pinctl by a future phase, unchanged. ---
+# marvin-core library by a later phase, unchanged. ---
 file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
@@ -58,7 +58,7 @@ if(WIN32)
 endif()
 
 # --- Low-level CLIs: talk to src/core directly (capture, analog, deck
-# control, device list). pinctl (below) is the API-level one. ---
+# control, device list). MarvinCaptureCLI (below) is the API-level one. ---
 add_executable(pincli src/cli/pincli.c)
 target_link_libraries(pincli PRIVATE pinnacle_core)
 
@@ -125,7 +125,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
 endif()
 
 # --- Public API: the marvin-core shared library (pin_api.c, a thin
-# wrapper over src/engine) and pinctl, the API-only CLI/integration test
+# wrapper over src/engine) and MarvinCaptureCLI, the command-line front end
 # that links nothing but it. ---
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
     add_library(marvin-core SHARED src/api/pin_api.c)
@@ -140,7 +140,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
         # Front-ends load it by this exact name; MinGW would add "lib".
         set_target_properties(marvin-core PROPERTIES PREFIX "")
         # Put libusb-1.0.dll next to the core so the build directory is a
-        # complete runtime set a GUI (or pinctl) can load from.
+        # complete runtime set a GUI (or MarvinCaptureCLI) can load from.
         find_file(PIN_LIBUSB_DLL libusb-1.0.dll PATHS ENV PATH NO_DEFAULT_PATH)
         if(PIN_LIBUSB_DLL)
             add_custom_command(TARGET marvin-core POST_BUILD
@@ -162,8 +162,8 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
             ${CMAKE_SOURCE_DIR}/firmware/README.md
             $<TARGET_FILE_DIR:marvin-core>/firmware)
 
-    add_executable(pinctl src/cli/pinctl.c)
-    target_link_libraries(pinctl PRIVATE marvin-core)
+    add_executable(MarvinCaptureCLI src/cli/marvin_capture_cli.c)
+    target_link_libraries(MarvinCaptureCLI PRIVATE marvin-core)
 
     # Hardware-free ctest coverage of the session engine, driven through
     # pin_api.h against the replay (virtual device) source -- see

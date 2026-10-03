@@ -1,6 +1,6 @@
 ---
 name: test-with-hardware-device
-description: Test the Pinnacle 500-USB driver against the real attached device (and deck/camera) with the CLIs pinlist, pinctl, pincli, pinanalog, pindeck; read debug logs; diagnose "USB error" / device-not-ready. Manual hardware testing, NOT the automated ctest suite.
+description: Test the Pinnacle 500-USB driver against the real attached device (and deck/camera) with the CLIs pinlist, MarvinCaptureCLI, pincli, pinanalog, pindeck; read debug logs; diagnose "USB error" / device-not-ready. Manual hardware testing, NOT the automated ctest suite.
 ---
 
 # Testing with the real hardware
@@ -40,27 +40,24 @@ script copies them). Exit code `-1073741511` (0xC0000139) = a wrong
 | tool | use |
 |---|---|
 | `pinlist` | list units: `usb:1-8  Pinnacle Studio 500-USB  2304:0213  READY` or `IN USE (pid, state)` |
-| `pinctl` | the session API as a CLI; what the GUI uses. Best for end-to-end tests |
+| `MarvinCaptureCLI` | the session API as a CLI (docs/cli.md); what the GUI uses; in `build\dist`. Best for end-to-end tests |
 | `pincli` | raw DV/HDV capture straight from FireWire; logs to stderr (best for bring-up debugging) |
 | `pinanalog` | analog composite/S-video capture to AVI, decoder status |
 | `pindeck` | AV/C deck control (play, stop, rew, timecode...) |
 
-### pinctl (device id from `pinlist`, e.g. `usb:1-8`)
+### MarvinCaptureCLI (run from `build\dist`)
 
 ```
-pinctl list | watch
-pinctl status <id>                      # e.g. "Closed (no signal)"
-pinctl capture -d <id> -i dv|svideo|composite [-s pal|ntsc|auto] [-f format] -o <path>
-               [--title T] [--split] [--passes N] [--idle-min M] [--duration S]
-               [--aspect auto|4:3|16:9] [--start-deck] [--rewind-first]
-pinctl deck <id> play|pause|stop|ff|rew|state|timecode
-pinctl preview-dump <id> [-n N] [-o prefix]     # save preview frames
-pinctl preview-rate <id> [seconds]              # preview frame rate
-pinctl monitor <id> [seconds] [T:in=dv|svideo|composite] [T:std=pal|ntsc]
+MarvinCaptureCLI                         # help + device table
+MarvinCaptureCLI --rew --wait            # deck control, left to right
+MarvinCaptureCLI --rew --wait --play --capture tape.dv --wait idle,nosignal --rew --wait
+MarvinCaptureCLI -d <id|serial|file> -i svideo --capture a.avi --wait +00:00:10:00
 ```
 
-On failure it prints `pinctl: device not ready: <engine error text>`. Its log
-lines are swallowed into API events, so for bring-up detail use `pincli`.
+Exit codes: 0 ok, 1 usage, 2 device, 3 deck, 4 capture ended abnormally, 130
+Ctrl-C. Human output goes to stderr (redirect it to a log file); `--debug` adds
+the core's debug log (AV/C commands, bring-up) and a plain status line per
+second. Syntax and semantics: `docs/cli.md`.
 
 ### pincli (DV/HDV)
 

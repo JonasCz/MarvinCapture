@@ -20,7 +20,7 @@
  * marvin-core public API.
  *
  * This is the only header a front-end (the WinUI app, a future macOS or
- * Linux GUI, pinctl) includes. It is a flat C ABI on purpose: opaque
+ * Linux GUI, MarvinCaptureCLI) includes. It is a flat C ABI on purpose: opaque
  * handles, fixed-size POD structs, UTF-8 strings in fixed buffers, and no
  * callbacks into the caller. Everything that happens asynchronously is
  * *polled*:

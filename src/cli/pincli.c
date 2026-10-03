@@ -288,7 +288,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "pincli: device opened\n");
 
     /* Cross-process ownership (pinnacle_lock.h): refuse to fight another
-     * pincli/pindeck/pinanalog -- or a future pinctl -- over this device.
+     * pincli/pindeck/pinanalog -- or MarvinCaptureCLI -- over this device.
      * Starts in PREPARING, matching what we're about to do below. */
     char device_id[PINNACLE_ENUM_ID_MAX];
     pinnacle_enum_build_id(libusb_get_device(dev.handle), device_id, sizeof(device_id));

@@ -37,7 +37,8 @@ builds everything (needs MSYS2 UCRT64 and the .NET 10 SDK; see
 build\dist\MarvinCaptureGUI.exe        the GUI
 build\dist\marvin-core.dll      the core library
 build\dist\firmware\                  FPGA bitstreams
-build\dist\cli\                       pincli pinanalog pindeck pinlist pinctl
+build\dist\MarvinCaptureCLI.exe        the command-line program
+build\dist\cli\                       pincli pinanalog pindeck pinlist
 ```
 
 The device has to be bound to WinUSB, not the vendor driver
@@ -58,7 +59,7 @@ to tell a fault from a quiet camera and how to check that nothing was dropped.
 
 ```
 MarvinCaptureGUI (WinUI 3)  ──┐
-pinctl                      ──┼──▶  marvin-core.dll  (src/api/pin_api.h)
+MarvinCaptureCLI            ──┼──▶  marvin-core.dll  (src/api/pin_api.h)
                               │        └─ session engine (src/engine), file writers (src/sinks)
 pincli, pinanalog, pindeck  ──┴──▶  hardware layer (src/core) ──▶ libusb ──▶ device
 ```

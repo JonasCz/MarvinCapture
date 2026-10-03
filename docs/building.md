@@ -28,7 +28,8 @@ build\
     MarvinCaptureGUI.exe, *.dll, *.xbf ...    the GUI (self-contained, unpackaged)
     marvin-core.dll, libusb-1.0.dll    the native core
     firmware\                                FPGA bitstreams
-    cli\                                     pincli pinanalog pindeck pinlist pinctl
+    MarvinCaptureCLI.exe                     the command-line program (shares the DLL and firmware\)
+    cli\                                     pincli pinanalog pindeck pinlist
                                              + marvin-core.dll, libusb-1.0.dll, firmware\
 ```
 
@@ -75,7 +76,7 @@ src/core/      hardware layer: USB device, 1394 link, streams, DV/HDV reassembly
 src/engine/    session engine: state machine, deck, preview, scene split, settings
 src/sinks/     file writers (raw, AVI, MOV/MKV rewrap, FFV1)
 src/api/       pin_api.h / pin_api.c, the flat C API the GUI links
-src/cli/       pincli, pinanalog, pindeck, pinlist, pinctl
+src/cli/       MarvinCaptureCLI, pincli, pinanalog, pindeck, pinlist
 gui/windows/   WinUI 3 app
 tests/         unit and replay tests; tests/data/ = local fixtures
 firmware/      FPGA bitstreams (see firmware/README.md)

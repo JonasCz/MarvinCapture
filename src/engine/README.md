@@ -112,7 +112,7 @@ scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
 
 This directory is normally built as part of the top-level `CMakeLists.txt`
 (`add_subdirectory(src/engine)`), which also builds the session engine
-above, `src/sinks` and `marvin-core`/`pinctl`:
+above, `src/sinks` and `marvin-core`/`MarvinCaptureCLI`:
 
 ```
 cmake -S . -B build -G Ninja

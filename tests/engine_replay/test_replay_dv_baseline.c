@@ -19,7 +19,7 @@
 /*
  * ctest: PIN_REPLAY=tests/data/ep88-pal.bin, `pin_capture_start` with
  * PIN_FMT_DV_RAW for a couple of seconds (through pin_api.h, same calls
- * pinctl's "capture" subcommand makes) must produce whole 144000/120000-byte
+ * the API capture path makes) must produce whole 144000/120000-byte
  * DV frames whose bytes are a prefix-aligned slice of the Phase-1 baseline
  * (tests/baseline_sha256.txt's frozen dv_reassembler output) -- at minimum,
  * every frame the capture wrote must appear somewhere in the baseline.

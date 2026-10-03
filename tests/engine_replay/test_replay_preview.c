@@ -19,7 +19,7 @@
 /*
  * ctest: pin_preview_wait()/pin_preview_lock() against the replay device
  * (PAL DV, see tests/data/README.md) produce a 720x576 4:2:0 frame with a
- * (1,1) chroma shift and a 4:3 DAR, the same thing pinctl's preview-dump
+ * (1,1) chroma shift and a 4:3 DAR, the same thing the old pinctl's preview-dump
  * subcommand writes out.
  *
  * Usage: test_replay_preview <trace_file>

@@ -39,7 +39,7 @@ Two ways in, both on the same core library:
 | `pinanalog` | analog (composite / S-video) capture to AVI |
 | `pindeck` | deck control: play, pause, stop, FF, REW, state, timecode |
 | `pinlist` | list attached units and their state |
-| `pinctl` | the session API as a CLI (capture, formats, presets); also the API's integration test |
+| `MarvinCaptureCLI` | everything the GUI does from the command line: deck control, DV/HDV and analog capture, in one command line ([cli.md](cli.md)); in `build\dist` next to the GUI |
 
 The tools look for their FPGA bitstream in `firmware/` relative to the current
 directory, so run them from `build\dist\cli` (or pass `-b`).
@@ -235,7 +235,7 @@ frame count of all passes, not the wall time.
 
 `pin_stop_reason_abnormal()` splits the reasons. **Abnormal** (device or camera
 gone, disk full, write error, any error): the GUI shows the sentence in a
-dialog with an OK button, and `pinctl capture` exits with 2. **Normal** (the
+dialog with an OK button, and `MarvinCaptureCLI` exits with 4. **Normal** (the
 user's stop, the no-signal timeout, the time limit, end of tape): no dialog;
 the GUI shows the sentence in the status bar instead of "Ready" until the next
 capture starts (not for the user's own stop).
@@ -310,8 +310,7 @@ get a virtual "replay" device that plays a recording back through the full
 pipeline:
 
 ```
-set PIN_REPLAY=tests\data\ep88-pal.bin
-pinctl capture -i dv -f dv -o out --duration 5
+MarvinCaptureCLI -d tests\data\ep88-pal.bin --capture out.dv --wait idle
 ```
 
 The ctest suite is built on this; see [building.md](building.md).

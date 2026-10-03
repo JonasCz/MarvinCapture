@@ -319,7 +319,7 @@ int pin_session_get_replay_file(char *out, size_t out_size)
 
 /* Directory of the module that contains this code: the marvin-core
  * DLL / .so / .dylib, or the executable when the core is linked in
- * statically (pinctl, tests). */
+ * statically (tests). */
 static int lib_dir(char *out, size_t cap)
 {
 #if defined(_WIN32)

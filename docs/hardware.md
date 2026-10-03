@@ -24,7 +24,7 @@ it treats two PIDs alike they share a row's behaviour here.
 | `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; host-side FX2 firmware download implemented as a best guess (see below) |
 
 Untested models appear as "(untested)" in the GUI device list, `pinlist` and
-`pinctl list`. The other PIDs in the vendor driver (`0x20a`, `0x20b`, `0x211`
+`MarvinCaptureCLI --help`. The other PIDs in the vendor driver (`0x20a`, `0x20b`, `0x211`
 Pro) are not in the INF's list for this driver and are not handled.
 
 **Bitstreams**: `MarvinAVS64.sys` embeds one OHCI, one Render and one Capture
