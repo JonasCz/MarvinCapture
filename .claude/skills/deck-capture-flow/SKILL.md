@@ -16,7 +16,8 @@ session engine"). The traps:
 - **No camera in the loop, so no end-to-end test.** The engine's deck code needs
   a real 1394 link; replay sessions skip `dv_tick()`'s deck part. Unit tests cover
   only the pure parts (`tests/engine/test_pin_deck.c`). Anything else needs the
-  camera: put what was reasoned and not verified into `docs/handoff-deck-flow.md`.
+  camera: say in the commit/report what was reasoned and not verified, and
+  list it under "Capture flow" in `docs/deck-control.md`.
 - **ACCEPTED is not done.** A status query right after REW/STOP can report the old
   mode; BOT/stopped is trusted only 3 s after the command was acknowledged
   (`deck_cmd_done_s`). NOT_IMPLEMENTED (08) echoes the command: never map it to a

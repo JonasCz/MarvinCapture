@@ -9,7 +9,10 @@ ID `0x000085`, 1080i/25 HDV tape) with `pindeck`:
 - That is confirmed independently of the camera's replies by the EP 0x88
   stream: about 3.6 MB/s of HDV while the tape moves, 0 when stopped.
 - The GUI and `pinctl` use it through the session engine (`pin_deck`);
-  `pincli` does not, and it has not been tried with a DV camera.
+  `pincli` does not.
+- The capture flow (rewind first, multi-pass, time limit, no-signal stop) was
+  also verified on a Pinnacle 510-USB with a DV camcorder (short tape), see
+  "Capture flow in the session engine" and "Verified on the DV camcorder".
 
 The transport lives in the core library:
 [`src/core/pinnacle_1394.c`](../src/core/pinnacle_1394.c) provides
@@ -129,9 +132,10 @@ into those ranges:
 | stop | `00 20 c4 60` | ACCEPTED; the stream drops to 0 within ~1 s |
 | ff | `00 20 c4 75` | ACCEPTED; state `0b … c4 75` (IN_TRANSITION) while winding |
 | rew | `00 20 c4 65` | ACCEPTED; likewise |
+| search (time code control) | `00 20 51 20 FF SS MM HH` | NOT_IMPLEMENTED on the DV camcorder (see below) |
 | state (status) | `01 20 d0 7f` | `0c 20 <transport opcode> <mode>` |
 | unit info | `01 ff 30 ff ff ff ff ff` | `0c ff 30 07 20 00 00 85` (VCR, Canon) |
-| subunit info | `01 ff 31 07 ff ff ff ff` | NOT_IMPLEMENTED |
+| subunit info | `01 ff 31 07 ff ff ff ff` | NOT_IMPLEMENTED (Canon HDV); `0c ff 31 07 20 38 ff ff` (DV camcorder) |
 | time code (status) | `01 20 51 71 ff ff ff ff` | `0c 20 51 71 FF SS MM HH` (BCD) while playing |
 
 ## Camera behaviour (Canon HDV)
@@ -184,9 +188,17 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   status query, or queues behind an in-flight command.
 - **Automatic rewind & capture** (`start_deck` + `rewind_first`): REW at once
   (no stream needed), poll the state until STOPPED (BOT), then PLAY, then open
-  the file as soon as the first frame says DV or HDV. BOT is accepted only
-  3 s after REW was acknowledged, because a status query right after REW can
-  still say "stopped". The session is REWINDING during the rewind.
+  the file as soon as the first frame says DV or HDV (a stopped deck sends
+  nothing, so the stream kind is unknown until PLAY: REW must not wait for it
+  and PLAY goes out right after BOT). BOT is accepted only 3 s after REW was
+  acknowledged, because a status query right after REW can still say
+  "stopped". The session is REWINDING during the rewind, then READY (PLAY sent,
+  waiting for the first frame) before CAPTURING; buttons follow `IsCapturing`,
+  so they are usable in that READY gap. `last_data_s` (no-signal timer) is
+  reset when the capture or the next pass starts, so the minutes of rewinding
+  never count as "no signal".
+- **NOT_IMPLEMENTED is never a deck state.** The answer (08) echoes the
+  command; it must not be mapped to a transport state.
 - **Stopping.** The no-signal timeout (`idle_stop_minutes`; time since data
   last arrived) and the time limit (`max_duration_minutes`, per pass: capture
   time of the current pass only, `elapsed_s`, which restarts with each pass so
@@ -217,9 +229,18 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   runs while a capture is active too. A topology change while the capture is
   under way (file open, or rewinding for it) ends it with `PIN_STOP_CAMERA_LOST`
   (no deck Stop: the node may have changed) and then re-scans as when idle. A
-  capture still waiting for its first frame keeps waiting. Untested (no camera).
+  capture still waiting for its first frame keeps waiting. Untested.
 - Not implemented: detecting the end of tape from the deck state alone (with
   the no-signal timeout off, a multi-pass capture waits forever at the end).
+  Left out on purpose: a false "stopped" while PLAY is still threading would
+  abort a good capture. The DV camcorder does not stop by itself at the end of
+  the recording (it keeps PLAY into blank tape), so the no-signal timeout is the
+  only end-of-recording detection.
+- **Blank section at the start.** A capture started while the deck is already
+  in a blank section never gets a first frame and stays READY; the no-signal
+  limit only applies after the first frame.
+- Not yet verified on hardware: `pin_capture_stop_ex` variants (GUI only) and
+  bus reset / camera loss during a capture.
 - The deck's own timecode while winding is described under "Timecode while
   winding" below.
 
@@ -235,10 +256,39 @@ signal is arriving, and once more after the winding stopped. An IN_TRANSITION
 answer or `ff` (no readable time code) leaves the last value on screen. While a
 stream with its own timecode runs, the stream's value is used instead.
 
-**Untested on the camera**: whether the Canon answers TIME CODE while winding
-(and with which response code) has not been checked, only the parsing is
-covered by `tests/engine/test_pin_deck.c`. To check:
-`pindeck rew wait:3 timecode wait:2 timecode stop`.
+On the DV camcorder TIME CODE answers during PLAY and when stopped mid-tape,
+and is REJECTED (0a) during FF, at the start/end of the tape and in blank
+sections. During REW a single poll was REJECTED, but the engine's alternating
+polling did show a live timecode while rewinding. The parsing is covered by
+`tests/engine/test_pin_deck.c`.
+
+## Verified on the DV camcorder
+
+Pinnacle 510-USB on Windows, DV camcorder with a short tape (about 5 min
+recording):
+
+- **TRANSPORT STATE** answers: stopped/wind-stop `0c 20 c4 60`; PLAY
+  `0c 20 c3 75`; PAUSE `0c 20 c3 7d`; FF winding `0c 20 c4 75`; REW winding
+  `0b 20 c4 65` (IN_TRANSITION) at the first poll, then `0c 20 c4 65`. REW
+  reaching the start and FF reaching the end both end in `c4 60` (briefly
+  `0b 20 c4 60` right at the end), so the `c4 60` mapping to STOPPED is right.
+- **Wind/stop commands** ff `00 20 c4 75`, rew `00 20 c4 65` and stop
+  `00 20 c4 60` all answer ACCEPTED (09). Wind speed is about 20x; a full
+  rewind of the ~5 min recording took about 100 s.
+- **Playing into blank tape:** the state stays PLAY (`c3 75`) and TIME CODE
+  answers REJECTED (0a); the deck does not stop at the end of the recording.
+- **No usable seek.** TIME CODE control (`00 20 51 20 FF SS MM HH`) is
+  NOT_IMPLEMENTED and the deck does not move. ABSOLUTE TRACK NUMBER control
+  (opcode 0x52, operand 0x20) is mostly NOT_IMPLEMENTED/REJECTED; one form,
+  `00 20 52 20 00 00 01 ff`, was ACCEPTED late (about 10 s) and the deck seeked
+  somewhere (ended in pause at 00:01:49:07), encoding not understood; while
+  seeking the deck stopped answering status for a few seconds. Position the
+  tape by FF/REW plus timecode polling instead.
+- **Capture checks passed:** rewind-first capture (REW with live timecode, then
+  PLAY, the file starts at the first frame); multi-pass with only a per-pass
+  time limit (pass 1 about 60 s, rewind, pass 2; the rewind time is not
+  counted); no-signal stop (the capture stopped 1 min after the recording
+  ended and the deck was stopped).
 
 ## Tool
 
@@ -260,6 +310,5 @@ covered by `tests/engine/test_pin_deck.c`. To check:
 - Wire `p1394_avc()` into `pincli` (`--play`, stopping at the end). During
   capture EP 0x84 is read by the capture event loop, so FCP responses need to
   be handled from there.
-- Try a DV camera.
 - Send the AV/C inquiries Windows sent (UNIT INFO, plug signal format) to
   detect DV versus HDV and the camera's capabilities before capture.
