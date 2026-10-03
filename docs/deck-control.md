@@ -1,15 +1,16 @@
 # Deck control (AV/C over FCP)
 
 **Status (2026-09-25): working.** Tested on a Canon HDV camcorder (company
-ID `0x000085`, 1080i/25 HDV tape) with `pindeck`:
+ID `0x000085`, 1080i/25 HDV tape) with `pindeck`, a deck-control tool since
+removed (the traffic shown below is what `MarvinCaptureCLI --debug` prints for
+the same commands):
 
 - Play, Pause, Stop, FF, Rewind, TRANSPORT STATE and TIME CODE all work.
 - Every command is answered on a **single send**, within a few
   milliseconds, and takes effect immediately.
 - That is confirmed independently of the camera's replies by the EP 0x88
   stream: about 3.6 MB/s of HDV while the tape moves, 0 when stopped.
-- The GUI and `MarvinCaptureCLI` use it through the session engine (`pin_deck`);
-  `pincli` does not.
+- The GUI and `MarvinCaptureCLI` use it through the session engine (`pin_deck`).
 - The capture flow (rewind first, multi-pass, time limit, no-signal stop) was
   also verified on a Pinnacle 510-USB with a DV camcorder (short tape), see
   "Capture flow in the session engine" and "Verified on the DV camcorder".
@@ -20,8 +21,11 @@ The transport lives in the core library:
 [startup.md](startup.md), and the message framing on EP 0x02 / 0x84 is in
 [protocol.md](protocol.md).
 
+Output of the removed `pindeck` (`state play wait:6 timecode pause state ff
+wait:3 rew stop`); `MarvinCaptureCLI --debug` prints the same bytes as
+`debug: AV/C -> 00 20 c3 75` and `debug: AV/C <- ACCEPTED 09 20 c3 75`:
+
 ```
-$ pindeck state play wait:6 timecode pause state ff wait:3 rew stop
 device up (5.4 s), camera is node 1
 [  5.652] step state
   <- STABLE          0c 20 c4 60          transport: WIND stop
@@ -58,7 +62,11 @@ The relevant decompile functions:
   `FUN_000354b0` (tcode 9).
 - The IRB table is at VA `0x4c000`.
 
-`pindeck -vv` prints this traffic.
+`MarvinCaptureCLI --debug` prints this traffic (`AV/C -> ...` for each command
+frame, `AV/C <- ACCEPTED ...` for the response, the ctype name first). Raw
+AV/C probing of arbitrary frames (the old `pindeck raw:<hex>` and `reg:<ohci
+offset>` steps) is no longer available from a shipped tool; the debug log shows
+the traffic of the normal commands only.
 
 ## Sending a packet (AT request context)
 
@@ -143,7 +151,7 @@ into those ranges:
 - **NOT_IMPLEMENTED means "busy".** While the mechanism changes mode (for
   example tape threading after PLAY, or mid-rewind), the camera may answer
   transport commands and TRANSPORT STATE with NOT_IMPLEMENTED (`08`), where
-  it should say REJECTED or INTERIM. `pindeck` retries transport commands
+  it should say REJECTED or INTERIM. `pin_deck` retries transport commands
   up to 5 times, 0.7 s apart.
 - **ACCEPTED means received, not done.** A TRANSPORT STATE sent a few
   milliseconds after STOP can still report the old mode (`STABLE PLAY`);
@@ -292,23 +300,16 @@ recording):
 
 ## Tool
 
-`pindeck [-b bitstream] [-v|-vv] [-r raw.bin] step...`
-
-- It runs the same bring-up as `pincli`, then the steps: `play`, `pause`,
-  `stop`, `ff`, `rew`, `state`, `timecode`, `subunits`, `wait:<sec>`,
-  `raw:<hex>` and `reg:<ohci offset>`.
-- It prints each AV/C exchange, and the EP 0x88 rate once a second during
-  `wait:`.
-- On exit it stops isochronous receive and releases the camera's plug. The
-  tape keeps doing whatever it was last told, so `pindeck play` followed by
-  `pincli` captures from tape.
-- `PINNACLE_DEBUG_1394=1|2` logs the link layer. Level 2 adds every EP 0x84
-  record and our config ROM.
+`MarvinCaptureCLI` (`--rew`, `--ff`, `--play`, `--pause`, `--stop`, `--wait`,
+[cli.md](cli.md)) and the GUI drive the deck through `pin_deck`. The tape keeps
+doing whatever it was last told when the program exits (`--stop` also stops
+it), and the camera's plug is released on exit. `--debug` logs every AV/C
+exchange and the link layer; see [cli.md](cli.md#debug-log). The old
+`pindeck` tool (with its `raw:`, `reg:` and `subunits` steps and the
+`PINNACLE_DEBUG_1394` levels) is gone; the per-record EP 0x84 dump is kept
+disabled under `#if 0` in `src/core/pinnacle_1394.c`.
 
 ## Open items
 
-- Wire `p1394_avc()` into `pincli` (`--play`, stopping at the end). During
-  capture EP 0x84 is read by the capture event loop, so FCP responses need to
-  be handled from there.
 - Send the AV/C inquiries Windows sent (UNIT INFO, plug signal format) to
   detect DV versus HDV and the camera's capabilities before capture.

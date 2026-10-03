@@ -54,3 +54,9 @@ session engine"). The traps:
   stream timecode is arriving.
 - Mirroring a new status field: `pin_api.h` (appended, ABI-compatible) ->
   `Interop/NativeStructs.cs` same order.
+- **Watching it on hardware:** `MarvinCaptureCLI --debug` logs every AV/C command
+  and response (`AV/C -> 00 20 c3 75`, `AV/C <- ACCEPTED 09 20 c3 75`, ctype name
+  first), the 1 Hz TRANSPORT STATE (`01 20 d0 7f`) / TIME CODE (`01 20 51 71 ff ff
+  ff ff`) polls and the session state changes (`session: state rewinding`), which is
+  what to compare with the flow above. The logging is in `p1394_avc*` (core), so it
+  covers sync and async commands alike.

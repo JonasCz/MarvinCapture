@@ -20,7 +20,7 @@ but nothing here uses it, so it is not shipped.
 They were extracted from the vendor driver with `scripts/extract-bitstreams.py`
 (which also writes the Render one) and are shipped next to the application so
 it works out of the box: `scripts/build.ps1` copies this directory into
-`build\dist\firmware\` (and `build\dist\cli\firmware\`). The core looks for
+`build\dist\firmware\`. The core looks for
 `firmware/` next to the core library, then next to the executable, unless the
 `firmware_dir` setting says otherwise.
 

@@ -80,6 +80,12 @@ MarvinCaptureGUI.exe --help
 
 The help text comes from `pin_script_help()`, so it always matches the core in use.
 
+`--debug` sets the core's log level to debug. The GUI prints the core's log lines
+(AV/C traffic, bring-up steps) on the console it was started from, or into the
+file when stdout is redirected (`MarvinCaptureGUI.exe --debug > log.txt`);
+without a console it has no effect. This replaces the old `PINNACLE_LOG_LEVEL`
+environment variable.
+
 Each window runs as its own process. "..." > "New window" starts a second one,
 for example to use a second device.
 
@@ -133,8 +139,7 @@ The app follows the Windows light/dark setting. To check the other theme
 without changing Windows, start it with `PIN_THEME=dark` (or `light`):
 
 ```powershell
-$env:PIN_THEME = "dark"; .ind\Debug
-et10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
+$env:PIN_THEME = "dark"; .\bin\Debug\net10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
 ```
 
 ## Layout

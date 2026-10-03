@@ -31,18 +31,12 @@ Two ways in, both on the same core library:
   same rule (`pin_capture_passes_allowed`, `pin_capture_opts_normalize`), so
   `--passes 2` without `--idle-min` / a duration limit also captures once.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
-- **The command-line tools** in `build\dist\cli\` (see [building.md](building.md)):
-
-| tool | what it does |
-|---|---|
-| `pincli` | DV / HDV capture straight from the FireWire port, to `.dv` or `.ts` |
-| `pinanalog` | analog (composite / S-video) capture to AVI |
-| `pindeck` | deck control: play, pause, stop, FF, REW, state, timecode |
-| `pinlist` | list attached units and their state |
-| `MarvinCaptureCLI` | everything the GUI does from the command line: deck control, DV/HDV and analog capture, in one command line ([cli.md](cli.md)); in `build\dist` next to the GUI |
-
-The tools look for their FPGA bitstream in `firmware/` relative to the current
-directory, so run them from `build\dist\cli` (or pass `-b`).
+- **The command-line program** `MarvinCaptureCLI` in `build\dist` next to the GUI
+  does everything the GUI does from a command line: device list, deck control,
+  DV/HDV and analog capture, streaming to stdout, in one command line
+  ([cli.md](cli.md)). It finds its FPGA bitstreams in `firmware\` next to
+  `marvin-core.dll`. `--debug` prints the core's debug log (raw AV/C traffic,
+  bring-up steps) and the status as plain lines.
 
 The device must be bound to WinUSB (or libusb-compatible) rather than the vendor
 driver: see [windows-driver.md](windows-driver.md).
@@ -50,16 +44,18 @@ driver: see [windows-driver.md](windows-driver.md).
 ## Running a capture
 
 ```
-pincli -o out.dv -t 300
+MarvinCaptureCLI --rew --wait --play --capture out.dv --wait idle,nosignal --rew --wait
+MarvinCaptureCLI --capture out.dv --wait +00:05:00:00 --stop      # 5 minutes of whatever the camera sends
 ```
 
-| flag | meaning |
-|---|---|
-| `-o`, `--output` | output path (required) |
-| `-b`, `--bitstream` | FPGA bitstream (default `firmware/fpga-ohci.bin`) |
-| `-t`, `--duration` | stop after N seconds; without it, runs until Ctrl+C |
+The first rewinds the tape, plays it, captures until the deck goes idle or the
+signal stays away, and rewinds again. The second captures for five minutes
+without driving the deck (point the camera at live view or start it by hand).
+The full language (settings, formats, `--split`, timecode waits, `--capture -`
+to stream to stdout, exit codes) is in [cli.md](cli.md).
 
-`-t` takes exactly the same shutdown path as Ctrl+C: stop the receive queue,
+A capture that ends, however it ends (a wait, `--stop`, Ctrl+C), takes the same
+shutdown path: stop the receive queue,
 send the 4-packet stop sequence while still draining EP 0x88, then discard any
 frame the stop landed in the middle of, so the file always ends on a whole
 frame.
@@ -89,6 +85,7 @@ are deferred this way; a hard size limit would not be. Details:
 bitstream upload, a 1.5 s FPGA settle, the 1394 link start-up, finding the
 camera and connecting to its output plug ([startup.md](startup.md)). `-t`
 counts from after that. A capture window shorter than that looks empty.
+`--debug` shows each step with its time.
 
 **The camera has to be transmitting.** In tape mode with the tape stopped, the
 device produces zero bytes, which looks identical to a hardware fault. See
@@ -100,39 +97,31 @@ Zero bytes on EP 0x88 has several causes. Two checks separate them.
 
 **The FPGA did not come up.** The `05`/`06` status reads bracketing the
 bitstream upload answer `<cmd> 01` when ready and `<cmd> 00` when not. This is
-checked, and `pincli` aborts with
+checked, and the bring-up fails (exit 2) with
 
 ```
-pincli: init failed: device reports not ready (FPGA did not come up; needs a physical USB power cycle)
+error: The device did not accept the FPGA bitstream ...: device reports not ready (FPGA did not come up; needs a physical USB power cycle)
 ```
 
 Neither a warm reboot nor rebinding the host controller clears this, since
 neither cuts VBUS. It needs a physical replug.
 
-**The receiver is fine, the source is quiet.** `PINNACLE_PROBE=1` reads seven
-OHCI registers after the start sequence:
+**The receiver is fine, the source is quiet.** Run with `--debug`: the bring-up
+lines show the 1394 link (`NodeID 0x8000ffc0 ... node 0 of 2`: the bus reset
+completed and we are node 0), the camera found (`camera is node 1 ... connected
+to oPCR[0] ..., channel 63`) and the receive context started, and the
+once-a-second AV/C poll shows the camera answering (`<- STABLE ...` with the
+transport state). If all of that is there and still no data arrives, the receive
+side works and the camera is not transmitting (tape stopped, nothing playing).
 
-```
-probe IntEvent        (0x080) = 0x04d10030
-probe SelfIDCount     (0x068) = 0x00010014
-probe LinkControlSet  (0x0e0) = 0x00300600
-probe NodeID          (0x0e8) = 0x8000ffc0
-probe CycleTimer      (0x0f0) = 0x339dc36a
-probe IR0.CtrlSet     (0x400) = 0xc0009400
-probe IR0.Match       (0x410) = 0x2000003f
-```
-
-| register | this value means |
-|---|---|
-| `NodeID` `0x8000ffc0` | `iDValid` set, bus `0x3FF`, we are node 0 |
-| `SelfIDCount` `0x00010014` | generation 1, no `selfIDError`: the bus reset completed |
-| `LinkControlSet` `0x00300600` | cycle master + cycle timer enabled, receiving self-ID and PHY packets |
-| `CycleTimer` non-zero, changing | the link is clocked and alive |
-| `IR0.CtrlSet` `0xc0009400` | bufferFill + isochHeader; `run` (b15), `wake` (b12) and `active` (b10) set, **`dead` (b11) clear**: the receiver is healthy |
-| `IR0.Match` `0x2000003f` | listening on channel 63, tag 1 |
-
-If `IR0.CtrlSet` shows `run` and `active` with `dead` clear and there is still
-no data, the receive side works and the camera is not transmitting.
+For a closer look at the OHCI receiver itself there used to be a register probe
+(`PINNACLE_PROBE=1`). It is disabled, kept under `#if 0` in
+`src/core/pinnacle_stream.c` (`probe_registers()`, with how to re-enable it).
+On a healthy receiver it read `NodeID` `0x8000ffc0` (`iDValid`, we are node 0),
+`SelfIDCount` `0x00010014` (generation 1, no `selfIDError`), `LinkControlSet`
+`0x00300600` (cycle master and cycle timer on), a changing `CycleTimer`,
+`IR0.CtrlSet` `0xc0009400` (`run`, `wake`, `active` set, **`dead` clear**) and
+`IR0.Match` `0x2000003f` (channel 63, tag 1).
 
 ## Proving no data was dropped
 
@@ -150,11 +139,10 @@ off tape), so timecode cannot verify continuity here, and ffmpeg prints
 
 What is used instead:
 
-**CIP/DBC continuity**, reported at the end of every run:
-
-```
-pincli: continuity: OK — 335515 data blocks, no CIP/DBC discontinuity (1 at stream join, expected)
-```
+**CIP/DBC continuity**, tracked by the DV reassembler (`dbc_gaps`, `dbc_joins`
+in `dv_reassembler.h`; the replay baseline test checks it). The shipped
+programs report its effect, the zero-filled sequences, as `frames_error` rather
+than a continuity line:
 
 The IEC 61883 CIP header carries a data block counter that the *camera*
 increments once per 480-byte data block, modulo 256. A jump means data was lost
@@ -173,8 +161,8 @@ per-PID TS continuity counters are authoritative there; see [hdv.md](hdv.md).
 nothing (apart from the timecode line above); `-map 0:v:0` for `.ts`. Compare
 the frame count with the wall-clock duration.
 
-For analog, `pinanalog`'s progress line counts missing, truncated and audio-missing
-frames; a clean run shows zeros and exit status 0 ([analog.md](analog.md)).
+For analog, the capture's frame-error counters count dropped (repeated) frames;
+a clean run shows zeros ([analog.md](analog.md)).
 
 ### Frames with error (live counters)
 
@@ -250,9 +238,10 @@ capture starts (not for the user's own stop).
 | `WRITE_ERROR` | writing a file failed, or the next file (split, pass) could not be created |
 
 A capture that drives the deck (`start_deck`) stops the tape when it ends for
-any reason except a lost device or camera. `PINNACLE_DISK_RESERVE_MB=<n>`
-replaces the 64 MB margin; set it to the drive's free space minus a few MB to
-test the disk-full stop (verified that way with the replay device).
+any reason except a lost device or camera. The environment variable
+`PINNACLE_DISK_RESERVE_MB=<n>` replaces the 64 MB margin; set it to the drive's
+free space minus a few MB to test the disk-full stop (verified that way with the
+replay device).
 
 ### The USB thread must never wait on the disk
 
@@ -266,9 +255,8 @@ resumed. The device ends each transfer after only ~4 KB, so 32 queued
 transfers held only ~36 ms.
 
 The fix is 256 queued transfers (~290 ms) and a 64 MB ring buffer drained by a
-second thread that runs the reassembler and writes the file. `pincli` prints
-the writer buffer's high-water mark at the end and stops with a warning if it
-ever overflowed.
+second thread that runs the reassembler and writes the file (`pin_writer`). If
+the queue ever overflows the writer drops units and the core logs a warning.
 
 The reassembler concatenates type-9 payloads in arrival order and ignores their
 ring addresses. That is right while addresses advance contiguously; if an
@@ -277,27 +265,29 @@ the addresses instead.
 
 ## Diagnostics
 
-All opt-in environment variables; the defaults are the right values.
+`MarvinCaptureCLI --debug` (and `MarvinCaptureGUI --debug`, which mirrors the
+log on the console it was started from) is the one switch: it prints the core's
+debug log, see [cli.md](cli.md#debug-log). The old debug environment variables
+(`PINNACLE_DEBUG_1394`, `_PROBE`, `_DEBUG_EP88`, `_DEBUG_EP84`, `_RAW_DUMP`,
+`_VIDEO_QUEUE`, `_VIDEO_XFER`, `PINNACLE_LOG_LEVEL`) are gone. The code behind
+the register probe, the raw endpoint dump and the per-completion logs is kept
+under `#if 0` in `src/core/pinnacle_stream.c` and `src/core/pinnacle_1394.c`
+(each block says how to bring it back); the EP 0x88 completion log runs on the
+USB thread and adds its own stalls, so it is not for loss testing.
+
+Two environment variables remain, for testing:
 
 | variable | effect |
 |---|---|
-| `PINNACLE_PROBE=1` | dump the OHCI registers above after the start sequence |
-| `PINNACLE_DEBUG_EP88=1` | log every EP 0x88 completion: size, delivery time, libusb completion time and callbacks over 1 ms. Not for loss testing: the log runs on the USB thread and adds its own stalls |
-| `PINNACLE_DEBUG_EP84=1` | log every EP 0x84 record with its arrival time |
-| `PINNACLE_RAW_DUMP=<path>` | write the raw EP 0x88 byte stream to a file before reassembly. This is also the input format of the replay device below |
-| `PINNACLE_DEBUG_1394`, `PINNACLE_VIDEO_QUEUE`, `PINNACLE_VIDEO_XFER` | 1394 debug logging, and the analog USB queue depth and transfer size |
+| `PIN_REPLAY=<file>` | the virtual replay device, see below (used by the ctest suite) |
 | `PINNACLE_DISK_RESERVE_MB=<n>` | free space (MB) a capture keeps on the output drive beyond the writer queue before it stops with "disk full" (default 64) |
-
-These are read by the CLIs and by the capture engine (so the GUI honours
-them too). Started from a console, the GUI also prints its log there;
-`PINNACLE_LOG_LEVEL=0` adds the core's debug lines.
 
 ## Two traps
 
 **The command channel blocks while EP 0x88 has an unread backlog.** Anything
 that writes to EP 0x02 while the isochronous receive context is running must
 keep reading EP 0x88 at the same time, or the write times out. The stop
-sequence and `PINNACLE_PROBE=1` both do.
+sequence does.
 
 **A non-transmitting camera is indistinguishable from a dead device** unless
 you check the two things above. One investigation concluded the device had been
@@ -305,7 +295,8 @@ bricked by the stop sequence when it had not.
 
 ## Testing without hardware
 
-Set `PIN_REPLAY=<file>` (a `.dv`, `.ts`, or a raw `PINNACLE_RAW_DUMP` file) to
+Set `PIN_REPLAY=<file>` (a `.dv`, `.ts`, or a raw EP 0x88 dump such as the
+`tests/data/ep88-*.bin` fixtures) to
 get a virtual "replay" device that plays a recording back through the full
 pipeline:
 

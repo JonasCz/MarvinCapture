@@ -32,3 +32,8 @@ Traps (all learned the hard way):
   without data) or every rewind/pause shows a false loss.
 - Clip counters count at arrival, not at commit, so units held by the split
   lookahead are charged to the previous clip.
+- The only shipped views of these counters are the status line / snapshot fields
+  of `MarvinCaptureCLI` and the GUI; the old CIP/DBC continuity line of `pincli` is
+  gone (`dbc_gaps` / `dbc_joins` still live in `dv_reassembler.h` and the replay
+  baseline test checks them). Check a change with the replay tests and, for the
+  live behaviour, a `MarvinCaptureCLI --debug` capture.

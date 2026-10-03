@@ -16,7 +16,7 @@ Data1.cab -> marvinavs64.cab). Never redistribute the output.
 MarvinAVS64.sys (FUN_0002c280) loads one of three 78,422-byte bitstreams
 depending on what the device is to do:
 
-    ohci     1394 / DV / HDV capture  (the one pincli uploads)
+    ohci     1394 / DV / HDV capture  (the DV/HDV one, fpga-ohci.bin)
     render   playback to the analog outputs
     capture  analog capture
 

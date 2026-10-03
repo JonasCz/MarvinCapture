@@ -23,7 +23,7 @@ it treats two PIDs alike they share a row's behaviour here.
 | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | supported, **untested** (same code path as the 700) |
 | `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; host-side FX2 firmware download implemented as a best guess (see below) |
 
-Untested models appear as "(untested)" in the GUI device list, `pinlist` and
+Untested models appear as "(untested)" in the GUI device list and
 `MarvinCaptureCLI --help`. The other PIDs in the vendor driver (`0x20a`, `0x20b`, `0x211`
 Pro) are not in the INF's list for this driver and are not handled.
 

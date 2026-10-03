@@ -24,18 +24,21 @@ bitstreams fit together is in the last section.
 
 ## Quick start
 
-```bash
-pinanalog -o out.avi -t 60           # uses firmware/fpga-capture.bin
-pinanalog --status                   # signal check
+```powershell
+MarvinCaptureCLI -i composite --capture out.avi --wait +00:01:00:00   # 60 s, uses firmware\fpga-capture.bin
+MarvinCaptureCLI -i composite --wait +00:00:05:00                      # bring-up and signal check only
 ```
 
-Options: `-i composite|svideo`, `-s auto|pal|ntsc|pal-m|pal-n|pal-60|ntsc-443|ntsc-j|secam`
-(`auto`, the default, picks PAL or NTSC from what the decoder sees),
-`--brightness/--contrast/--saturation/--hue/--sharpness`, `--tv-mode`.
+Options (settings, [cli.md](cli.md)): `-i composite|svideo`,
+`--std auto|pal|ntsc|pal-m|pal-n|pal-60|ntsc-443|ntsc-j|secam` (`auto`, the
+default, picks PAL or NTSC from what the decoder sees), `--brightness`,
+`--contrast`, `--saturation`, `--hue`, `--sharpness`, `--audio-gain`. The
+decoder always runs with VTR (tape) timing; the vendor's "fast locking" TV
+setting is not offered. `--debug` shows the bring-up steps and the detected
+standard.
 
-The progress line counts **missing**, **truncated** and **audio missing**
-frames. A clean capture shows zeros for all three, and `pinanalog` exits
-with status 4 if any is non-zero.
+The status line counts frames with errors (dropped/repeated frames); a clean
+capture shows zero.
 
 ## How analog differs from DV
 
@@ -48,8 +51,9 @@ alt 0  ->  "05 00" -> "05 01"  ->  Capture bitstream on EP 0x02 (78,422 B)
 ```
 
 That is all a switch from DV to analog takes. No replug, no power cycle.
-Tested both ways: `pinanalog` after `pincli`, and `pincli` after
-`pinanalog` (its normal bring-up reloads OHCI and the 1394 link comes up).
+Tested both ways: analog after DV, and DV after analog (the DV bring-up
+reloads OHCI and the 1394 link comes up); `MarvinCaptureCLI` does this when
+the input changes between invocations.
 The trace shows the vendor doing exactly this when VirtualDub opens the
 device, which had come up in OHCI (DV) mode at plug-in. `pinnacle_fpga_load()`
 implements it. `pinnacle_analog_open()` first asks "06 00" whether any
@@ -142,14 +146,15 @@ The decoder object has vtable `0x431d0` (constructor `FUN_00039aac`).
 - **Picture**: brightness = reg 0x0a (`FUN_0003a230`), contrast = 0x0b
   (`FUN_0003a2bc`), saturation = 0x0c (`FUN_0003a34c`), hue = 0x0d, NTSC
   only (`FUN_0003a3e8`), sharpness = reg 0x09 bits 1:0 (`FUN_0003a4a0`).
-  The vendor maps its signed user values onto these; `pinanalog` takes the
+  The vendor maps its signed user values onto these; the CLI/GUI take the
   register values directly.
 - **VCR mode** (`FUN_0003a1c8`): reg 0x08 bits 4:3, `01` = VTR timing (the
-  vendor's default, suited to tape) or `11` = fast locking (`--tv-mode`).
+  vendor's default, suited to tape, always used here) or `11` = fast locking
+  (TV; not offered).
 - **Output enable** (`FUN_0003a178`): reg 0x11 bit3 (OEYC), set to `0c`.
 - **Status and detection** (`FUN_000263d4`, `FUN_0003a53c`): reg 0x1f.
   bit6 HLVLN = no horizontal lock, bit5 FIDT = 60 Hz, bit7 = interlaced.
-  The vendor picks NTSC-M or PAL-B from FIDT. `pinanalog -s auto` does
+  The vendor picks NTSC-M or PAL-B from FIDT. `--std auto` does
   the same.
 - The vendor also writes register `0x3a = 00`, which is not an SAA7113
   register. We skip it.
@@ -448,7 +453,7 @@ Each one is embedded in the driver and can be overridden by a file in
 
 | mode | embedded at (VA) | MD5 | registry override |
 |---|---|---|---|
-| OHCI (1394, DV/HDV) | `0x4aa70` | `3888c23c…` = **identical to the bitstream pincli uploads** | `FileFloydOHCI` |
+| OHCI (1394, DV/HDV) | `0x4aa70` | `3888c23c…` = **identical to the DV/HDV bitstream (`fpga-ohci.bin`)** | `FileFloydOHCI` |
 | Render (output to TV / analog out) | `0x5dcd0` | `cacaa36d…` | `FileFloydRender` |
 | Capture (analog in) | `0x70f30` | `280bacc6…` | `FileFloydCapture` |
 

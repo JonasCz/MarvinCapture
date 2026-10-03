@@ -1,6 +1,6 @@
 ---
 name: build-and-test
-description: Build the Pinnacle 500-USB driver (core DLL, CLIs, GUI) with scripts/build.ps1 and run the automated ctest suite. Use when asked to build or rebuild. For testing against the real device see test-with-hardware-device.
+description: Build the Pinnacle 500-USB driver (core DLL, MarvinCaptureCLI, GUI) with scripts/build.ps1 and run the automated ctest suite. Use when asked to build or rebuild. For testing against the real device see test-with-hardware-device.
 ---
 
 # Build and test
@@ -9,12 +9,12 @@ Full reference: `docs/building.md`. This is the practical, tested path on Window
 
 ## Build
 
-Always use the script; it builds FFmpeg (first time), the core DLL, the CLIs,
+Always use the script; it builds FFmpeg (first time), the core DLL, the CLI,
 runs ctest, builds the GUI and assembles `build\dist`:
 
 ```powershell
 scripts\build.ps1               # everything
-scripts\build.ps1 -SkipGui      # core + CLIs + tests only (fast, no .NET needed)
+scripts\build.ps1 -SkipGui      # core + CLI + tests only (fast, no .NET needed)
 scripts\build.ps1 -SkipTests    # skip ctest
 ```
 
@@ -25,18 +25,19 @@ Quick native-only iteration (no script): in PowerShell with
 `$env:PATH = "C:\msys64\ucrt64\bin;C:\msys64\usr\bin;$env:PATH"`, then
 `cmake --build build/core` and `ctest --test-dir build/core`. This does **not**
 update `build\dist`; either rerun the script or copy `marvin-core.dll` and
-the changed exes from `build\core` into `build\dist\cli`.
+`MarvinCaptureCLI.exe` from `build\core` into `build\dist`.
 
-Output: `build\dist` (GUI + `MarvinCaptureCLI.exe` + core DLL + `firmware\`) and `build\dist\cli`
-(`pincli pinanalog pindeck pinlist` + `marvin-core.dll`,
-`libusb-1.0.dll`, `libwinpthread-1.dll`, `firmware\`). Run the CLIs from
-`build\dist\cli` (they default to `firmware\` in the cwd).
+Output: `build\dist` holds `MarvinCaptureGUI.exe`, `MarvinCaptureCLI.exe`,
+`marvin-core.dll`, `libusb-1.0.dll`, `libwinpthread-1.dll`, the runtime files of
+the GUI and `firmware\`. (The old `build\dist\cli` folder with pincli, pinanalog,
+pindeck, pinlist is gone; the script deletes a leftover one.) `MarvinCaptureCLI`
+is the only command-line program; run it from `build\dist`.
 
 ## Pitfalls
 
-- **Exit code -1073741511 (0xC0000139) from a CLI**: it picked up a wrong
+- **Exit code -1073741511 (0xC0000139) from the CLI**: it picked up a wrong
   `libwinpthread-1.dll` from PATH (Git's mingw64, `Desktop\ffmpeg`). The script
-  now copies the right one next to the CLIs; if you see this on an old
+  copies the right one next to it; if you see this on an old
   `build\dist`, rebuild with the script.
 - Don't rebuild `build\dist` while the GUI is open (it locks the files).
 - **Edits that silently don't apply**: when patching source with scripts, assert
@@ -47,5 +48,6 @@ Output: `build\dist` (GUI + `MarvinCaptureCLI.exe` + core DLL + `firmware\`) and
 `ctest` (and `scripts\build.ps1` without `-SkipTests`) is the **automated code
 test suite**: unit tests plus replay tests that run on recordings, no device
 needed. Testing against the real device, its deck or camera is a separate,
-manual activity: use the **test-with-hardware-device** skill (CLIs, debug logs,
-diagnosing "USB error").
+manual activity: use the **test-with-hardware-device** skill (MarvinCaptureCLI,
+`--debug` logs, diagnosing "USB error"). The replay tests use the `PIN_REPLAY`
+environment variable (the replay device); it is the only variable ctest relies on.

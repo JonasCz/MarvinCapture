@@ -23,19 +23,17 @@ No device is needed to build or to run the tests.
 
 ```
 build\
-  core\            CMake build tree: static libraries, the DLL, the CLIs, the test executables
+  core\            CMake build tree: static libraries, the DLL, the CLI, the test executables
   dist\            what you run and ship
     MarvinCaptureGUI.exe, *.dll, *.xbf ...    the GUI (self-contained, unpackaged)
     marvin-core.dll, libusb-1.0.dll    the native core
     firmware\                                FPGA bitstreams
     MarvinCaptureCLI.exe                     the command-line program (shares the DLL and firmware\)
-    cli\                                     pincli pinanalog pindeck pinlist
-                                             + marvin-core.dll, libusb-1.0.dll, firmware\
+    libwinpthread-1.dll                      runtime DLL the core imports
 ```
 
-The GUI and the CLIs find `firmware\` next to the core library, so `build\dist`
-can be copied anywhere. The CLIs also default to `firmware\` relative to the
-current directory, so run them from `build\dist\cli`.
+The GUI and the CLI find `firmware\` next to the core library, so `build\dist`
+can be copied anywhere.
 
 ## What the script does
 
@@ -45,7 +43,7 @@ current directory, so run them from `build\dist\cli`.
 2. **Core**: `cmake -G Ninja -B build\core` then `cmake --build`. Targets:
    `pinnacle_core` (hardware layer), `pinnacle_engine` / `pinnacle_engine_pure`
    (session engine), `pinnacle_sinks` (file writers), `marvin-core` (the
-   DLL, `src/api/pin_api.h`) and the CLIs.
+   DLL, `src/api/pin_api.h`) and `MarvinCaptureCLI`.
 3. **Tests**: `ctest --test-dir build\core --output-on-failure`.
 4. **GUI**: `dotnet build gui\windows\MarvinCaptureGUI -c Release -p:Platform=x64
    -p:PinnacleCoreDir=build\core -p:OutDir=build\dist\`. Details in
@@ -76,7 +74,7 @@ src/core/      hardware layer: USB device, 1394 link, streams, DV/HDV reassembly
 src/engine/    session engine: state machine, deck, preview, scene split, settings
 src/sinks/     file writers (raw, AVI, MOV/MKV rewrap, FFV1)
 src/api/       pin_api.h / pin_api.c, the flat C API the GUI links
-src/cli/       MarvinCaptureCLI, pincli, pinanalog, pindeck, pinlist
+src/cli/       MarvinCaptureCLI
 gui/windows/   WinUI 3 app
 tests/         unit and replay tests; tests/data/ = local fixtures
 firmware/      FPGA bitstreams (see firmware/README.md)

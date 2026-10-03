@@ -86,7 +86,7 @@ bit 27 means a reply is wanted, with a tag in bits 26:20.
 ### The steps
 
 "Needed?" is the result of leaving that one step out and running
-`pindeck state play wait:4 stop` on the Canon HDV camera. The next run
+`state play wait:4 stop` (deck commands, run with the since removed `pindeck` tool) on the Canon HDV camera. The next run
 always recovered without a replug.
 
 | # | what | value | meaning | source | needed? |
@@ -166,7 +166,7 @@ two text leaves (UTF-16LE, language 0x409)
 The CRCs are computed the way the vendor computes them. That is CRC-CCITT
 (0x1021) over each quadlet's bytes in **little-endian** order, where IEEE
 1212 specifies big-endian. For the development unit this reproduces the
-vendor ROM byte for byte (checked with `PINNACLE_DEBUG_1394=2`).
+vendor ROM byte for byte (checked against the config ROM dump the since removed `PINNACLE_DEBUG_1394=2` printed; `--debug` still logs the ROM words).
 
 The camera does not appear to need our ROM: leaving it out changed nothing.
 It is kept for three reasons:
@@ -262,6 +262,6 @@ bitstream upload and the 1.5 s FPGA settle time.
 | test | result |
 |---|---|
 | Full deck test: state, play, timecode, pause, ff, rew, stop | every command answered on a single send; EP 0x88 rate matches the transport state |
-| `pincli -t 15` and `-t 60` while playing | `tscheck` RESULT: clean; 0 continuity-counter errors; 0 CIP/DBC discontinuities |
-| Back-to-back `pincli -t 10` | clean |
+| 15 s and 60 s captures (the since removed `pincli`) while playing | `tscheck` RESULT: clean; 0 continuity-counter errors; 0 CIP/DBC discontinuities |
+| Back-to-back 10 s captures | clean |
 | oPCR after exit | back to `0x003f0092` (connection released) |

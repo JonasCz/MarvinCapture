@@ -37,9 +37,9 @@ PAT `0x0`, PMT `0x81`. The DV CIP validation in `dv_reassembler.c` distinguishes
 the two by the FMT field (`h[8] & 0x3f`) and, for HDV, `DBS == 6` and a payload
 that is a multiple of 192 bytes; the first data packet locks the format.
 
-## What `pincli` does
+## What the capture does
 
-`pincli -o out.ts ...` detects HDV automatically; no flag. It strips the two
+`MarvinCaptureCLI --capture out.ts ...` detects HDV automatically; no flag. It strips the two
 outer layers, drops the 4-byte source-packet timestamps and writes the 188-byte
 TS packets back to back. The output plays directly (`ffplay out.ts`).
 
@@ -54,7 +54,7 @@ output, e.g. a pipe, cannot be cut and keeps the tail.)
 
 ## Verifying integrity — read this before trusting the DBC line
 
-`pincli` reports two independent checks, but **they are not equally strong for
+The capture tracks two independent checks, but **they are not equally strong for
 HDV**:
 
 - **TS continuity counters (authoritative).** Per-PID 4-bit CC. Every lost
@@ -84,7 +84,7 @@ ffmpeg -v error -i out.ts -map 0:v:0 -f null -    # a healthy file prints nothin
   occasionally had one hole of ~25 bus cycles (~3 ms, a damaged picture)
   about 5 s in. Cause: a filesystem flush blocked the thread that keeps the
   USB queue full, the FPGA's receive FIFO overran and dropped bus cycles. Not
-  the camera, not the bus. `pincli` now decouples disk writes from USB reads;
+  the camera, not the bus. the capture now decouples disk writes from USB reads;
   see [usage.md](usage.md#the-usb-thread-must-never-wait-on-the-disk)
   for the evidence and the A/B. A hole, if one ever occurs, is kept as received
   and only counted (TS has no fixed-size unit to zero-pad, unlike DV).

@@ -115,7 +115,7 @@ verbatim from `protocol_data.h` (`PINNACLE_CONFIG_PREBITSTREAM_SEQ` /
 sequence used to fail on packet 3 of 4 (the OHCI read of `0x404`, straight after
 clearing `run`) because the read loop had been torn down while DV was still in
 flight. Anything written to EP 0x02 while the receive context runs must keep
-reading EP 0x88 too; the stop sequence and `PINNACLE_PROBE` both do now.
+reading EP 0x88 too; the stop sequence does.
 
 **A quiet camera looks exactly like a wedged device.** The `05`/`06` status reads
 around the bitstream are checked (`PINNACLE_ERR_NOT_READY`, "needs a physical

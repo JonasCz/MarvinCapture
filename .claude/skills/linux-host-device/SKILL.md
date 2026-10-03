@@ -1,6 +1,6 @@
 ---
 name: linux-host-device
-description: Build and run the core/CLIs on the Linux SSH host (jonas@192.168.0.103) where the Pinnacle 510-USB (2304:0223) is attached; sync the tree, build, no-sudo udev access, where the Ghidra decompilation of the vendor driver lives.
+description: Build and run the core and MarvinCaptureCLI on the Linux SSH host (jonas@192.168.0.103) where the Pinnacle 510-USB (2304:0223) is attached; sync the tree, build, no-sudo udev access, where the Ghidra decompilation of the vendor driver lives.
 ---
 
 # Linux host with the 510-USB
@@ -21,7 +21,7 @@ from Windows: `pip install paramiko`). No ssh/sshpass needed.
 cd ~/pin-ng; ln -sfn ~/pinnacle-oss/third_party third_party   # prebuilt linux FFmpeg slice
 cmake -B build -S . && cmake --build build -j4 && (cd build && ctest)
 ```
-The full build (engine, all CLIs, 23 ctests) works on Linux. Sync first (`sync.py` above; it also
+The full build (engine, MarvinCaptureCLI, the ctests) works on Linux. Sync first (`sync.py` above; it also
 sends untracked files under src/tests/firmware/scripts/docs).
 
 ## Running against the device
@@ -29,17 +29,18 @@ sends untracked files under src/tests/firmware/scripts/docs).
 `/etc/udev/rules.d/99-pinnacle.rules` (`SUBSYSTEM=="usb", ATTR{idVendor}=="2304", MODE="0666"`)
 makes the node world-accessible: run everything as `jonas`, **no sudo** (the auto-mode
 classifier refuses `sudo -S` anyway). Check with `ls -l /dev/bus/usb/001/*`. Without access
-the CLIs say `device already open in another process` (that is EACCES).
+the CLI says `device already open in another process` (that is EACCES).
 
 No camera is attached, so only bring-up can be tested. Quick checks from `~/pin-ng`:
 
-- `./build/pinlist` / `./build/MarvinCaptureCLI --help` -- model name, `(untested)` flag, GUID serial.
-- DV bring-up to "ready": `PINNACLE_DEBUG_1394=2 PINNACLE_PROBE=1 timeout 60 ./build/pindeck -vv state`
-  expects `NodeID 0xc000ffc0 ... node 0 of 1` and "no camera on the 1394 bus".
-- Analog bring-up: `timeout 40 ./build/pinanalog --status` (decoder answers, "NO SIGNAL").
-  **Always** wrap CLIs in `timeout` and give `pinanalog` `-t`/`--status`: bare `pinanalog` runs forever
-  and hangs the ssh call (then `pkill pinanalog`).
-- Crash hunting: `gdb -batch -ex run -ex bt --args ./build/pindeck ...` (gdb is installed).
+- `./build/MarvinCaptureCLI` (no arguments): help and the device table -- model name, `(untested)` flag, GUID serial.
+- DV bring-up to "ready": `timeout 60 ./build/MarvinCaptureCLI --debug --wait +00:00:05:00 2> d.log`
+  (the first action is a wait, so the session comes up as DV) expects `NodeID 0xc000ffc0 ... node 0 of 1`
+  and "no camera answered on the 1394 bus" in the log.
+- Analog bring-up: `timeout 40 ./build/MarvinCaptureCLI --debug -i composite --wait +00:00:05:00 2> a.log`
+  (decoder answers, "no signal", exit 0). **Always** wrap the CLI in `timeout`: a capture without a
+  terminating `--wait` runs until Ctrl-C and hangs the ssh call (then `pkill MarvinCaptureCLI`).
+- Crash hunting: `gdb -batch -ex run -ex bt --args ./build/MarvinCaptureCLI ...` (gdb is installed).
 
 Do not run anything that loads the FX2 firmware (`pinnacle_ensure_fx2`) against
 the 510-USB: it is a no-op there (`fx2_firmware` is NULL for every model but

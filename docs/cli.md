@@ -41,7 +41,7 @@ table (id, name, vid:pid, serial, state, owner pid), to stdout, exit 0.
 | `--keep-raw` | off | Keep the raw `.dv`/`.ts` next to a rewrapped file. |
 | `--overwrite` | off | Without it an existing target file is an error. |
 | `--brightness --contrast --saturation --hue --sharpness --audio-gain N` | device default | Analog controls. |
-| `--debug` | off | Status as one plain line per second instead of a redrawn line, plus debug logging (raw AV/C commands and answers, bring-up details). |
+| `--debug` | off | Status as one plain line per second instead of a redrawn line, plus the core's debug log (see [Debug log](#debug-log)). |
 
 Settings cannot change while a capture is open (between `--capture` and the
 action that closes it).
@@ -95,6 +95,34 @@ terminal and printed once per second when stderr is not a terminal or with
 `--debug` (which also prints the core's debug log). Ctrl-C once stops
 gracefully (`Stopping: finalising files...`), a second Ctrl-C exits at once
 with 130.
+
+### Debug log
+
+Without `--debug` only warnings and errors from the core are printed (as
+`warning: ...` / `error: ...`). With it every level is, each line prefixed
+with its level. The core logs, at debug level (the GUI shows the same lines on
+its console when started with `--debug`):
+
+- the **raw AV/C traffic**: `-> 00 20 c4 65` for a command frame sent to the
+  camera, `<- ACCEPTED 09 20 c4 65` for its response (the ctype name, then the
+  frame), `<- INTERIM ...` while the camera is busy, `<- no response ...` on a
+  timeout. The deck is polled once a second, so this is two lines per second
+  while the session is open (`01 20 d0 7f` = transport state, `01 20 51 71 ff ff
+  ff ff` = timecode). Raw AV/C probing of arbitrary frames is no longer
+  available from a shipped tool; the log shows the traffic of the normal
+  commands only;
+- the **bring-up steps**: device opened (model, id), GUID, FPGA bitstream path,
+  size and upload time, each step with how long the previous one took, the
+  1394 NodeID / node count, the camera found and the plug connected, the
+  analog standard detected, session state changes;
+- 1394 link events (write responses owed to the camera, unrelated FCP frames,
+  the config ROM), and a summary when the stream read loop ends.
+
+Per-USB-transfer detail is not logged. The code that used to print it (OHCI
+register probe after start-up, EP 0x88 completion log and raw dump, EP 0x84
+record log, link-level hex dumps) is kept disabled under `#if 0` in
+`src/core/pinnacle_stream.c` and `src/core/pinnacle_1394.c`, each with a note
+on how to re-enable it.
 
 ### Streaming to stdout
 

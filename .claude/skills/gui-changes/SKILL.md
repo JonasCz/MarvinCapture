@@ -65,6 +65,9 @@ API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
   (`pin_script_settings`) in `ApplyScriptSettings`, and runs the steps with
   `pin_script_run` once READY (`MainWindow.RunPendingScriptIfReady`; `PIN_EVT_STEP`
   / `PIN_EVT_DONE` in `HandleEvent`). Docs: `gui/windows/README.md`.
+  `--debug` (the shared parser's `pin_script_debug`) sets `pin_set_log_level(0)`
+  in `ParseCommandLine` so `ConsoleOutput` mirrors the core's debug log; there
+  is no environment variable for it any more.
 - Tab order / accessibility: give controls `AutomationProperties.Name` (and
   `HelpText` for the why); keep the XAML order = tab order.
 - Errors to the user: `VM.ShowInfo(title, message, severity)` (InfoBar); modal
@@ -86,6 +89,8 @@ computed in C#. Low-disk uses two copies of the storage elements toggled by
 
 ## Debugging
 
+- Core debug log: start `build\dist\MarvinCaptureGUI.exe --debug` from a console or
+  with stdout redirected to a file (AV/C traffic, bring-up steps; `docs/cli.md`).
 - Crashes / unhandled exceptions: `%LOCALAPPDATA%\PinnacleOSS\crash.log`
   (absent = clean run). If the core DLL fails to load or reports an API
   version other than 3, the app shows an error window instead of the UI.
