@@ -100,7 +100,6 @@ void pinnacle_analog_config_defaults(pinnacle_analog_config_t *cfg)
     cfg->input = PINNACLE_INPUT_COMPOSITE;
     cfg->standard = PINNACLE_STD_PAL;
     pinnacle_picture_defaults(&cfg->picture);
-    cfg->vcr_mode = 1;
 }
 
 /* --- SAA7113 ------------------------------------------------------------ */
@@ -146,11 +145,12 @@ static pinnacle_status_t saa_write_table(pinnacle_analog_t *a, const regval_t *t
 }
 
 /* Reg 0x08: bit7 AUFD (automatic field detection) is always on; bit6 FSEL
- * (60 Hz when AUFD is off); bits 4:3 HTC, 01 = VTR, 11 = fast locking.
- * The vendor's VcrMode switches between exactly those two. */
+ * (60 Hz when AUFD is off); bits 4:3 HTC, always 01 = VTR timing (tape
+ * sources; the vendor default). The vendor's other setting, 11 = fast
+ * locking for broadcast TV, is not offered. */
 static uint8_t saa_reg08(const pinnacle_analog_t *a)
 {
-    uint8_t v = 0x80 | (a->cfg.vcr_mode ? 0x08 : 0x18);
+    uint8_t v = 0x80 | 0x08;
     if (pinnacle_std_is_60hz(a->cfg.standard))
         v |= 0x40;
     return v;
@@ -333,6 +333,9 @@ static pinnacle_status_t power_up(pinnacle_analog_t *a)
     uint8_t ver = 0;
     if (pinnacle_i2c_read(dev, decoder_addr(dev), 0x00, &ver) != PINNACLE_OK)
         pin_logf(PIN_LOG_WARN, "pinnacle: SAA7113 did not answer\n");
+    else
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: video decoder at I2C 0x%02x answered, chip version %02x\n",
+                 decoder_addr(dev), ver);
     if ((st = saa_write_table(a, saa7113_init, sizeof(saa7113_init) / sizeof(saa7113_init[0]))) !=
         PINNACLE_OK)
         return st;
@@ -352,6 +355,9 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
     else
         pinnacle_analog_config_defaults(&a->cfg);
     apply_geometry(a);
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: analog bring-up: %s input, %s, %ux%u\n",
+             a->cfg.input == PINNACLE_INPUT_SVIDEO ? "S-Video" : "composite",
+             pinnacle_std_name(a->cfg.standard), a->width, a->height);
 
     /* "06 00" answers 01 while some bitstream is running. A cold device
      * first needs the power-up sequence before its loader answers "05". */
@@ -374,6 +380,7 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
     if (libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
                                          PINNACLE_ALT_SETTING_CAPTURE) != 0)
         return PINNACLE_ERR_USB_TRANSFER;
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: capture alt setting selected\n");
 
     /* Decoder: full init (a warm switch from DV skipped power_up), then
      * the settings. Reg 0x11 bit 3 (OEYC) enables the decoder's pixel
@@ -399,12 +406,6 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
         (st = ac97_init(a)) != PINNACLE_OK)
         return st;
     return PINNACLE_OK;
-}
-
-pinnacle_status_t pinnacle_analog_set_input(pinnacle_analog_t *a, pinnacle_input_t input)
-{
-    a->cfg.input = input;
-    return saa_apply_input(a);
 }
 
 pinnacle_status_t pinnacle_analog_set_standard(pinnacle_analog_t *a, pinnacle_std_t std)
@@ -702,12 +703,8 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
      * device's short packet ends each transfer. */
     unsigned audio_bytes = (a->audio_samples_per_packet * 4 + PACKET_HEADER + 511) & ~511u;
 
-    unsigned vdepth = dev->tuning.video_queue ? dev->tuning.video_queue : VIDEO_QUEUE;
-    unsigned vbytes = dev->tuning.video_xfer ? dev->tuning.video_xfer : VIDEO_XFER;
-    if (vdepth < 1 || vdepth > VIDEO_QUEUE_MAX)
-        vdepth = VIDEO_QUEUE;
-    if (vbytes < 512 || vbytes % 512)
-        vbytes = VIDEO_XFER;
+    const unsigned vdepth = VIDEO_QUEUE;
+    const unsigned vbytes = VIDEO_XFER;
 
     /* Before anything is queued: WinUSB only changes the policy on an idle pipe. */
     int raw_video = set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 1);

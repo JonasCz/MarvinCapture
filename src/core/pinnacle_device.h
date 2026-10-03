@@ -66,36 +66,6 @@ typedef enum {
 
 const char *pinnacle_strerror(pinnacle_status_t status);
 
-/* The PINNACLE_* getenv() knobs the core used to read on every call, now
- * collected into one struct so a GUI can set them programmatically (and so
- * the value is read once, not on every hot-path call). Defaults reproduce
- * the pre-refactor behaviour exactly; pinnacle_tuning_from_env() applies the
- * same env vars the core used to read directly, so the CLIs -- which call it
- * once right after pinnacle_open() -- behave exactly as before. Core code
- * itself never calls getenv(); it only reads dev->tuning. */
-typedef struct {
-    /* pinnacle_stream.c (DV/HDV) */
-    int debug_1394;             /* PINNACLE_DEBUG_1394: p1394 verbose level (0/1/2) */
-    int probe_registers;        /* PINNACLE_PROBE=1: probe OHCI registers after stream start */
-    int debug_ep88;             /* PINNACLE_DEBUG_EP88=1: log every EP 0x88 completion */
-    const char *raw_dump_path;  /* PINNACLE_RAW_DUMP: also write raw EP 0x88 bytes here, or NULL */
-    int debug_ep84;             /* PINNACLE_DEBUG_EP84=1: log every EP 0x84 record */
-
-    /* pinnacle_analog.c */
-    unsigned video_queue;       /* PINNACLE_VIDEO_QUEUE: video transfer queue depth, 0 = default */
-    unsigned video_xfer;        /* PINNACLE_VIDEO_XFER: video transfer size, 0 = default */
-} pinnacle_tuning_t;
-
-/* Fills *t with the same defaults the core used to fall back to when an env
- * var was unset. Called by pinnacle_open(), so dev->tuning is always usable
- * even if the CLI never calls pinnacle_tuning_from_env(). */
-void pinnacle_tuning_defaults(pinnacle_tuning_t *t);
-
-/* Overrides *t from the PINNACLE_* environment variables, exactly as the
- * core used to read them inline. CLI-only: a GUI has no controlling
- * terminal/environment to speak of and should set fields directly. */
-void pinnacle_tuning_from_env(pinnacle_tuning_t *t);
-
 typedef struct {
     libusb_context *usb_ctx;
     libusb_device_handle *handle;
@@ -118,14 +88,14 @@ typedef struct {
     int iso_channel;           /* channel IR context 0 listens on */
     int pcr_connected;         /* we hold a point-to-point connection on oPCR[0] */
     char fail_detail[200];     /* why the last pinnacle_stream_start failed, for the user */
-    pinnacle_tuning_t tuning;  /* PINNACLE_* knobs; defaulted by pinnacle_open() */
+    char progress_last[96];    /* last step pinnacle_progress() logged (debug log), "" = none */
+    uint64_t progress_ms;      /* monotonic ms when it was logged */
 } pinnacle_device_t;
 
-static inline void pinnacle_progress(const pinnacle_device_t *dev, const char *step, int percent)
-{
-    if (dev && dev->progress)
-        dev->progress(dev->progress_user, step, percent);
-}
+/* Reports a bring-up step to the progress callback (if set) and logs it at
+ * debug level, with the time since the previous step; a step repeated with a
+ * new percentage is logged once. */
+void pinnacle_progress(pinnacle_device_t *dev, const char *step, int percent);
 
 /* Finds and opens the device, claims the vendor-class interface. Does not
  * touch alt settings or upload anything yet — call pinnacle_init_hardware

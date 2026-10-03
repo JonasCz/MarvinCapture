@@ -29,36 +29,29 @@
 #include <string.h>
 #include <time.h>
 
-void pinnacle_tuning_defaults(pinnacle_tuning_t *t)
+static uint64_t mono_ms(void)
 {
-    memset(t, 0, sizeof(*t));
-    t->debug_1394 = 0;
-    t->probe_registers = 0;
-    t->debug_ep88 = 0;
-    t->raw_dump_path = NULL;
-    t->debug_ep84 = 0;
-    t->video_queue = 0;     /* 0 = use VIDEO_QUEUE */
-    t->video_xfer = 0;      /* 0 = use VIDEO_XFER */
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
 }
 
-void pinnacle_tuning_from_env(pinnacle_tuning_t *t)
+void pinnacle_progress(pinnacle_device_t *dev, const char *step, int percent)
 {
-    const char *e;
-
-    if ((e = getenv("PINNACLE_DEBUG_1394")))
-        t->debug_1394 = atoi(e);
-    if ((e = getenv("PINNACLE_PROBE")))
-        t->probe_registers = (e[0] == '1');
-    if ((e = getenv("PINNACLE_DEBUG_EP88")))
-        t->debug_ep88 = (e[0] == '1');
-    if ((e = getenv("PINNACLE_RAW_DUMP")))
-        t->raw_dump_path = e;
-    if ((e = getenv("PINNACLE_DEBUG_EP84")))
-        t->debug_ep84 = (e[0] == '1');
-    if ((e = getenv("PINNACLE_VIDEO_QUEUE")))
-        t->video_queue = (unsigned)atoi(e);
-    if ((e = getenv("PINNACLE_VIDEO_XFER")))
-        t->video_xfer = (unsigned)atoi(e);
+    if (!dev)
+        return;
+    if (strcmp(dev->progress_last, step) != 0) {
+        uint64_t now = mono_ms();
+        if (dev->progress_last[0])
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: step \"%s\" (%u ms after the previous step)\n", step,
+                     (unsigned)(now - dev->progress_ms));
+        else
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: step \"%s\"\n", step);
+        snprintf(dev->progress_last, sizeof(dev->progress_last), "%s", step);
+        dev->progress_ms = now;
+    }
+    if (dev->progress)
+        dev->progress(dev->progress_user, step, percent);
 }
 
 static void sleep_ms(unsigned ms)
@@ -141,7 +134,6 @@ static pinnacle_status_t find_device(libusb_context *ctx, const char *device_id,
 pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device_id)
 {
     memset(dev, 0, sizeof(*dev));
-    pinnacle_tuning_defaults(&dev->tuning);
 
     if (libusb_init(&dev->usb_ctx) != 0)
         return PINNACLE_ERR_USB_INIT;
@@ -198,6 +190,12 @@ pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device
     }
     dev->interface_claimed = 1;
 
+    {
+        char id[PINNACLE_ENUM_ID_MAX];
+        pinnacle_enum_build_id(libusb_get_device(dev->handle), id, sizeof(id));
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: opened %s (%04x:%04x, %s), interface %d claimed\n",
+                 model->name, PINNACLE_VID, model->pid, id, PINNACLE_INTERFACE_NUM);
+    }
     return PINNACLE_OK;
 }
 
@@ -256,6 +254,9 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
 
     pinnacle_status_t status = PINNACLE_OK;
     size_t offset = 0;
+    uint64_t t_start = mono_ms();
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: uploading the FPGA bitstream '%s' (%zu bytes in %u chunks)\n",
+             path, n, (unsigned)PINNACLE_BITSTREAM_CHUNK_COUNT);
     pinnacle_progress(dev, "Uploading FPGA firmware", 0);
     for (unsigned i = 0; i < PINNACLE_BITSTREAM_CHUNK_COUNT; i++) {
         unsigned chunk_len = PINNACLE_BITSTREAM_CHUNK_SIZES[i];
@@ -275,6 +276,9 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
     }
 
     free(buf);
+    if (status == PINNACLE_OK)
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA bitstream uploaded in %u ms\n",
+                 (unsigned)(mono_ms() - t_start));
     return status;
 }
 
@@ -317,6 +321,7 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
             dev->guid_lo = ((uint32_t)reply[8] << 24) | ((uint32_t)reply[9] << 16) |
                            ((uint32_t)reply[10] << 8) | reply[11];
             dev->have_guid = 1;
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: device GUID %08x%08x\n", dev->guid_hi, dev->guid_lo);
         } else if (req[1] == 0x00) {
             memcpy(dev->id0, reply + 4, 8);
         }
@@ -599,5 +604,6 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
     if (rc != 0)
         return PINNACLE_ERR_USB_TRANSFER;
 
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA up, operational alt setting selected\n");
     return PINNACLE_OK;
 }

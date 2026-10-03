@@ -42,8 +42,7 @@ public partial class App : Application
             LogCrash("AppDomain.UnhandledException", e.ExceptionObject as Exception, e.IsTerminating);
         };
 
-#if DEBUG
-        if (Environment.GetEnvironmentVariable("PINNACLE_GUI_FIRSTCHANCE") == "1")
+#if false // first-chance exception / binding-failure tracing (was PINNACLE_GUI_FIRSTCHANCE=1 in Debug builds): change to #if DEBUG to bring it back
         {
             AppDomain.CurrentDomain.FirstChanceException += (s, e) =>
                 LogCrash("FirstChance", e.Exception, false);
@@ -60,14 +59,13 @@ public partial class App : Application
         };
     }
 
-    /// <summary>Startup breadcrumbs, only with PINNACLE_GUI_FIRSTCHANCE=1 in Debug builds.</summary>
+    /// <summary>Startup breadcrumbs: disabled (was PINNACLE_GUI_FIRSTCHANCE=1 in Debug builds); remove the #if false to bring it back.</summary>
     [System.Diagnostics.Conditional("DEBUG")]
     public static void Trace(string what)
     {
-        if (Environment.GetEnvironmentVariable("PINNACLE_GUI_FIRSTCHANCE") == "1")
-        {
-            LogCrash("trace: " + what, null, false);
-        }
+#if false
+        LogCrash("trace: " + what, null, false);
+#endif
     }
 
     private static void LogCrash(string source, Exception? ex, bool terminating)

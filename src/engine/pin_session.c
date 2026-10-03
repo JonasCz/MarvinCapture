@@ -187,6 +187,12 @@ static void set_state(pin_session_t *s, pin_state_t st)
     if (s->state == PIN_STATE_CAPTURING && st != PIN_STATE_CAPTURING &&
         s->stream_kind == PIN_KIND_ANALOG && s->active_format == PIN_FMT_ANALOG_FFV1_MKV)
         rate_persist(s);
+    if (st != s->state) {
+        static const char *const names[] = { "closed", "preparing", "ready", "capturing",
+                                              "stopping", "rewinding", "error" };
+        pin_logf(PIN_LOG_DEBUG, "session: state %s\n",
+                 (unsigned)st < sizeof(names) / sizeof(names[0]) ? names[st] : "?");
+    }
     s->state = st;
     if (s->lock) {
         pinnacle_lock_state_t ls = PINNACLE_LOCK_READY;
@@ -2014,6 +2020,7 @@ static void do_run_dv(pin_session_t *s)
         return;
     }
 
+    pin_logf(PIN_LOG_DEBUG, "session: DV/HDV bring-up, FPGA bitstream %s\n", fw);
     pinnacle_status_t pst = pinnacle_init_hardware(&s->dev, fw);
     if (pst != PINNACLE_OK) {
         set_init_error(s, pst, fw);
@@ -2305,6 +2312,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
     if (s->requested_std != PIN_STD_AUTO)
         cfg.standard = (pinnacle_std_t)(s->requested_std - 1); /* enums line up 1:1, see pin_std_t */
 
+    pin_logf(PIN_LOG_DEBUG, "session: analog bring-up, FPGA bitstream %s\n", fw);
     pinnacle_status_t pst = pinnacle_analog_open(&s->analog, &s->dev, fw, &cfg);
     if (pst != PINNACLE_OK) {
         set_init_error(s, pst, fw);
@@ -2325,6 +2333,9 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
         }
         if (ast.locked && ast.is_60hz != pinnacle_std_is_60hz(s->analog.cfg.standard))
             pinnacle_analog_set_standard(&s->analog, ast.is_60hz ? PINNACLE_STD_NTSC : PINNACLE_STD_PAL);
+        pin_logf(PIN_LOG_DEBUG, "session: auto standard: %s, field rate %s -> %s\n",
+                 ast.locked ? "decoder locked" : "no signal", ast.locked ? (ast.is_60hz ? "60 Hz" : "50 Hz") : "unknown",
+                 pinnacle_std_name(s->analog.cfg.standard));
         pin_session_lock(s);
         s->is_60hz = pinnacle_std_is_60hz(s->analog.cfg.standard);
         s->detected_std = s->is_60hz ? PIN_STD_NTSC : PIN_STD_PAL;
@@ -2655,6 +2666,8 @@ static void *worker_main(void *arg)
             set_state(s, PIN_STATE_PREPARING);
             pthread_mutex_unlock(&s->mtx);
 
+            pin_logf(PIN_LOG_DEBUG, "session: selecting the %s input\n",
+                     cmd.input == PIN_INPUT_DV ? "DV/HDV" : cmd.input == PIN_INPUT_SVIDEO ? "S-Video" : "composite");
             if (!s->is_replay && !s->dev.handle) {
                 pinnacle_status_t pst = pinnacle_open_by_id(&s->dev, s->device_id);
                 if (pst != PINNACLE_OK) {
@@ -2665,8 +2678,6 @@ static void *worker_main(void *arg)
                     pin_session_unlock(s);
                     continue;
                 }
-                /* The same PINNACLE_* debug/tuning env vars the CLIs honour. */
-                pinnacle_tuning_from_env(&s->dev.tuning);
                 /* Publish the unit's GUID in the lock record straight away,
                  * so other windows can label it; the analog bring-up never
                  * reads it on its own. */

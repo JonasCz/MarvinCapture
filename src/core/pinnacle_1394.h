@@ -59,7 +59,6 @@ extern "C" {
 
 typedef struct {
     pinnacle_device_t *dev;
-    int verbose;
     uint16_t local_node;       /* 0xffc0 | our node number, from NodeID */
     int node_count;            /* from SelfIDCount */
     unsigned next_tl;
@@ -114,7 +113,6 @@ int p1394_reg_read(pinnacle_1394_t *l, uint16_t ohci_off, uint32_t *val);
  * returns 1 and fills *val once the reply has arrived, else 0. */
 int p1394_reg_read_begin(pinnacle_1394_t *l, uint16_t off);
 int p1394_reg_read_poll(pinnacle_1394_t *l, uint16_t off, uint32_t *val);
-int p1394_at_reset(pinnacle_1394_t *l);
 
 /* Reads NodeID and SelfIDCount into local_node / node_count. Waits (up to
  * ~1 s) for the NodeID to become valid after a bus reset. */

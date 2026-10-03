@@ -359,6 +359,10 @@ public sealed partial class MainWindow : Window
             return;
         }
         _script = script;
+        if (Native.ScriptDebug(script) && ConsoleOutput.Enabled)
+        {
+            Native.SetLogLevel(0); // ConsoleOutput mirrors the core's debug lines
+        }
         // --device may be a recording to replay: the core lists it as "replay:<name>" once registered
         _scriptDevice = Native.ScriptDevice(script);
         if (_scriptDevice.Length > 0 && System.IO.File.Exists(_scriptDevice))

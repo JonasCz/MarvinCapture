@@ -138,6 +138,7 @@ pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path)
         goto out;
     }
 
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: uploading the FPGA bitstream '%s' (%zu bytes)\n", path, len);
     pinnacle_progress(dev, "Uploading FPGA firmware", 0);
     for (size_t off = 0; off < len; off += FPGA_CHUNK) {
         pinnacle_progress(dev, "Uploading FPGA firmware", (int)(off * 100 / len));
@@ -162,6 +163,8 @@ pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path)
     if (st == PINNACLE_OK && ready != 0x01) {
         pin_logf(PIN_LOG_ERROR, "pinnacle: FPGA did not come up (06 -> %02x)\n", ready);
         st = PINNACLE_ERR_NOT_READY;
+    } else if (st == PINNACLE_OK) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA up (06 -> %02x)\n", ready);
     }
 out:
     free(buf);

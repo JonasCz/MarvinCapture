@@ -443,6 +443,11 @@ public static unsafe partial class Native
     public static string ScriptDevice(SafeHandle script) => PtrToUtf8(pin_script_device(script));
 
     [LibraryImport(Lib)]
+    private static partial int pin_script_debug(SafeHandle script);
+    /// <summary>--debug was given.</summary>
+    public static bool ScriptDebug(SafeHandle script) => pin_script_debug(script) != 0;
+
+    [LibraryImport(Lib)]
     private static partial int pin_script_needs_session(SafeHandle script);
     public static bool ScriptNeedsSession(SafeHandle script) => pin_script_needs_session(script) != 0;
 

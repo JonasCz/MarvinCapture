@@ -80,7 +80,6 @@ typedef struct {
     pinnacle_input_t input;
     pinnacle_std_t standard;
     pinnacle_picture_t picture;
-    int vcr_mode;       /* SAA7113 VTR timing (tape sources); the vendor default */
 } pinnacle_analog_config_t;
 
 void pinnacle_analog_config_defaults(pinnacle_analog_config_t *cfg);
@@ -110,7 +109,6 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
                                        const char *capture_bitstream_path,
                                        const pinnacle_analog_config_t *cfg);
 
-pinnacle_status_t pinnacle_analog_set_input(pinnacle_analog_t *a, pinnacle_input_t input);
 pinnacle_status_t pinnacle_analog_set_standard(pinnacle_analog_t *a, pinnacle_std_t std);
 pinnacle_status_t pinnacle_analog_set_picture(pinnacle_analog_t *a, const pinnacle_picture_t *p);
 pinnacle_status_t pinnacle_analog_get_status(pinnacle_analog_t *a, pinnacle_analog_status_t *st);

@@ -13,11 +13,15 @@ namespace PinnacleCapture;
 /// if stdout was redirected (<c>MarvinCaptureGUI.exe &gt; log.txt</c>, or a
 /// pipe) that is used as is; otherwise the parent's console, if there is
 /// one, is attached. Started from Explorer there is neither and this does
-/// nothing. PINNACLE_LOG_LEVEL=0 adds the core's debug lines.
+/// nothing. The command line option --debug adds the core's debug lines
+/// (MainWindow.ParseCommandLine sets the log level).
 /// </summary>
 internal static partial class ConsoleOutput
 {
     private static TextWriter? _out;
+
+    /// <summary>A console (or redirected stdout) is attached.</summary>
+    public static bool Enabled => _out is not null;
     private static readonly object _lock = new();
 
     public static void Init()
@@ -42,19 +46,6 @@ internal static partial class ConsoleOutput
         catch
         {
             _out = null;
-        }
-
-        try
-        {
-            if (_out is not null &&
-                int.TryParse(Environment.GetEnvironmentVariable("PINNACLE_LOG_LEVEL"), out var level))
-            {
-                Native.SetLogLevel(level);
-            }
-        }
-        catch
-        {
-            // core not loadable: App.OnLaunched reports that
         }
     }
 
