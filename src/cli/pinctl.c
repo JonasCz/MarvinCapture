@@ -25,7 +25,7 @@
  *   list
  *   status <id>
  *   capture -d id -i input [-s std] [-f format] -o path [--title T]
- *           [--split] [--passes N] [--idle-min M] [--duration S]
+ *           [--split] [--passes N] [--idle-min M] [--max-min M] [--duration S]
  *           [--aspect a] [--start-deck] [--rewind-first]
  *   deck <id> <play|pause|stop|ff|rew|state|timecode>
  *   preview-dump <id> -n N -o prefix
@@ -189,7 +189,7 @@ static int cmd_capture(int argc, char **argv)
 {
     const char *id = NULL, *input = "dv", *std_s = "auto", *fmt = NULL, *out_path = NULL;
     const char *title = "", *aspect = "auto";
-    int split = 0, passes = 1, idle_min = 0, duration = 0, start_deck = 0, rewind_first = 0;
+    int split = 0, passes = 1, idle_min = 0, max_min = 0, duration = 0, start_deck = 0, rewind_first = 0;
 
     for (int i = 0; i < argc; i++) {
         if (!strcmp(argv[i], "-d") && i + 1 < argc) id = argv[++i];
@@ -201,6 +201,7 @@ static int cmd_capture(int argc, char **argv)
         else if (!strcmp(argv[i], "--split")) split = 1;
         else if (!strcmp(argv[i], "--passes") && i + 1 < argc) passes = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--idle-min") && i + 1 < argc) idle_min = atoi(argv[++i]);
+        else if (!strcmp(argv[i], "--max-min") && i + 1 < argc) max_min = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--duration") && i + 1 < argc) duration = atoi(argv[++i]);
         else if (!strcmp(argv[i], "--aspect") && i + 1 < argc) aspect = argv[++i];
         else if (!strcmp(argv[i], "--start-deck")) start_deck = 1;
@@ -244,6 +245,7 @@ static int cmd_capture(int argc, char **argv)
     opts.scene_split = split;
     opts.passes = passes < 1 ? 1 : passes;
     opts.idle_stop_minutes = idle_min;
+    opts.max_duration_minutes = max_min;
     opts.start_deck = start_deck || rewind_first;
     opts.rewind_first = rewind_first;
     opts.aspect = !strcmp(aspect, "4:3") ? PIN_ASPECT_4_3
@@ -284,6 +286,8 @@ static int cmd_capture(int argc, char **argv)
     }
 
     time_t deadline = duration ? time(NULL) + duration : 0;
+    int seen_capturing = 0;
+    time_t ready_since = 0;
     while (!g_stop) {
         pin_status_snapshot_t snap; memset(&snap, 0, sizeof(snap)); snap.size = sizeof(snap);
         pin_get_status(s, &snap);
@@ -291,9 +295,19 @@ static int cmd_capture(int argc, char **argv)
         pin_format_status_line(&snap, line, sizeof(line));
         printf("\r%-100s", line);
         fflush(stdout);
+        if (snap.state == PIN_STATE_CAPTURING) seen_capturing = 1;
         if (snap.state != PIN_STATE_CAPTURING && snap.state != PIN_STATE_STOPPING &&
-            snap.state != PIN_STATE_REWINDING)
+            snap.state != PIN_STATE_REWINDING) {
+            /* After an automatic rewind the session is READY while PLAY is
+             * sent and the first frame awaited (tape threading, several
+             * seconds): that is "not started yet", not "finished". */
+            if (!seen_capturing && snap.state == PIN_STATE_READY) {
+                if (!ready_since) ready_since = time(NULL);
+                if (time(NULL) - ready_since < 60) { sleep_ms(200); continue; }
+            }
             break;
+        }
+        ready_since = 0;
         if (deadline && time(NULL) >= deadline) { pin_capture_stop(s); deadline = 0; }
         pin_event_t ev;
         while (pin_poll_event(s, &ev)) {
@@ -507,7 +521,7 @@ static void usage(void)
         "usage: pinctl list\n"
         "       pinctl status <id>\n"
         "       pinctl capture -d id -i dv|svideo|composite [-s std] [-f format] -o path\n"
-        "                      [--title T] [--split] [--passes N] [--idle-min M]\n"
+        "                      [--title T] [--split] [--passes N] [--idle-min M] [--max-min M]\n"
         "                      [--duration S] [--aspect auto|4:3|16:9] [--start-deck]\n"
         "                      [--rewind-first]\n"
         "       pinctl deck <id> <play|pause|stop|ff|rew|state|timecode>\n"
