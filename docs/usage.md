@@ -238,10 +238,7 @@ capture starts (not for the user's own stop).
 | `WRITE_ERROR` | writing a file failed, or the next file (split, pass) could not be created |
 
 A capture that drives the deck (`start_deck`) stops the tape when it ends for
-any reason except a lost device or camera. The environment variable
-`PINNACLE_DISK_RESERVE_MB=<n>` replaces the 64 MB margin; set it to the drive's
-free space minus a few MB to test the disk-full stop (verified that way with the
-replay device).
+any reason except a lost device or camera.
 
 ### The USB thread must never wait on the disk
 
@@ -275,12 +272,34 @@ under `#if 0` in `src/core/pinnacle_stream.c` and `src/core/pinnacle_1394.c`
 (each block says how to bring it back); the EP 0x88 completion log runs on the
 USB thread and adds its own stalls, so it is not for loss testing.
 
-Two environment variables remain, for testing:
+### Old low-level tools (git history)
+
+Commit `febfca6` removed the low-level command-line tools; MarvinCaptureCLI
+replaces them for normal use, but they stay in git history for diagnostics:
+
+- `pincli`: raw DV/HDV capture with CIP/DBC continuity statistics.
+- `pindeck`: raw AV/C commands (`raw:<hex>`), 1394 register reads (`reg:`),
+  `subunits`, EP 0x88 byte rate.
+- `pinanalog`: analog capture with raw endpoint dumps.
+- `pinlist`: device listing.
+
+The last tree containing them is `febfca6~1`. Build, for example, pindeck from it:
+
+```
+git worktree add ../old febfca6~1
+cd ../old
+cmake -S . -B build -G Ninja && cmake --build build --target pindeck
+```
+
+(same toolchain as [building.md](building.md); the targets are `pincli`,
+`pindeck`, `pinanalog`, `pinlist`). `pinctl`, the older tool MarvinCaptureCLI
+replaced first, is in the tree before commit `3614da4` (`3614da4~1`).
+
+One environment variable remains, for testing:
 
 | variable | effect |
 |---|---|
 | `PIN_REPLAY=<file>` | the virtual replay device, see below (used by the ctest suite) |
-| `PINNACLE_DISK_RESERVE_MB=<n>` | free space (MB) a capture keeps on the output drive beyond the writer queue before it stops with "disk full" (default 64) |
 
 ## Two traps
 

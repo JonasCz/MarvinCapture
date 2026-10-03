@@ -68,13 +68,16 @@ debug: AV/C <- ACCEPTED 09 20 c4 65             (response: ctype name, then the 
 ```
 
 Raw AV/C probing of arbitrary frames or OHCI registers (the old
-`pindeck raw:`/`reg:`) is no longer possible from a shipped tool; the log shows
+`pindeck raw:`/`reg:`) is no longer possible from a shipped tool, but the tool
+is in git history: `git worktree add ../old febfca6~1`, build the `pindeck`
+target there (cmake as in docs/building.md; also pincli, pinanalog, pinlist;
+pinctl is in `3614da4~1`), details in docs/usage.md (Diagnostics); the log shows
 the traffic of the normal commands (the 1 Hz state/timecode poll appears as two
 lines per second). The register probe, raw EP 0x88 dump, per-completion and
 EP 0x84 logging live on as `#if 0` blocks in `src/core/pinnacle_stream.c` and
 `src/core/pinnacle_1394.c` (each says how to re-enable it; rebuild with the
 script). Test hooks that remain: `PIN_REPLAY=<file>` (virtual replay device, no
-hardware) and `PINNACLE_DISK_RESERVE_MB`.
+hardware).
 
 The GUI takes `--debug` too: start `build\dist\MarvinCaptureGUI.exe --debug`
 from a console, or with stdout redirected to a file, to read its log.
