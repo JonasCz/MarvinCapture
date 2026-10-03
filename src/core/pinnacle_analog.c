@@ -528,7 +528,6 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
  * So it is per-transfer cost on the host side, not queue depth; usbfs
  * turns anything over 16 KiB into a scatter-gather list, and big buffers
  * need several TRBs. 512 x 8 KiB keeps 200 ms queued.
- * PINNACLE_VIDEO_XFER / PINNACLE_VIDEO_QUEUE override both for testing.
  *
  * On Windows, WinUSB by default hands a pipe's reads to the host controller
  * one at a time, however many are queued: each completion goes back up

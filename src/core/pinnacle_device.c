@@ -43,7 +43,7 @@ void pinnacle_progress(pinnacle_device_t *dev, const char *step, int percent)
     if (strcmp(dev->progress_last, step) != 0) {
         uint64_t now = mono_ms();
         if (dev->progress_last[0])
-            pin_logf(PIN_LOG_DEBUG, "pinnacle: step \"%s\" (%u ms after the previous step)\n", step,
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: step \"%s\" (the previous step took %u ms)\n", step,
                      (unsigned)(now - dev->progress_ms));
         else
             pin_logf(PIN_LOG_DEBUG, "pinnacle: step \"%s\"\n", step);

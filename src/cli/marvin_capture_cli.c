@@ -224,6 +224,27 @@ static const char *log_level_name(int level)
     }
 }
 
+/* The core's log lines are process-wide events (pin_poll_event(NULL)), not
+ * part of the session's queue. Prints them: every level with --debug,
+ * else warnings and errors. */
+static void print_log_events(int debug)
+{
+    pin_event_t ev;
+    for (;;) {
+        memset(&ev, 0, sizeof(ev));
+        ev.size = sizeof(ev);
+        if (!pin_poll_event(NULL, &ev))
+            break;
+        if (ev.kind != PIN_EVT_LOG || !(debug || ev.a >= 2))
+            continue;
+        size_t n = strlen(ev.text);
+        while (n > 0 && (ev.text[n - 1] == '\n' || ev.text[n - 1] == '\r'))
+            ev.text[--n] = '\0';
+        if (n > 0)
+            say("%s: %s", log_level_name(ev.a), ev.text);
+    }
+}
+
 int main(int argc, char **argv)
 {
     pin_script_t *sc = NULL;
@@ -259,6 +280,7 @@ int main(int argc, char **argv)
 
     pin_session_t *s = NULL;
     st = pin_open(pin_script_device(sc), &s);
+    print_log_events(debug);
     if (st != PIN_OK) {
         fprintf(stderr, "error: cannot open the device: %s\n", pin_strerror(st));
         pin_script_free(sc);
@@ -299,6 +321,7 @@ int main(int argc, char **argv)
         }
         pin_event_t ev;
         int got = 0;
+        print_log_events(debug);
         for (;;) {
             memset(&ev, 0, sizeof(ev));
             ev.size = sizeof(ev);
@@ -309,14 +332,7 @@ int main(int argc, char **argv)
             case PIN_EVT_STEP:
                 say("[%d/%d] %s", ev.a + 1, pin_script_step_count(sc), ev.text);
                 break;
-            case PIN_EVT_LOG:
-                if (debug || ev.a >= 2) {
-                    size_t n = strlen(ev.text);
-                    while (n > 0 && (ev.text[n - 1] == '\n' || ev.text[n - 1] == '\r'))
-                        ev.text[--n] = '\0';
-                    if (n > 0)
-                        say("%s: %s", log_level_name(ev.a), ev.text);
-                }
+            case PIN_EVT_LOG:   /* the session queue carries none today; kept for safety */
                 break;
             case PIN_EVT_ERROR:
                 say("error: %s", ev.text);
@@ -358,6 +374,7 @@ int main(int argc, char **argv)
     }
     finish_inplace();
     pin_close(s);
+    print_log_events(debug);
     pin_script_free(sc);
     return exit_code;
 }

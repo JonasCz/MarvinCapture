@@ -22,9 +22,9 @@
  * stderr) can install its own sink -- queue lines as events, show them in a
  * log pane, whatever -- without the core caring who is listening.
  *
- * The default sink writes exactly what pincli/pindeck/pinanalog have always
- * printed to stderr, so the existing CLIs are unaffected unless they choose
- * to install a sink of their own.
+ * The default sink writes the lines to stderr. marvin-core installs its own
+ * (pin_api.c): the lines become PIN_EVT_LOG events for the front end, filtered
+ * by pin_set_log_level(); MarvinCaptureCLI --debug lowers it to debug.
  */
 
 #ifndef PIN_LOG_H
