@@ -5,24 +5,27 @@ description: Build and run the core and MarvinCaptureCLI on the Linux SSH host (
 
 # Linux host with the 510-USB
 
-Host: `jonas@192.168.0.103` (password in the task/user message; Ubuntu, paramiko works
-from Windows: `pip install paramiko`). No ssh/sshpass needed.
+Host: `jonas@192.168.0.103` (Ubuntu). Plain `ssh` key login works from Windows Git Bash (BatchMode);
+no password is ever used. If key login fails, stop and ask the user.
 
-## Run commands / sync the tree (paramiko, from the session scratchpad)
+## Sync the tree (from the repo root in Git Bash)
 
-- `ssh.py "<cmd>" [sudo] [timeout]`: `paramiko.SSHClient().connect(host, username, password)`,
-  `exec_command`, print stdout+stderr. (`sudo` mode = `echo pw | sudo -S -p '' bash -c '<cmd>'`.)
-- `sync.py`: `git ls-files CMakeLists.txt src tests firmware scripts docs`, tar+gzip in
-  memory, `sftp.putfo` to `/tmp/pin-src.tgz`, then `mkdir -p ~/pin-ng && cd ~/pin-ng && tar xzf`.
+```
+git ls-files -z CMakeLists.txt src tests firmware scripts docs third_party LICENSE | tar --null -T - -czf -   | ssh jonas@192.168.0.103 'rm -rf ~/marvin-main && mkdir -p ~/marvin-main && cd ~/marvin-main && tar xzf -'
+```
+Only tracked files are sent (commit or `git add` new files first). The gui/ folder is Windows-only.
 
 ## Build on the host
 
+FFmpeg is built once per tree with the repo script (needs the current config: the nut muxer etc.;
+an old prebuilt slice makes test_stdout_sinks fail with "no NUT muxer"). Source tarballs can be
+reused by copying `third_party/ffmpeg-src` from a previous tree first:
 ```
-cd ~/pin-ng; ln -sfn ~/pinnacle-oss/third_party third_party   # prebuilt linux FFmpeg slice
-cmake -B build -S . && cmake --build build -j4 && (cd build && ctest)
+cd ~/marvin-main && bash scripts/build-ffmpeg.sh        # ~30 s with the tarball present, minutes otherwise
+cmake -B build -S . && cmake --build build -j6 && (cd build && ctest)
 ```
-The full build (engine, MarvinCaptureCLI, the ctests) works on Linux. Sync first (`sync.py` above; it also
-sends untracked files under src/tests/firmware/scripts/docs).
+Outputs: `build/MarvinCaptureCLI`, `build/libmarvin-core.so`, 27 ctests (all pass on Linux as of
+the rename). `MarvinCaptureCLI --help` ends with "No devices found." when no device is attached.
 
 ## Running against the device
 
@@ -31,7 +34,7 @@ makes the node world-accessible: run everything as `jonas`, **no sudo** (the aut
 classifier refuses `sudo -S` anyway). Check with `ls -l /dev/bus/usb/001/*`. Without access
 the CLI says `device already open in another process` (that is EACCES).
 
-No camera is attached, so only bring-up can be tested. Quick checks from `~/pin-ng`:
+No camera is attached, so only bring-up can be tested. Quick checks from `~/marvin-main`:
 
 - `./build/MarvinCaptureCLI` (no arguments): help and the device table -- model name, `(untested)` flag, GUID serial.
 - DV bring-up to "ready": `timeout 60 ./build/MarvinCaptureCLI --debug --wait +00:00:05:00 2> d.log`
