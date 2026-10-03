@@ -56,17 +56,11 @@
 #define CHUNK_PACKETS 200                 /* ~37.6 KB per write_unit push */
 #define MAX_BYTES (48u * 1024 * 1024)     /* first ~48 MB is plenty for a smoke test */
 
-int main(int argc, char **argv)
+/* Rewraps the capture into one container and checks it. */
+static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
 {
-    CHECK(argc == 2);
-    const char *cap_path = argv[1];
-
     FILE *in = fopen(cap_path, "rb");
-    if (!in) {
-        printf("SKIP: %s not present (see tests/data/README.md) -- HDV rewrap test skipped\n",
-               cap_path);
-        return 0;
-    }
+    CHECK(in);
 
     pin_sink_params_t params;
     memset(&params, 0, sizeof(params));
@@ -81,9 +75,9 @@ int main(int argc, char **argv)
     params.colour_matrix = PIN_MATRIX_BT709;
     snprintf(params.title, sizeof(params.title), "marvin-core HDV rewrap test");
 
-    pin_sink_t *s = pin_sink_create(PIN_FMT_HDV_MOV);
+    pin_sink_t *s = pin_sink_create(fmt);
     CHECK(s);
-    CHECK(s->open(s, "test_hdv.mov", &params) == PIN_OK);
+    CHECK(s->open(s, out_path, &params) == PIN_OK);
 
     uint8_t buf[TS_PACKET * CHUNK_PACKETS];
     size_t total = 0;
@@ -107,7 +101,7 @@ int main(int argc, char **argv)
     CHECK(s->close(s) == PIN_OK);
 
     AVFormatContext *fc = NULL;
-    CHECK(avformat_open_input(&fc, "test_hdv.mov", NULL, NULL) >= 0);
+    CHECK(avformat_open_input(&fc, out_path, NULL, NULL) >= 0);
     CHECK(avformat_find_stream_info(fc, NULL) >= 0);
 
     int vidx = -1, aidx = -1;
@@ -119,6 +113,12 @@ int main(int argc, char **argv)
             aidx = (int)i;
     }
     CHECK(vidx >= 0);
+    /* the capture's own clock starts at ~834 s; the rewrapped file starts at 0 (a B-frame
+     * lead-in or an audio/video offset of a fraction of a second is fine) */
+    printf("%s: start_time %.3f s, duration %.3f s\n", out_path, (double)fc->start_time / AV_TIME_BASE,
+           (double)fc->duration / AV_TIME_BASE);
+    CHECK(fc->start_time != AV_NOPTS_VALUE && fc->start_time > -AV_TIME_BASE && fc->start_time < AV_TIME_BASE);
+    CHECK(fc->duration > 0 && fc->duration < 3 * AV_TIME_BASE);
     AVStream *vs = fc->streams[vidx];
     CHECK_EQ_I(vs->codecpar->codec_id, AV_CODEC_ID_MPEG2VIDEO);
     CHECK_EQ_I(vs->codecpar->width, 1440);
@@ -145,5 +145,18 @@ int main(int argc, char **argv)
     printf("OK: %lld MPEG-2 pictures, %s, 1440x1080 TT, BT.709%s\n", (long long)vframes,
            "codec-copy", aidx >= 0 ? " + MP2 audio" : " (no audio in this slice)");
     CHECK(vframes > 0);
+}
+
+int main(int argc, char **argv)
+{
+    CHECK(argc == 2);
+    FILE *probe = fopen(argv[1], "rb");
+    if (!probe) {
+        printf("SKIP: %s not present (see tests/data/README.md) -- HDV rewrap test skipped\n", argv[1]);
+        return 0;
+    }
+    fclose(probe);
+    run(argv[1], PIN_FMT_HDV_MOV, "test_hdv.mov");
+    run(argv[1], PIN_FMT_HDV_MKV, "test_hdv.mkv");
     return 0;
 }

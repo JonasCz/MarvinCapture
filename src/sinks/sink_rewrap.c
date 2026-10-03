@@ -561,6 +561,7 @@ static pin_status_t hdv_remux(rewrap_priv_t *p, const char *final_path)
         avformat_close_input(&in);
         return PIN_ERR_CODEC;
     }
+    out->avoid_negative_ts = AVFMT_AVOID_NEG_TS_MAKE_ZERO;   /* see the rebasing below */
 
     int map[8];
     memset(map, -1, sizeof(map));
@@ -611,12 +612,24 @@ static pin_status_t hdv_remux(rewrap_priv_t *p, const char *final_path)
         return PIN_ERR_CODEC;
     }
 
+    /* The transport stream carries the camera's own clock (PCR/PTS), so the tape's
+     * position in seconds, not 0, is where its first picture lands. A rewrapped file
+     * starts at 0 instead: everything moves by the earliest start of any stream
+     * (in->start_time, in AV_TIME_BASE units), keeping audio and video in sync. A
+     * negative dts that is left (B-frame reordering) is the muxer's to shift. */
+    int64_t base_us = in->start_time != AV_NOPTS_VALUE ? in->start_time : 0;
+
     AVPacket *pkt = av_packet_alloc();
     pin_status_t result = PIN_OK;
     while (av_read_frame(in, pkt) >= 0) {
         if (pkt->stream_index < 8 && map[pkt->stream_index] >= 0) {
             AVStream *is = in->streams[pkt->stream_index];
             AVStream *os = out->streams[map[pkt->stream_index]];
+            int64_t off = av_rescale_q(base_us, AV_TIME_BASE_Q, is->time_base);
+            if (pkt->pts != AV_NOPTS_VALUE)
+                pkt->pts -= off;
+            if (pkt->dts != AV_NOPTS_VALUE)
+                pkt->dts -= off;
             av_packet_rescale_ts(pkt, is->time_base, os->time_base);
             pkt->stream_index = map[pkt->stream_index];
             if (av_interleaved_write_frame(out, pkt) < 0)
