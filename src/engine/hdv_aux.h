@@ -125,6 +125,10 @@ int hdv_parse_picture(const uint8_t *ts_packets, size_t n_packets, int video_pid
  * set. */
 unsigned hdv_ts_discontinuity_count(const uint8_t *ts_packets, size_t n_packets);
 
+/* Offset of the first MPEG-2 sequence header (00 00 01 B3) in an elementary stream
+ * chunk, or (size_t)-1 if there is none. A decoder fed from before it only complains. */
+size_t hdv_find_sequence_header(const uint8_t *es, size_t len);
+
 /* Best-effort scan of aux_pid's payload bytes for DV-style date/time/TC
  * packs, see file header comment. out is zeroed then filled with whatever
  * was found; fields whose pack was never seen stay .valid = 0. */

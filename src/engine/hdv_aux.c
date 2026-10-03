@@ -253,3 +253,11 @@ void hdv_aux_scan_datetime(const uint8_t *ts_packets, size_t n_packets, int aux_
         }
     }
 }
+
+size_t hdv_find_sequence_header(const uint8_t *es, size_t len)
+{
+    for (size_t i = 0; i + 4 <= len; i++)
+        if (es[i] == 0 && es[i + 1] == 0 && es[i + 2] == 1 && es[i + 3] == 0xb3)
+            return i;
+    return (size_t)-1;
+}

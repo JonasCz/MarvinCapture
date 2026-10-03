@@ -225,8 +225,20 @@ static void test_aux_datetime_scan(void)
     CHECK(!info.timecode.valid, "no TC pack present -> invalid");
 }
 
+static void test_find_sequence_header(void)
+{
+    const uint8_t mid[] = { 0x12, 0x34, 0x00, 0x00, 0x01, 0x00, 0x00, 0x08, 0x00, 0x00, 0x01, 0xb8 };
+    CHECK(hdv_find_sequence_header(mid, sizeof(mid)) == (size_t)-1, "no sequence header (picture, GOP only)");
+    const uint8_t with[] = { 0x55, 0x00, 0x00, 0x01, 0xb5, 0x00, 0x00, 0x01, 0xb3, 0x5a, 0x04 };
+    CHECK(hdv_find_sequence_header(with, sizeof(with)) == 5, "sequence header found after other start codes");
+    const uint8_t cut[] = { 0x00, 0x00, 0x01 };
+    CHECK(hdv_find_sequence_header(cut, sizeof(cut)) == (size_t)-1, "start code cut short");
+    CHECK(hdv_find_sequence_header(mid, 0) == (size_t)-1, "empty");
+}
+
 int main(void)
 {
+    test_find_sequence_header();
     test_pat_pmt_discovery();
     test_gop_header_decode();
     test_no_gop_header();

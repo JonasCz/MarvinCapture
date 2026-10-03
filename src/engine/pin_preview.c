@@ -24,6 +24,7 @@
 #include <libavutil/pixfmt.h>
 
 #include "../core/pin_log.h"
+#include "hdv_aux.h"
 
 #include <pthread.h>
 #include <stdarg.h>
@@ -74,6 +75,7 @@ struct pin_preview {
     AVCodecContext *dv_ctx, *hdv_ctx;
     uint8_t *hdv_es;
     size_t hdv_es_cap;
+    int hdv_have_seq;   /* a sequence header (00 00 01 B3) has gone into the HDV decoder */
 };
 
 /* FFmpeg writes its own messages ("Concealing bitstream errors", "Detected
@@ -84,6 +86,10 @@ static void pv_av_log(void *avcl, int level, const char *fmt, va_list vl)
 {
     if (level > AV_LOG_INFO)
         return;
+    /* what the decoder says when it is handed the middle of a picture before the first
+     * sequence header: harmless, the preview just waits for the next GOP */
+    if (fmt && strstr(fmt, "Invalid frame dimensions"))
+        level = AV_LOG_DEBUG + 1;
     static __thread int in_line_prefix;
     char line[512];
     int prefix = in_line_prefix;
@@ -427,12 +433,24 @@ static void decode_hdv(pin_preview_t *p, const uint8_t *ts_packets, size_t len, 
     size_t es_len = extract_es(p, ts_packets, n_packets, video_pid);
     if (es_len == 0)
         return;
+    /* The decoder cannot know the picture size before the first sequence header: what
+     * arrives earlier (the ring is already running when a capture joins it) would only
+     * make it complain ("Invalid frame dimensions 0x0"). Start at the first header. */
+    uint8_t *es = p->hdv_es;
+    if (!p->hdv_have_seq) {
+        size_t at = hdv_find_sequence_header(es, es_len);
+        if (at == (size_t)-1)
+            return;
+        p->hdv_have_seq = 1;
+        es += at;
+        es_len -= at;
+    }
 
     AVPacket *pkt = av_packet_alloc();
     AVFrame *frame = av_frame_alloc();
     if (!pkt || !frame)
         goto out;
-    pkt->data = p->hdv_es;
+    pkt->data = es;
     pkt->size = (int)es_len;
     if (avcodec_send_packet(p->hdv_ctx, pkt) == 0) {
         while (avcodec_receive_frame(p->hdv_ctx, frame) == 0) {
