@@ -428,8 +428,17 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
 
     unsigned depth = DV_QUEUE_DEPTH;
 
-    struct rx_slot slots[DV_QUEUE_DEPTH];
-    memset(slots, 0, sizeof(slots));
+    /* On the heap, not the stack: libusb's completion callbacks write into the slots and
+     * ep84. If a cancelled transfer never completes in time (see the teardown below) they
+     * must stay valid after this function has returned, so they are leaked then instead. */
+    struct rx_slot *slots = calloc(DV_QUEUE_DEPTH, sizeof(*slots));
+    struct ep84_state *ep84p = calloc(1, sizeof(*ep84p));
+    if (!slots || !ep84p) {
+        free(slots);
+        free(ep84p);
+        return PINNACLE_ERR_USB_TRANSFER;
+    }
+#define ep84 (*ep84p)
 
     pinnacle_status_t status = PINNACLE_OK;
     unsigned allocated = 0;
@@ -450,6 +459,8 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
         allocated++;
     }
     if (allocated == 0) {
+        free(slots);
+        free(ep84p);
         return PINNACLE_ERR_USB_TRANSFER;
     }
 
@@ -469,7 +480,6 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
 
     /* EP 0x84 drain, on this same event loop (async AV/C, p1394_avc_begin/poll,
      * has nothing to poll without it). */
-    struct ep84_state ep84;
     memset(&ep84, 0, sizeof(ep84));
     ep84.link = link;
     struct libusb_transfer *ep84_xfer = NULL;
@@ -583,8 +593,9 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
     if (ep84_xfer && ep84.active)
         libusb_cancel_transfer(ep84_xfer);
 
-    for (int spin = 0; spin < 200; spin++) {
-        int pending = ep84.active ? 1 : 0;
+    int pending = 0;
+    for (int spin = 0; spin < 400; spin++) {
+        pending = ep84.active ? 1 : 0;
         for (unsigned i = 0; i < allocated; i++) {
             if (slots[i].submitted)
                 pending = 1;
@@ -595,7 +606,23 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
         if (libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL) != 0)
             break;
     }
+    /* recount: the loop may have ended on its last pass or on an error */
+    pending = ep84.active ? 1 : 0;
+    for (unsigned i = 0; i < allocated; i++)
+        if (slots[i].submitted)
+            pending = 1;
 
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: read loop ended, %lu EP 0x88 completions, "
+                    "%lu EP 0x84 records (%lu bytes)\n",
+            completions, ep84.packets, ep84.bytes);
+
+    if (pending) {
+        /* libusb still owns some transfer and will call back into slots / ep84 / the buffers:
+         * freeing any of it would be a use after free. Leak it (a few MB, once). */
+        pin_logf(PIN_LOG_WARN, "pinnacle: a cancelled USB transfer did not complete; "
+                        "leaking the read queue instead of freeing it\n");
+        return status;
+    }
     for (unsigned i = 0; i < allocated; i++) {
         if (slots[i].xfer) {
             free(slots[i].xfer->buffer);
@@ -604,9 +631,8 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
     }
     if (ep84_xfer)
         libusb_free_transfer(ep84_xfer);
-
-    pin_logf(PIN_LOG_DEBUG, "pinnacle: read loop ended, %lu EP 0x88 completions, "
-                    "%lu EP 0x84 records (%lu bytes)\n",
-            completions, ep84.packets, ep84.bytes);
+    free(slots);
+    free(ep84p);
+#undef ep84
     return status;
 }
