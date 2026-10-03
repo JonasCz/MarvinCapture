@@ -61,7 +61,15 @@ pin_status_t pin_session_capture_stop(pin_session_t *s, pin_stop_deck_t stop_dec
 pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out);
 int pin_session_poll_event(pin_session_t *s, pin_event_t *out);
 
-pin_status_t pin_session_run_actions(pin_session_t *s, const pin_launch_t *launch);
+/* Command-line script runner (pin_script_run.c); wrapped by pin_api.c. */
+struct pin_script;
+pin_status_t pin_session_script_run(pin_session_t *s, const struct pin_script *sc);
+pin_status_t pin_session_script_cancel(pin_session_t *s);
+/* Stops and joins a running script thread (pin_session_close). */
+void pin_session_script_shutdown(pin_session_t *s);
+/* 1 while a capture is running, waiting to start, rewinding for one, or being
+ * finalised, or a capture command is still queued. */
+int pin_session_capture_busy(pin_session_t *s);
 
 void pin_session_set_aspect(pin_session_t *s, pin_aspect_t aspect);
 

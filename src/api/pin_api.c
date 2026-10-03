@@ -19,7 +19,7 @@
 /*
  * marvin-core: the exported ABI (pin_api.h). Every function here is a
  * thin wrapper over src/engine (mostly pin_session.h) and the hardware-free
- * engine modules (pin_settings.h, pin_cmdline.h) -- no logic of its own
+ * engine modules (pin_settings.h, pin_script.h) -- no logic of its own
  * beyond argument checking and translating between this library's frozen
  * public types and the engine's internal ones. See src/engine/pin_session.h
  * for what actually happens.
@@ -30,7 +30,7 @@
 #include "../engine/pin_session_priv.h" /* pin_session_push_event(NULL, ...) and s->preview */
 #include "../engine/pin_deck.h"
 #include "../engine/pin_settings.h"
-#include "../engine/pin_cmdline.h"
+#include "../engine/pin_script.h"
 #include "../engine/pin_stop.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
@@ -702,146 +702,54 @@ pin_status_t pin_settings_set(const char *key, const char *value)
 }
 
 /* ========================================================================
- * launch options / actions
+ * command line: settings + actions (engine/pin_script*.c)
  * ==================================================================== */
 
-static pin_format_t format_from_key(const char *key)
+pin_status_t pin_script_parse(int argc, const char *const *argv, pin_script_t **out, char *err,
+                              size_t err_cap)
 {
-    static const struct { const char *key; pin_format_t f; } tbl[] = {
-        { "dv", PIN_FMT_DV_RAW }, { "dv-avi", PIN_FMT_DV_AVI }, { "dv-mov", PIN_FMT_DV_MOV },
-        { "hdv-ts", PIN_FMT_HDV_TS }, { "hdv-mov", PIN_FMT_HDV_MOV }, { "hdv-mkv", PIN_FMT_HDV_MKV },
-        { "avi", PIN_FMT_ANALOG_AVI }, { "ffv1-mkv", PIN_FMT_ANALOG_FFV1_MKV },
-    };
-    for (unsigned i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++)
-        if (strcmp(key, tbl[i].key) == 0)
-            return tbl[i].f;
-    return PIN_FMT_COUNT; /* invalid */
+    return pin_script_parse_args(argc, argv, out, err, err_cap);
 }
 
-static pin_std_t std_from_string(const char *s)
+void pin_script_free(pin_script_t *sc) { pin_script_destroy(sc); }
+
+const char *pin_script_help(void) { return pin_script_help_text(); }
+
+int pin_script_help_requested(const pin_script_t *sc) { return sc && sc->help; }
+
+const char *pin_script_device(const pin_script_t *sc)
 {
-    static const struct { const char *name; pin_std_t std; } tbl[] = {
-        { "auto", PIN_STD_AUTO }, { "pal", PIN_STD_PAL }, { "ntsc", PIN_STD_NTSC },
-        { "pal-m", PIN_STD_PAL_M }, { "pal-n", PIN_STD_PAL_N }, { "pal-60", PIN_STD_PAL_60 },
-        { "ntsc443", PIN_STD_NTSC_443 }, { "ntsc-j", PIN_STD_NTSC_J }, { "secam", PIN_STD_SECAM },
-    };
-    for (unsigned i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++)
-        if (strcasecmp(s, tbl[i].name) == 0)
-            return tbl[i].std;
-    return PIN_STD_AUTO;
+    return sc && sc->has_device ? sc->device : NULL;
 }
 
-pin_status_t pin_launch_parse(int argc, const char *const *argv, pin_launch_t *out,
-                               char *err, size_t err_cap)
+int pin_script_debug(const pin_script_t *sc) { return sc && sc->debug; }
+
+int pin_script_step_count(const pin_script_t *sc) { return sc ? sc->nsteps : 0; }
+
+pin_status_t pin_script_step_text(const pin_script_t *sc, int index, char *out, size_t cap)
 {
-    if (!out)
+    return pin_script_step_description(sc, index, out, cap);
+}
+
+int pin_script_needs_session(const pin_script_t *sc) { return sc && sc->nsteps > 0; }
+
+pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_settings_t *out)
+{
+    if (!sc || !out)
         return PIN_ERR_ARG;
-    memset(out, 0, sizeof(*out));
+    if (out->size != sizeof(*out))
+        return PIN_ERR_ABI;
+    *out = sc->initial;
     out->size = sizeof(*out);
-
-    /* pin_cmdline_parse() takes char** (it never modifies the strings, only
-     * reads them); cast away const to bridge the two APIs. */
-    char **argv_nc = malloc(sizeof(char *) * (size_t)argc);
-    if (!argv_nc)
-        return PIN_ERR_NOMEM;
-    for (int i = 0; i < argc; i++)
-        argv_nc[i] = (char *)argv[i];
-
-    pin_cmdline_opts_t opts;
-    pin_cmdline_defaults(&opts);
-    int rc = pin_cmdline_parse(argc, argv_nc, &opts, err, err_cap);
-    free(argv_nc);
-    if (rc != 0)
-        return PIN_ERR_ARG;
-    if (opts.help_requested) {
-        out->action_count = 0;
-        return PIN_OK; /* caller checks pin_launch_help() itself */
-    }
-
-    strncpy(out->device, opts.device, sizeof(out->device) - 1);
-    if (opts.device_is_replay_file && opts.device_replay_path[0])
-        pin_session_set_replay_file(opts.device_replay_path);
-    if (opts.input_set) {
-        out->has_input = 1;
-        out->input = opts.input == PIN_CMDLINE_INPUT_SVIDEO ? PIN_INPUT_SVIDEO
-                    : opts.input == PIN_CMDLINE_INPUT_COMPOSITE ? PIN_INPUT_COMPOSITE
-                    : PIN_INPUT_DV;
-    }
-    if (opts.std_set) {
-        out->has_std = 1;
-        out->std = std_from_string(opts.std);
-    }
-
-    pin_capture_opts_defaults(&out->capture);
-    if (opts.output_set) {
-        strncpy(out->capture.path, opts.output, sizeof(out->capture.path) - 1);
-        out->capture_fields |= PIN_OPT_PATH;
-        out->has_capture_opts = 1;
-    }
-    if (opts.format_set) {
-        pin_format_t f = format_from_key(opts.format);
-        if (f == PIN_FMT_COUNT) {
-            if (err && err_cap) snprintf(err, err_cap, "unknown --format '%s'", opts.format);
-            return PIN_ERR_ARG;
-        }
-        pin_format_info_t fi;
-        pin_format_info(f, &fi);
-        if (fi.kind == PIN_KIND_ANALOG) out->capture.format_analog = f;
-        else if (fi.kind == PIN_KIND_DV) out->capture.format_dv = f;
-        else out->capture.format_hdv = f;
-        out->capture_fields |= PIN_OPT_FORMAT;
-        out->has_capture_opts = 1;
-    }
-    if (opts.title_set) {
-        strncpy(out->capture.title, opts.title, sizeof(out->capture.title) - 1);
-        out->capture_fields |= PIN_OPT_TITLE;
-        out->has_capture_opts = 1;
-    }
-    if (opts.split_set) {
-        out->capture.scene_split = opts.split;
-        out->capture_fields |= PIN_OPT_SPLIT;
-        out->has_capture_opts = 1;
-    }
-    if (opts.passes_set) {
-        out->capture.passes = (int)opts.passes;
-        out->capture_fields |= PIN_OPT_PASSES;
-        out->has_capture_opts = 1;
-    }
-    if (opts.idle_min_set) {
-        out->capture.idle_stop_minutes = (int)opts.idle_min;
-        out->capture_fields |= PIN_OPT_IDLE;
-        out->has_capture_opts = 1;
-    }
-    if (opts.aspect_set) {
-        out->capture.aspect = opts.aspect == PIN_CMDLINE_ASPECT_4_3 ? PIN_ASPECT_4_3
-                              : opts.aspect == PIN_CMDLINE_ASPECT_16_9 ? PIN_ASPECT_16_9
-                              : PIN_ASPECT_AUTO;
-        out->capture_fields |= PIN_OPT_ASPECT;
-        out->has_capture_opts = 1;
-    }
-
-    out->action_count = (int)(opts.num_actions > PIN_MAX_ACTIONS ? PIN_MAX_ACTIONS : opts.num_actions);
-    for (int i = 0; i < out->action_count; i++) {
-        switch (opts.actions[i]) {
-        case PIN_ACTION_REWIND: out->actions[i] = PIN_ACT_REWIND; break;
-        case PIN_ACTION_PLAY: out->actions[i] = PIN_ACT_PLAY; break;
-        case PIN_ACTION_STOP: out->actions[i] = PIN_ACT_STOP; break;
-        case PIN_ACTION_CAPTURE: out->actions[i] = PIN_ACT_CAPTURE; break;
-        case PIN_ACTION_WAIT_EOT: out->actions[i] = PIN_ACT_WAIT_EOT; break;
-        }
-    }
-    out->exit_when_done = opts.exit_when_done;
     return PIN_OK;
 }
 
-const char *pin_launch_help(void)
+pin_status_t pin_script_run(pin_session_t *s, const pin_script_t *sc)
 {
-    static char buf[4096];
-    pin_cmdline_help(buf, sizeof(buf));
-    return buf;
+    return pin_session_script_run(s, sc);
 }
 
-pin_status_t pin_run_actions(pin_session_t *s, const pin_launch_t *launch)
+pin_status_t pin_script_cancel(pin_session_t *s)
 {
-    return pin_session_run_actions(s, launch);
+    return pin_session_script_cancel(s);
 }

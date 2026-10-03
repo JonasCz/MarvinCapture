@@ -1458,6 +1458,7 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
     pin_logf(why == PIN_STOP_USER ? PIN_LOG_INFO : PIN_LOG_WARN, "session: %s\n", s->stop_text);
     pin_session_push_event(s, PIN_EVT_CAPTURE_ENDED, (int32_t)why, s->stop_text);
     s->capture_began = 0;
+    s->capture_end_seq++;
 }
 
 /* A capture is running, rewinding between passes, or waiting to start. */
@@ -1465,6 +1466,15 @@ static int capture_active(const pin_session_t *s)
 {
     return s->sink || s->capture_want_start || s->rewind_before_capture || s->pass_rewinding ||
            s->state == PIN_STATE_CAPTURING || s->state == PIN_STATE_REWINDING;
+}
+
+int pin_session_capture_busy(pin_session_t *s)
+{
+    pin_session_lock(s);
+    int busy = capture_active(s) || s->state == PIN_STATE_STOPPING ||
+               (s->cmd.pending && (s->cmd.kind == PIN_CMD_CAPTURE_START || s->cmd.kind == PIN_CMD_CAPTURE_STOP));
+    pin_session_unlock(s);
+    return busy;
 }
 
 /* Finishes the open file (pending units first) and reports it closed. */
@@ -2738,6 +2748,7 @@ void pin_session_close(pin_session_t *s)
 {
     if (!s)
         return;
+    pin_session_script_shutdown(s); /* it needs the worker to finalise a capture */
     s->loop_stop = 1;
     pin_cmd_t cmd = { .kind = PIN_CMD_CLOSE };
     pthread_mutex_lock(&s->mtx);
@@ -3233,108 +3244,4 @@ int pin_session_monitor_available(pin_session_t *s)
     int n = (int)s->mon_fill;
     pthread_mutex_unlock(&s->mon_mtx);
     return n;
-}
-
-/* ========================================================================
- * action sequencer
- * ==================================================================== */
-
-pin_status_t pin_session_run_actions(pin_session_t *s, const pin_launch_t *launch)
-{
-    if (!s || !launch) return PIN_ERR_ARG;
-    /* Runs synchronously on a detached helper thread so the call itself
-     * stays non-blocking, as documented. */
-    pin_launch_t *copy = malloc(sizeof(*copy));
-    if (!copy) return PIN_ERR_NOMEM;
-    *copy = *launch;
-
-    typedef struct { pin_session_t *s; pin_launch_t *l; } actx_t;
-    actx_t *a = malloc(sizeof(*a));
-    a->s = s; a->l = copy;
-
-    void *actions_thread(void *arg);
-    pthread_t t;
-    if (pthread_create(&t, NULL, actions_thread, a) != 0) {
-        free(copy); free(a);
-        return PIN_ERR_INTERNAL;
-    }
-    pthread_detach(t);
-    return PIN_OK;
-}
-
-void *actions_thread(void *arg)
-{
-    struct { pin_session_t *s; pin_launch_t *l; } *a = arg;
-    pin_session_t *s = a->s;
-    pin_launch_t *l = a->l;
-    pin_status_t result = PIN_OK;
-
-    for (int i = 0; i < l->action_count && result == PIN_OK; i++) {
-        switch (l->actions[i]) {
-        case PIN_ACT_REWIND:
-            pin_session_deck(s, PIN_DECK_CMD_REW);
-            /* The deck may still report STOPPED until the command lands, so
-             * first see it start moving (or give up after 5 s: already at
-             * the start), then wait for it to stop at the beginning. A full
-             * rewind of a long tape takes minutes. */
-            for (int spin = 0; spin < 50; spin++) {
-                pin_status_snapshot_t st = { .size = sizeof(st) };
-                pin_session_get_status(s, &st);
-                if (st.deck != PIN_DECK_STOPPED && st.deck != PIN_DECK_UNKNOWN) break;
-                sleep_ms(100);
-            }
-            for (int spin = 0; spin < 6000; spin++) { /* up to 10 min */
-                pin_status_snapshot_t st = { .size = sizeof(st) };
-                pin_session_get_status(s, &st);
-                if (st.deck == PIN_DECK_STOPPED || st.state == PIN_STATE_ERROR) break;
-                sleep_ms(100);
-            }
-            break;
-        case PIN_ACT_PLAY:
-            pin_session_deck(s, PIN_DECK_CMD_PLAY);
-            break;
-        case PIN_ACT_STOP:
-            pin_session_deck(s, PIN_DECK_CMD_STOP);
-            break;
-        case PIN_ACT_CAPTURE: {
-            if (l->has_capture_opts)
-                result = pin_session_capture_start(s, &l->capture, 1);
-            if (result != PIN_OK)
-                break;
-            /* Starting is asynchronous: wait for the capture to begin (a
-             * rewind_first capture goes through REWINDING first) before
-             * waiting for it to end, or READY would look like "already done". */
-            for (int spin = 0; spin < 100; spin++) { /* up to 10 s */
-                pin_status_snapshot_t st = { .size = sizeof(st) };
-                pin_session_get_status(s, &st);
-                if (st.state == PIN_STATE_CAPTURING || st.state == PIN_STATE_REWINDING ||
-                    st.state == PIN_STATE_ERROR)
-                    break;
-                sleep_ms(100);
-            }
-            for (;;) {
-                pin_status_snapshot_t st = { .size = sizeof(st) };
-                pin_session_get_status(s, &st);
-                if (st.state != PIN_STATE_CAPTURING && st.state != PIN_STATE_REWINDING &&
-                    st.state != PIN_STATE_STOPPING)
-                    break;
-                sleep_ms(200);
-            }
-            break;
-        }
-        case PIN_ACT_WAIT_EOT:
-            for (;;) {
-                pin_status_snapshot_t st = { .size = sizeof(st) };
-                pin_session_get_status(s, &st);
-                if (st.deck == PIN_DECK_STOPPED || st.state == PIN_STATE_ERROR) break;
-                sleep_ms(200);
-            }
-            break;
-        default: break;
-        }
-    }
-    pin_session_push_event(s, PIN_EVT_DONE, (int32_t)result, NULL);
-    free(l);
-    free(a);
-    return NULL;
 }

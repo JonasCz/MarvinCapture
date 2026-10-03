@@ -32,7 +32,8 @@ add_library(pinnacle_engine_pure STATIC
     pin_split.c
     pin_naming.c
     pin_settings.c
-    pin_cmdline.c
+    pin_script.c
+    pin_script_eval.c
     pin_audio_resample.c
 )
 
@@ -63,7 +64,8 @@ pinnacle_engine_test(test_pin_scene)
 pinnacle_engine_test(test_pin_split)
 pinnacle_engine_test(test_pin_naming)
 pinnacle_engine_test(test_pin_settings)
-pinnacle_engine_test(test_pin_cmdline)
+pinnacle_engine_test(test_pin_script)
+pinnacle_engine_test(test_pin_script_eval)
 pinnacle_engine_test(test_pin_audio_resample)
 pinnacle_engine_test(test_dv_error)
 pinnacle_engine_test(test_hdv_error)

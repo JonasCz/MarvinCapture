@@ -31,10 +31,9 @@
  *   preview-dump <id> -n N -o prefix
  *   preview-rate <id> [seconds]
  *   monitor <id> [seconds] [T:in=dv|svideo|composite] [T:std=pal|ntsc|...]
- *   actions <id> --actions a,b,c [other pin_launch_parse flags]
  *   watch
  *
- * Device ids (list/status/deck/capture -d/preview-dump/monitor/actions) may
+ * Device ids (list/status/deck/capture -d/preview-dump/monitor) may
  * also be a device serial (16 hex chars, case-insensitive) or a path to an
  * existing file to replay -- see pin_api.h's pin_open().
  */
@@ -479,42 +478,6 @@ static int cmd_monitor(const char *id, int argc, char **argv)
     return 0;
 }
 
-static int cmd_actions(int argc, char **argv, const char *id)
-{
-    pin_launch_t launch;
-    char err[256] = "";
-    char **argv2 = malloc(sizeof(char *) * (size_t)(argc + 1));
-    argv2[0] = "pinctl";
-    for (int i = 0; i < argc; i++) argv2[i + 1] = argv[i];
-    pin_status_t st = pin_launch_parse(argc + 1, (const char *const *)argv2, &launch, err, sizeof(err));
-    free(argv2);
-    if (st != PIN_OK) { fprintf(stderr, "pinctl actions: %s\n", err); return 2; }
-
-    pin_session_t *s = NULL;
-    st = pin_open(id, &s);
-    if (st != PIN_OK) { fprintf(stderr, "pinctl: open failed: %s\n", pin_strerror(st)); return 1; }
-    if (launch.has_input) pin_set_input(s, launch.input);
-    for (int i = 0; i < 100 && !g_stop; i++) {
-        pin_status_snapshot_t snap; memset(&snap, 0, sizeof(snap)); snap.size = sizeof(snap);
-        pin_get_status(s, &snap);
-        if (snap.state == PIN_STATE_READY || snap.state == PIN_STATE_ERROR) break;
-        sleep_ms(100);
-    }
-    g_stop_session = s;
-    pin_run_actions(s, &launch);
-    for (;;) {
-        pin_event_t ev;
-        while (pin_poll_event(s, &ev)) {
-            printf("event kind=%d a=%d text=%s\n", ev.kind, ev.a, ev.text);
-            if (ev.kind == PIN_EVT_DONE) { pin_close(s); return ev.a == PIN_OK ? 0 : 1; }
-        }
-        if (g_stop) break;
-        sleep_ms(200);
-    }
-    pin_close(s);
-    return 0;
-}
-
 static void usage(void)
 {
     fprintf(stderr,
@@ -528,7 +491,6 @@ static void usage(void)
         "       pinctl preview-dump <id> [-n N] [-o prefix]\n"
         "       pinctl preview-rate <id> [seconds]\n"
         "       pinctl monitor <id> [seconds] [T:in=dv|svideo|composite] [T:std=pal|ntsc]\n"
-        "       pinctl actions <id> --actions a,b,c [pin_launch_parse flags...]\n"
         "       pinctl watch\n");
 }
 
@@ -552,8 +514,6 @@ int main(int argc, char **argv)
         return cmd_preview_rate(argv[2], argc >= 4 ? atoi(argv[3]) : 0);
     if (!strcmp(sub, "monitor") && argc >= 3)
         return cmd_monitor(argv[2], argc - 3, argv + 3);
-    if (!strcmp(sub, "actions") && argc >= 3)
-        return cmd_actions(argc - 3, argv + 3, argv[2]);
     if (!strcmp(sub, "watch"))
         return cmd_watch();
 

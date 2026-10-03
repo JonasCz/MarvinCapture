@@ -84,8 +84,10 @@ if(EXISTS "${PIN_TRACE_PAL}")
     pin_engine_replay_test(test_replay_preview "${PIN_TRACE_PAL}")
 endif()
 
-# 1f: pin_launch_parse(), no session/replay involved.
-pin_engine_replay_test(test_pin_launch_parse)
+# 1f: pin_script_run() against the replay device (the command-line sequencer).
+if(EXISTS "${PIN_TRACE_PAL}")
+    pin_engine_replay_test(test_pin_script_run "${PIN_TRACE_PAL}")
+endif()
 
 # 1g: pin_check_output() collision detection and free space, plus the
 # replay device's serial == "REPLAY" (task 3).

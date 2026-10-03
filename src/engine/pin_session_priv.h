@@ -66,7 +66,6 @@ typedef enum {
     PIN_CMD_CAPTURE_START,
     PIN_CMD_CAPTURE_STOP,
     PIN_CMD_DECK,
-    PIN_CMD_RUN_ACTIONS,
     PIN_CMD_CLOSE,
 } pin_cmd_kind_t;
 
@@ -77,7 +76,6 @@ typedef struct {
     int overwrite;
     pin_deck_cmd_t deck_cmd;
     pin_stop_deck_t stop_deck;    /* CAPTURE_STOP: who stops the deck */
-    pin_launch_t launch;
     int pending;
 } pin_cmd_t;
 
@@ -258,10 +256,13 @@ struct pin_session {
     unsigned evq_head, evq_count;
     pthread_mutex_t evq_mtx;
 
-    /* action sequencer */
-    pin_launch_t launch;
-    int actions_running;
-    int action_index;
+    /* script sequencer (pin_script_run.c) */
+    pthread_t script_thread;
+    int script_thread_valid;    /* script_thread must be joined */
+    int script_running;         /* the thread has not finished */
+    int script_cancel;          /* pin_script_cancel() was called */
+    /* counts capture_report_end() calls: lets the sequencer tell "my capture ended" */
+    unsigned capture_end_seq;
 };
 
 /* Pushes an event to s's queue (s may be NULL: process-wide, handled by

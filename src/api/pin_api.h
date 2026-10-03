@@ -69,7 +69,7 @@
 extern "C" {
 #endif
 
-#define PIN_API_VERSION 2
+#define PIN_API_VERSION 3
 
 #define PIN_PATH_MAX 1024 /* bytes of UTF-8, including the terminator */
 #define PIN_NAME_MAX 64
@@ -608,10 +608,11 @@ typedef enum {
     PIN_EVT_INPUT_FORMAT,   /* signal / stream format changed; re-read the status */
     PIN_EVT_LOG,            /* a = level (0 debug .. 3 error), text = message */
     PIN_EVT_ERROR,          /* a = pin_status_t, text = message */
-    PIN_EVT_DONE,           /* the action list (pin_run_actions) finished: a = pin_status_t */
+    PIN_EVT_DONE,           /* pin_script_run finished: a = exit code (0 ok, see pin_script_run), text = reason */
     PIN_EVT_DEVICES,        /* device list may have changed (this process's own view) */
     PIN_EVT_CAPTURE_ENDED,  /* a capture ended (after its files were closed): a = pin_stop_reason_t,
                                text = "Capture stopped after capturing 12m30s, because ..." */
+    PIN_EVT_STEP,           /* pin_script_run: a step starts: a = step index, text = its description */
 } pin_event_kind_t;
 
 typedef struct {
@@ -717,49 +718,86 @@ PIN_API pin_status_t pin_settings_set(const char *key, const char *value);
 PIN_API pin_status_t pin_device_settings_key(const char *serial, const char *id, const char *key,
                                             char *out, size_t cap);
 
-/* ---- launch options / scripted actions ----------------------------------- */
+/* ---- command line: settings + actions (docs/cli.md) --------------------------- */
 
-typedef enum {
-    PIN_ACT_NONE = 0,
-    PIN_ACT_REWIND,         /* rewind to the start of the tape and wait */
-    PIN_ACT_PLAY,
-    PIN_ACT_STOP,
-    PIN_ACT_CAPTURE,        /* capture with the launch options until it ends */
-    PIN_ACT_WAIT_EOT,       /* wait until the deck stops */
-} pin_action_t;
+/* The command-line language shared by every front end (MarvinCaptureCLI, the
+ * GUI): settings and actions, processed left to right, e.g.
+ *     --rew --wait --play --capture tape01.avi --wait idle,nosignal --rew --wait
+ * The core parses it (pin_script_parse), checks it as far as it can without a
+ * device (unknown options, bad values, malformed timecodes, transport actions
+ * on an analog input, ...), and runs it as a sequence of steps on a helper
+ * thread (pin_script_run). A "step" is one action: --rew --ff --play --pause
+ * --stop --capture PATH --wait [CONDS]. Settings (--input, --std, --format,
+ * ...) are not steps; they change what the steps after them do. */
 
-#define PIN_MAX_ACTIONS 16
+typedef struct pin_script pin_script_t;
 
+/* Parses argv (UTF-8, WITHOUT the program name). On success *out is a script to
+ * free with pin_script_free(). A usage error returns PIN_ERR_ARG with a one-line
+ * message naming the offending argument in err. -h / --help anywhere, or no
+ * arguments at all, give a script with pin_script_help_requested() set (the
+ * rest of the line is not looked at then). */
+PIN_API pin_status_t pin_script_parse(int argc, const char *const *argv, pin_script_t **out,
+                                      char *err, size_t err_cap);
+PIN_API void pin_script_free(pin_script_t *sc);   /* safe with NULL; a running script has its own copy */
+
+/* The full help text (docs/cli.md), static storage. */
+PIN_API const char *pin_script_help(void);
+
+PIN_API int pin_script_help_requested(const pin_script_t *sc);
+/* -d / --device value (an id, a serial, or a file to replay; pass it to
+ * pin_open()), or NULL when none was given (= the first device). */
+PIN_API const char *pin_script_device(const pin_script_t *sc);
+/* --debug was given: the front end sets the log level to 0 and prints the status
+ * as one plain line per second. */
+PIN_API int pin_script_debug(const pin_script_t *sc);
+/* Number of steps (actions). */
+PIN_API int pin_script_step_count(const pin_script_t *sc);
+/* Printable description of step i, e.g. "rew", "wait idle,nosignal=+00:01:00:00",
+ * "capture tape01.avi". PIN_ERR_ARG for an index out of range. */
+PIN_API pin_status_t pin_script_step_text(const pin_script_t *sc, int index, char *out, size_t cap);
+/* 1 if running the script needs an open session (it has at least one step). */
+PIN_API int pin_script_needs_session(const pin_script_t *sc);
+
+/* The settings given before the first action (all of them if the script has no
+ * actions), for a front end that shows them in its own controls. Set size to
+ * sizeof() before the call. Controls are in the units of pin_set_control(). */
 typedef struct {
     uint32_t size;
-    char device[PIN_NAME_MAX];  /* id, "first", or "" */
     int has_input;          pin_input_t input;
     int has_std;            pin_std_t std;
-    int has_capture_opts;   pin_capture_opts_t capture;   /* only the fields given on the command line are applied over the saved settings */
-    uint32_t capture_fields;    /* bitmask of which capture fields were given, see PIN_OPT_* */
-    int action_count;
-    pin_action_t actions[PIN_MAX_ACTIONS];
-    int exit_when_done;
-} pin_launch_t;
+    int has_format_analog;  pin_format_t format_analog;
+    int has_format_dv;      pin_format_t format_dv;
+    int has_format_hdv;     pin_format_t format_hdv;
+    int has_aspect;         pin_aspect_t aspect;
+    int has_split;          int split;
+    int has_title;          char title[PIN_TEXT_MAX];
+    int has_keep_raw;       int keep_raw;
+    uint32_t controls_set;  /* bit (1 << pin_control_t) per control that was given */
+    int32_t control_brightness, control_contrast, control_saturation;
+    int32_t control_hue, control_sharpness, control_audio_gain;
+} pin_script_settings_t;
 
-#define PIN_OPT_PATH     (1u << 0)
-#define PIN_OPT_FORMAT   (1u << 1)
-#define PIN_OPT_TITLE    (1u << 2)
-#define PIN_OPT_SPLIT    (1u << 3)
-#define PIN_OPT_PASSES   (1u << 4)
-#define PIN_OPT_IDLE     (1u << 5)
-#define PIN_OPT_ASPECT   (1u << 6)
+PIN_API pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_settings_t *out);
 
-/* Parses a GUI command line (UTF-8 argv, argv[0] skipped), including
- * --preset file.ini. Returns PIN_ERR_ARG with a message in err on bad
- * input. pin_launch_help() is the matching --help text. */
-PIN_API pin_status_t pin_launch_parse(int argc, const char *const *argv, pin_launch_t *out,
-                                      char *err, size_t err_cap);
-PIN_API const char *pin_launch_help(void);
+/* Runs the script on a helper thread (non-blocking; the script is copied). The
+ * session must be open: the runner applies the input (pin_set_input, if the
+ * script names one or the session was never brought up; then waits for READY),
+ * the analog standard and controls, and performs the steps in order.
+ *   - PIN_EVT_STEP (a = step index, text = pin_script_step_text) as each step starts.
+ *   - PIN_EVT_DONE at the end: a = the exit code (0 ok, 1 usage-type error found
+ *     at run time, e.g. an existing file without --overwrite or --capture - which is
+ *     not supported yet, 2 device or bring-up error, 3 deck error, 4 a capture ended
+ *     abnormally, 130 cancelled); text = a one-line reason when a != 0.
+ * Capture: a manual capture with the current settings; it is closed (and
+ * finalised) by the next transport action, the next --capture or the end of the
+ * script. Returns PIN_ERR_STATE if a script is already running in this session. */
+PIN_API pin_status_t pin_script_run(pin_session_t *s, const pin_script_t *sc);
 
-/* Runs the launch actions in order on the worker. Non-blocking; progress
- * shows up in the status and events, PIN_EVT_DONE when finished. */
-PIN_API pin_status_t pin_run_actions(pin_session_t *s, const pin_launch_t *launch);
+/* Ctrl-C: finalises an open capture, stops the tape if the script moved it, and
+ * finishes with PIN_EVT_DONE a = 130. Non-blocking. PIN_ERR_STATE if no script is
+ * running. */
+PIN_API pin_status_t pin_script_cancel(pin_session_t *s);
 
 #ifdef __cplusplus
 }

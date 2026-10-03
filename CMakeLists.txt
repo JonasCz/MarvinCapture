@@ -96,6 +96,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
         src/engine/pin_deck.c
         src/engine/pin_preview.c
         src/engine/pin_hdv_audio.c
+        src/engine/pin_script_run.c
         src/engine/pin_devices_wait.c
     )
     target_include_directories(pinnacle_engine PUBLIC ${CMAKE_SOURCE_DIR}/src/engine)
