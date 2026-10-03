@@ -1116,15 +1116,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 SessionState = (PinState)evt.A;
                 RefreshDevices(); // badge: Open / Capturing
                 break;
+            case PinEventKind.Step:
+                LastLogLine = evt.Text;
+                break;
             case PinEventKind.Done:
-                var ds = (PinStatus)evt.A;
-                if (ds == PinStatus.Ok)
+                // A = exit code (docs/cli.md), Text = the reason when it is not 0
+                if (evt.A == 0)
                 {
-                    ShowInfo("Done", "All command-line actions finished.", 1);
+                    ShowInfo("Done", "The command-line steps finished.", 1);
                 }
                 else
                 {
-                    ShowInfo("Actions stopped", Native.StrError(ds), 3);
+                    ShowInfo("Command line stopped", evt.Text.Length > 0 ? evt.Text : $"Exit code {evt.A}", 3);
                 }
                 break;
         }
@@ -1320,14 +1323,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    // ================================================================== launch options
+    // ================================================================== command line
 
     /// <summary>
-    /// Applies the presets from pin_launch_parse over the loaded settings.
-    /// Only the capture fields flagged in capture_fields are applied, as the
-    /// header specifies.
+    /// Applies the settings a command line gave before its first action (pin_script_settings) over
+    /// the loaded settings: input, standard, formats, aspect, split and the analog controls (which
+    /// are applied when the device opens, like the saved ones). The title and --keep-raw have no
+    /// field in this window; the script's own captures use them.
     /// </summary>
-    public void ApplyLaunch(in PinLaunch l)
+    public void ApplyScriptSettings(in PinScriptSettings l)
     {
         if (l.HasInput != 0)
         {
@@ -1338,64 +1342,48 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             var std = l.Std;
             SelectedStandard = Standards.FirstOrDefault(s => s.Std == std) ?? SelectedStandard;
         }
-        if (l.HasCaptureOpts == 0)
-        {
-            return;
-        }
-
-        var c = l.Capture;
-        var fields = (PinOptFields)l.CaptureFields;
         bool analog = !IsDvInput;
-        if (fields.HasFlag(PinOptFields.Path))
+        if (l.HasFormatAnalog != 0)
         {
-            SplitPath(c.Path, out var dir, out var name);
-            if (analog)
-            {
-                AnalogOutputDir = dir;
-                AnalogName = name;
-            }
-            else
-            {
-                DvOutputDir = dir;
-                DvName = name;
-            }
-        }
-        if (fields.HasFlag(PinOptFields.Format))
-        {
-            var af = AnalogFormats.FirstOrDefault(f => f.Format == c.FormatAnalog);
+            var wanted = l.FormatAnalog;
+            var af = AnalogFormats.FirstOrDefault(f => f.Format == wanted);
             if (af is not null) AnalogFormat = af;
-            DvSettings.ApplyFormat(c.FormatDv);
-            HdvSettings.ApplyFormat(c.FormatHdv);
         }
-        if (fields.HasFlag(PinOptFields.Split))
+        if (l.HasFormatDv != 0)
         {
-            DvSettings.SplitIntoScenes = HdvSettings.SplitIntoScenes = c.SceneSplit != 0;
+            DvSettings.ApplyFormat(l.FormatDv);
         }
-        if (fields.HasFlag(PinOptFields.Passes))
+        if (l.HasFormatHdv != 0)
         {
-            DvSettings.Passes = HdvSettings.Passes = Math.Max(1, c.Passes);
+            HdvSettings.ApplyFormat(l.FormatHdv);
         }
-        if (fields.HasFlag(PinOptFields.Idle))
+        if (l.HasSplit != 0)
         {
-            if (analog) AnalogIdleStopMinutes = Math.Max(0, c.IdleStopMinutes);
-            else DvSettings.IdleStopMinutes = HdvSettings.IdleStopMinutes = Math.Max(0, c.IdleStopMinutes);
+            DvSettings.SplitIntoScenes = HdvSettings.SplitIntoScenes = l.Split != 0;
         }
-        if (fields.HasFlag(PinOptFields.Aspect))
+        if (l.HasAspect != 0)
         {
             // --aspect applies to the kinds the chosen input can deliver.
-            if (analog) AnalogAspectIndex = (int)c.Aspect;
-            else DvSettings.AspectIndex = HdvSettings.AspectIndex = (int)c.Aspect;
+            if (analog) AnalogAspectIndex = (int)l.Aspect;
+            else DvSettings.AspectIndex = HdvSettings.AspectIndex = (int)l.Aspect;
+        }
+        foreach (var slider in PictureSliders.Append(AudioGain))
+        {
+            if (l.Control(slider.Control) is int v)
+            {
+                SaveSetting($"gui.control_{(int)slider.Control}", v.ToString(CultureInfo.InvariantCulture));
+            }
         }
     }
 
-    public PinStatus RunActions(in PinLaunch l)
+    public PinStatus RunScript(PinScriptHandle script)
     {
         if (Session is not { IsInvalid: false })
         {
             return PinStatus.ErrState;
         }
-        var st = Native.RunActions(Session, in l);
-        Report(st, "Command-line actions");
+        var st = Native.ScriptRun(Session, script);
+        Report(st, "Command line");
         return st;
     }
 

@@ -18,7 +18,6 @@ public static class PinLimits
     public const int PathMax = 1024;
     public const int NameMax = 64;
     public const int TextMax = 256;
-    public const int MaxActions = 16;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -303,43 +302,64 @@ public unsafe struct PinFrame
     }
 }
 
+/// <summary>pin_script_settings_t: the settings a command line gave before its first action.</summary>
 [StructLayout(LayoutKind.Sequential)]
-public unsafe struct PinLaunch
+public unsafe struct PinScriptSettings
 {
     public uint Size;
-    public fixed byte DeviceBuf[PinLimits.NameMax];
     public int HasInput;
     public PinInput Input;
     public int HasStd;
     public PinStd Std;
-    public int HasCaptureOpts;
-    public PinCaptureOpts Capture;
-    public uint CaptureFields;
-    public int ActionCount;
-    public fixed int Actions[PinLimits.MaxActions]; // pin_action_t is int-sized
-    public int ExitWhenDone;
+    public int HasFormatAnalog;
+    public PinFormat FormatAnalog;
+    public int HasFormatDv;
+    public PinFormat FormatDv;
+    public int HasFormatHdv;
+    public PinFormat FormatHdv;
+    public int HasAspect;
+    public PinAspect Aspect;
+    public int HasSplit;
+    public int Split;
+    public int HasTitle;
+    public fixed byte TitleBuf[PinLimits.TextMax];
+    public int HasKeepRaw;
+    public int KeepRaw;
+    public uint ControlsSet;    // bit (1 << PinControl) per control given
+    public int ControlBrightness;
+    public int ControlContrast;
+    public int ControlSaturation;
+    public int ControlHue;
+    public int ControlSharpness;
+    public int ControlAudioGain;
 
-    public string Device
+    public string Title
     {
-        get { fixed (byte* p = DeviceBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); }
-        set { fixed (byte* p = DeviceBuf) Utf8Fixed.Set(p, PinLimits.NameMax, value); }
+        get { fixed (byte* p = TitleBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); }
     }
 
-    public PinAction GetAction(int i)
+    public int? Control(PinControl c)
     {
-        fixed (int* a = Actions) return (PinAction)a[i];
+        if ((ControlsSet & (1u << (int)c)) == 0)
+        {
+            return null;
+        }
+        return c switch
+        {
+            PinControl.Brightness => ControlBrightness,
+            PinControl.Contrast => ControlContrast,
+            PinControl.Saturation => ControlSaturation,
+            PinControl.Hue => ControlHue,
+            PinControl.Sharpness => ControlSharpness,
+            PinControl.AudioGain => ControlAudioGain,
+            _ => null,
+        };
     }
 
-    public void SetAction(int i, PinAction action)
+    public static PinScriptSettings Create()
     {
-        fixed (int* a = Actions) a[i] = (int)action;
-    }
-
-    public static PinLaunch Create()
-    {
-        var l = new PinLaunch();
-        l.Size = (uint)sizeof(PinLaunch);
-        l.Capture = PinCaptureOpts.Create();
+        var l = new PinScriptSettings();
+        l.Size = (uint)sizeof(PinScriptSettings);
         return l;
     }
 }

@@ -410,26 +410,57 @@ public static unsafe partial class Native
         return pin_device_settings_key(serial, id, null, buf, (nuint)cap) == PinStatus.Ok ? Utf8Fixed.Get(buf, cap) : null;
     }
 
-    // ---- launch options / scripted actions --------------------------------------------
+    // ---- command line: settings + actions (pin_script_*) ------------------------------
 
     [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
-    private static partial PinStatus pin_launch_parse(int argc, string[] argv, ref PinLaunch out_, byte* err, nuint errCap);
+    private static partial PinStatus pin_script_parse(int argc, string[] argv, out nint script, byte* err, nuint errCap);
+
+    [LibraryImport(Lib, EntryPoint = "pin_script_free")]
+    internal static partial void pin_script_free_raw(nint script);
 
     [LibraryImport(Lib)]
-    private static partial nint pin_launch_help();
-    public static string LaunchHelp() => PtrToUtf8(pin_launch_help());
+    private static partial nint pin_script_help();
+    public static string ScriptHelp() => PtrToUtf8(pin_script_help());
 
-    public static PinStatus LaunchParse(string[] argv, out PinLaunch launch, out string error)
+    /// <summary>Parses the command line (WITHOUT the program name).</summary>
+    public static PinStatus ScriptParse(string[] argv, out PinScriptHandle? script, out string error)
     {
-        launch = PinLaunch.Create();
         const int cap = 512;
         byte* buf = stackalloc byte[cap];
-        var status = pin_launch_parse(argv.Length, argv, ref launch, buf, (nuint)cap);
+        var status = pin_script_parse(argv.Length, argv, out nint raw, buf, (nuint)cap);
+        script = (status == PinStatus.Ok && raw != 0) ? new PinScriptHandle(raw) : null;
         error = status == PinStatus.Ok ? string.Empty : Utf8Fixed.Get(buf, cap);
         return status;
     }
 
     [LibraryImport(Lib)]
-    private static partial PinStatus pin_run_actions(SafeHandle s, in PinLaunch launch);
-    public static PinStatus RunActions(SafeHandle s, in PinLaunch launch) => pin_run_actions(s, in launch);
+    private static partial int pin_script_help_requested(SafeHandle script);
+    public static bool ScriptHelpRequested(SafeHandle script) => pin_script_help_requested(script) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial nint pin_script_device(SafeHandle script);
+    /// <summary>-d / --device value, or "" when none was given.</summary>
+    public static string ScriptDevice(SafeHandle script) => PtrToUtf8(pin_script_device(script));
+
+    [LibraryImport(Lib)]
+    private static partial int pin_script_needs_session(SafeHandle script);
+    public static bool ScriptNeedsSession(SafeHandle script) => pin_script_needs_session(script) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial PinStatus pin_script_settings(SafeHandle script, ref PinScriptSettings out_);
+    public static PinScriptSettings ScriptSettings(SafeHandle script)
+    {
+        var st = PinScriptSettings.Create();
+        pin_script_settings(script, ref st);
+        return st;
+    }
+
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial void pin_set_replay_file(string path);
+    /// <summary>Makes a recording show up as a "replay:&lt;name&gt;" device (pin_set_replay_file).</summary>
+    public static void SetReplayFile(string path) => pin_set_replay_file(path);
+
+    [LibraryImport(Lib)]
+    private static partial PinStatus pin_script_run(SafeHandle s, SafeHandle script);
+    public static PinStatus ScriptRun(SafeHandle s, SafeHandle script) => pin_script_run(s, script);
 }

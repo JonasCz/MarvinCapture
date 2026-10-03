@@ -93,9 +93,9 @@ public partial class App : Application
         try
         {
             uint v = Interop.Native.ApiVersion();
-            if (v != 2)
+            if (v != 3)
             {
-                problem = $"marvin-core.dll implements API version {v}, but this app needs version 2.";
+                problem = $"marvin-core.dll implements API version {v}, but this app needs version 3.";
             }
         }
         catch (Exception ex) when (ex is DllNotFoundException or EntryPointNotFoundException or BadImageFormatException)

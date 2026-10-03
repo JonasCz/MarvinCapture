@@ -49,10 +49,11 @@ public sealed partial class MainWindow : Window
     private bool _keepingAwake;
 
     // command line
-    private PinLaunch _launch;
-    private bool _hasLaunch;
-    private bool _pendingActions;
-    private bool _exitWhenDone;
+    private PinScriptHandle? _script;
+    private string _scriptDevice = "";
+    private PinScriptSettings _scriptSettings;
+    private bool _pendingScript;
+    private bool _scriptRunning;
     private string? _launchError;
     private bool _showHelpOnStart;
 
@@ -280,12 +281,12 @@ public sealed partial class MainWindow : Window
         }
 
         VM.RefreshDevices();
-        var preferred = _hasLaunch ? _launch.Device : null;
-        // Selecting the device loads its own settings; the command-line presets go on top of them.
+        var preferred = _script is not null ? _scriptDevice : null;
+        // Selecting the device loads its own settings; the command-line settings go on top of them.
         VM.SelectedDevice = VM.PickInitialDevice(string.IsNullOrEmpty(preferred) ? null : preferred);
-        if (_hasLaunch)
+        if (_script is not null)
         {
-            VM.ApplyLaunch(in _launch);
+            VM.ApplyScriptSettings(in _scriptSettings);
         }
         _startupDone = true;
         OpenSelectedIfNeeded();
@@ -332,41 +333,49 @@ public sealed partial class MainWindow : Window
 
     private void ParseCommandLine()
     {
-        // Whole argv: pin_launch_parse skips argv[0] itself.
-        var args = Environment.GetCommandLineArgs();
+        // Whole argv; the core's parser wants it without the program name. No arguments at all
+        // is a normal start (the core would answer that with its help text).
+        var args = Environment.GetCommandLineArgs().Skip(1).ToArray();
         if (args.Length == 0)
         {
             return;
         }
-        if (args.Any(a => a is "--help" or "-h" or "/?" or "-?"))
+        if (args.Any(a => a is "/?" or "-?"))
         {
             _showHelpOnStart = true;
             return;
         }
 
-        var st = Native.LaunchParse(args, out var launch, out var err);
-        if (st != PinStatus.Ok)
+        var st = Native.ScriptParse(args, out var script, out var err);
+        if (st != PinStatus.Ok || script is null)
         {
             _launchError = string.IsNullOrEmpty(err) ? Native.StrError(st) : err;
             return;
         }
-        _launch = launch;
-        _hasLaunch = true;
-        _pendingActions = launch.ActionCount > 0;
-        _exitWhenDone = launch.ExitWhenDone != 0;
+        if (Native.ScriptHelpRequested(script))
+        {
+            script.Dispose();
+            _showHelpOnStart = true;
+            return;
+        }
+        _script = script;
+        // --device may be a recording to replay: the core lists it as "replay:<name>" once registered
+        _scriptDevice = Native.ScriptDevice(script);
+        if (_scriptDevice.Length > 0 && System.IO.File.Exists(_scriptDevice))
+        {
+            Native.SetReplayFile(_scriptDevice);
+            _scriptDevice = "replay:" + System.IO.Path.GetFileName(_scriptDevice);
+        }
+        _scriptSettings = Native.ScriptSettings(script);
+        _pendingScript = Native.ScriptNeedsSession(script);
     }
 
-    private void RunPendingActionsIfReady()
+    private void RunPendingScriptIfReady()
     {
-        if (_pendingActions && VM.Session is { IsInvalid: false } && VM.SessionState == PinState.Ready)
+        if (_pendingScript && _script is not null && VM.Session is { IsInvalid: false } && VM.SessionState == PinState.Ready)
         {
-            _pendingActions = false;
-            var st = VM.RunActions(in _launch);
-            if (st != PinStatus.Ok && _exitWhenDone)
-            {
-                _allowClose = true;
-                Close();
-            }
+            _pendingScript = false;
+            _scriptRunning = VM.RunScript(_script) == PinStatus.Ok;
         }
     }
 
@@ -384,7 +393,7 @@ public sealed partial class MainWindow : Window
         }
 
         TrackPreviewAspect();
-        RunPendingActionsIfReady();
+        RunPendingScriptIfReady();
         UpdateTaskbar();
         UpdateKeepAwake();
 
@@ -702,17 +711,16 @@ public sealed partial class MainWindow : Window
 
     private void VM_EngineEvent(object? sender, EngineEventArgs e)
     {
-        if (e.Kind == PinEventKind.Done && _exitWhenDone)
+        if (e.Kind == PinEventKind.Done)
         {
-            _allowClose = true;
-            Close();
+            _scriptRunning = false;
         }
         // A capture that ended abnormally (device or camera gone, disk full, write error):
         // a dialog, with how much was captured. A normal end (limit, end of tape) only goes to
         // the status bar (MainViewModel.ApplyStatus). Not while closing or running unattended
         // command-line actions.
         if (e.Kind == PinEventKind.CaptureEnded && Native.StopReasonAbnormal((PinStopReason)e.A) &&
-            !_closing && !_finalizingForClose && !_exitWhenDone)
+            !_closing && !_finalizingForClose && !_scriptRunning)
         {
             _ = ShowDialogAsync("Capture stopped", e.Text, null, "OK");
         }
@@ -917,7 +925,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ShowHelpAsync(string? error)
     {
-        var help = Native.LaunchHelp();
+        var help = Native.ScriptHelp();
         var body = new StackPanel { Spacing = 12 };
         if (error is not null)
         {

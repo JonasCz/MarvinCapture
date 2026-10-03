@@ -152,6 +152,7 @@ public enum PinEventKind : int
     Done,
     Devices,
     CaptureEnded,   // A = PinStopReason, Text = ready-made sentence
+    Step,           // command-line script: A = step index, Text = its description
 }
 
 /// <summary>Why a capture ended (pin_stop_reason_t).</summary>
@@ -173,26 +174,4 @@ public enum PinMatrix : int
 {
     Bt601 = 0,
     Bt709,
-}
-
-public enum PinAction : int
-{
-    None = 0,
-    Rewind,
-    Play,
-    Stop,
-    Capture,
-    WaitEot,
-}
-
-[System.Flags]
-public enum PinOptFields : uint
-{
-    Path = 1u << 0,
-    Format = 1u << 1,
-    Title = 1u << 2,
-    Split = 1u << 3,
-    Passes = 1u << 4,
-    Idle = 1u << 5,
-    Aspect = 1u << 6,
 }
