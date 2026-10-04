@@ -14,7 +14,16 @@ to widgets, dialogs, bindings and P/Invoke. Before writing C# logic, ask
 "would the macOS GUI need this too?". If yes, it goes in the core and the GUI
 calls it through `pin_api.h`. Examples already done that way: output naming
 and collision/free-space checks (`pin_check_output`), file name validation
-(`pin_naming_validate`), settings, command-line parsing, scene splitting.
+(`pin_naming_validate`), settings, command-line parsing, scene splitting, the next
+file number (`pin_next_file_number`), every status-bar / device-list text
+(`pin_format_status_short`, `pin_format_signal`, `pin_format_frames`,
+`pin_format_sizes`, `pin_format_storage_*`, `pin_format_bytes`,
+`pin_device_status_text`, `pin_device_unavailable_reason`, `pin_no_devices_hint`,
+... in `pin_api.h`, "ready-made texts") and the button enable rules
+(`pin_deck_cmd_allowed`, `pin_capture_action_allowed`). The text helpers are in
+`src/engine/pin_ui_text.c` (pure) and `src/api/pin_api.c` (snapshot / device based;
+tested by `tests/engine/test_pin_ui_text.c` and `test_pin_ui_api.c`). A new status
+text or enable rule goes there, not into C#.
 
 Core change checklist: function in `src/engine/*.c` + declaration in its
 header, expose through `src/api/pin_api.[ch]` if the GUI needs it, add a test in
@@ -82,7 +91,7 @@ that carries its 24 DIP left margin (a collapsed host leaves no gap).
 fit next to the file text's 80 DIP, collapses free-space, frames, storage, time, deck
 in that order (the file text is the first item, deck the second) (re-run on size and on the text properties changing).
 Properties are set in `MainViewModel.ApplyStatus` straight from the core
-snapshot; counters (`frames_error`, `clip_*`, `total_bytes_written`,
+snapshot (the strings come from the `pin_format_*` calls via `Native.Format*`); counters (`frames_error`, `clip_*`, `total_bytes_written`,
 `est_seconds_left`) and the format label (`video_label`) are the core's, never
 computed in C#. Low-disk uses two copies of the storage elements toggled by
 `DiskLow`. Minimum window width is 1000 DIP.
@@ -114,7 +123,8 @@ computed in C#. Low-disk uses two copies of the storage elements toggled by
 - Git reports CRLF to LF warnings on commit; harmless.
 - XAML/C# files in the working tree may be CRLF; scripted edits must detect the
   line ending (assert the match count). Deck-button enablement lives in
-  `MainViewModel` (`DeckRewEnabled` etc., driven by `DeckState`); any new
+  `MainViewModel` (`DeckRewEnabled` etc., driven by `DeckState`; the bodies only call
+  the core rules `Native.DeckCmdAllowed` / `CaptureActionAllowed`); any new
   property they depend on must be added to the `[NotifyPropertyChangedFor]`
   lists of `_isCapturing` / `_sessionState` / `_deckState`.
 - Window geometry uses `AppWindow` (no P/Invoke): `gui.window` + `gui.window_maximized`,

@@ -116,6 +116,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     add_executable(test_pin_deck tests/engine/test_pin_deck.c src/api/pin_api.c)
     target_link_libraries(test_pin_deck PRIVATE pinnacle_engine)
     add_test(NAME test_pin_deck COMMAND test_pin_deck)
+
+    # the ready-made texts / enable rules that read a status snapshot or device info (pin_api.c)
+    add_executable(test_pin_ui_api tests/engine/test_pin_ui_api.c src/api/pin_api.c)
+    target_link_libraries(test_pin_ui_api PRIVATE pinnacle_engine)
+    add_test(NAME test_pin_ui_api COMMAND test_pin_ui_api)
 endif()
 
 # --- Public API: the marvin-core shared library (pin_api.c, a thin

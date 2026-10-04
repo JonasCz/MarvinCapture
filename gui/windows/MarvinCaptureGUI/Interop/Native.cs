@@ -299,6 +299,210 @@ public static unsafe partial class Native
         return Utf8Fixed.Get(buf, cap);
     }
 
+    // ---- ready-made texts and enable rules ----------------------------------------
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_bytes(ulong bytes, byte* out_, nuint cap);
+
+    /// <summary>"123 B" / "1.5 GB".</summary>
+    public static string FormatBytes(ulong bytes)
+    {
+        const int cap = 32;
+        byte* buf = stackalloc byte[cap];
+        pin_format_bytes(bytes, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_time_left(double seconds, byte* out_, nuint cap);
+
+    /// <summary>"2 h 05 min left" / "45 min left".</summary>
+    public static string FormatTimeLeft(double seconds)
+    {
+        const int cap = 48;
+        byte* buf = stackalloc byte[cap];
+        pin_format_time_left(seconds, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial uint pin_next_file_number(string path);
+
+    /// <summary>pin_capture_opts_t.first_number for a capture to this path: one past the highest "name-NNNN.ext" in its directory.</summary>
+    public static uint NextFileNumber(string path) => pin_next_file_number(path);
+
+    [LibraryImport(Lib)]
+    private static partial nint pin_deck_state_name(PinDeckState s);
+    public static string DeckStateName(PinDeckState s) => PtrToUtf8(pin_deck_state_name(s));
+
+    [LibraryImport(Lib)]
+    private static partial int pin_deck_cmd_allowed(PinState state, int deckAvailable, PinDeckState deck, PinDeckCmd cmd);
+
+    /// <summary>Whether the deck button for cmd is enabled (core rule; deckAvailable = a camera is on the bus).</summary>
+    public static bool DeckCmdAllowed(PinState state, bool deckAvailable, PinDeckState deck, PinDeckCmd cmd) =>
+        pin_deck_cmd_allowed(state, deckAvailable ? 1 : 0, deck, cmd) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial int pin_capture_action_allowed(PinState state, int deckAvailable, PinCaptureAction action);
+
+    /// <summary>Whether the capture button for this action is enabled (core rule).</summary>
+    public static bool CaptureActionAllowed(PinState state, bool deckAvailable, PinCaptureAction action) =>
+        pin_capture_action_allowed(state, deckAvailable ? 1 : 0, action) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial int pin_state_is_capturing(PinState state);
+
+    /// <summary>Capturing, Stopping or Rewinding: a capture is running or ending.</summary>
+    public static bool StateIsCapturing(PinState state) => pin_state_is_capturing(state) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_state(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>"Ready", "Rewinding (pass 2/3)", ...</summary>
+    public static string FormatState(in PinStatusSnapshot st)
+    {
+        const int cap = 64;
+        byte* buf = stackalloc byte[cap];
+        pin_format_state(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial int pin_format_status_short(in PinStatusSnapshot st, int behindHub, byte* out_, nuint cap);
+
+    /// <summary>The status bar's first line. <paramref name="hubReady"/>: it is the "Ready (connection via USB hub ...)" text, whose tooltip is the hub hint.</summary>
+    public static string FormatStatusShort(in PinStatusSnapshot st, bool behindHub, out bool hubReady)
+    {
+        const int cap = PinLimits.PathMax + 128; // a long file name, then "  ·  pass 2/3"
+        byte* buf = stackalloc byte[cap];
+        hubReady = pin_format_status_short(in st, behindHub ? 1 : 0, buf, (nuint)cap) != 0;
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_signal(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>"HDV · 1080i25", "S-Video · NTSC", ...</summary>
+    public static string FormatSignal(in PinStatusSnapshot st)
+    {
+        const int cap = 96;
+        byte* buf = stackalloc byte[cap];
+        pin_format_signal(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_frames(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>"Frames 1,234 · 2 err · 0 drop".</summary>
+    public static string FormatFrames(in PinStatusSnapshot st)
+    {
+        const int cap = 160;
+        byte* buf = stackalloc byte[cap];
+        pin_format_frames(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_frames_detail(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>The frames item's multi-line tooltip.</summary>
+    public static string FormatFramesDetail(in PinStatusSnapshot st)
+    {
+        const int cap = 512;
+        byte* buf = stackalloc byte[cap];
+        pin_format_frames_detail(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_sizes(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>"1.5 GB / 300.0 MB": this capture / the current file.</summary>
+    public static string FormatSizes(in PinStatusSnapshot st)
+    {
+        const int cap = 96;
+        byte* buf = stackalloc byte[cap];
+        pin_format_sizes(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_storage_free(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>"· 20.0 GB free · 95 min left" (either part only when known), else "".</summary>
+    public static string FormatStorageFree(in PinStatusSnapshot st)
+    {
+        const int cap = 160;
+        byte* buf = stackalloc byte[cap];
+        pin_format_storage_free(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_storage_detail(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>The storage item's multi-line tooltip.</summary>
+    public static string FormatStorageDetail(in PinStatusSnapshot st)
+    {
+        const int cap = 512;
+        byte* buf = stackalloc byte[cap];
+        pin_format_storage_detail(in st, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_device_display_name(in PinDeviceInfo d, byte* out_, nuint cap);
+
+    /// <summary>The device's name, with " (untested)" for a model nobody verified on hardware.</summary>
+    public static string DeviceDisplayName(in PinDeviceInfo d)
+    {
+        const int cap = 160;
+        byte* buf = stackalloc byte[cap];
+        pin_device_display_name(in d, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_device_status_text(in PinDeviceInfo d, int capturingHere, byte* out_, nuint cap);
+
+    /// <summary>The device badge: "Capturing", "Ready", "In use", ...</summary>
+    public static string DeviceStatusText(in PinDeviceInfo d, bool capturingHere)
+    {
+        const int cap = 64;
+        byte* buf = stackalloc byte[cap];
+        pin_device_status_text(in d, capturingHere ? 1 : 0, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial int pin_device_unavailable_reason(in PinDeviceInfo d, byte* out_, nuint cap);
+
+    /// <summary>Why the device can't be picked (tooltip), or null when it can.</summary>
+    public static string? DeviceUnavailableReason(in PinDeviceInfo d)
+    {
+        const int cap = 256;
+        byte* buf = stackalloc byte[cap];
+        return pin_device_unavailable_reason(in d, buf, (nuint)cap) != 0 ? Utf8Fixed.Get(buf, cap) : null;
+    }
+
+    [LibraryImport(Lib)]
+    private static partial int pin_device_open_problem(in PinDeviceInfo d, byte* out_, nuint cap);
+
+    /// <summary>The sentence for a failed attempt to open the device, or null when it can be opened.</summary>
+    public static string? DeviceOpenProblem(in PinDeviceInfo d)
+    {
+        const int cap = 256;
+        byte* buf = stackalloc byte[cap];
+        return pin_device_open_problem(in d, buf, (nuint)cap) != 0 ? Utf8Fixed.Get(buf, cap) : null;
+    }
+
+    [LibraryImport(Lib)]
+    private static partial nint pin_no_devices_hint();
+
+    /// <summary>The hint shown while no device is found (platform-specific).</summary>
+    public static string NoDevicesHint() => PtrToUtf8(pin_no_devices_hint());
+
     // ---- events -------------------------------------------------------------------
 
     [LibraryImport(Lib)]

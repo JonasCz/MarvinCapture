@@ -822,7 +822,7 @@ public sealed partial class MainWindow : Window
             {
                 msg = "The destination is a FAT32 drive. Files larger than 4 GB will fail.";
             }
-            var free = MainViewModel.HumanSize(check.FreeBytes);
+            var free = Native.FormatBytes(check.FreeBytes);
             var r = await ShowDialogAsync("Check the destination",
                 $"{msg}\n\nFree space: {free} (about {check.MinutesLeft} minutes at this format).",
                 "Capture anyway", "Cancel");
@@ -836,7 +836,7 @@ public sealed partial class MainWindow : Window
         {
             var drive = Path.GetPathRoot(Path.GetFullPath(check.FirstPath)) ?? "the output drive";
             var r = await ShowDialogAsync("Low disk space",
-                $"Only {MainViewModel.HumanSize(check.FreeBytes)} free on {drive}. Continue?",
+                $"Only {Native.FormatBytes(check.FreeBytes)} free on {drive}. Continue?",
                 "OK", "Cancel");
             if (r != ContentDialogResult.Primary)
             {

@@ -111,6 +111,15 @@ public enum PinDeckCmd : int
     Rew,
 }
 
+/// <summary>pin_capture_action_t: which capture button a pin_capture_action_allowed() question is about.</summary>
+public enum PinCaptureAction : int
+{
+    StartManual = 0,
+    StartAuto,
+    Stop,
+    StopTape,
+}
+
 public enum PinFormat : int
 {
     AnalogAvi = 0,

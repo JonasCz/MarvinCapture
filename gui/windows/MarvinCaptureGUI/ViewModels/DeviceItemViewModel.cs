@@ -35,8 +35,8 @@ public sealed partial class DeviceItemViewModel
         }
     });
 
-    /// <summary>Whether this process can open it (free, or already open here).</summary>
-    public bool IsUsable => State is PinDevState.Ready or PinDevState.OpenHere;
+    /// <summary>Whether this process can open it (free, or already open here; the core's rule).</summary>
+    public bool IsUsable => UnavailableReason is null;
 
     /// <summary>Badge background, resolved from theme resources (so high-contrast themes apply).</summary>
     public Microsoft.UI.Xaml.Media.Brush? StatusBrush =>
@@ -55,29 +55,17 @@ public sealed partial class DeviceItemViewModel
 
     public string DisplayName => $"{Name} ({ShortId})";
 
-    /// <summary>Why this entry can't be picked, or null when it can (shown as the item's tooltip).</summary>
-    public string? UnavailableReason => State switch
-    {
-        PinDevState.InUse => OwnerPid != 0 ? $"In use by another window (pid {OwnerPid})" : "In use by another program",
-        PinDevState.Preparing => OwnerPid != 0 ? $"Being prepared by another window (pid {OwnerPid})" : "Being prepared by another program",
-        PinDevState.NoDriver => "Needs the WinUSB driver (install it with Zadig, then reconnect)",
-        PinDevState.Unsupported => "This model isn't supported yet",
-        _ => null,
-    };
+    /// <summary>Why this entry can't be picked, or null when it can (shown as the item's tooltip; from the core).</summary>
+    public string? UnavailableReason { get; }
+
+    /// <summary>The core's sentence for a failed attempt to open this entry, or null when it can be opened.</summary>
+    public string? OpenProblem { get; }
 
     /// <summary>This window has the device open and is recording from it.</summary>
     public bool IsCapturingHere { get; }
 
-    public string StatusText => IsCapturingHere ? "Capturing" : State switch
-    {
-        PinDevState.Ready => "Ready",
-        PinDevState.Preparing => "Preparing…",
-        PinDevState.InUse => "In use",
-        PinDevState.OpenHere => "Ready",
-        PinDevState.NoDriver => "Driver missing",
-        PinDevState.Unsupported => "Unsupported",
-        _ => "Unknown",
-    };
+    /// <summary>Badge text ("Capturing", "Ready", "In use", ...; from the core).</summary>
+    public string StatusText { get; }
 
     /// <summary>Semantic colour key consumed by a XAML converter/resource lookup (Success/Caution/Critical/Neutral).</summary>
     public string StatusBrushKey => IsCapturingHere ? "SystemFillColorCriticalBrush" : State switch
@@ -98,8 +86,11 @@ public sealed partial class DeviceItemViewModel
     {
         IsCapturingHere = capturingHere;
         Id = info.Id;
-        // Models the core drives but nobody verified on real hardware are flagged in the list.
-        Name = info.Tested == 0 && info.State != PinDevState.Unsupported ? info.Name + " (untested)" : info.Name;
+        // The core flags models it drives but nobody verified on real hardware as "(untested)".
+        Name = Native.DeviceDisplayName(in info);
+        StatusText = Native.DeviceStatusText(in info, capturingHere);
+        UnavailableReason = Native.DeviceUnavailableReason(in info);
+        OpenProblem = Native.DeviceOpenProblem(in info);
         State = info.State;
         OwnerPid = info.OwnerPid;
         Serial = info.Serial;

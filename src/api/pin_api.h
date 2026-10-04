@@ -718,7 +718,10 @@ PIN_API pin_status_t pin_preview_lock_due(pin_session_t *s, double now, pin_fram
 PIN_API int pin_preview_next_time(pin_session_t *s, double *t);
 
 /* Seconds on the monotonic clock present_time is on. On Windows it is
- * QueryPerformanceCounter, so DXGI / DWM timestamps compare directly. */
+ * QueryPerformanceCounter, so DXGI / DWM timestamps compare directly. On
+ * macOS it is mach_absolute_time (CLOCK_UPTIME_RAW, which does not count
+ * system sleep), the clock of CACurrentMediaTime() and CADisplayLink /
+ * CVDisplayLink timestamps. Elsewhere CLOCK_MONOTONIC. */
 PIN_API double pin_clock_now(void);
 
 /* Stop decoding while the preview isn't visible (window minimised etc.). */
@@ -862,6 +865,128 @@ PIN_API pin_status_t pin_script_run(pin_session_t *s, const pin_script_t *sc);
  * finishes with PIN_EVT_DONE a = 130. Non-blocking. PIN_ERR_STATE if no script is
  * running. */
 PIN_API pin_status_t pin_script_cancel(pin_session_t *s);
+
+/* ---- ready-made texts and enable rules (the same in every GUI) ---------------------
+ *
+ * Everything below is logic a front end would otherwise have to copy: the strings
+ * (UTF-8, English; "·" is U+00B7, "…" is U+2026) and which buttons are enabled when.
+ * A front end keeps only widgets, layout and bindings. Text functions write a
+ * NUL-terminated string into out (truncated to cap); 512 bytes hold any of
+ * them, including the multi-line ones, except pin_format_status_short(), which can carry a
+ * file name (PIN_PATH_MAX + 128). Numbers use '.' as the
+ * decimal separator and ',' as the thousands separator whatever the system locale. */
+
+/* "123 B", "1.5 GB": B KB MB GB TB in 1024 steps, one decimal above bytes. */
+PIN_API void pin_format_bytes(uint64_t bytes, char *out, size_t cap);
+
+/* "2 h 05 min left" / "45 min left": whole minutes, truncated, never negative. */
+PIN_API void pin_format_time_left(double seconds, char *out, size_t cap);
+
+/* The number to put in pin_capture_opts_t.first_number for a capture to `path` (the
+ * output directory + base name, the extension optional): one higher than the highest
+ * "<name>-<digits>.<ext>" file already in that directory (any extension, name matched
+ * case-insensitively), so no format's earlier takes are overwritten. A trailing ".ext" of
+ * the name is dropped if it is the extension of any output format. Returns 1 if the
+ * directory doesn't exist or can't be read, or the name is empty. An empty directory
+ * part means ".". */
+PIN_API uint32_t pin_next_file_number(const char *path);
+
+/* Deck state as shown in the status bar: "Stopped", "Playing", "Paused", "Fast forward",
+ * "Rewinding", "Camera recording", "No tape", else "—" (an em dash). Static, never NULL. */
+PIN_API const char *pin_deck_state_name(pin_deck_state_t s);
+
+/* Whether the deck button for cmd is enabled. Inputs are what the status snapshot
+ * has (state, deck; deck_available = the input is DV/HDV with camera_present != 0,
+ * i.e. false only when no camera answered on the bus). All commands need state READY
+ * (never while capturing or finalising), a camera, and a deck that has a tape; then each
+ * is disabled when the deck is already doing what it asks: PLAY while playing or
+ * recording, PAUSE while paused, STOP while stopped, FF while fast-forwarding, REW
+ * while rewinding. Cheap: call it per button per status tick. */
+PIN_API int pin_deck_cmd_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck,
+                                 pin_deck_cmd_t cmd);
+
+/* The capture buttons. A button that starts a capture turns into the matching stop
+ * button while one runs, so a GUI asks for the start action when state is READY or
+ * the stop action when pin_state_is_capturing() (the capture's own states):
+ *   START_MANUAL  analog "Capture", DV/HDV "Manual capture": READY
+ *   START_AUTO    DV/HDV "Automatic rewind & capture" (drives the deck): READY and a camera
+ *   STOP          stop the capture, leave the tape: CAPTURING or REWINDING (not while
+ *                 STOPPING, the file is already being finalised)
+ *   STOP_TAPE     stop the capture and the tape: STOP, and a camera */
+typedef enum {
+    PIN_CAPTURE_START_MANUAL = 0,
+    PIN_CAPTURE_START_AUTO,
+    PIN_CAPTURE_STOP,
+    PIN_CAPTURE_STOP_TAPE,
+} pin_capture_action_t;
+
+PIN_API int pin_capture_action_allowed(pin_state_t state, int deck_available,
+                                       pin_capture_action_t action);
+
+/* 1 for CAPTURING, STOPPING and REWINDING: a capture is running (or ending), so the
+ * options are locked and the stop buttons show instead of the start buttons. */
+PIN_API int pin_state_is_capturing(pin_state_t state);
+
+/* Session state: "Closed", "Preparing…", "Ready", "Capturing", "Finalizing…",
+ * "Rewinding (pass 2/3)", "Error". */
+PIN_API void pin_format_state(const pin_status_snapshot_t *st, char *out, size_t cap);
+
+/* The status bar's first line: while capturing the file name (no directory) and, for
+ * several passes, "  ·  pass 2/3" (two spaces each side of the dot); while READY
+ * after a capture that ended on its own or without video, the core's stop_text; "Error: "
+ * + the error text; "Preparing: " + detail; else pin_format_state(). behind_hub = the open
+ * device sits behind a USB hub (pin_device_info_t.hub_depth > 0): READY then reads
+ * "Ready (connection via USB hub detected, see readme)" and the function returns 1 (the
+ * tooltip should then be pin_usb_hub_hint()); else 0. */
+PIN_API int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub,
+                                    char *out, size_t cap);
+
+/* What is arriving: "S-Video", "Composite", "HDV", "DV" or "DV/HDV" for the input, and with a
+ * signal " · " + the format: DV/HDV the snapshot's video_label ("PAL", "1080i25"), analog
+ * the decoder's standard (PAL, NTSC, PAL-M, PAL-N, PAL-60, NTSC-4.43, NTSC-J, SECAM). */
+PIN_API void pin_format_signal(const pin_status_snapshot_t *st, char *out, size_t cap);
+
+/* "Frames 1,234 · 2 err · 0 drop" (dropped = frames_dropped + write_dropped),
+ * and its multi-line tooltip: totals (since capture start while capturing, else since
+ * the app started), the current clip, and what counts as an error. */
+PIN_API void pin_format_frames(const pin_status_snapshot_t *st, char *out, size_t cap);
+PIN_API void pin_format_frames_detail(const pin_status_snapshot_t *st, char *out, size_t cap);
+
+/* "1.5 GB / 300.0 MB": everything this capture wrote / the current file. */
+PIN_API void pin_format_sizes(const pin_status_snapshot_t *st, char *out, size_t cap);
+
+/* "· 20.0 GB free · 1 h 35 min left": the free space (only when known, disk_free_bytes
+ * > 0) and the time left (only when est_seconds_left >= 0), else "". */
+PIN_API void pin_format_storage_free(const pin_status_snapshot_t *st, char *out, size_t cap);
+
+/* Multi-line tooltip for the storage item: bytes written (capture, file), free space,
+ * time left, and a warning when disk_low. */
+PIN_API void pin_format_storage_detail(const pin_status_snapshot_t *st, char *out, size_t cap);
+
+/* Device list. "Ready" = READY or OPEN_HERE. */
+
+/* The name, plus " (untested)" for a model nobody verified on hardware (tested == 0,
+ * not UNSUPPORTED). */
+PIN_API void pin_device_display_name(const pin_device_info_t *d, char *out, size_t cap);
+
+/* Badge text: "Capturing" if capturing_here (this window records from it), else "Ready",
+ * "Preparing…", "In use", "Driver missing", "Unsupported" or "Unknown". */
+PIN_API void pin_device_status_text(const pin_device_info_t *d, int capturing_here,
+                                    char *out, size_t cap);
+
+/* Tooltip for a device that can't be picked ("In use by another window (pid 123)", ...).
+ * Returns 0 and "" for one that can (READY, OPEN_HERE), else 1. PIN_DEV_NO_DRIVER is
+ * also what a failed permission check on macOS / Linux reports, so its text depends on
+ * the platform (Windows: install WinUSB with Zadig; Linux: a udev rule; macOS: something
+ * else holds the device). */
+PIN_API int pin_device_unavailable_reason(const pin_device_info_t *d, char *out, size_t cap);
+
+/* The sentence for a failed attempt to open such a device ("This device is in use by
+ * another program (process 123)."), platform-specific like the above. Same return values. */
+PIN_API int pin_device_open_problem(const pin_device_info_t *d, char *out, size_t cap);
+
+/* The hint shown while pin_enumerate() finds nothing; platform-specific. Static. */
+PIN_API const char *pin_no_devices_hint(void);
 
 #ifdef __cplusplus
 }

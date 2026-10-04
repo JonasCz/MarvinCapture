@@ -156,7 +156,7 @@
                             </Grid>
                             <TextBlock Style="{StaticResource CaptionTextBlockStyle}"
                                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                                       Text="No devices found. Connect the Studio 500-USB and make sure it uses the WinUSB driver."
+                                       Text="{x:Bind VM.NoDevicesHint}"
                                        TextWrapping="Wrap"
                                        Visibility="{x:Bind VM.NoDevices, Mode=OneWay}" />
                             <RadioButtons MaxColumns="3" Margin="0,2,0,0"

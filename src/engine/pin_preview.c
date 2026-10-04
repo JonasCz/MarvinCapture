@@ -275,7 +275,16 @@ double pin_previewer_clock(void)
     return (double)c.QuadPart / (double)freq.QuadPart;
 #else
     struct timespec ts;
+#if defined(__APPLE__)
+    /* CLOCK_MONOTONIC keeps counting while the Mac sleeps; mach_absolute_time
+     * (== CLOCK_UPTIME_RAW) does not, and it is the clock CADisplayLink /
+     * CVDisplayLink / CACurrentMediaTime timestamps are on. Using it lets a
+     * macOS renderer compare them with present_time directly, like QPC on
+     * Windows. */
+    clock_gettime(CLOCK_UPTIME_RAW, &ts);
+#else
     clock_gettime(CLOCK_MONOTONIC, &ts);
+#endif
     return (double)ts.tv_sec + ts.tv_nsec / 1e9;
 #endif
 }

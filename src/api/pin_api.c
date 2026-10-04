@@ -32,6 +32,7 @@
 #include "../engine/pin_settings.h"
 #include "../engine/pin_script.h"
 #include "../engine/pin_stop.h"
+#include "../engine/pin_ui_text.h"
 #include "../engine/pin_usb_topology.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
@@ -546,6 +547,336 @@ void pin_format_window_title(const pin_status_snapshot_t *st, const char *device
     snprintf(out, cap, "%s%s%s - MarvinCapture", lead, lead[0] ? " - " : "",
              device_name ? device_name : "Pinnacle 500-USB");
 }
+
+/* ========================================================================
+ * ready-made texts and enable rules (pin_api.h "ready-made texts")
+ * ==================================================================== */
+
+#define ELLIPSIS "\xe2\x80\xa6"     /* U+2026 */
+#define EM_DASH "\xe2\x80\x94"      /* U+2014 */
+#define MIDDOT "\xc2\xb7"           /* U+00B7 */
+
+void pin_format_bytes(uint64_t bytes, char *out, size_t cap) { pin_ui_format_bytes(bytes, out, cap); }
+
+void pin_format_time_left(double seconds, char *out, size_t cap)
+{
+    pin_ui_format_time_left(seconds, out, cap);
+}
+
+uint32_t pin_next_file_number(const char *path)
+{
+    char ext_buf[PIN_FMT_COUNT][sizeof(((pin_format_info_t *)0)->extension)];
+    const char *exts[PIN_FMT_COUNT];
+    int n = 0;
+    for (int f = 0; f < PIN_FMT_COUNT; f++) {
+        pin_format_info_t fi;
+        if (pin_session_format_info((pin_format_t)f, &fi) == PIN_OK) {
+            snprintf(ext_buf[n], sizeof(ext_buf[n]), "%s", fi.extension);
+            exts[n] = ext_buf[n];
+            n++;
+        }
+    }
+    return pin_ui_next_file_number(path, exts, n);
+}
+
+const char *pin_deck_state_name(pin_deck_state_t s)
+{
+    switch (s) {
+    case PIN_DECK_STOPPED: return "Stopped";
+    case PIN_DECK_PLAYING: return "Playing";
+    case PIN_DECK_PAUSED: return "Paused";
+    case PIN_DECK_FAST_FORWARD: return "Fast forward";
+    case PIN_DECK_REWINDING: return "Rewinding";
+    case PIN_DECK_RECORDING: return "Camera recording";
+    case PIN_DECK_NO_TAPE: return "No tape";
+    case PIN_DECK_UNKNOWN: break;
+    }
+    return EM_DASH;
+}
+
+int pin_deck_cmd_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck,
+                         pin_deck_cmd_t cmd)
+{
+    return pin_ui_deck_cmd_allowed(state, deck_available, deck, cmd);
+}
+
+int pin_capture_action_allowed(pin_state_t state, int deck_available, pin_capture_action_t action)
+{
+    return pin_ui_capture_action_allowed(state, deck_available, action);
+}
+
+int pin_state_is_capturing(pin_state_t state)
+{
+    return state == PIN_STATE_CAPTURING || state == PIN_STATE_STOPPING || state == PIN_STATE_REWINDING;
+}
+
+void pin_format_state(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    switch (st->state) {
+    case PIN_STATE_CLOSED: snprintf(out, cap, "Closed"); break;
+    case PIN_STATE_PREPARING: snprintf(out, cap, "Preparing" ELLIPSIS); break;
+    case PIN_STATE_READY: snprintf(out, cap, "Ready"); break;
+    case PIN_STATE_CAPTURING: snprintf(out, cap, "Capturing"); break;
+    case PIN_STATE_STOPPING: snprintf(out, cap, "Finalizing" ELLIPSIS); break;
+    case PIN_STATE_REWINDING: snprintf(out, cap, "Rewinding (pass %d/%d)", st->pass, st->passes); break;
+    case PIN_STATE_ERROR: snprintf(out, cap, "Error"); break;
+    default: snprintf(out, cap, "?"); break;
+    }
+}
+
+/* The last capture ended on its own (a limit, an error) or got no video, not by the user's stop. */
+static int stopped_unasked(const pin_status_snapshot_t *st)
+{
+    return (st->stop_reason != PIN_STOP_NONE && st->stop_reason != PIN_STOP_USER) || st->stop_no_video != 0;
+}
+
+#define PIN_HUB_READY_TEXT "Ready (connection via USB hub detected, see readme)"
+
+int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return 0;
+    const char *file = st->current_file;
+    for (const char *p = st->current_file; *p; p++)
+        if (*p == '/' || *p == '\\')
+            file = p + 1;
+
+    if (st->state == PIN_STATE_ERROR) {
+        snprintf(out, cap, "Error: %s", st->error_text[0] ? st->error_text : pin_strerror(st->last_error));
+    } else if (st->state == PIN_STATE_PREPARING && st->detail[0]) {
+        snprintf(out, cap, "Preparing: %s", st->detail);
+    } else if (st->state == PIN_STATE_READY && st->stop_text[0] && stopped_unasked(st)) {
+        /* why the last capture stopped (not after the user's own stop), until the next one */
+        snprintf(out, cap, "%s", st->stop_text);
+    } else if (!file[0] || st->state != PIN_STATE_CAPTURING) {
+        if (st->state == PIN_STATE_READY && behind_hub) {
+            snprintf(out, cap, "%s", PIN_HUB_READY_TEXT);
+            return 1;
+        }
+        pin_format_state(st, out, cap);
+    } else if (st->passes > 1) {
+        snprintf(out, cap, "%s  " MIDDOT "  pass %d/%d", file, st->pass, st->passes);
+    } else {
+        snprintf(out, cap, "%s", file);
+    }
+    return 0;
+}
+
+void pin_format_signal(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    const char *type;
+    switch (st->input) {
+    case PIN_INPUT_SVIDEO: type = "S-Video"; break;
+    case PIN_INPUT_COMPOSITE: type = "Composite"; break;
+    default:
+        type = st->stream_kind == PIN_KIND_HDV ? "HDV" : st->stream_kind == PIN_KIND_DV ? "DV" : "DV/HDV";
+        break;
+    }
+    const char *fmt = "";
+    if (st->signal) {
+        if (st->input == PIN_INPUT_DV) {
+            fmt = st->video_label;
+        } else {
+            switch (st->detected_std) {
+            case PIN_STD_PAL: fmt = "PAL"; break;
+            case PIN_STD_NTSC: fmt = "NTSC"; break;
+            case PIN_STD_PAL_M: fmt = "PAL-M"; break;
+            case PIN_STD_PAL_N: fmt = "PAL-N"; break;
+            case PIN_STD_PAL_60: fmt = "PAL-60"; break;
+            case PIN_STD_NTSC_443: fmt = "NTSC-4.43"; break;
+            case PIN_STD_NTSC_J: fmt = "NTSC-J"; break;
+            case PIN_STD_SECAM: fmt = "SECAM"; break;
+            default: fmt = st->video_label; break;
+            }
+        }
+    }
+    if (fmt[0])
+        snprintf(out, cap, "%s " MIDDOT " %s", type, fmt);
+    else
+        snprintf(out, cap, "%s", type);
+}
+
+void pin_format_frames(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    char f[32], e[32], d[32];
+    pin_ui_format_count(st->frames, f, sizeof(f));
+    pin_ui_format_count(st->frames_error, e, sizeof(e));
+    pin_ui_format_count(st->frames_dropped + st->write_dropped, d, sizeof(d));
+    snprintf(out, cap, "Frames %s " MIDDOT " %s err " MIDDOT " %s drop", f, e, d);
+}
+
+void pin_format_frames_detail(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    char f[32], e[32], d[32], cf[32], ce[32], cd[32];
+    pin_ui_format_count(st->frames, f, sizeof(f));
+    pin_ui_format_count(st->frames_error, e, sizeof(e));
+    pin_ui_format_count(st->frames_dropped + st->write_dropped, d, sizeof(d));
+    pin_ui_format_count(st->clip_frames, cf, sizeof(cf));
+    pin_ui_format_count(st->clip_frames_error, ce, sizeof(ce));
+    pin_ui_format_count(st->clip_frames_dropped, cd, sizeof(cd));
+    snprintf(out, cap,
+             "Total (since %s)\nFrames: %s\nWith errors: %s\nDropped: %s\n\n"
+             "Current clip\nFrames: %s\nWith errors: %s\nDropped: %s\n\n"
+             "A frame has an error if the camera damaged or concealed it,\n"
+             "data was missing, or (HDV) it depends on a damaged picture.",
+             pin_state_is_capturing(st->state) ? "capture start" : "the app started",
+             f, e, d, cf, ce, cd);
+}
+
+void pin_format_sizes(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    char total[32], clip[32];
+    pin_ui_format_bytes(st->total_bytes_written, total, sizeof(total));
+    pin_ui_format_bytes(st->clip_bytes_written, clip, sizeof(clip));
+    snprintf(out, cap, "%s / %s", total, clip);
+}
+
+void pin_format_storage_free(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    char free_text[48] = "", left[48] = "";
+    if (st->disk_free_bytes > 0) {
+        char b[32];
+        pin_ui_format_bytes(st->disk_free_bytes, b, sizeof(b));
+        snprintf(free_text, sizeof(free_text), "%s free", b);
+    }
+    if (st->est_seconds_left >= 0)
+        pin_ui_format_time_left(st->est_seconds_left, left, sizeof(left));
+    snprintf(out, cap, "%s%s%s%s", free_text[0] ? MIDDOT " " : "", free_text,
+             left[0] ? " " MIDDOT " " : "", left);
+}
+
+void pin_format_storage_detail(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    char total[32], clip[32], free_b[32], left[48] = "";
+    pin_ui_format_bytes(st->total_bytes_written, total, sizeof(total));
+    pin_ui_format_bytes(st->clip_bytes_written, clip, sizeof(clip));
+    pin_ui_format_bytes(st->disk_free_bytes, free_b, sizeof(free_b));
+    if (st->est_seconds_left >= 0)
+        pin_ui_format_time_left(st->est_seconds_left, left, sizeof(left));
+    snprintf(out, cap, "Written in this capture: %s\nWritten in the current file: %s%s%s%s%s%s",
+             total, clip,
+             st->disk_free_bytes > 0 ? "\nFree on the output volume: " : "",
+             st->disk_free_bytes > 0 ? free_b : "",
+             left[0] ? "\n" : "", left,
+             st->disk_low ? "\n\nLow disk space: less than 1 hour or 50 GB left" : "");
+}
+
+void pin_device_display_name(const pin_device_info_t *d, char *out, size_t cap)
+{
+    if (!d || !out || cap == 0)
+        return;
+    snprintf(out, cap, "%s%s", d->name,
+             (d->tested == 0 && d->state != PIN_DEV_UNSUPPORTED) ? " (untested)" : "");
+}
+
+void pin_device_status_text(const pin_device_info_t *d, int capturing_here, char *out, size_t cap)
+{
+    if (!d || !out || cap == 0)
+        return;
+    const char *t;
+    if (capturing_here) {
+        t = "Capturing";
+    } else {
+        switch (d->state) {
+        case PIN_DEV_READY:
+        case PIN_DEV_OPEN_HERE: t = "Ready"; break;
+        case PIN_DEV_PREPARING: t = "Preparing" ELLIPSIS; break;
+        case PIN_DEV_IN_USE: t = "In use"; break;
+        case PIN_DEV_NO_DRIVER: t = "Driver missing"; break;
+        case PIN_DEV_UNSUPPORTED: t = "Unsupported"; break;
+        default: t = "Unknown"; break;
+        }
+    }
+    snprintf(out, cap, "%s", t);
+}
+
+/* PIN_DEV_NO_DRIVER: on Windows no WinUSB driver is bound; on macOS / Linux it is what a
+ * failed open with LIBUSB_ERROR_ACCESS maps to (pinnacle_enum.h, PINNACLE_ENUM_NO_PERMISSION):
+ * on Linux a missing udev rule, on macOS another driver or program that holds the interface. */
+#if defined(_WIN32)
+#define NO_DRIVER_REASON "Needs the WinUSB driver (install it with Zadig, then reconnect)"
+#define NO_DRIVER_PROBLEM "This device needs the WinUSB driver. Install it with Zadig, then reconnect."
+#define NO_DEVICES_HINT "No devices found. Connect the Studio 500-USB and make sure it uses the WinUSB driver."
+#elif defined(__APPLE__)
+#define NO_DRIVER_REASON "The device could not be accessed (another driver or program holds it)"
+#define NO_DRIVER_PROBLEM "This device could not be accessed: another driver or program holds it. " \
+                          "Close programs that use it, then reconnect it."
+#define NO_DEVICES_HINT "No devices found. Connect the Studio 500-USB."
+#else
+#define NO_DRIVER_REASON "No permission to open the USB device (add a udev rule for vendor 2304, then reconnect)"
+#define NO_DRIVER_PROBLEM "No permission to open this USB device. Add a udev rule for vendor 2304 " \
+                          "(SUBSYSTEM==\"usb\", ATTR{idVendor}==\"2304\", MODE=\"0666\"), then reconnect it."
+#define NO_DEVICES_HINT "No devices found. Connect the Studio 500-USB and check that you may access it (udev rule)."
+#endif
+
+int pin_device_unavailable_reason(const pin_device_info_t *d, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return 0;
+    out[0] = 0;
+    if (!d)
+        return 0;
+    switch (d->state) {
+    case PIN_DEV_IN_USE:
+        if (d->owner_pid)
+            snprintf(out, cap, "In use by another window (pid %u)", (unsigned)d->owner_pid);
+        else
+            snprintf(out, cap, "In use by another program");
+        return 1;
+    case PIN_DEV_PREPARING:
+        if (d->owner_pid)
+            snprintf(out, cap, "Being prepared by another window (pid %u)", (unsigned)d->owner_pid);
+        else
+            snprintf(out, cap, "Being prepared by another program");
+        return 1;
+    case PIN_DEV_NO_DRIVER:
+        snprintf(out, cap, "%s", NO_DRIVER_REASON);
+        return 1;
+    case PIN_DEV_UNSUPPORTED:
+        snprintf(out, cap, "This model isn't supported yet");
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+int pin_device_open_problem(const pin_device_info_t *d, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return 0;
+    out[0] = 0;
+    if (!d || d->state == PIN_DEV_READY || d->state == PIN_DEV_OPEN_HERE)
+        return 0;
+    switch (d->state) {
+    case PIN_DEV_IN_USE:
+        if (d->owner_pid)
+            snprintf(out, cap, "This device is in use by another program (process %u).", (unsigned)d->owner_pid);
+        else
+            snprintf(out, cap, "This device is in use by another program.");
+        break;
+    case PIN_DEV_PREPARING: snprintf(out, cap, "Another program is preparing this device."); break;
+    case PIN_DEV_NO_DRIVER: snprintf(out, cap, "%s", NO_DRIVER_PROBLEM); break;
+    case PIN_DEV_UNSUPPORTED: snprintf(out, cap, "This model is recognised but not supported yet."); break;
+    default: snprintf(out, cap, "This device can't be opened right now."); break;
+    }
+    return 1;
+}
+
+const char *pin_no_devices_hint(void) { return NO_DEVICES_HINT; }
 
 int pin_poll_event(pin_session_t *s, pin_event_t *out)
 {

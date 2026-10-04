@@ -46,6 +46,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public bool HasSelectedDevice => SelectedDevice is not null;
 
+    /// <summary>The core's (platform-specific) hint shown while no device is found.</summary>
+    public string NoDevicesHint { get; } = Native.NoDevicesHint();
+
     private string? _openedDeviceId;
 
     /// <summary>True from capture start until the core reports READY again (includes STOPPING / REWINDING).</summary>
@@ -64,14 +67,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                               nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private PinState _sessionState = PinState.Closed;
 
+    /// <summary>The core's rule for a capture button (pin_capture_action_allowed).</summary>
+    private bool CaptureAllowed(PinCaptureAction action) =>
+        Native.CaptureActionAllowed(SessionState, DeckAvailable, action);
+
     /// <summary>Stop is possible while writing (or between passes); not while already finalising.</summary>
-    public bool CanStop => SessionState is PinState.Capturing or PinState.Rewinding;
+    public bool CanStop => CaptureAllowed(PinCaptureAction.Stop);
 
     /// <summary>The Capture/Stop button (analog) and the Play-and-capture/Stop button (DV).</summary>
-    public bool CaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready;
+    public bool CaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.Stop : PinCaptureAction.StartManual);
 
     /// <summary>Idle: start a capture without touching the tape. Capturing: stop it and leave the tape alone (always available, however the capture was started).</summary>
-    public bool PlayAndCaptureEnabled => IsCapturing ? CanStop : SessionState == PinState.Ready;
+    public bool PlayAndCaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.Stop : PinCaptureAction.StartManual);
 
     /// <summary>True when the running capture was started by "Automatic rewind &amp; capture" (the core stops the deck when it ends).</summary>
     private bool _captureWithDeck;
@@ -87,17 +94,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private bool _deckAvailable = true;
 
-    /// <summary>The deck buttons are usable only while idle and READY with a camera to talk to; never while capturing.</summary>
-    private bool DeckControlsUsable => !IsCapturing && SessionState == PinState.Ready && DeckAvailable && DeckState != PinDeckState.NoTape;
+    /// <summary>The core's rule for a deck button (pin_deck_cmd_allowed): idle and READY with a camera and a tape, and not already doing what the button asks.</summary>
+    private bool DeckCmdAllowed(PinDeckCmd cmd) => Native.DeckCmdAllowed(SessionState, DeckAvailable, DeckState, cmd);
 
-    /// <summary>Each button is disabled when the deck is already doing what it would ask for.</summary>
-    public bool DeckRewEnabled => DeckControlsUsable && DeckState != PinDeckState.Rewinding;
-    public bool DeckPlayEnabled => DeckControlsUsable && DeckState is not (PinDeckState.Playing or PinDeckState.Recording);
-    public bool DeckStopEnabled => DeckControlsUsable && DeckState != PinDeckState.Stopped;
-    public bool DeckFfEnabled => DeckControlsUsable && DeckState != PinDeckState.FastForward;
+    public bool DeckRewEnabled => DeckCmdAllowed(PinDeckCmd.Rew);
+    public bool DeckPlayEnabled => DeckCmdAllowed(PinDeckCmd.Play);
+    public bool DeckStopEnabled => DeckCmdAllowed(PinDeckCmd.Stop);
+    public bool DeckFfEnabled => DeckCmdAllowed(PinDeckCmd.Ff);
 
     /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (started that way) it stops the capture and the tape.</summary>
-    public bool DvAutoCaptureEnabled => IsCapturing ? CanStop && DeckAvailable : SessionState == PinState.Ready && DeckAvailable;
+    public bool DvAutoCaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.StopTape : PinCaptureAction.StartAuto);
 
     public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
     public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
@@ -370,7 +376,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Status bar, row 2 of the file item: "Capturing  ·  pass 2/3" while a capture runs, else "".</summary>
     [ObservableProperty] private string _statusSubText = "";
 
-    private static bool IsCapturingState(PinState s) => s is PinState.Capturing or PinState.Stopping or PinState.Rewinding;
     [ObservableProperty] private string _timecode = "--:--:--:--";
     /// <summary>Status bar time: the tape timecode for DV/HDV, the time since capture start for analog.</summary>
     [ObservableProperty] private string _statusTimeText = "--:--:--:--";
@@ -402,18 +407,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty] private bool _diskLow;
     [ObservableProperty] private bool _hasDiskInfo;
-    [ObservableProperty] private string _diskFreeText = "";
-    [ObservableProperty] private string _timeLeftText = "";
-
-    private static string FormatTimeLeft(double seconds)
-    {
-        var t = TimeSpan.FromSeconds(seconds);
-        if (t.TotalHours >= 1)
-        {
-            return $"{(int)t.TotalHours} h {t.Minutes:00} min left";
-        }
-        return $"{Math.Max(0, (int)t.TotalMinutes)} min left";
-    }
 
     // Transient InfoBar
     [ObservableProperty] private bool _infoOpen;
@@ -571,14 +564,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
         if (!dev.IsUsable)
         {
-            ShowInfo(dev.Name, dev.State switch
-            {
-                PinDevState.InUse => $"This device is in use by another program (process {dev.OwnerPid}).",
-                PinDevState.Preparing => "Another program is preparing this device.",
-                PinDevState.NoDriver => "This device needs the WinUSB driver. Install it with Zadig, then reconnect.",
-                PinDevState.Unsupported => "This model is recognised but not supported yet.",
-                _ => "This device can't be opened right now.",
-            }, 2);
+            ShowInfo(dev.Name, dev.OpenProblem ?? "This device can't be opened right now.", 2);
             NoVideoText = dev.StatusText;
             return false;
         }
@@ -677,17 +663,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             IsPlayChecked = state is PinDeckState.Playing or PinDeckState.Recording;
             IsStopChecked = state == PinDeckState.Stopped;
             IsFfChecked = state == PinDeckState.FastForward;
-            var text = state switch
-            {
-                PinDeckState.Stopped => "Stopped",
-                PinDeckState.Playing => "Playing",
-                PinDeckState.Paused => "Paused",
-                PinDeckState.FastForward => "Fast forward",
-                PinDeckState.Rewinding => "Rewinding",
-                PinDeckState.Recording => "Camera recording",
-                PinDeckState.NoTape => "No tape",
-                _ => "—",
-            };
+            var text = Native.DeckStateName(state);
             DeckStateReserveText = text + " …";
             DeckStateText = busy ? text + " …" : text;
         }
@@ -707,7 +683,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var o = Native.CaptureOptsDefaults();
         bool analog = !IsDvInput;
         o.Path = analog ? AnalogOutputPath : DvOutputPath;
-        o.FirstNumber = NextFileNumber(o.Path);
+        o.FirstNumber = Native.NextFileNumber(o.Path); // every file is "name-NNNN.ext": continue after the highest one
 
         if (AnalogFormat is not null) o.FormatAnalog = AnalogFormat.Format;
         if (DvSettings.SelectedFormat is not null) o.FormatDv = DvSettings.SelectedFormat.Format;
@@ -726,54 +702,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.StartDeck = startDeck ? 1 : 0;
         o.RewindFirst = rewindFirst ? 1 : 0; // "Play and capture": start of tape, then play
         return o;
-    }
-
-    /// <summary>
-    /// Every capture file is "name-NNNN.ext" (scene splitting or not). Returns the
-    /// number after the highest one already used for this name, in any format.
-    /// </summary>
-    private uint NextFileNumber(string path)
-    {
-        try
-        {
-            var dir = System.IO.Path.GetDirectoryName(path);
-            var name = System.IO.Path.GetFileName(path);
-            if (string.IsNullOrEmpty(name))
-            {
-                return 1;
-            }
-            var ext = System.IO.Path.GetExtension(name).TrimStart('.');
-            var known = AnalogFormats.Concat(DvSettings.Formats).Concat(HdvSettings.Formats);
-            if (ext.Length > 0 && known.Any(f => string.Equals(f.Extension, ext, StringComparison.OrdinalIgnoreCase)))
-            {
-                name = System.IO.Path.GetFileNameWithoutExtension(name);
-            }
-            if (string.IsNullOrEmpty(dir))
-            {
-                dir = ".";
-            }
-            if (!System.IO.Directory.Exists(dir))
-            {
-                return 1;
-            }
-            var re = new System.Text.RegularExpressions.Regex(
-                "^" + System.Text.RegularExpressions.Regex.Escape(name) + @"-(\d+)\.[^.]+$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-            uint max = 0;
-            foreach (var f in System.IO.Directory.EnumerateFiles(dir))
-            {
-                var m = re.Match(System.IO.Path.GetFileName(f));
-                if (m.Success && uint.TryParse(m.Groups[1].Value, out var n) && n > max)
-                {
-                    max = n;
-                }
-            }
-            return max + 1;
-        }
-        catch (Exception)
-        {
-            return 1;
-        }
     }
 
     public PinStatus CheckOutput(in PinCaptureOpts o, out PinOutputCheck check)
@@ -899,8 +827,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    private const string ReadyBehindHubText = "Ready (connection via USB hub detected, see readme)";
-
     /// <summary>The open device's list entry (the selection, if the list doesn't have it).</summary>
     private DeviceItemViewModel? OpenDevice =>
         Devices.FirstOrDefault(d => d.Id == _openedDeviceId) ?? SelectedDevice;
@@ -911,41 +837,15 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private void ApplyStatus(in PinStatusSnapshot st)
     {
         SessionState = st.State;
-        SessionStateText = st.State switch
-        {
-            PinState.Closed => "Closed",
-            PinState.Preparing => "Preparing…",
-            PinState.Ready => "Ready",
-            PinState.Capturing => "Capturing",
-            PinState.Stopping => "Finalizing…",
-            PinState.Rewinding => $"Rewinding (pass {st.Pass}/{st.Passes})",
-            PinState.Error => "Error",
-            _ => st.State.ToString(),
-        };
+        SessionStateText = Native.FormatState(in st);
 
         StatusLine = Native.FormatStatusLine(in st);
-        var file = string.IsNullOrEmpty(st.CurrentFile) ? "" : System.IO.Path.GetFileName(st.CurrentFile);
-        if (st.State == PinState.Error)
-        {
-            StatusShortText = "Error: " + (string.IsNullOrEmpty(st.ErrorText) ? Native.StrError(st.LastError) : st.ErrorText);
-        }
-        else
-        {
-            StatusShortText = st.State == PinState.Preparing && st.Detail.Length > 0
-                ? "Preparing: " + st.Detail
-                // why the last capture stopped (not after the user's own stop), until the next one
-                : st.State == PinState.Ready &&
-                  (st.StopReason is not (PinStopReason.None or PinStopReason.User) || st.StopNoVideo) &&
-                  st.StopText.Length > 0
-                ? st.StopText
-                : string.IsNullOrEmpty(file) || st.State != PinState.Capturing
-                ? (st.State == PinState.Ready && OpenDeviceBehindHub ? ReadyBehindHubText : SessionStateText)
-                : st.Passes > 1 ? $"{file}  \u00B7  pass {st.Pass}/{st.Passes}" : file;
-        }
-        StatusSubText = IsCapturingState(st.State) ? SessionStateText : "";
+        StatusShortText = Native.FormatStatusShort(in st, OpenDeviceBehindHub, out bool hubReady);
+        bool capturingState = Native.StateIsCapturing(st.State);
+        StatusSubText = capturingState ? SessionStateText : "";
         StatusTip = StatusSubText.Length > 0 && StatusSubText != StatusShortText
             ? $"{StatusSubText}\n{StatusShortText}" : StatusShortText;
-        if (StatusShortText == ReadyBehindHubText && OpenDevice?.HubHint is { } hint)
+        if (hubReady && OpenDevice?.HubHint is { } hint)
         {
             StatusTip = hint;
         }
@@ -964,15 +864,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         SignalLocked = st.Signal != 0;
         SignalLockText = SignalLocked ? "Locked" : "No signal";
-        SignalTypeText = SignalTypeFor(in st);
+        SignalTypeText = Native.FormatSignal(in st);
 
-        var dropped = st.FramesDropped + st.WriteDropped;
-        FramesTotalText = $"Frames {st.Frames:N0} · {st.FramesError:N0} err · {dropped:N0} drop";
-        FramesTip = $"Total (since {(IsCapturingState(st.State) ? "capture start" : "the app started")})\n"
-            + $"Frames: {st.Frames:N0}\nWith errors: {st.FramesError:N0}\nDropped: {dropped:N0}\n\n"
-            + $"Current clip\nFrames: {st.ClipFrames:N0}\nWith errors: {st.ClipFramesError:N0}\nDropped: {st.ClipFramesDropped:N0}\n\n"
-            + "A frame has an error if the camera damaged or concealed it,\ndata was missing, or (HDV) it depends on a damaged picture.";
-        SizeText = $"{HumanSize(st.TotalBytesWritten)} / {HumanSize(st.ClipBytesWritten)}";
+        FramesTotalText = Native.FormatFrames(in st);
+        FramesTip = Native.FormatFramesDetail(in st);
+        SizeText = Native.FormatSizes(in st);
 
         FeedMeter(in st);
         AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
@@ -990,17 +886,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         }
 
         DiskLow = st.DiskLow != 0;
-        DiskFreeText = st.DiskFreeBytes > 0 ? $"{HumanSize(st.DiskFreeBytes)} free" : "";
-        TimeLeftText = st.EstSecondsLeft >= 0 ? FormatTimeLeft(st.EstSecondsLeft) : "";
-        StorageFreeText = (DiskFreeText.Length > 0 ? "· " + DiskFreeText : "")
-            + (TimeLeftText.Length > 0 ? " · " + TimeLeftText : "");
-        StorageTip = $"Written in this capture: {HumanSize(st.TotalBytesWritten)}\nWritten in the current file: {HumanSize(st.ClipBytesWritten)}"
-            + (DiskFreeText.Length > 0 ? $"\nFree on the output volume: {HumanSize(st.DiskFreeBytes)}" : "")
-            + (TimeLeftText.Length > 0 ? $"\n{TimeLeftText}" : "")
-            + (st.DiskLow != 0 ? "\n\nLow disk space: less than 1 hour or 50 GB left" : "");
+        StorageFreeText = Native.FormatStorageFree(in st);
+        StorageTip = Native.FormatStorageDetail(in st);
         HasDiskInfo = st.DiskFreeBytes > 0;
 
-        IsCapturing = st.State is PinState.Capturing or PinState.Stopping or PinState.Rewinding;
+        IsCapturing = capturingState;
 
         ApplyDeckStatus(st.Deck, st.DeckBusy != 0);
 
@@ -1038,51 +928,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     private static string FormatDb(float db) => db <= -143 ? "silent" : $"{db:0.0} dBFS";
-
-    /// <summary>"HDV · 1080i25", "DV · PAL", "S-Video · NTSC", ...: what is arriving, from the core's status.</summary>
-    private static string SignalTypeFor(in PinStatusSnapshot st)
-    {
-        string type = st.Input switch
-        {
-            PinInput.SVideo => "S-Video",
-            PinInput.Composite => "Composite",
-            _ => st.StreamKind == PinKind.Hdv ? "HDV" : st.StreamKind == PinKind.Dv ? "DV" : "DV/HDV",
-        };
-        if (st.Signal == 0)
-        {
-            return type;
-        }
-        // DV/HDV: the core's own label (PAL, NTSC, 1080i25, 720p59.94); analog adds the
-        // variants the decoder detects.
-        string std = st.Input == PinInput.Dv
-            ? st.VideoLabel
-            : st.DetectedStd switch
-            {
-                PinStd.Pal => "PAL",
-                PinStd.Ntsc => "NTSC",
-                PinStd.PalM => "PAL-M",
-                PinStd.PalN => "PAL-N",
-                PinStd.Pal60 => "PAL-60",
-                PinStd.Ntsc443 => "NTSC-4.43",
-                PinStd.NtscJ => "NTSC-J",
-                PinStd.Secam => "SECAM",
-                _ => st.VideoLabel,
-            };
-        return std.Length > 0 ? type + " · " + std : type;
-    }
-
-    public static string HumanSize(ulong bytes)
-    {
-        string[] units = { "B", "KB", "MB", "GB", "TB" };
-        double size = bytes;
-        int unit = 0;
-        while (size >= 1024 && unit < units.Length - 1)
-        {
-            size /= 1024;
-            unit++;
-        }
-        return unit == 0 ? $"{bytes} B" : $"{size:0.0} {units[unit]}";
-    }
 
     private void HandleEvent(in PinEvent evt)
     {
