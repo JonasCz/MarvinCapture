@@ -1,4 +1,40 @@
-# Pinnacle Studio 500-USB — open driver
+<h1 align="center">MarvinCapture</h1>
+<p align="center"><b>An open-source user-space driver and application to capture DV and analog video via Pinnacle USB capture devices.</b></p>
+
+## Background
+
+DV video from tape is increasingly hard to capture (ingest) on modern systems, on Windows 10 it still works, but all the existing hardware / driver / software combinations make it quite a buggy and frustrating experience. MacOS 26 has dropped support for FireWire entirely.
+
+This is an attempt to fix that, by writing a new, modern, cross platform integrated driver and user-space capture application, targeting Pinnacle's MovieBox series of USB capture devices which feature a FireWire input for DV, in addition to analog.
+
+These devices implement a lossless DV-to-USB bridge, i.e. the box **does not** perform any kind of compression or conversion. The DV data you get is what was sent by the camera. Performance is very reliable, the devices do not have any data loss or audio desync issues (test methodology below)
+
+These are no longer made, although they are still available on second-hand markets, usually for reasonable prices (30-50€).
+
+Pinnacle's driver internally calls these "Marvin", hence the naming.
+
+## Features
+
+A modern, Native GUI for Windows and Mac, plus a flexible command-line application for Windows, Mac, and Linux, allowing capture to various file formats, with options mostly focused on high quality archival and preservation.
+
+[screenshot windows and mac]
+
+## Supported hardware:
+
+|  | PID | internal name | product | status |
+|---|---|---|---|---|
+| <a href="docs/images/500-usb.jpg"><img src="docs/images/500-usb.jpg" width="80" alt="Studio 500-USB"></a> | `0213` | Marvin-Lite | Studio **500-USB** | supported, tested, DV/HDV/analog in |
+| <a href="docs/images/510-usb.jpg"><img src="docs/images/510-usb.jpg" width="80" alt="Studio 510-USB"></a> | `0223` | Marvin-510 | Studio **510-USB** | supported, tested, DV/HDV/analog in |
+| <a href="docs/images/700-usb.jpg"><img src="docs/images/700-usb.jpg" width="80" alt="Studio 700-USB"></a> | `0212` | Marvin-CR | Studio **700-USB** | **untested** (but probably works) |
+| <a href="docs/images/710-usb.jpg"><img src="docs/images/710-usb.jpg" width="80" alt="MovieBox Plus 710-USB"></a> | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | **untested** (but probably works) |
+| <a href="docs/images/moviebox-deluxe.jpg"><img src="docs/images/moviebox-deluxe.jpg" width="80" alt="MovieBox Deluxe"></a> | `0206` | Marvin-classic | **MovieBox Deluxe** | **untested** (less likely to work) |
+
+Pinnacle also made some devices which are not supported:
+
+* **MovieBox DV**: Analog to DV converter box, lacking USB.
+* **MovieBox**, **Dazzle**: Analog to USB, no DV inputs.
+
+
 
 An open user-space driver, a command-line program and a Windows capture app for the
 **Pinnacle Studio 500-USB** (`USB\VID_2304&PID_0213`, codename *Marvin-Lite*), a
