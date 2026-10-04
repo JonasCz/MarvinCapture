@@ -626,6 +626,15 @@ static void queue_free(struct queue *q, pinnacle_device_t *dev)
         struct timeval tv = { .tv_sec = 0, .tv_usec = 20000 };
         libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL);
     }
+    /* A cancelled transfer that never completed (device gone) is still libusb's: freeing it
+     * would be a use after free. Leak the queue then (a few MB, once), like the DV loop. */
+    for (unsigned i = 0; i < q->depth; i++) {
+        if (q->slots[i].xfer && !q->slots[i].done) {
+            pin_logf(PIN_LOG_WARN, "pinnacle: a cancelled USB transfer did not complete; "
+                     "leaking the read queue instead of freeing it\n");
+            return;
+        }
+    }
     for (unsigned i = 0; i < q->depth; i++) {
         if (!q->slots[i].xfer)
             continue;

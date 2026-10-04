@@ -461,7 +461,7 @@ public sealed partial class MainWindow : Window
                 }
                 if (r != 0)
                 {
-                    DispatcherQueue.TryEnqueue(OnDevicesChanged);
+                    DispatcherQueue.TryEnqueue(() => OnDevicesChanged());
                 }
             }
         })
@@ -469,7 +469,9 @@ public sealed partial class MainWindow : Window
         _deviceWatch.Start();
     }
 
-    private void OnDevicesChanged()
+    /// <param name="sessionFailed">Called because the open session went to ERROR (not by a
+    /// device-list change): it is only dropped if its device has gone from the list.</param>
+    private void OnDevicesChanged(bool sessionFailed = false)
     {
         if (_closing)
         {
@@ -478,8 +480,14 @@ public sealed partial class MainWindow : Window
         VM.RefreshDevices();
 
         // The open device was unplugged: drop the session (a running capture
-        // ends with an error from the core and is finalised by it).
-        if (_openedDeviceId is not null && !VM.IsCapturing && VM.Devices.All(d => d.Id != _openedDeviceId))
+        // ends with an error from the core and is finalised by it; the core's
+        // ERROR state can arrive before or after this list change, so it triggers
+        // this too, else a replug of the same device would keep the dead session).
+        // After a device-list change a session in ERROR is dropped even if its device is
+        // still listed (replugged), so the device is opened afresh.
+        bool dead = !sessionFailed && VM.SessionState == PinState.Error;
+        if (_openedDeviceId is not null && !VM.IsCapturing &&
+            (dead || VM.Devices.All(d => d.Id != _openedDeviceId)))
         {
             VM.CloseSession();
             _openedDeviceId = null;
@@ -690,6 +698,14 @@ public sealed partial class MainWindow : Window
                 if (VM.SelectedDevice is not null)
                 {
                     OpenSelectedIfNeeded();
+                }
+                break;
+            case nameof(MainViewModel.SessionState):
+                if (VM.SessionState == PinState.Error)
+                {
+                    // e.g. the device was unplugged during a capture (the core finalised the
+                    // files and reported the stop): release the dead session if its device is gone.
+                    DispatcherQueue.TryEnqueue(() => OnDevicesChanged(sessionFailed: true));
                 }
                 break;
             case nameof(MainViewModel.IsCapturing):

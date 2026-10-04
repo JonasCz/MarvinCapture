@@ -106,6 +106,10 @@ endif()
 # own header comment and tests/data/README.md.
 pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}")
 
+# Unplug during a capture (replay fakes the USB NO_DEVICE failure): files finalised,
+# stop reason DEVICE_LOST, session in ERROR, a new session opens afterwards.
+pin_engine_replay_test(test_replay_unplug "${PIN_TRACES_DIR}/dv-ntsc.dv" "${PIN_HDV_CAPTURE}")
+
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.
 pin_engine_replay_test(test_pin_color_matrix)
 

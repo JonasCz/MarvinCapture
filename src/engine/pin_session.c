@@ -1527,6 +1527,15 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
         pin_stop_message_no_video(why, s->capture_opts.path, detail, s->stop_text, sizeof(s->stop_text));
     else
         pin_stop_message(why, s->stop_captured_s, detail, s->stop_text, sizeof(s->stop_text));
+    if (why == PIN_STOP_DEVICE_LOST && !pin_path_is_stdout(s->capture_opts.path)) {
+        /* the files were closed (finalised) before this; say where they are */
+        size_t n = strlen(s->stop_text);
+        if (s->units_total > 0 && s->current_file[0])
+            snprintf(s->stop_text + n, sizeof(s->stop_text) - n,
+                     " The file was saved up to that point: %s", s->current_file);
+        else
+            snprintf(s->stop_text + n, sizeof(s->stop_text) - n, " No file was written.");
+    }
     pin_logf(why == PIN_STOP_USER ? PIN_LOG_INFO : PIN_LOG_WARN, "session: %s\n", s->stop_text);
     pin_session_push_event(s, PIN_EVT_CAPTURE_ENDED, (int32_t)why, s->stop_text);
     if (say_no_video)
@@ -1669,7 +1678,7 @@ static int stream_failed(pin_session_t *s)
     pin_session_lock(s);
     capture_end(s, gone ? PIN_STOP_DEVICE_LOST : PIN_STOP_ERROR, detail, 0);
     set_error(s, gone ? PIN_ERR_NOT_FOUND : PIN_ERR_USB,
-              gone ? "The capture device was disconnected. Plug it in again and reopen it."
+              gone ? "The capture device was disconnected. Reconnect it to continue."
                    : "The USB connection to the capture device failed.");
     pin_session_unlock(s);
     return gone;
@@ -2501,6 +2510,15 @@ static void replay_handle_eot(pin_session_t *s)
     pin_session_unlock(s);
 }
 
+/* Test seam: PIN_REPLAY_UNPLUG_AFTER=<frames> makes the replay device behave as if it
+ * were unplugged once a capture has written that many frames (stream_failed() then
+ * ends the capture with PIN_STOP_DEVICE_LOST, as for a real USB disconnect). */
+static uint64_t replay_unplug_after(void)
+{
+    const char *v = getenv("PIN_REPLAY_UNPLUG_AFTER");
+    return v && v[0] ? (uint64_t)strtoull(v, NULL, 10) : 0;
+}
+
 /* HDV .ts replay: the file is already a plain, 188-byte-aligned MPEG2-TS
  * (unlike the real EP 0x88 stream, it carries no OHCI/type-9 framing), so
  * dv_reassembler_feed() does not apply. Instead this mirrors what
@@ -2526,6 +2544,8 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     uint8_t *pic = NULL;
     size_t pic_len = 0, pic_cap = 0;
     uint8_t pkt[HDV_TS_PACKET_SIZE];
+    uint64_t unplug_after = replay_unplug_after();
+    int unplugged = 0;
 
     s->loop_stop = 0;
     while (!s->loop_stop) {
@@ -2534,7 +2554,10 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
         pin_session_lock(s);
         capture_guard(s, 0);
         pin_deck_state_t d = s->deck;
+        if (unplug_after && s->sink && s->frames >= unplug_after)
+            unplugged = 1;
         pin_session_unlock(s);
+        if (unplugged) { s->loop_stop = 1; break; }
         if (d == PIN_DECK_STOPPED || d == PIN_DECK_PAUSED) { sleep_ms(50); continue; }
         if (d == PIN_DECK_REWINDING) {
             sleep_ms(2000); /* simulated rewind time, per the plan */
@@ -2584,9 +2607,13 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     }
     free(pic);
 
-    pin_session_lock(s);
-    capture_end(s, PIN_STOP_USER, NULL, 0);
-    pin_session_unlock(s);
+    if (unplugged) {
+        stream_failed(s); /* the same path as a real unplug */
+    } else {
+        pin_session_lock(s);
+        capture_end(s, PIN_STOP_USER, NULL, 0);
+        pin_session_unlock(s);
+    }
     fclose(f);
     return 0;
 }
@@ -2629,6 +2656,8 @@ static int replay_run(pin_session_t *s)
     uint8_t *chunk = malloc(frame_size ? (size_t)frame_size : 65536);
     unsigned units_paced = 0;
     int chunks_idle = 0; /* raw dump: chunks in a row that ended no frame */
+    uint64_t unplug_after = replay_unplug_after();
+    int unplugged = 0;
     s->loop_stop = 0;
     while (!s->loop_stop) {
         if (handle_inline_commands(s, 0)) { s->loop_stop = 1; break; }
@@ -2636,7 +2665,10 @@ static int replay_run(pin_session_t *s)
         pin_session_lock(s);
         capture_guard(s, 0);
         pin_deck_state_t d = s->deck;
+        if (unplug_after && s->sink && s->frames >= unplug_after)
+            unplugged = 1;
         pin_session_unlock(s);
+        if (unplugged) { s->loop_stop = 1; break; }
         if (d == PIN_DECK_STOPPED || d == PIN_DECK_PAUSED) { sleep_ms(50); continue; }
         if (d == PIN_DECK_REWINDING) {
             sleep_ms(2000); /* simulated rewind time, per the plan */
@@ -2693,10 +2725,14 @@ static int replay_run(pin_session_t *s)
     }
     free(chunk);
 
-    pin_session_lock(s);
-    capture_end(s, PIN_STOP_USER, NULL, 0);
-    pin_session_unlock(s);
     dv_reassembler_finish(&reasm);
+    if (unplugged) {
+        stream_failed(s); /* the same path as a real unplug */
+    } else {
+        pin_session_lock(s);
+        capture_end(s, PIN_STOP_USER, NULL, 0);
+        pin_session_unlock(s);
+    }
     fclose(f);
     return 0;
 }

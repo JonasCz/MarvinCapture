@@ -714,12 +714,19 @@ final class WindowModel {
         t.start()
     }
 
-    private func onDevicesChanged() {
+    /// `sessionFailed`: called because the open session went to ERROR (not by a device-list change); it is
+    /// only dropped then if its device has gone from the list.
+    private func onDevicesChanged(sessionFailed: Bool = false) {
         guard !isClosing else { return }
         refreshDevices()
         // The open device was unplugged: drop the session (a running capture ends with an error from
-        // the core and is finalised by it).
-        if let open = openedDeviceID, !isCapturing, !devices.contains(where: { $0.id == open }) {
+        // the core and is finalised by it; that ERROR can arrive before or after this list change, so
+        // it triggers this too, else a replug of the same device would keep the dead session). After a
+        // device-list change a session in ERROR is dropped even if its device is still listed
+        // (replugged), so the device is opened afresh.
+        let dead = !sessionFailed && sessionState == PIN_STATE_ERROR
+        if let open = openedDeviceID, !isCapturing,
+           dead || !devices.contains(where: { $0.id == open }) {
             closeSession()
             preview.detach()
         }
@@ -1057,6 +1064,12 @@ final class WindowModel {
         case PIN_EVT_STATE:
             sessionState = pin_state_t(rawValue: UInt32(clamping: e.a))
             refreshDevices()   // badge: Open / Capturing
+            if sessionState == PIN_STATE_ERROR {
+                // e.g. the device was unplugged during a capture (the core finalised the files and
+                // reported the stop): release the dead session if its device is gone. Not inline: this
+                // runs while the session's events are being drained.
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.onDevicesChanged(sessionFailed: true) } }
+            }
         case PIN_EVT_STEP:
             lastLogLine = e.text
         case PIN_EVT_DONE:
