@@ -159,6 +159,94 @@ static void show_status(pin_session_t *s, int inplace)
     g_inplace_width = pad;
 }
 
+/* ---- help wrapping ------------------------------------------------------ */
+
+/* Terminal width of stdout in columns, or 0 when it is not a terminal (then nothing is wrapped). */
+static int stdout_columns(void)
+{
+#if defined(_WIN32)
+    CONSOLE_SCREEN_BUFFER_INFO ci;
+    if (_isatty(_fileno(stdout)) && GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &ci))
+        return ci.srWindow.Right - ci.srWindow.Left + 1;
+    return 0;
+#else
+    struct winsize ws;
+    if (isatty(1) && ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0)
+        return ws.ws_col;
+    return 0;
+#endif
+}
+
+/* The help text has one logical line per entry and no line width of its own. Wrap each line at
+ * `width` on spaces, continuing under the entry's text: "  --opt   description" hangs under the
+ * description, "  - item" under the item text, anything else under its own indent. */
+static void print_wrapped(FILE *f, const char *text, int width)
+{
+    if (width <= 0) {
+        fputs(text, f);
+        return;
+    }
+    if (width < 40)
+        width = 40;
+    width -= 1;   /* never write into the last column: some terminals wrap early there */
+    while (*text) {
+        const char *eol = strchr(text, '\n');
+        size_t len = eol ? (size_t)(eol - text) : strlen(text);
+        size_t indent = 0;
+        while (indent < len && text[indent] == ' ')
+            indent++;
+        size_t hang = indent;
+        if (indent == 2 && indent < len) {
+            if (text[2] == '-' && len > 3 && text[3] == ' ') {
+                hang = 4;                              /* bullet */
+            } else {
+                for (size_t i = 3; i + 1 < len; i++)   /* first gap of 2+ spaces: description column */
+                    if (text[i] == ' ' && text[i + 1] == ' ') {
+                        size_t j = i;
+                        while (j < len && text[j] == ' ')
+                            j++;
+                        if (j < len)
+                            hang = j;
+                        break;
+                    }
+            }
+        } else if (indent >= 2 && indent < len && text[indent] == '-' && indent + 1 < len && text[indent + 1] == ' ') {
+            hang = indent + 2;
+        }
+        if ((int)hang > width / 2)
+            hang = 0;
+        size_t pos = 0;
+        int first = 1;
+        while (pos < len || first) {
+            size_t pad = first ? 0 : hang;
+            size_t room = (size_t)width - pad;
+            size_t take = len - pos;
+            if (take > room) {
+                size_t cut = room;
+                while (cut > 0 && text[pos + cut] != ' ')
+                    cut--;
+                /* do not break inside the leading indentation of the first row */
+                if (cut <= (first ? indent : 0))
+                    cut = room;
+                take = cut;
+            }
+            for (size_t i = 0; i < pad; i++)
+                fputc(' ', f);
+            fwrite(text + pos, 1, take, f);
+            fputc('\n', f);
+            pos += take;
+            while (pos < len && text[pos] == ' ')
+                pos++;
+            first = 0;
+            if (pos >= len)
+                break;
+        }
+        if (len == 0)
+            ;  /* empty line: first loop iteration already wrote the newline */
+        text += len + (eol ? 1 : 0);
+    }
+}
+
 /* ---- device table ------------------------------------------------------- */
 
 static const char *dev_state_name(pin_dev_state_t s)
@@ -254,6 +342,12 @@ static void print_log_events(int debug)
 
 int main(int argc, char **argv)
 {
+    /* Hidden: the help text alone, unwrapped and without the device list; the build copies it into
+     * docs/cli.md (scripts/sync-cli-help.sh). */
+    if (argc == 2 && strcmp(argv[1], "--help-text") == 0) {
+        fputs(pin_script_help(), stdout);
+        return 0;
+    }
     pin_script_t *sc = NULL;
     char err[256] = "";
     pin_status_t st = pin_script_parse(argc - 1, (const char *const *)(argv + 1), &sc, err, sizeof(err));
@@ -263,7 +357,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (pin_script_help_requested(sc)) {
-        fputs(pin_script_help(), stdout);
+        print_wrapped(stdout, pin_script_help(), stdout_columns());
         fputc('\n', stdout);
         print_device_table(stdout);
         pin_script_free(sc);

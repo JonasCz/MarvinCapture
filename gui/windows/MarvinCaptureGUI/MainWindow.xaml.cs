@@ -934,14 +934,14 @@ public sealed partial class MainWindow : Window
         body.Children.Add(new ScrollViewer
         {
             MaxHeight = 420,
-            HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = new TextBlock
             {
                 Text = help,
                 FontFamily = new FontFamily("Consolas"),
                 FontSize = 13,
                 IsTextSelectionEnabled = true,
-                TextWrapping = TextWrapping.NoWrap,
+                TextWrapping = TextWrapping.Wrap,
             },
         });
         await ShowDialogAsync("Command-line options", body, null, "Close", wide: true);

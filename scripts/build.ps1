@@ -94,6 +94,12 @@ Step 'Assembling build\windows-x86_64\dist'
 # (the GUI build below copies the same files again).
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $core 'MarvinCaptureCLI.exe') $dist -Force
+# The help text lives in src\engine\pin_script.c; docs\cli.md is generated from docs\cli.md.template.
+$helpText = (& (Join-Path $dist 'MarvinCaptureCLI.exe') --help-text) -join "`n"
+$tmpl = [IO.File]::ReadAllText((Join-Path $root 'docs\cli.md.template'))
+$new = $tmpl.Replace('@CLI_HELP@', "``````text`n$helpText`n``````")
+$helpDoc = Join-Path $root 'docs\cli.md'
+if (-not (Test-Path $helpDoc) -or [IO.File]::ReadAllText($helpDoc) -ne $new) { [IO.File]::WriteAllText($helpDoc, $new) }
 Copy-Item (Join-Path $core 'marvin-core.dll') $dist -Force
 Copy-Item (Join-Path $core 'libusb-1.0.dll') $dist -Force
 Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $dist -Force

@@ -150,6 +150,7 @@ fi
 step "Assembling build/${PLATFORM}/dist"
 mkdir -p "${DIST}"
 cp -f "${CORE}/MarvinCaptureCLI" "${DIST}/"
+"${ROOT}/scripts/sync-cli-help.sh" "${DIST}/MarvinCaptureCLI"   # help text -> docs/cli.md
 cp -f "${CORE}/${CORE_LIB}" "${DIST}/"
 [[ -n "${LIBUSB_LIB}" ]] && cp -f "${CORE}/${LIBUSB_LIB}" "${DIST}/"
 rm -rf "${DIST}/firmware"

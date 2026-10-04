@@ -86,12 +86,13 @@ int pinnacle_std_is_60hz(pinnacle_std_t std)
 
 void pinnacle_picture_defaults(pinnacle_picture_t *p)
 {
-    /* The values of the vendor's SAA7113 init table. */
+    /* Neutral picture. The vendor's SAA7113 init table starts at contrast 0x47 and sharpness 1;
+     * these are applied over it. */
     p->brightness = 0x80;
-    p->contrast = 0x47;
+    p->contrast = 0x40;
     p->saturation = 0x40;
     p->hue = 0;
-    p->sharpness = 1;
+    p->sharpness = 2;
 }
 
 void pinnacle_analog_config_defaults(pinnacle_analog_config_t *cfg)

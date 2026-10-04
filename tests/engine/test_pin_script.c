@@ -238,6 +238,14 @@ static void test_cli_examples(void)
     CHECK(w && !w->wait_all && w->nconds == 1 && w->conds[0].kind == PIN_COND_TIMECODE, "wait-any item");
     pin_script_destroy(sc);
 
+    /* no extension and no --format: each kind's default format, no warning */
+    CHECK(PARSE(sc, err, "--capture", "dir.x/clip", "--wait") == PIN_OK, "capture without extension");
+    cap = find_step(sc, 0);
+    CHECK(cap && strcmp(cap->cap.base, "dir.x/clip") == 0 && cap->cap.format[0] == PIN_FMT_ANALOG_AVI &&
+              cap->cap.format[1] == PIN_FMT_DV_RAW && cap->cap.format[2] == PIN_FMT_HDV_TS &&
+              cap->cap.warn_mask == 0, "extensionless capture uses the defaults");
+    pin_script_destroy(sc);
+
     /* example 4: analog */
     CHECK(PARSE(sc, err, "-i", "svideo", "--std", "pal", "--capture", "vhs.mkv", "--wait-any", "signal=00:00:05",
                 "--wait-any", "nosignal=00:00:30,captured=04:00:00") == PIN_OK, "example 4");
@@ -418,7 +426,6 @@ static void test_errors(void)
     EXPECT_ERROR("--rew takes no value", "--rew=now");
     EXPECT_ERROR("--capture needs a file name", "--capture");
     EXPECT_ERROR("--capture needs a file name", "--capture", "--wait");
-    EXPECT_ERROR("cannot tell the format", "--capture", "clip");
     EXPECT_ERROR("cannot tell the format", "--capture", "clip.mp4");
     EXPECT_ERROR("--wait bogus", "--wait", "bogus");
     EXPECT_ERROR("--wait timecode=00:00:60:00", "--wait", "timecode=00:00:60:00");
