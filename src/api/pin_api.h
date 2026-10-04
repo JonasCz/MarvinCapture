@@ -923,6 +923,15 @@ typedef enum {
 PIN_API int pin_capture_action_allowed(pin_state_t state, int deck_available,
                                        pin_capture_action_t action);
 
+/* DV/HDV "Manual capture" (START_MANUAL, but it records what the deck is already sending):
+ * enabled only in state READY with a camera whose deck is playing (or the camera is
+ * recording, live picture). While a capture runs the button is the Stop button and
+ * pin_capture_action_allowed(STOP) applies instead. pin_manual_capture_block_text()
+ * is the tooltip for the disabled button: "No camera or deck detected", "Start
+ * playback on the tape first", or "" when the deck does not block it. Static, never NULL. */
+PIN_API int pin_manual_capture_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck);
+PIN_API const char *pin_manual_capture_block_text(int deck_available, pin_deck_state_t deck);
+
 /* 1 for CAPTURING, STOPPING and REWINDING: a capture is running (or ending), so the
  * options are locked and the stop buttons show instead of the start buttons. */
 PIN_API int pin_state_is_capturing(pin_state_t state);

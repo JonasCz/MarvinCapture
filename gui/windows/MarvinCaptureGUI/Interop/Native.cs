@@ -350,6 +350,20 @@ public static unsafe partial class Native
         pin_capture_action_allowed(state, deckAvailable ? 1 : 0, action) != 0;
 
     [LibraryImport(Lib)]
+    private static partial int pin_manual_capture_allowed(PinState state, int deckAvailable, PinDeckState deck);
+
+    /// <summary>DV/HDV "Manual capture" start is enabled (core rule: READY, a camera, deck playing).</summary>
+    public static bool ManualCaptureAllowed(PinState state, bool deckAvailable, PinDeckState deck) =>
+        pin_manual_capture_allowed(state, deckAvailable ? 1 : 0, deck) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial nint pin_manual_capture_block_text(int deckAvailable, PinDeckState deck);
+
+    /// <summary>Why the deck blocks Manual capture ("Start playback on the tape first"), "" when it does not.</summary>
+    public static string ManualCaptureBlockText(bool deckAvailable, PinDeckState deck) =>
+        PtrToUtf8(pin_manual_capture_block_text(deckAvailable ? 1 : 0, deck));
+
+    [LibraryImport(Lib)]
     private static partial int pin_state_is_capturing(PinState state);
 
     /// <summary>Capturing, Stopping or Rewinding: a capture is running or ending.</summary>

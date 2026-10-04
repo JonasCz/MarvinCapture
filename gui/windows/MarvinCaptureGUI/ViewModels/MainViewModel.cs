@@ -56,14 +56,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(IsIdle), nameof(CaptureButtonText), nameof(CaptureButtonGlyph),
                               nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled),
                               nameof(PrimaryDvTitle), nameof(PrimaryDvHelp), nameof(PrimaryDvGlyph), nameof(DeviceSelectEnabled),
-                              nameof(ManualCaptureTitle), nameof(ManualCaptureHelp), nameof(ManualCaptureGlyph),
+                              nameof(ManualCaptureTitle), nameof(ManualCaptureHelp), nameof(ManualCaptureGlyph), nameof(ManualCaptureDisabledTip),
                               nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private bool _isCapturing;
 
     public bool IsIdle => !IsCapturing;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled), nameof(CanStop),
+    [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(ManualCaptureDisabledTip), nameof(CaptureEnabled), nameof(CanStop),
                               nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private PinState _sessionState = PinState.Closed;
 
@@ -78,7 +78,23 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool CaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.Stop : PinCaptureAction.StartManual);
 
     /// <summary>Idle: start a capture without touching the tape. Capturing: stop it and leave the tape alone (always available, however the capture was started).</summary>
-    public bool PlayAndCaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.Stop : PinCaptureAction.StartManual);
+    public bool PlayAndCaptureEnabled => IsCapturing
+        ? CaptureAllowed(PinCaptureAction.Stop)
+        : Native.ManualCaptureAllowed(SessionState, DeckAvailable, DeckState);
+
+    /// <summary>Tooltip of the Manual capture button while it is disabled for want of a camera or playback; null otherwise.</summary>
+    public string? ManualCaptureDisabledTip
+    {
+        get
+        {
+            if (IsCapturing || PlayAndCaptureEnabled)
+            {
+                return null; // null: no tooltip at all (an empty one would show an empty bubble)
+            }
+            string t = Native.ManualCaptureBlockText(DeckAvailable, DeckState);
+            return t.Length > 0 ? t : null;
+        }
+    }
 
     /// <summary>True when the running capture was started by "Automatic rewind &amp; capture" (the core stops the deck when it ends).</summary>
     private bool _captureWithDeck;
@@ -91,7 +107,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>False only when the core knows for sure that no camera is on the FireWire bus.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
+    [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled),
+                              nameof(PlayAndCaptureEnabled), nameof(ManualCaptureDisabledTip))]
     private bool _deckAvailable = true;
 
     /// <summary>The core's rule for a deck button (pin_deck_cmd_allowed): idle and READY with a camera and a tape, and not already doing what the button asks.</summary>
@@ -260,7 +277,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SaveSetting("gui.last_kind", value.ToString(CultureInfo.InvariantCulture));
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled))]
+    [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled),
+                              nameof(PlayAndCaptureEnabled), nameof(ManualCaptureDisabledTip))]
     private PinDeckState _deckState = PinDeckState.Unknown;
     [ObservableProperty] private bool _isRewChecked;
     [ObservableProperty] private bool _isPlayChecked;

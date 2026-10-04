@@ -509,7 +509,9 @@ public sealed partial class MainWindow : Window
     /// </summary>
     private void UpdateTaskbar()
     {
-        if (VM.InfoOpen && VM.InfoSeverity == 3)
+        // Red only for an error condition: not for a stale error bar that was already showing when a
+        // capture ended normally (user stop, no-signal timeout, time limit, end of tape).
+        if (VM.InfoOpen && VM.InfoSeverity == 3 && VM.InfoMessage != _normalEndInfoMessage)
         {
             _taskbar.SetProgress(PinProgressMode.Error, 1);
         }
@@ -530,6 +532,9 @@ public sealed partial class MainWindow : Window
     }
 
     private bool _wasCapturing;
+
+    /// <summary>The error bar's text that was open when the last capture ended normally; it does not turn the taskbar red.</summary>
+    private string? _normalEndInfoMessage;
 
     private bool _taskbarStartBusy;
 
@@ -714,6 +719,10 @@ public sealed partial class MainWindow : Window
         // a dialog, with how much was captured. A normal end (limit, end of tape) only goes to
         // the status bar (MainViewModel.ApplyStatus). Not while closing or running unattended
         // command-line actions.
+        if (e.Kind == PinEventKind.CaptureEnded)
+        {
+            _normalEndInfoMessage = !Native.StopReasonAbnormal((PinStopReason)e.A) && VM.InfoOpen ? VM.InfoMessage : null;
+        }
         if (e.Kind == PinEventKind.CaptureEnded && Native.StopReasonAbnormal((PinStopReason)e.A) &&
             !_closing && !_finalizingForClose && !_scriptRunning)
         {

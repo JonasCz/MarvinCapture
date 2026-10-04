@@ -180,7 +180,11 @@ final class WindowModel {
     var canStop: Bool { captureAllowed(PIN_CAPTURE_STOP) }
     /// The Capture / Stop button (analog) and the Manual capture / Stop button (DV/HDV).
     var captureEnabled: Bool { captureAllowed(isCapturing ? PIN_CAPTURE_STOP : PIN_CAPTURE_START_MANUAL) }
-    var playAndCaptureEnabled: Bool { captureEnabled }
+    /// DV/HDV Manual capture: only while the deck plays (core rule); while capturing it is the Stop button.
+    var playAndCaptureEnabled: Bool {
+        isCapturing ? captureAllowed(PIN_CAPTURE_STOP)
+                    : Pin.manualCaptureAllowed(state: sessionState, deckAvailable: deckAvailable, deck: deckState)
+    }
     /// "Automatic rewind & capture" drives the deck, so it needs a camera. While capturing it stops capture and tape.
     var dvAutoCaptureEnabled: Bool { captureAllowed(isCapturing ? PIN_CAPTURE_STOP_TAPE : PIN_CAPTURE_START_AUTO) }
     var deckRewEnabled: Bool { deckAllowed(PIN_DECK_CMD_REW) }
@@ -191,8 +195,12 @@ final class WindowModel {
     var captureButtonText: String { isCapturing ? "Stop capture" + stopCountdownSuffix : "Capture" }
     var manualCaptureTitle: String { isCapturing ? "Stop capture & continue tape" + stopCountdownSuffix : "Manual capture" }
     var manualCaptureHelp: String {
-        isCapturing ? "Stops the capture and leaves the tape as it is"
-                    : "Records whatever the camera or deck is already sending, without controlling it"
+        if isCapturing { return "Stops the capture and leaves the tape as it is" }
+        if !playAndCaptureEnabled {
+            let why = Pin.manualCaptureBlockText(deckAvailable: deckAvailable, deck: deckState)
+            if !why.isEmpty { return why }
+        }
+        return "Records whatever the camera or deck is already sending, without controlling it"
     }
     var primaryDvTitle: String { isCapturing ? "Stop capture & stop tape" + stopCountdownSuffix : "Automatic rewind & capture" }
     var primaryDvHelp: String {
@@ -1091,7 +1099,7 @@ final class WindowModel {
             if !quiet && !scriptRunning { showInfo("No video received", e.text, .warning) }
             if !quiet {
                 Notifier.shared.postIfInactive(title: "No video received", body: e.text)
-                onAttention?(true)   // nothing was written: as bad as a failure to someone waiting
+                onAttention?(false)   // a normal end (no-signal timeout on an empty tape): not the critical bounce
             }
             pendingFinished = nil
         default:

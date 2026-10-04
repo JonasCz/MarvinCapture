@@ -189,6 +189,14 @@ static void test_rules(void)
     CHECK(!pin_ui_capture_action_allowed(PIN_STATE_READY, 0, PIN_CAPTURE_START_AUTO), "auto needs a camera");
     CHECK(pin_ui_capture_action_allowed(PIN_STATE_READY, 1, PIN_CAPTURE_START_AUTO), "auto with a camera");
     CHECK(!pin_ui_capture_action_allowed(PIN_STATE_READY, 1, PIN_CAPTURE_STOP), "nothing to stop");
+    CHECK(pin_ui_manual_capture_allowed(PIN_STATE_READY, 1, PIN_DECK_PLAYING), "manual dv while playing");
+    CHECK(!pin_ui_manual_capture_allowed(PIN_STATE_READY, 1, PIN_DECK_STOPPED), "manual dv needs playback");
+    CHECK(!pin_ui_manual_capture_allowed(PIN_STATE_READY, 1, PIN_DECK_PAUSED), "manual dv not paused");
+    CHECK(!pin_ui_manual_capture_allowed(PIN_STATE_READY, 0, PIN_DECK_PLAYING), "manual dv needs a camera");
+    CHECK(!pin_ui_manual_capture_allowed(PIN_STATE_PREPARING, 1, PIN_DECK_PLAYING), "manual dv needs READY");
+    CHECK(pin_ui_manual_capture_block(0, PIN_DECK_PLAYING)[0] != ' ', "no camera text");
+    CHECK(pin_ui_manual_capture_block(1, PIN_DECK_STOPPED)[0] != ' ', "playback text");
+    CHECK(pin_ui_manual_capture_block(1, PIN_DECK_PLAYING)[0] == ' ', "no block text");
     CHECK(!pin_ui_capture_action_allowed(PIN_STATE_PREPARING, 1, PIN_CAPTURE_START_MANUAL), "not while preparing");
     CHECK(!pin_ui_capture_action_allowed(PIN_STATE_ERROR, 1, PIN_CAPTURE_START_MANUAL), "not in error");
     CHECK(!pin_ui_capture_action_allowed(PIN_STATE_CAPTURING, 1, PIN_CAPTURE_START_MANUAL), "not while capturing");

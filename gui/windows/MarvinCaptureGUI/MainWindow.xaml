@@ -460,6 +460,8 @@
                                     </Grid>
 
                                     <!-- secondary: record whatever arrives, without deck control -->
+                                    <!-- A disabled button shows no tooltip, so it sits in a Grid that does (tip only while disabled). -->
+                                    <Grid Background="Transparent" ToolTipService.ToolTip="{x:Bind VM.ManualCaptureDisabledTip, Mode=OneWay}">
                                     <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="16,8"
                                             Click="Capture_Click"
                                             IsEnabled="{x:Bind VM.PlayAndCaptureEnabled, Mode=OneWay}"
@@ -474,6 +476,7 @@
                                             <TextBlock Grid.Column="1" Text="{x:Bind VM.ManualCaptureTitle, Mode=OneWay}" VerticalAlignment="Center" />
                                         </Grid>
                                     </Button>
+                                    </Grid>
 
                                     <!-- primary action (last): rewind, play, record. Same size as Manual capture,
                                          accent coloured. Turns into "Stop capture & stop tape" in place. -->
