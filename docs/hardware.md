@@ -15,13 +15,13 @@ bitstream file names, decoder I2C address); nothing else hard-codes a PID.
 The vendor driver (`MarvinAVS64.sys`) branches on the PID in a few places; where
 it treats two PIDs alike they share a row's behaviour here.
 
-| PID | internal name | product | status |
-|---|---|---|---|
-| `0213` | Marvin-Lite | Studio **500-USB** | supported, tested |
-| `0223` | Marvin-510 | Studio **510-USB** | supported, tested (Windows: bring-up, DV capture, deck control, stdout streaming) |
-| `0212` | Marvin-CR | Studio **700-USB** | supported, **untested** (same code path as the 500) |
-| `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | supported, **untested** (same code path as the 700) |
-| `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; host-side FX2 firmware download implemented as a best guess (see below) |
+|  | PID | internal name | product | status |
+|---|---|---|---|---|
+| <a href="images/500-usb.jpg"><img src="images/500-usb.jpg" width="80" alt="Studio 500-USB"></a> | `0213` | Marvin-Lite | Studio **500-USB** | supported, tested |
+| <a href="images/510-usb.jpg"><img src="images/510-usb.jpg" width="80" alt="Studio 510-USB"></a> | `0223` | Marvin-510 | Studio **510-USB** | supported, tested (Windows: bring-up, DV capture, deck control, stdout streaming) |
+| <a href="images/700-usb.jpg"><img src="images/700-usb.jpg" width="80" alt="Studio 700-USB"></a> | `0212` | Marvin-CR | Studio **700-USB** | supported, **untested** (same code path as the 500) |
+| <a href="images/710-usb.jpg"><img src="images/710-usb.jpg" width="80" alt="MovieBox Plus 710-USB"></a> | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | supported, **untested** (same code path as the 700) |
+| <a href="images/moviebox-deluxe.jpg"><img src="images/moviebox-deluxe.jpg" width="80" alt="MovieBox Deluxe"></a> | `0206` | Marvin-classic | **MovieBox Deluxe** | supported in part, **untested**; host-side FX2 firmware download implemented as a best guess (see below) |
 
 Untested models appear as "(untested)" in the GUI device list and
 `MarvinCaptureCLI --help`. The other PIDs in the vendor driver (`0x20a`, `0x20b`, `0x211`
