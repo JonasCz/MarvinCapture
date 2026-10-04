@@ -18,7 +18,7 @@ Running that binary outside the .app needs `DYLD_LIBRARY_PATH=build/macos-arm64/
 - `Sources/MarvinCapture/App` entry point (AppKit main), `AppDelegate`, `MainWindowController`, startup probe.
 - `Sources/MarvinCapture/Core` Swift helpers over the C API (`Pin`, `CoreString`).
 - `Sources/MarvinCapture/Models` `@Observable` models: `WindowModel` (all window state and logic), `AppModel` (command line, launch), `KindSettingsModel`, `DeviceItem`, `ControlSliderModel`, `FormatItem`.
-- `Sources/MarvinCapture/Services` console output, notifications, keep-awake, preview/audio seams.
+- `Sources/MarvinCapture/Services` console output, notifications, keep-awake, preview seam and the AVAudioEngine audio monitor (`AudioMonitor.swift`).
 - `Sources/MarvinCapture/Preview` Metal preview: `PreviewRenderer` (render thread, textures, pacing), `PreviewShaders` (MSL source, compiled at run time), `MetalPreview` (view, sink, visibility).
 - `Sources/MarvinCapture/Views` SwiftUI views.
 - `Tools/make-icon.swift` draws the app icon at build time.
@@ -35,5 +35,6 @@ version mismatch shows an error in the window instead.
   (the snapshot hook cannot capture a CAMetalLayer): the real shader rendered into an offscreen texture and
   read back, plus `/path/frame.png.cpu.png`, the same picture converted on the CPU from the core's planes.
 - `MARVIN_PREVIEW_IGNORE_OCCLUSION=1` keeps the preview running although macOS reports the window as occluded (locked or sleeping screen).
+- `MARVIN_UNMUTE=1` starts unmuted for this run without saving `gui.muted` (default is muted, which keeps the audio engine stopped and no output device held). With `--debug` the audio monitor prints one statistics line per second (callbacks, frames asked / given by the core, short reads, underruns).
 - `--debug` mirrors the core's debug log and all engine events to stdout (line buffered; skipped when stdout is /dev/null).
 - Capture-end notifications (user notifications while the app is in the background) only work from the .app bundle.

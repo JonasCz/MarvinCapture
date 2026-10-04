@@ -62,6 +62,7 @@ final class AppModel {
         script = parsed
         if let s = parsed, s.debug {
             Pin.setLogLevel(0)   // ConsoleOutput mirrors the core's debug lines
+            CoreAudioMonitor.debugStats = true
         }
         showHelp = helpRequested || launchError != nil
         helpError = launchError

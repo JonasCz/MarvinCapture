@@ -112,7 +112,7 @@ final class WindowModel {
     // MARK: seams and callbacks (set by the view layer / app delegate)
 
     @ObservationIgnored var preview: PreviewSink = MetalPreview()
-    @ObservationIgnored var audio: AudioMonitor = NullAudioMonitor()
+    @ObservationIgnored var audio: AudioMonitor = CoreAudioMonitor()
     /// An abnormal capture end the user must see (not while closing or running command-line steps).
     @ObservationIgnored var onAlert: ((ModelAlert) -> Void)?
     /// Every drained engine event, after the model applied it.
@@ -1163,6 +1163,8 @@ final class WindowModel {
         loading = true
         defer { loading = false }
         isMuted = loadGlobalSetting("gui.muted", fallback: "1") != "0"
+        // Developer aid: start unmuted without touching the saved setting (`loading` blocks the save).
+        if ProcessInfo.processInfo.environment["MARVIN_UNMUTE"] == "1" { isMuted = false }
     }
 
     /// Loads the selected device's settings (defaults for a device never seen before).
