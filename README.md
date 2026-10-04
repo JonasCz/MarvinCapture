@@ -15,7 +15,7 @@ Pinnacle's driver internally calls these "Marvin", hence the naming.
 
 ## Features
 
-A modern, Native GUI for Windows and Mac, plus a flexible command-line application for Windows, Mac, and Linux, allowing capture to various file formats, with options mostly focused on high quality archival and preservation.
+Modern, native GUIs for Windows and Mac, plus a flexible command-line application for Windows, Mac, and Linux, allowing video capture to various file formats, with options mostly focused on high quality archival and preservation.
 
 [screenshot windows and mac]
 
@@ -45,28 +45,30 @@ A modern, Native GUI for Windows and Mac, plus a flexible command-line applicati
 | <a href="docs/images/710-usb.jpg"><img src="docs/images/710-usb.jpg" width="80" alt="MovieBox Plus 710-USB"></a> | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | **untested** (but probably works) |
 | <a href="docs/images/moviebox-deluxe.jpg"><img src="docs/images/moviebox-deluxe.jpg" width="80" alt="MovieBox Deluxe"></a> | `0206` | Marvin-classic | **MovieBox Deluxe** | **untested** (less likely to work) |
 
+The 710-USB/510-USB is supposedly the best for analog, according to some forum threads.
+
 Pinnacle also made some devices which are not supported:
 
 * **MovieBox DV**: Analog to DV converter box, lacking USB. This one has a square shape similar to the 700 and deluxe, in silver.
-* **MovieBox**, **Dazzle**: Analog to USB, no DV inputs. Also available in a square shape, don't buy any of these for use with this project.
+* **MovieBox USB**, **Dazzle**: Analog to USB, no DV inputs. Also available in a square shape, or triangle with attached USB cable, don't buy any of these for use with this project.
 
 More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the device implements a standard OHCI-1394 host controller on an FPGA, it can likely work with any Firewire-100 device and likely isn't limited to DV, although this project focuses on DV video)
 
 ## Reliability & Correctness
 
-In my experience with writing and using this, this is already far more reliable, bug-free, and pleasant to use than all existing pure-firewire based DV capture solutions. No more random deck not detected or reboot required...
+In my experience with writing and using this, this is already far more reliable, bug-free, and pleasant to use than all existing pure-firewire based DV capture solutions. No more random deck not detected and reboot required to get it back...
 
 This has also been **extensively tested for correctness**, here meaning not losing data.
 
-This is done with a Test-DVD containing QR codes, one per frame, and [Linear Timecode](https://en.wikipedia.org/wiki/Linear_timecode). These look like this:
+This is done with a Test-DVD containing QR codes, one per frame, encoding the frame number, and [Linear Timecode](https://en.wikipedia.org/wiki/Linear_timecode), also encoding the frame number, These look like this:
 
 <a href="docs/images/qr-code-frame.png"><img src="docs/images/qr-code-frame.png" width="180" alt="MovieBox Deluxe"></a>
 
-We can play this DVD in a DVD player, with the output connected to the capture device under test. With this project, over a 60 minute test, both on analog inputs, and on DV (via a camcorder in "AV to DV" mode), we have 0 frames lost (frames missing, that are expected to be there), and 0ms of audio missing (undecodable by [LTCdump](https://github.com/x42/ltc-tools/blob/master/ltcdump.c)).
+We can play this DVD in a DVD player, with the output connected to the capture device under test. With this project, over a 60 minute test, both on analog inputs, and on DV (via a camcorder in "AV to DV" mode), we have 0 frames lost (frames missing, that are expected to be there), and 0ms of audio missing (undecodable by [LTCdump](https://github.com/x42/ltc-tools/blob/master/ltcdump.c)), and no audio sync drift of more than 1 frame in either direction.
 
 This capture device is, in my testing so far, the only USB device and software that fully passes this test. (The pinnacle devices lock the sample clock to the incoming video clock, and do not drop or duplicate frames to resample the framerate). 
 
-(Note that this testing harness and test DVD is not part of this repo).
+(Note that this test DVD generation, and testing tool is not part of this repo).
 
 Note that the usual recommendation regarding USB devices still applies: avoid connecting it on a hub where it shares bandwidth with other devices (the UI and CLI will warn if it detects a hub). Although this is much less of an issue with DV than with analog, since the bitrate of DV is 25Mbps, which has plenty of margin with USB2's 480Mbps.
 
