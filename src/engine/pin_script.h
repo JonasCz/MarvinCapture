@@ -137,6 +137,7 @@ struct pin_script {
     int has_device;
     int help;
     int debug;
+    int exit_when_done;
     pin_script_settings_t initial;  /* settings given before the first action (all of them if none) */
     pin_script_item_t *items;
     int nitems, cap_items;

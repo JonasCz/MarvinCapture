@@ -35,6 +35,7 @@ Settings:
   --sharpness N            0 to 3 (default 2); the decoder chip has four steps only
   --audio-gain N           in tenths of a dB, -345 to 120 in steps of 15 (default 0 = 0 dB)
   --debug                  status as one plain line per second, plus debug logging (raw AV/C traffic, bring-up details)
+  --exit-when-done         GUI only: close the window when the steps finish, with the exit code below. The CLI always exits when done and ignores this.
   Settings cannot change while a capture is open (from --capture until the next transport action, --capture or the end of the arguments).
 
 Actions:
@@ -79,3 +80,21 @@ Examples:
 
 -h, --help, or no arguments at all: this text, followed by the device list.
 ```
+
+## Running the GUI from a shell
+
+`MarvinCaptureGUI.exe` is a GUI-subsystem program, so PowerShell returns to the
+prompt immediately and its console output (for example `--debug`) interleaves
+with the prompt. Pipe the output to make the shell wait until the app exits and
+to keep the output in order:
+
+```powershell
+.\MarvinCaptureGUI.exe --debug | Out-Host
+.\MarvinCaptureGUI.exe --debug 2>&1 | Tee-Object gui.log   # also save a log
+```
+
+With stdout redirected or piped the app writes to that; otherwise it attaches
+to the parent console. Started from Explorer there is no output.
+Add `--exit-when-done` to close the window when the command-line steps finish;
+the process exit code is the one listed in the help text (the CLI always exits
+when done).

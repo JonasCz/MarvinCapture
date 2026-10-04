@@ -763,6 +763,8 @@ const char *pin_script_device(const pin_script_t *sc)
 
 int pin_script_debug(const pin_script_t *sc) { return sc && sc->debug; }
 
+int pin_script_exit_when_done(const pin_script_t *sc) { return sc && sc->exit_when_done; }
+
 int pin_script_step_count(const pin_script_t *sc) { return sc ? sc->nsteps : 0; }
 
 pin_status_t pin_script_step_text(const pin_script_t *sc, int index, char *out, size_t cap)

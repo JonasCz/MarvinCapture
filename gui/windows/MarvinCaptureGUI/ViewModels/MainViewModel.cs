@@ -677,7 +677,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             IsPlayChecked = state is PinDeckState.Playing or PinDeckState.Recording;
             IsStopChecked = state == PinDeckState.Stopped;
             IsFfChecked = state == PinDeckState.FastForward;
-            DeckStateText = state switch
+            var text = state switch
             {
                 PinDeckState.Stopped => "Stopped",
                 PinDeckState.Playing => "Playing",
@@ -687,7 +687,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 PinDeckState.Recording => "Camera recording",
                 PinDeckState.NoTape => "No tape",
                 _ => "—",
-            } + (busy ? " …" : "");
+            };
+            DeckStateReserveText = text + " …";
+            DeckStateText = busy ? text + " …" : text;
         }
         finally
         {

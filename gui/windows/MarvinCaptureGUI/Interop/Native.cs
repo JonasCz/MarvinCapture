@@ -470,6 +470,11 @@ public static unsafe partial class Native
     public static bool ScriptDebug(SafeHandle script) => pin_script_debug(script) != 0;
 
     [LibraryImport(Lib)]
+    private static partial int pin_script_exit_when_done(SafeHandle script);
+    /// <summary>--exit-when-done was given.</summary>
+    public static bool ScriptExitWhenDone(SafeHandle script) => pin_script_exit_when_done(script) != 0;
+
+    [LibraryImport(Lib)]
     private static partial int pin_script_needs_session(SafeHandle script);
     public static bool ScriptNeedsSession(SafeHandle script) => pin_script_needs_session(script) != 0;
 

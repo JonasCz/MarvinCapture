@@ -701,6 +701,14 @@ public sealed partial class MainWindow : Window
         if (e.Kind == PinEventKind.Done)
         {
             _scriptRunning = false;
+            if (_script is not null && Native.ScriptExitWhenDone(_script) && !_closing)
+            {
+                // --exit-when-done: leave with the script's exit code (docs/cli.md)
+                Environment.ExitCode = e.A;
+                _allowClose = true;
+                Close();
+                return;
+            }
         }
         // A capture that ended abnormally (device or camera gone, disk full, write error):
         // a dialog, with how much was captured. A normal end (limit, end of tape) only goes to

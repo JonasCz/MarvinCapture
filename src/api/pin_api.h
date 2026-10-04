@@ -810,6 +810,9 @@ PIN_API const char *pin_script_device(const pin_script_t *sc);
 /* --debug was given: the front end sets the log level to 0 and prints the status
  * as one plain line per second. */
 PIN_API int pin_script_debug(const pin_script_t *sc);
+/* --exit-when-done was given: a GUI closes itself when the script ends (PIN_EVT_DONE),
+ * with the exit code from the event. The CLI always exits and ignores it. */
+PIN_API int pin_script_exit_when_done(const pin_script_t *sc);
 /* Number of steps (actions). */
 PIN_API int pin_script_step_count(const pin_script_t *sc);
 /* Printable description of step i, e.g. "rew", "wait-any idle=00:01:00,nosignal=00:01:00",

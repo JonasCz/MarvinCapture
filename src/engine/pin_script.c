@@ -261,6 +261,7 @@ const char *pin_script_help_text(void)
         "  --sharpness N            0 to 3 (default 2); the decoder chip has four steps only\n"
         "  --audio-gain N           in tenths of a dB, -345 to 120 in steps of 15 (default 0 = 0 dB)\n"
         "  --debug                  status as one plain line per second, plus debug logging (raw AV/C traffic, bring-up details)\n"
+        "  --exit-when-done         GUI only: close the window when the steps finish, with the exit code below. The CLI always exits when done and ignores this.\n"
         "  Settings cannot change while a capture is open (from --capture until the next transport action, --capture or the end of the arguments).\n"
         "\n"
         "Actions:\n"
@@ -519,7 +520,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             FAIL("%s cannot change while a capture is open (it ends at the next transport action, "
                  "--capture or the end of the arguments)", name);
         int is_flag = strcmp(name, "--split") == 0 || strcmp(name, "--keep-raw") == 0 ||
-                      strcmp(name, "--overwrite") == 0 || strcmp(name, "--debug") == 0;
+                      strcmp(name, "--overwrite") == 0 || strcmp(name, "--debug") == 0 ||
+                      strcmp(name, "--exit-when-done") == 0;
         if (is_flag && inl)
             FAIL("%s takes no value (got \"%s\")", name, inl);
 
@@ -593,6 +595,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             p.overwrite = 1;
         } else if (strcmp(name, "--debug") == 0) {
             sc->debug = 1;
+        } else if (strcmp(name, "--exit-when-done") == 0) {
+            sc->exit_when_done = 1;
         } else if (strcmp(name, "--brightness") == 0 || strcmp(name, "--contrast") == 0 ||
                    strcmp(name, "--saturation") == 0 || strcmp(name, "--hue") == 0 ||
                    strcmp(name, "--sharpness") == 0 || strcmp(name, "--audio-gain") == 0) {
