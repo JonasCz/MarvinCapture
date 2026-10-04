@@ -21,6 +21,8 @@ tests/data/*
 # --- Build output ----------------------------------------------------------
 build/
 build-*/
+gui/macos/.build/
+gui/macos/.swiftpm/
 *.o
 *.a
 *.exe

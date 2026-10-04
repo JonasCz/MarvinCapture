@@ -1,0 +1,6 @@
+// The path is relative to this file. link "marvin-core" needs -L<core dir>.
+module CMarvinCore [system] {
+    header "../../../../src/api/pin_api.h"
+    link "marvin-core"
+    export *
+}

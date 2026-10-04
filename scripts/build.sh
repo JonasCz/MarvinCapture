@@ -24,14 +24,21 @@
 #   1. (first time only) builds the minimal static FFmpeg into third_party/.
 #   2. Configures and builds the native core (libmarvin-core.dylib/.so,
 #      MarvinCaptureCLI) into build/<os>-<arch>/core, and runs the ctest suite.
-#   3. (no macOS/Linux GUI yet; build/<os>-<arch>/gui is reserved for it.)
-#   4. Assembles build/<os>-<arch>/dist:
+#   3. Assembles build/<os>-<arch>/dist:
 #
 #        MarvinCaptureCLI           the command-line program
 #        libmarvin-core.dylib       the core library (.so on Linux)
 #        libusb-1.0.0.dylib         macOS only: bundled libusb (Linux uses the
 #                                   system's libusb-1.0)
 #        firmware/                  FPGA bitstreams
+#        MarvinCapture.app          macOS only: the native GUI (gui/macos), ad-hoc
+#                                   signed; core, libusb and firmware are inside
+#                                   (Contents/Frameworks, Contents/Resources/firmware)
+#
+#   4. macOS only: builds the Swift GUI with SwiftPM (intermediates in
+#      build/macos-arm64/gui) and assembles dist/MarvinCapture.app. Needs only the
+#      Command Line Tools (no Xcode): the app icon is drawn by gui/macos/Tools/
+#      make-icon.swift and packed with iconutil. There is no Linux GUI yet.
 #
 #   MarvinCaptureCLI finds the core next to itself (rpath @loader_path /
 #   $ORIGIN) and the core finds firmware/ next to itself, so dist/ can be
@@ -46,8 +53,8 @@
 #
 #   --config Release|Debug  build type (default Release)
 #   --skip-tests            don't run ctest
-#   --skip-gui              build the native core and CLI only (currently
-#                           always the case: there is no macOS/Linux GUI yet)
+#   --skip-gui              build the native core and CLI only (no
+#                           MarvinCapture.app; there is no Linux GUI yet)
 #   --clean                 delete build/<os>-<arch>/ first (other platforms'
 #                           output is kept)
 
@@ -159,18 +166,93 @@ cp -f "${ROOT}/firmware/fpga-ohci.bin" "${ROOT}/firmware/fpga-capture.bin" \
       "${ROOT}/firmware/fx2-marvin.bin" "${ROOT}/firmware/README.md" "${DIST}/firmware/"
 
 # --- 4. GUI --------------------------------------------------------------------------
-# There is no macOS/Linux GUI yet; when there is, it builds here with its
-# intermediates in build/<os>-<arch>/gui and its output in dist/.
+# macOS: gui/macos (SwiftPM) -> dist/MarvinCapture.app. Linux: none yet.
+APP="${DIST}/MarvinCapture.app"
 if [[ "${SKIP_GUI}" -eq 1 ]]; then
-    echo "(--skip-gui: nothing to skip, there is no ${OS} GUI yet)"
-else
+    echo "(--skip-gui)"
+elif [[ "${OS}" != macos ]]; then
     echo "(no ${OS} GUI yet: core and CLI only)"
+else
+    command -v swift >/dev/null 2>&1 || die "'swift' not found (install the Xcode Command Line Tools: xcode-select --install)"
+    GUI_SRC="${ROOT}/gui/macos"
+    GUI_BUILD="${BUILD}/gui"
+    SWIFT_CONFIG="$(echo "${CONFIG}" | tr '[:upper:]' '[:lower:]')"
+
+    step "Building the macOS GUI (${CONFIG})"
+    # -L: where libmarvin-core.dylib is (the module map only says `link "marvin-core"`).
+    swift build -c "${SWIFT_CONFIG}" --package-path "${GUI_SRC}" --scratch-path "${GUI_BUILD}" \
+        -Xlinker -L"${CORE}"
+    GUI_BIN="$(swift build -c "${SWIFT_CONFIG}" --package-path "${GUI_SRC}" --scratch-path "${GUI_BUILD}" \
+        --show-bin-path)/MarvinCapture"
+
+    # App icon: drawn with AppKit (no Xcode), cached until the generator changes.
+    ICON_SRC="${GUI_SRC}/Tools/make-icon.swift"
+    ICON_ICNS="${GUI_BUILD}/AppIcon.icns"
+    ICON_STAMP="${GUI_BUILD}/AppIcon.sha256"
+    ICON_HASH="$(sha256_of "${ICON_SRC}")"
+    if [[ ! -f "${ICON_ICNS}" || ! -f "${ICON_STAMP}" || "$(tr -d '[:space:]' < "${ICON_STAMP}")" != "${ICON_HASH}" ]]; then
+        step "Generating the app icon"
+        rm -rf "${GUI_BUILD}/AppIcon.iconset"
+        swift "${ICON_SRC}" "${GUI_BUILD}/AppIcon.iconset"
+        iconutil -c icns "${GUI_BUILD}/AppIcon.iconset" -o "${ICON_ICNS}"
+        echo "${ICON_HASH}" > "${ICON_STAMP}"
+    fi
+
+    step "Assembling build/${PLATFORM}/dist/MarvinCapture.app"
+    APP_VERSION="0.1.0"
+    APP_BUILD="$(git -C "${ROOT}" rev-list --count HEAD 2>/dev/null || echo 1)"
+    rm -rf "${APP}"
+    mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Frameworks" "${APP}/Contents/Resources"
+    cp -f "${GUI_BIN}" "${APP}/Contents/MacOS/MarvinCapture"
+    cp -f "${CORE}/${CORE_LIB}" "${CORE}/${LIBUSB_LIB}" "${APP}/Contents/Frameworks/"
+    cp -R "${DIST}/firmware" "${APP}/Contents/Resources/firmware"   # not in Frameworks: non-code files there break codesign
+    cp -f "${ICON_ICNS}" "${APP}/Contents/Resources/AppIcon.icns"
+
+    # Info.plist (generated so the version is set here).
+    # UIDesignRequiresCompatibility: keeps the classic (pre-Liquid Glass) look if the
+    # app is ever built with the macOS 26 SDK; harmless on macOS 15.
+    cat > "${APP}/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleExecutable</key><string>MarvinCapture</string>
+    <key>CFBundleIdentifier</key><string>jonascz.MarvinCapture</string>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+    <key>CFBundleName</key><string>MarvinCapture</string>
+    <key>CFBundleDisplayName</key><string>MarvinCapture</string>
+    <key>CFBundlePackageType</key><string>APPL</string>
+    <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+    <key>CFBundleVersion</key><string>${APP_BUILD}</string>
+    <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>LSMinimumSystemVersion</key><string>15.0</string>
+    <key>LSApplicationCategoryType</key><string>public.app-category.video</string>
+    <key>NSHighResolutionCapable</key><true/>
+    <key>NSPrincipalClass</key><string>NSApplication</string>
+    <key>UIDesignRequiresCompatibility</key><true/>
+    <key>NSHumanReadableCopyright</key><string>Copyright © 2026 Jonas Cz. Free software under the GNU Affero General Public License, version 3 or later.</string>
+</dict>
+</plist>
+PLIST
+    plutil -lint "${APP}/Contents/Info.plist" >/dev/null
+
+    # Ad-hoc signing: inner code first, then the bundle (no --deep).
+    for lib in "${APP}/Contents/Frameworks/"*.dylib; do
+        codesign --force --sign - "${lib}"
+    done
+    codesign --force --sign - "${APP}"
+    codesign --verify --strict --verbose=2 "${APP}"
 fi
 
 # --- Check ---------------------------------------------------------------------------
 step "Checking build/${PLATFORM}/dist"
 expect=(MarvinCaptureCLI "${CORE_LIB}" ${LIBUSB_LIB}
         firmware/fpga-ohci.bin firmware/fpga-capture.bin firmware/fx2-marvin.bin firmware/README.md)
+[[ "${OS}" == macos && "${SKIP_GUI}" -eq 0 ]] && expect+=(MarvinCapture.app/Contents/MacOS/MarvinCapture
+        MarvinCapture.app/Contents/Info.plist MarvinCapture.app/Contents/Resources/AppIcon.icns
+        MarvinCapture.app/Contents/Frameworks/"${CORE_LIB}" MarvinCapture.app/Contents/Frameworks/"${LIBUSB_LIB}"
+        MarvinCapture.app/Contents/Resources/firmware/fpga-ohci.bin)
 missing=()
 for f in "${expect[@]}"; do
     [[ -e "${DIST}/${f}" ]] || missing+=("${f}")
