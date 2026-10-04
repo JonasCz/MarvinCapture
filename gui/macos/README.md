@@ -160,7 +160,7 @@ The menu bar (`App/MainMenu.swift`) has MarvinCapture, File (New Window, Choose
 Output Folder, Close), Capture (rebuilt for the current input each time it opens),
 Deck, Input, View (mute, full screen), Window and Help (command-line help, project
 website). Enable rules are the model's, i.e. the core's, the same as for the
-buttons. The sidebar "…" menu offers New Window, Command-Line Help and About.
+buttons. About is in the MarvinCapture menu; New Window and Command-Line Help are in File and Help (there is no "…" button in the window).
 
 There are only the standard macOS shortcuts (New Window, Close, Quit, Hide, Hide
 Others, Minimize, full screen, Help), on purpose: a stray key must never start or
@@ -176,7 +176,7 @@ Both are released when the capture ends and on quit. Check with
 
 ## Windows
 
-Each window runs as its own process: File > New Window (or "…" > New Window)
+Each window runs as its own process: File > New Window
 starts another instance of the app, for example to use a second device. Only
 the first instance saves the window frame (`NSWindow` frame autosave
 `MarvinCaptureMain`); later instances read it, offset it by 30 pt per older
@@ -214,6 +214,9 @@ Sources/
 
 ## Notes
 
+- Look: Finder-like. The title bar is transparent (`fullSizeContentView`) and the sidebar is one pane on the
+  system sidebar material (`NSVisualEffectView`, `.sidebar`) running up under it; sections are separated by
+  hairlines, not boxes. All outer paddings are 16 pt (`MainView.padding`).
 - The C API is imported through the module `CMarvinCore`; there are no
   hand-written mirrors of structs or enums (unlike `Interop/` on Windows).
 - The preview has a dedicated render thread that blocks in `pin_preview_wait()`

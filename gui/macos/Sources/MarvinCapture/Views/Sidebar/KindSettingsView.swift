@@ -43,17 +43,19 @@ struct KindSettingsView: View {
             Toggle("Split into scenes", isOn: $settings.splitIntoScenes)
                 .disabled(!settings.splitEnabled)
                 .help("Starts a new numbered file at every recording start, timecode jump or date change on the tape.")
-            HStack(alignment: .top, spacing: 12) {
-                NumberField(title: "Stop no signal (min)", value: $settings.idleStopMinutes,
-                            help: "Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically).")
+            HStack(alignment: .top, spacing: 8) {
+                NumberField(title: "No signal (min)", value: $settings.idleStopMinutes,
+                            help: "Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically).",
+                            width: 44, accessibilityName: "Stop no signal (min)")
                     .frame(maxWidth: .infinity, alignment: .leading)
                 NumberField(title: "Stop after (min)", value: $settings.maxDurationMinutes,
-                            help: "Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it.")
+                            help: "Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it.", width: 44)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                NumberField(title: "Passes", value: $settings.displayPasses, range: 1...20,
+                            help: settings.passesToolTip, width: 36, accessibilityName: "Capture passes")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .disabled(!settings.passesUsable)
             }
-            NumberField(title: "Capture passes", value: $settings.displayPasses, range: 1...20,
-                        help: settings.passesToolTip, width: 56)
-                .disabled(!settings.passesUsable)
         }
     }
 }

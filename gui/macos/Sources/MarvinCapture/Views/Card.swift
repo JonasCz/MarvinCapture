@@ -14,27 +14,42 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import AppKit
 import SwiftUI
 
-/// A "card": grouped controls on the window surface (the Windows CardStyle). A rounded
-/// quaternary fill with a hairline, which follows light / dark mode on its own.
+/// A section of the sidebar (the Windows CardStyle): grouped controls straight on the sidebar surface,
+/// like Finder's sidebar. No box: the sections are told apart by spacing and a hairline `Divider`.
 struct Card<Content: View>: View {
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) { content }
-            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 14)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.quaternary.opacity(0.6)))
-            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.separator))
     }
 }
 
-/// Card heading ("Output", "Signal", "Tape").
+/// Section heading ("Output", "Signal", "Tape"): small, semibold, secondary, like a Finder sidebar header.
 struct CardHeader: View {
     let title: String
     init(_ title: String) { self.title = title }
-    var body: some View { Text(title).font(.headline) }
+    var body: some View {
+        Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// The sidebar's background: the system sidebar material (what Finder uses), which follows light / dark
+/// mode and the window's active state on its own.
+struct SidebarMaterial: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = .sidebar
+        v.blendingMode = .behindWindow
+        v.state = .followsWindowActiveState
+        return v
+    }
+
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
 /// A control with a small caption above it (the Windows "Header").
@@ -62,6 +77,7 @@ struct NumberField: View {
     var range: ClosedRange<Int> = 0...600
     let help: String
     var width: CGFloat = 60
+    var accessibilityName: String?   // when `title` is a shortened label
 
     var body: some View {
         let clamped = Binding<Int>(
@@ -73,10 +89,10 @@ struct NumberField: View {
                     .textFieldStyle(.roundedBorder)
                     .multilineTextAlignment(.trailing)
                     .frame(width: width)
-                    .accessibilityLabel(title)
+                    .accessibilityLabel(accessibilityName ?? title)
                 Stepper("", value: clamped, in: range)
                     .labelsHidden()
-                    .accessibilityLabel(title)
+                    .accessibilityLabel(accessibilityName ?? title)
             }
         }
         .help(help)
@@ -103,7 +119,7 @@ struct OutputNameRow: View {
             Button(action: onChooseFolder) {
                 Image(systemName: "folder").frame(width: 18)
             }
-            .help(directory)
+            .help(directory.isEmpty ? "Choose the output folder" : directory)   // tooltip = the current folder
             .accessibilityLabel(folderLabel)
             .accessibilityValue(directory)
         }

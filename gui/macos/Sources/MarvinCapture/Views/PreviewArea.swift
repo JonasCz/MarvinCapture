@@ -36,7 +36,7 @@ struct PreviewArea: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
-        .padding(EdgeInsets(top: 4, leading: 4, bottom: 16, trailing: 16))
+        .padding(MainView.padding)
     }
 }
 

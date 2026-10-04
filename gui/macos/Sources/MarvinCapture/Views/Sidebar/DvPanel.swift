@@ -35,6 +35,7 @@ struct DvPanel: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 110)
+                .help("Which file options are shown below: DV or HDV (the name and folder are shared)")
                 .accessibilityLabel("File options for")
             }
             Group {
@@ -51,6 +52,8 @@ struct DvPanel: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("DV and HDV capture options")
 
+        Divider()
+
         Card {
             HStack(spacing: 12) {
                 CardHeader("Tape")
@@ -61,14 +64,14 @@ struct DvPanel: View {
             // Secondary: record whatever arrives, without deck control.
             CaptureButton(
                 title: model.manualCaptureTitle,
-                symbol: model.isCapturing ? "stop.fill" : "record.circle",
+                symbol: model.isCapturing ? "stop.circle.fill" : "arrow.down.circle",
                 destructive: model.isCapturing, help: model.manualCaptureHelp,
                 action: { CaptureFlow.captureClicked(model) })
                 .disabled(!model.playAndCaptureEnabled)
             // Primary, last: rewind, play, record. Turns into "Stop capture & stop tape" in place.
             CaptureButton(
                 title: model.primaryDvTitle,
-                symbol: model.isCapturing ? "stop.fill" : "backward.end.circle.fill",
+                symbol: model.isCapturing ? "stop.circle.fill" : "arrow.down.circle.fill",
                 prominent: true, destructive: model.isCapturing, help: model.primaryDvHelp,
                 action: { CaptureFlow.playAndCaptureClicked(model) })
                 .disabled(!model.dvAutoCaptureEnabled)

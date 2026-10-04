@@ -16,21 +16,25 @@
 
 import SwiftUI
 
-/// The left column: info banner, source card, then the analog or the DV/HDV panel. Scrolls when the
-/// window is short.
+/// The left column, one pane on the sidebar material: info banner, source section, then the analog or the
+/// DV/HDV sections. Scrolls when the window is short.
 struct Sidebar: View {
     let app: AppModel
     private var model: WindowModel { app.window }
 
     var body: some View {
         ScrollView {
-            VStack(spacing: 12) {
+            VStack(spacing: 14) {
                 InfoBanner(model: model)
                 SourceCard(app: app)
+                Divider()
                 if model.isDvInput { DvPanel(model: model) } else { AnalogPanel(model: model) }
             }
-            .padding(EdgeInsets(top: 4, leading: 16, bottom: 14, trailing: 12))
+            .padding(MainView.padding)
         }
+        // The system sidebar material, running up under the (transparent) title bar like Finder's.
+        .background { SidebarMaterial().ignoresSafeArea() }
+        .overlay(alignment: .trailing) { Divider().ignoresSafeArea() }
         .accessibilityLabel("Capture settings")
     }
 }

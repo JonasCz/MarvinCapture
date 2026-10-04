@@ -29,11 +29,11 @@ struct HelpSheet: View {
             if let error {
                 InfoBannerContent(severity: .error, title: "Invalid command line", message: error)
             }
-            ScrollView([.vertical, .horizontal]) {
+            ScrollView(.vertical) {
                 Text(text)
                     .font(.system(size: 12, design: .monospaced))
                     .textSelection(.enabled)
-                    .fixedSize()
+                    .fixedSize(horizontal: false, vertical: true)   // wraps to the window width
                     .padding(10)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

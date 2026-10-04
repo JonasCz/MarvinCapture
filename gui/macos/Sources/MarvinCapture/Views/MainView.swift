@@ -17,12 +17,16 @@
 import SwiftUI
 
 /// The window's content: sidebar (fixed width) + preview, status bar below. Port of MainWindow.xaml.
-/// The title bar is the regular titled NSWindow (MainWindowController keeps its title in step).
+/// The title bar is transparent with the content running under it (MainWindowController keeps its title
+/// in step); the safe area keeps controls clear of the traffic lights.
 struct MainView: View {
     @Bindable var app: AppModel
 
     private var model: WindowModel { app.window }
     static let sidebarWidth: CGFloat = 384
+    /// One padding everywhere: sidebar content and preview to the window / title bar / status bar edges
+    /// and to each other.
+    static let padding: CGFloat = 16
 
     var body: some View {
         VStack(spacing: 0) {
@@ -36,7 +40,7 @@ struct MainView: View {
         }
         // The window background drawn explicitly: identical on screen, and it makes the snapshot hook's
         // cacheDisplay (which paints opaque white behind transparent views) correct in dark mode.
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background { Color(nsColor: .windowBackgroundColor).ignoresSafeArea() }
         .overlay {
             if model.isFinalizingForClose { FinalizingOverlay() }
         }

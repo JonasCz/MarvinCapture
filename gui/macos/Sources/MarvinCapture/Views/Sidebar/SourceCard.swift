@@ -16,7 +16,7 @@
 
 import SwiftUI
 
-/// Device picker, the "…" menu and the input selector.
+/// Device picker and the input selector.
 struct SourceCard: View {
     let app: AppModel
     private var model: WindowModel { app.window }
@@ -24,22 +24,15 @@ struct SourceCard: View {
     var body: some View {
         @Bindable var m = app.window
         Card {
-            HStack(spacing: 8) {
-                DevicePopUp(
-                    devices: model.devices,
-                    selection: model.selectedDeviceID,
-                    enabled: model.deviceSelectEnabled,
-                    placeholder: model.noDevices ? "No devices found" : "Select a device",
-                    onSelect: { model.selectedDeviceID = $0 })
-                    .frame(maxWidth: .infinity)
-                MoreMenu(app: app)
-            }
-            if let d = model.selectedDevice { DeviceCaption(device: d) }
-            if model.noDevices {
-                Text(model.noDevicesHint)
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+            DevicePopUp(
+                devices: model.devices,
+                selection: model.selectedDeviceID,
+                enabled: model.deviceSelectEnabled,
+                placeholder: model.noDevices ? "No devices found" : "Select a device",
+                onSelect: { model.selectedDeviceID = $0 })
+                .frame(maxWidth: .infinity)
+            // The device itself is in the pop-up; only the USB-hub warning is worth a line of its own.
+            if let d = model.selectedDevice, d.isBehindHub { HubWarning(device: d) }
             Picker("Input", selection: $m.inputIndex) {
                 Text("DV / HDV").tag(0)
                 Text("S-Video").tag(1)
@@ -54,45 +47,16 @@ struct SourceCard: View {
     }
 }
 
-/// The id, status and hub warning of the selected device (the closed popup only has room for the name).
-private struct DeviceCaption: View {
+/// The hub warning of the selected device (the closed popup only has room for the name).
+private struct HubWarning: View {
     let device: DeviceItem
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text("\(device.shortId) · \(device.statusText)")
-                .foregroundStyle(.secondary)
-            if device.isBehindHub {
-                Text(device.hubLine).foregroundStyle(.orange)
-                    .help(device.hubHint ?? "")
-            }
-        }
-        .font(.caption)
-        .lineLimit(1)
-        .truncationMode(.middle)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(device.accessibilityName)
-    }
-}
-
-/// "…": New Window, Command-line Help, About.
-private struct MoreMenu: View {
-    let app: AppModel
-
-    var body: some View {
-        Menu {
-            Button { NewWindow.open(reportingTo: app.window) } label: { Label("New Window", systemImage: "macwindow.badge.plus") }
-                .help("Opens another capture window, for example for a second device")
-            Button { app.openHelpFromMenu() } label: { Label("Command-Line Help", systemImage: "terminal") }
-            Divider()
-            Button { About.show() } label: { Label("About MarvinCapture", systemImage: "info.circle") }
-        } label: {
-            Image(systemName: "ellipsis.circle").font(.system(size: 16))
-        }
-        .menuStyle(.borderlessButton)
-        .menuIndicator(.hidden)
-        .fixedSize()
-        .help("More options")
-        .accessibilityLabel("More options")
+        Text(device.hubLine)
+            .font(.caption).foregroundStyle(.orange)
+            .lineLimit(1)
+            .truncationMode(.middle)
+            .help(device.hubHint ?? "")
+            .accessibilityLabel(device.accessibilityName)
     }
 }

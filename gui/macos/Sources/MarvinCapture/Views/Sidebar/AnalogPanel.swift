@@ -59,6 +59,8 @@ struct AnalogPanel: View {
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Analog capture options")
 
+        Divider()
+
         Card {
             HStack {
                 CardHeader("Signal")
@@ -81,8 +83,8 @@ struct AnalogPanel: View {
             // The primary action, last: Capture, which turns into Stop capture in place.
             CaptureButton(
                 title: model.captureButtonText, caption: model.analogCaptureHint,
-                symbol: model.isCapturing ? "stop.fill" : "record.circle",
-                prominent: true, destructive: model.isCapturing,
+                symbol: model.isCapturing ? "stop.circle.fill" : "arrow.down.circle.fill",
+                prominent: true, destructive: model.isCapturing, help: model.analogCaptureHint,
                 action: { CaptureFlow.captureClicked(model) })
                 .disabled(!model.captureEnabled)
         }

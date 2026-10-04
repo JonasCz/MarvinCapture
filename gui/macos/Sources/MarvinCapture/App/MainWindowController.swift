@@ -37,9 +37,13 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         }
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: NSSize(width: 1100, height: 700)),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         window.title = "MarvinCapture"
+        // Finder-like: a transparent title bar, the content (the sidebar material) runs up under it. The
+        // SwiftUI safe area keeps the controls clear of the traffic lights.
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
         window.contentViewController = NSHostingController(rootView: content)
         window.contentMinSize = Self.minContentSize
         window.isReleasedWhenClosed = false
