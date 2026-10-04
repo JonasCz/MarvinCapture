@@ -24,13 +24,15 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     static let frameAutosaveName = "MarvinCaptureMain"
     static let minContentSize = NSSize(width: 1000, height: 640)
 
-    /// Return false to veto closing (later: "stop the capture first?").
+    /// Return false to veto closing (the close flow asks about a running capture).
     var shouldClose: (() -> Bool)?
+    private let model: AppModel?
 
     init(startup: Startup.Result, model: AppModel?) {
+        self.model = model
         let content: AnyView
         switch startup {
-        case .ok: content = AnyView(ContentView(app: model!))
+        case .ok: content = AnyView(MainView(app: model!))
         case .failed(let message): content = AnyView(StartupErrorView(message: message))
         }
         let window = NSWindow(
@@ -47,6 +49,31 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         window.setContentSize(NSSize(width: 1100, height: 700))
         window.center()
         window.setFrameAutosaveName(Self.frameAutosaveName)
+        // Developer aid: MARVIN_WINDOW_SIZE=WxH forces the content size (and lifts the minimum), to
+        // look at narrow layouts and take snapshots of a known size.
+        if let s = ProcessInfo.processInfo.environment["MARVIN_WINDOW_SIZE"] {
+            let p = s.lowercased().split(separator: "x").compactMap { Double($0) }
+            if p.count == 2 {
+                window.contentMinSize = NSSize(width: 400, height: 300)
+                window.setContentSize(NSSize(width: p[0], height: p[1]))
+            }
+        }
+        // Developer aid: MARVIN_APPEARANCE=dark|light (the -AppleInterfaceStyle argument is not honoured
+        // by every AppKit path, and is dropped from the command line anyway).
+        if let a = ProcessInfo.processInfo.environment["MARVIN_APPEARANCE"] {
+            window.appearance = NSAppearance(named: a.lowercased() == "dark" ? .darkAqua : .aqua)
+        }
+        trackWindowTitle()
+    }
+
+    /// The title bar shows the model's window title (device, state, file); re-arms after every change.
+    private func trackWindowTitle() {
+        guard let model else { return }
+        withObservationTracking {
+            window?.title = model.window.windowTitle
+        } onChange: { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.trackWindowTitle() } }
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }

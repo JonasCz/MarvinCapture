@@ -26,6 +26,9 @@ import CMarvinCore
 protocol PreviewSink: AnyObject {
     func attach(session: Pin.Session)
     func detach()
+    /// Display aspect of the frames being shown (the core's value with the aspect override applied),
+    /// nil until a frame arrived. The window sizes the preview frame from it.
+    var frameDar: (num: Int, den: Int)? { get }
 }
 
 /// The audio monitor (pin_monitor_read pump into the system output). The model owns the mute state
@@ -43,6 +46,7 @@ protocol AudioMonitor: AnyObject {
 
 @MainActor
 final class NullPreviewSink: PreviewSink {
+    var frameDar: (num: Int, den: Int)? { nil }
     func attach(session: Pin.Session) {}
     func detach() {}
 }

@@ -16,13 +16,13 @@
 
 import AppKit
 
-/// Application delegate. Later steps add applicationDockMenu, the capture
-/// confirmation in applicationShouldTerminate, URL/file opening, etc.
+/// Application delegate. Later steps add applicationDockMenu, URL/file opening, etc.
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var windowController: MainWindowController?
     private(set) var appModel: AppModel?
     private var snapshotHook: SnapshotHook?
+    private var closeFlow: CloseFlow?
     /// Set by --exit-when-done: the exit code the process leaves with.
     private var exitCode: Int32?
 
@@ -41,6 +41,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appModel = model
         let wc = MainWindowController(startup: startup, model: model)
         windowController = wc
+        if let m = model {
+            let flow = CloseFlow(model: m.window)
+            closeFlow = flow
+            wc.shouldClose = { flow.windowShouldClose() }
+        }
+        Alerts.shared.window = wc.window
         wc.showWindow(nil)
         NSApp.activate()
         if let w = wc.window { snapshotHook = SnapshotHook.installIfRequested(window: w) }
@@ -55,7 +61,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        // Later: ask for confirmation while capturing.
-        .terminateNow
+        // --exit-when-done leaves with its exit code without asking.
+        if exitCode != nil { return .terminateNow }
+        return closeFlow?.shouldTerminate() ?? .terminateNow
     }
 }

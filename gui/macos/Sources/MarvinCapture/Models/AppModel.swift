@@ -31,6 +31,8 @@ final class AppModel {
     private(set) var launchError: String?
     /// Set while the help sheet should be open (the view clears it).
     var showHelp = false
+    /// The parse error the help sheet shows above the text (only the launch's own, not from the menu).
+    private(set) var helpError: String?
     /// An abnormal capture end the view shows as an alert (the view clears it).
     var alert: ModelAlert?
 
@@ -62,6 +64,7 @@ final class AppModel {
             Pin.setLogLevel(0)   // ConsoleOutput mirrors the core's debug lines
         }
         showHelp = helpRequested || launchError != nil
+        helpError = launchError
         window.configureLaunch(script: parsed)
         window.onAlert = { [unowned self] in alert = $0 }
     }
@@ -79,6 +82,12 @@ final class AppModel {
             i += 1
         }
         return out
+    }
+
+    /// "Command-line help" from a menu: the help text without a stale launch error.
+    func openHelpFromMenu() {
+        helpError = nil
+        showHelp = true
     }
 
     /// Starts the window model (device list, open, timers, device watch). Call once the window is up.

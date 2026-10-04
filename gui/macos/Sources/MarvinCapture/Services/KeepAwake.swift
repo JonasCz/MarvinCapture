@@ -27,7 +27,9 @@ final class KeepAwake {
     func set(_ on: Bool) {
         if on, activity == nil {
             activity = ProcessInfo.processInfo.beginActivity(
-                options: [.idleSystemSleepDisabled, .userInitiated],
+                // userInitiated also keeps App Nap away; sudden termination is named explicitly so a
+                // logout / shutdown has to ask the app (the close flow) while a file is being written.
+                options: [.idleSystemSleepDisabled, .userInitiated, .suddenTerminationDisabled],
                 reason: "Capturing video")
         } else if !on, let a = activity {
             ProcessInfo.processInfo.endActivity(a)

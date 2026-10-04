@@ -63,7 +63,8 @@ final class SnapshotHook {
         view.layoutSubtreeIfNeeded()
         guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
         view.cacheDisplay(in: view.bounds, to: rep)
-        guard let png = rep.representation(using: .png, properties: [:]) else { return }
+        let out = rep
+        guard let png = out.representation(using: .png, properties: [:]) else { return }
         // Write to a temp name first: a reader never sees half a file.
         let tmp = path + ".tmp"
         do {

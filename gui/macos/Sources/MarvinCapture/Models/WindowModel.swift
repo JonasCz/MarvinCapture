@@ -122,7 +122,8 @@ final class WindowModel {
     /// Runs at the end of every 100 ms tick (the close flow watches for READY here).
     @ObservationIgnored var afterTick: (() -> Void)?
     /// Set by the close flow so no dialog / notification fires for the stop the user asked for.
-    @ObservationIgnored var isFinalizingForClose = false
+    /// Observable: the view shows the "Finalizing files…" overlay while it is set.
+    var isFinalizingForClose = false
 
     // MARK: devices
 
@@ -312,6 +313,23 @@ final class WindowModel {
     }
     /// Set by the preview step: a frame arrived within the last second.
     var previewHasVideo = false
+    /// Display aspect the preview frame is sized to (TrackPreviewAspect): what the preview reports for
+    /// the frames on screen, else 16:9 when the active aspect override is 16:9, else 4:3.
+    private(set) var previewDar = Dar(num: 4, den: 3)
+    struct Dar: Equatable { var num: Int; var den: Int }
+
+    private func trackPreviewAspect() {
+        var d = Dar(num: 4, den: 3)
+        if previewHasVideo, let f = preview.frameDar, f.num > 0, f.den > 0 {
+            d = Dar(num: f.num, den: f.den)
+        } else if activeAspectIndex == 2 {   // pin_aspect_t order: Auto, 4:3, 16:9
+            d = Dar(num: 16, den: 9)
+        }
+        if d != previewDar { previewDar = d }
+    }
+
+    /// What a click on the mute button does.
+    var muteActionName: String { isMuted ? "Unmute" : "Mute" }
     private(set) var noVideoText = "No device open"
 
     /// No-signal timeout running during a capture: text and a bar that shrinks to 0.
@@ -879,6 +897,7 @@ final class WindowModel {
         }
         flushPendingFinished()
         runPendingScriptIfReady()
+        trackPreviewAspect()
         keepAwake.set(isCapturing)
         afterTick?()
     }

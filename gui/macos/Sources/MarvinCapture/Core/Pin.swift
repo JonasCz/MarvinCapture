@@ -345,6 +345,15 @@ enum Pin {
 
     /// The full help text (docs/cli.md).
     static func scriptHelp() -> String { String(cString: pin_script_help()) }
+
+    /// Letterbox helper: the largest rectangle of display aspect `dar` inside w x h (the core's rule,
+    /// so the preview frame and the renderer agree). Returns its size.
+    static func fitRect(darNum: Int, darDen: Int, width: Int, height: Int) -> (width: Int, height: Int) {
+        var x: Int32 = 0, y: Int32 = 0, rw: Int32 = 0, rh: Int32 = 0
+        pin_fit_rect(Int32(clamping: darNum), Int32(clamping: darDen), Int32(clamping: width), Int32(clamping: height),
+                     &x, &y, &rw, &rh)
+        return (Int(rw), Int(rh))
+    }
 }
 
 extension pin_script_settings_t {
