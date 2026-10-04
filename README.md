@@ -39,11 +39,13 @@ Modern, native GUIs for Windows and Mac, plus a flexible command-line applicatio
 
 |  | PID | internal name | product | status |
 |---|---|---|---|---|
-| <a href="docs/images/500-usb.jpg"><img src="docs/images/500-usb.jpg" width="80" alt="Studio 500-USB"></a> | `0213` | Marvin-Lite | Studio **500-USB** | supported, tested, DV/HDV/analog in |
-| <a href="docs/images/510-usb.jpg"><img src="docs/images/510-usb.jpg" width="80" alt="Studio 510-USB"></a> | `0223` | Marvin-510 | Studio **510-USB** | supported, tested, DV/HDV/analog in |
-| <a href="docs/images/700-usb.jpg"><img src="docs/images/700-usb.jpg" width="80" alt="Studio 700-USB"></a> | `0212` | Marvin-CR | Studio **700-USB** | **untested** (but probably works) |
-| <a href="docs/images/710-usb.jpg"><img src="docs/images/710-usb.jpg" width="80" alt="MovieBox Plus 710-USB"></a> | `0224` | Marvin-710 | **MovieBox Plus / 710-USB** | **untested** (but probably works) |
+| <a href="docs/images/500-usb.jpg"><img src="docs/images/500-usb.jpg" width="80" alt="500-USB"></a> | `0213` | Marvin-Lite | **500-USB** | supported, tested, DV/HDV/analog in |
+| <a href="docs/images/510-usb.jpg"><img src="docs/images/510-usb.jpg" width="80" alt="510-USB"></a> | `0223` | Marvin-510 | **510-USB** | supported, tested, DV/HDV/analog in |
+| <a href="docs/images/700-usb.jpg"><img src="docs/images/700-usb.jpg" width="80" alt="700-USB"></a> | `0212` | Marvin-CR | **700-USB** | **untested** (but probably works) |
+| <a href="docs/images/710-usb.jpg"><img src="docs/images/710-usb.jpg" width="80" alt="MovieBox Plus 710-USB"></a> | `0224` | Marvin-710 | **710-USB** | **untested** (but probably works) |
 | <a href="docs/images/moviebox-deluxe.jpg"><img src="docs/images/moviebox-deluxe.jpg" width="80" alt="MovieBox Deluxe"></a> | `0206` | Marvin-classic | **MovieBox Deluxe** | **untested** (less likely to work) |
+
+These boxes were variously sold as Pinnacle Studio MovieBox USB, Pinnacle Studio MovieBox HD, Pinnacle Studio MovieBox Ultimate, Pinnacle Studio MovieBox Plus, and possibly others, with variations in which combinations of hardware and software were included.
 
 The 710-USB/510-USB is supposedly the best for analog, according to some forum threads.
 
