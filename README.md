@@ -90,9 +90,19 @@ build\windows-x86_64\dist\marvin-core.dll             the core library
 build\windows-x86_64\dist\firmware\                   FPGA bitstreams
 ```
 
-On macOS and Linux, `bash scripts/build.sh` builds the core and
-`MarvinCaptureCLI` into `build/<os>-<arch>/dist` (for example
-`build/macos-arm64/dist`, `build/linux-x86_64/dist`).
+On macOS, `bash scripts/build.sh` builds everything (needs the Xcode Command
+Line Tools and Homebrew's cmake, ninja, nasm, libusb and pkgconf; no Xcode) into
+`build/macos-arm64/dist`:
+
+```
+build/macos-arm64/dist/MarvinCapture.app              the GUI (core, libusb and firmware inside)
+build/macos-arm64/dist/MarvinCaptureCLI               the command-line program
+build/macos-arm64/dist/libmarvin-core.dylib           the core library
+build/macos-arm64/dist/firmware/                      FPGA bitstreams
+```
+
+On Linux, `bash scripts/build.sh` builds the core and `MarvinCaptureCLI` into
+`build/linux-x86_64/dist` (there is no Linux GUI yet).
 
 The device has to be bound to WinUSB, not the vendor driver
 ([docs/windows-driver.md](docs/windows-driver.md)). Then either run
@@ -108,8 +118,9 @@ The device has to be bound to WinUSB, not the vendor driver
 
 ```
 MarvinCaptureGUI (WinUI 3)  ──┐
-                              ├──▶  marvin-core.dll  (src/api/pin_api.h)
-MarvinCaptureCLI            ──┘        └─ session engine (src/engine), file writers (src/sinks)
+MarvinCapture.app (macOS)   ──┼──▶  marvin-core  (marvin-core.dll / libmarvin-core.dylib / .so,
+MarvinCaptureCLI            ──┘                   src/api/pin_api.h)
+                                       └─ session engine (src/engine), file writers (src/sinks)
                                        └─ hardware layer (src/core) ──▶ libusb ──▶ device
 ```
 
@@ -126,7 +137,8 @@ MarvinCaptureCLI            ──┘        └─ session engine (src/engine),
 | [docs/hdv.md](docs/hdv.md) | HDV capture |
 | [docs/analog.md](docs/analog.md) | Analog capture, other Marvin models, the three bitstreams |
 | [docs/windows-driver.md](docs/windows-driver.md) | Switching the device to WinUSB |
-| [gui/windows/README.md](gui/windows/README.md) | The GUI |
+| [gui/windows/README.md](gui/windows/README.md) | The Windows GUI |
+| [gui/macos/README.md](gui/macos/README.md) | The macOS GUI |
 
 Note this documentation was written by an LLM, primarily for other LLM usage.
 

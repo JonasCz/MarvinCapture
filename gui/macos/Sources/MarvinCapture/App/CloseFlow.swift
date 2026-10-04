@@ -26,6 +26,9 @@ final class CloseFlow {
     private var asking = false
     /// Quit was asked through ⌘Q: answer AppKit's pending terminate request when done.
     private var replyPending = false
+    /// The capture is finalised and the user agreed: the next terminate request goes through without asking
+    /// again (the model's `isCapturing` can lag a tick behind the state the close flow saw).
+    private var approved = false
 
     init(model: WindowModel) {
         self.model = model
@@ -42,6 +45,7 @@ final class CloseFlow {
 
     /// NSApplicationDelegate.applicationShouldTerminate.
     func shouldTerminate() -> NSApplication.TerminateReply {
+        if approved { return .terminateNow }
         if model.isFinalizingForClose {
             replyPending = true
             return .terminateLater
@@ -94,6 +98,7 @@ final class CloseFlow {
             NSApp.reply(toApplicationShouldTerminate: true)
         } else {
             // The window route: terminating runs shouldTerminate again, which now says yes.
+            approved = true
             NSApp.terminate(nil)
         }
     }

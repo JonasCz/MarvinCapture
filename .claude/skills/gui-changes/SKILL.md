@@ -1,18 +1,23 @@
 ---
 name: gui-changes
-description: Make changes to the MarvinCapture GUI (WinUI 3 / C#, gui/windows/MarvinCaptureGUI): where things live, how settings and capture options flow, the core-first rule, build/lock gotchas. Use before editing GUI XAML, view models or the native interop.
+description: Make changes to the MarvinCapture GUIs (Windows: WinUI 3 / C#, gui/windows/MarvinCaptureGUI; macOS: SwiftUI + AppKit, gui/macos): where things live, how settings and capture options flow, the core-first rule, threading contracts, build/lock gotchas. Use before editing GUI XAML, view models, Swift views/models or the native interop.
 ---
 
 # GUI changes
 
+Two GUIs: `gui/windows/` (C#, WinUI 3; sections below up to "Taskbar / shell
+interop") and `gui/macos/` (Swift; see "macOS GUI" at the end). Docs:
+`gui/windows/README.md`, `gui/macos/README.md`. The macOS app is a port of the
+Windows one: when behaviour changes in one, check the other.
+
 ## Core-first rule
 
-Each platform gets its own GUI codebase (today only `gui/windows/`, a C# WinUI 3
-app; macOS/Linux GUIs will be separate code). So **put every piece of logic that
-isn't UI in the core** (`src/engine`, `src/api`) and keep the per-platform code
-to widgets, dialogs, bindings and P/Invoke. Before writing C# logic, ask
-"would the macOS GUI need this too?". If yes, it goes in the core and the GUI
-calls it through `pin_api.h`. Examples already done that way: output naming
+Each platform gets its own GUI codebase (`gui/windows/`, a C# WinUI 3 app;
+`gui/macos/`, a Swift app; a Linux GUI would be separate code again). So **put
+every piece of logic that isn't UI in the core** (`src/engine`, `src/api`) and keep
+the per-platform code to widgets, dialogs, bindings and the native call layer.
+Before writing C# or Swift logic, ask "would the other GUI need this too?". If yes,
+it goes in the core and the GUI calls it through `pin_api.h`. Examples already done that way: output naming
 and collision/free-space checks (`pin_check_output`), file name validation
 (`pin_naming_validate`), settings, command-line parsing, scene splitting, the next
 file number (`pin_next_file_number`), every status-bar / device-list text
@@ -28,10 +33,13 @@ text or enable rule goes there, not into C#.
 Core change checklist: function in `src/engine/*.c` + declaration in its
 header, expose through `src/api/pin_api.[ch]` if the GUI needs it, add a test in
 `tests/engine/` (registered in `src/engine/CMakeLists.txt`), and mirror any new
-API/struct/enum in `Interop/Native*.cs`. Prefer reusing an existing call (e.g.
+API/struct/enum in `Interop/Native*.cs` (Windows; macOS imports the header, so
+only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing call (e.g.
 `pin_check_output` already returns a message the GUI shows) over a new export.
 
 ## Where things are (gui/windows/MarvinCaptureGUI)
+
+(Windows only; the macOS layout is in "macOS GUI" below.)
 
 - `MainWindow.xaml` / `.xaml.cs`: the one window. Analog panel is `[0]`, DV/HDV
   panel is `[1]` inside `PanelSwitch`. Click handlers, dialogs, pickers.
@@ -174,3 +182,126 @@ close it (don't kill it) and re-run. Don't run `ctest` directly from
 `build\windows-x86_64\core` (exit 0xc0000139 = DLL path not set); the script sets PATH.
 
 Commit and push straight to main (single-developer repo).
+
+## macOS GUI (gui/macos)
+
+SwiftPM package, Swift 6.x toolchain in Swift 5 language mode, macOS 15, arm64.
+AppKit owns the app, the window and the menus; SwiftUI is hosted inside the window
+(`NSHostingController`). Docs: `gui/macos/README.md`.
+
+### Where things are (gui/macos/Sources/MarvinCapture)
+
+- `App/`: `main.swift` (entry; the body runs in `MainActor.assumeIsolated`, because
+  top-level code is nonisolated for the compiler), `AppDelegate` (wires model,
+  menus, Dock tile, close flow; terminate), `MainWindowController` (the one
+  window, frame autosave, instance cascade), `MainMenu` (`MenuController`: menu
+  bar and Dock menu, enable rules via `validateMenuItem`), `CloseFlow`
+  (close / quit while capturing), `CaptureFlow` (start: plan, confirmation sheets,
+  start), `Alerts` (one NSAlert sheet at a time), `NewWindow` (+ `Instance`),
+  `Startup` (API version probe, firmware dir), `SnapshotHook`.
+- `Core/Pin.swift`: stateless wrappers over `pin_api.h` (formatting, settings,
+  script, devices). `CoreString.swift`: `cString` / `setCString` for the `char[N]`
+  tuple fields. The C API comes in as module `CMarvinCore`
+  (`Sources/CMarvinCore/module.modulemap`, no copy of the header): **no hand
+  mirroring of structs / enums**; a new C function is usable in Swift as soon as
+  it is in `pin_api.h`. Size-versioned structs: set `size` yourself (see the
+  `make*` helpers), pass by `&`.
+- `Models/WindowModel.swift`: all window state and logic (the macOS
+  MainViewModel + the non-view part of MainWindow.xaml.cs): settings load / save,
+  device watch, open / close session, `buildCaptureOpts`, `planCapture` /
+  `startCapture`, the 100 ms `tick()` (status + events) and the 30 Hz meter timer,
+  `applyStatus`, `handleEvent`. `AppModel`: command line (`pin_script_parse`).
+  `KindSettingsModel` (DV / HDV tab), `ControlSliderModel`, `DeviceItem`,
+  `FormatItem`. All `@MainActor @Observable`; non-observed state is
+  `@ObservationIgnored`.
+- `Services/`: `MediaSeams.swift` (the `PreviewSink` and `AudioMonitor` protocols
+  and null implementations), `AudioMonitor.swift` (`CoreAudioMonitor`),
+  `DockTile`, `Notifier`, `KeepAwake`, `ConsoleOutput`.
+- `Preview/`: `PreviewRenderer` (render thread, Metal), `PreviewShaders` (MSL as a
+  string), `MetalPreview` (the `PreviewSink`: view, visibility).
+- `Views/`: SwiftUI (`Sidebar/`, `StatusBar/`, `PreviewArea`, ...).
+  `StatusBarLayout.swift` decides which status items fit (drop order free space,
+  frames, storage, time, deck: same as `FitStatusBar` on Windows).
+
+Rules like on Windows: every text and enable rule comes from the core
+(`pin_format_*`, `pin_deck_cmd_allowed`, `pin_capture_action_allowed`); settings
+are per device (`saveSetting` / `loadSetting` add the `dev_<GUID>.` scope) with
+writes suppressed while `loading`; the window frame is AppKit's autosave, not a
+setting. A model property a view reads is plain (observed); wiring (callbacks, timers,
+the preview / audio seams) is `@ObservationIgnored`.
+
+### Threading contracts (do not break)
+
+- **Preview render thread.** `PreviewRenderer` blocks in `pin_preview_wait`, takes
+  frames with `pin_preview_lock_due`, and only enters the core through `enterCore()`,
+  which hands out the session while it is attached and marks `inCore`.
+  `PreviewSink.detach()` is synchronous: when it returns the thread is out of the
+  core. Locks: `state` (handshake, flags) and `gate` (all Metal / layer use), never
+  taken gate -> state.
+- **Audio render block** (`CoreAudioMonitor`): runs on CoreAudio's real-time thread
+  and must not allocate, message objects or hop actors, so it only touches a
+  manually allocated `RenderCore` struct behind an `os_unfair_lock`: the block only
+  try-locks (silence for that buffer if the main thread holds it), `detach()` takes
+  the lock and clears the session.
+- **Close order** (`WindowModel.closeSession`): `audio.stop()`, `audio.detach()`,
+  `preview.detach()`, then `pin_close` (which blocks until files are finalised).
+  Never call into a session after detach. Callers stop a running capture and wait
+  for READY first (`CloseFlow`).
+- **Device watch thread**: blocked in `pin_devices_wait`; hands changes to the main
+  actor with `DispatchQueue.main.async { MainActor.assumeIsolated { ... } }`;
+  `shutdown()` sets its stop flag and calls `pin_devices_wake`.
+- Everything else (timers, views, models) runs on the main thread; timers are
+  added in `.common` modes so they keep running while menus are open and while
+  AppKit waits for a `terminateLater` reply. The close flow always answers a
+  pending terminate (`CloseFlow.replyPending`).
+
+### Build and verify
+
+```sh
+bash scripts/build.sh                  # everything incl. tests, then dist/MarvinCapture.app
+bash scripts/build.sh --skip-tests     # faster
+swift build --package-path gui/macos --scratch-path build/macos-arm64/gui \
+    -Xlinker -L$PWD/build/macos-arm64/core      # Swift only, core already built
+```
+
+A bare binary needs `DYLD_LIBRARY_PATH=build/macos-arm64/core`. Run the real app
+from a shell with `build/macos-arm64/dist/MarvinCapture.app/Contents/MacOS/MarvinCapture`
+(stdout visible, `--debug` works, e.g. with a replay file as `--device file.dv`);
+`open ...app --args` loses stdout.
+
+Agents have **no screen-recording permission**, so verify with the built-in aids
+(env vars, all in `gui/macos/README.md`): `MARVIN_SNAPSHOT=/tmp/x.png`
+(+ `MARVIN_SNAPSHOT_QUIT=seconds`) renders the window content to a PNG, then read
+the PNG; `MARVIN_WINDOW_SIZE=WxH` and `MARVIN_APPEARANCE=dark|light` for layout and
+theme; `MARVIN_PREVIEW_DUMP` for the preview (a CAMetalLayer is not in the
+snapshot); `MARVIN_MENU_DUMP=1` for the menu tree and its enable state;
+`MARVIN_DOCK_DUMP` for the Dock tile; `MARVIN_UNMUTE=1` for the audio monitor
+(statistics with `--debug`); `MARVIN_PREVIEW_IGNORE_OCCLUSION=1` on a locked screen.
+A new aid goes in the same style and into that list in the README.
+
+### Gotchas
+
+- **No Metal compiler in the Command Line Tools**: the shader is MSL source in
+  `PreviewShaders.swift`, compiled at run time with `makeLibrary(source:)`. No
+  `.metal` files, no `.metallib`.
+- **No `actool`**: the icon is drawn by `Tools/make-icon.swift` and packed with
+  `iconutil` (cached in `build/macos-arm64/gui`, redone when the generator's hash
+  changes). No asset catalog.
+- **`Info.plist` is generated by `scripts/build.sh`** (version, bundle id, minimum
+  system): edit it there. Firmware goes in `Contents/Resources/firmware`, not
+  `Frameworks` (codesign). Signing is ad hoc, inner dylibs first, then the bundle.
+- **Swift 5 language mode** (`swiftLanguageModes: [.v5]`): the models are
+  `@MainActor`, callbacks from other threads must hop explicitly. Timer / observer
+  closures that run on the main thread use `MainActor.assumeIsolated`; code that
+  runs off the main thread (render thread, audio block, device watch) must not
+  touch main-actor state.
+- One window per process: "New Window" starts another process (`NewWindow`,
+  `MARVIN_SECONDARY=1`); only the first instance saves the window frame.
+- `UNUserNotificationCenter` and `NSApp.dockTile` badges need the `.app`; a bare
+  binary skips notifications.
+- Sheets: use `Alerts.shared.ask` (serialised, brings the window forward);
+  never `runModal` on top of the window. `CaptureFlow.starting` and
+  `WindowModel.captureStartPending` stop a second start while sheets are open or the
+  core has not yet reported CAPTURING (the core starts asynchronously).
+- `bash scripts/build.sh` must stay green (tests + app). Keep the README's
+  MARVIN_* list complete (`grep -rn MARVIN_ gui/macos/Sources`).

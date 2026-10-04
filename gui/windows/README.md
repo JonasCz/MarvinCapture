@@ -81,7 +81,8 @@ the analog controls) are applied over the selected device's saved settings;
 captures. If there are actions (`--rew`, `--play`, `--capture PATH`, `--wait`,
 ...), they run (`pin_script_run`) once the device is ready, and the window shows
 them like any other capture. The old `--preset`, `--actions`, `--output`,
-`--passes`, `--idle-min` and `--exit-when-done` are gone.
+`--passes` and `--idle-min` are gone. `--exit-when-done` closes the window when the
+steps finish, with the script's exit code.
 
 ```powershell
 # open a specific device on the composite input, PAL, 16:9 anamorphic

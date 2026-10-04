@@ -1,6 +1,6 @@
 ---
 name: build-and-test
-description: Build the Pinnacle 500-USB driver (core library, MarvinCaptureCLI, GUI) with scripts/build.ps1 on Windows or scripts/build.sh on macOS/Linux, and run the automated ctest suite. Use when asked to build or rebuild. For testing against the real device see test-with-hardware-device.
+description: Build the Pinnacle 500-USB driver (core library, MarvinCaptureCLI, GUI: MarvinCaptureGUI.exe on Windows, MarvinCapture.app on macOS) with scripts/build.ps1 on Windows or scripts/build.sh on macOS/Linux, and run the automated ctest suite. Use when asked to build or rebuild. For testing against the real device see test-with-hardware-device.
 ---
 
 # Build and test
@@ -40,18 +40,27 @@ is the only command-line program; run it from `build\windows-x86_64\dist`.
 ## macOS and Linux
 
 ```sh
-bash scripts/build.sh                  # core, CLI, ctest
+bash scripts/build.sh                  # core, CLI, ctest, and on macOS the GUI
 bash scripts/build.sh --config Debug   # Release (default) or Debug
 bash scripts/build.sh --skip-tests     # skip ctest
+bash scripts/build.sh --skip-gui       # macOS: no MarvinCapture.app (Linux has no GUI)
 bash scripts/build.sh --clean          # delete only this platform's build/<os>-<arch> first
 ```
 
-`--skip-gui` is accepted but does nothing yet (there is no macOS/Linux GUI).
+On macOS the GUI is `gui/macos` (SwiftPM; needs only the Command Line Tools with
+Swift 6.x, no Xcode): `swift build` into `build/macos-arm64/gui`, icon via
+`iconutil`, then `dist/MarvinCapture.app` is assembled and ad-hoc signed.
+Quick Swift-only iteration with the core already built:
+`swift build --package-path gui/macos --scratch-path build/macos-arm64/gui -Xlinker -L$PWD/build/macos-arm64/core`
+(a bare binary needs `DYLD_LIBRARY_PATH=build/macos-arm64/core`; this does not
+update `dist/`). Details: the gui-changes skill and `gui/macos/README.md`.
 Output in `build/<os>-<arch>/dist`: `MarvinCaptureCLI`, the core library
 (`libmarvin-core.dylib` on macOS, `libmarvin-core.so` on Linux), on macOS the
-bundled `libusb-1.0.0.dylib` (no Homebrew needed at run time), and `firmware/`;
-for example `build/macos-arm64/dist/MarvinCaptureCLI`. The CMake tree is
-`build/<os>-<arch>/core`.
+bundled `libusb-1.0.0.dylib` (no Homebrew needed at run time), `firmware/`, and on
+macOS `MarvinCapture.app`; for example `build/macos-arm64/dist/MarvinCaptureCLI`.
+The CMake tree is `build/<os>-<arch>/core`. The build rewrites `docs/cli.md`
+from `docs/cli.md.template` (`scripts/sync-cli-help.sh`); a diff there after a
+build is normally only a changed help text from the C source.
 
 ## Pitfalls
 

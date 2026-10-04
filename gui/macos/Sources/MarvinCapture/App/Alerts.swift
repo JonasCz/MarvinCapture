@@ -56,7 +56,9 @@ final class Alerts {
         for (i, nb) in alert.buttons.enumerated() {
             nb.keyEquivalent = i == defaultIndex ? "\r" : (i == buttons.count - 1 && buttons.count > 1 ? "\u{1b}" : "")
         }
-        guard let host = targetWindow else {
+        // Hidden app / no visible window: the sheet waits on the main window and shows when it comes back
+        // (a modal panel here could not be answered by a user who sees nothing).
+        guard let host = targetWindow ?? window else {
             let r = alert.runModal()
             return max(0, r.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue)
         }
@@ -91,6 +93,7 @@ final class Alerts {
     /// A capture started from the Dock menu can reach a dialog while the window is behind others or
     /// minimised: show the window before the sheet.
     private func bringToFront() {
+        if NSApp.isHidden { NSApp.unhide(nil) }   // Dock "Quit" on a hidden app: the question must be seen
         guard let w = targetWindow else { return }
         if w.isMiniaturized { w.deminiaturize(nil) }
         if !NSApp.isActive { NSApp.activate() }

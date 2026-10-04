@@ -37,7 +37,7 @@ enum CaptureFlow {
     }
 
     static func start(_ model: WindowModel, playFirst: Bool) {
-        guard !starting else { return }
+        guard !starting, !model.captureStartPending else { return }
         starting = true
         Task { @MainActor in
             defer { starting = false }

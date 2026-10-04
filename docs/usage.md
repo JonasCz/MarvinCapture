@@ -2,13 +2,20 @@
 
 Two ways in, both on the same core library:
 
-- **The GUI**, `MarvinCaptureGUI.exe` ([gui/windows/README.md](../gui/windows/README.md)):
-  device list, live preview, deck control, DV/HDV/analog capture with scene
-  splitting and the same integrity checks. It remembers its window position
-  and size, and keeps a separate set of settings (output folders and names,
+- **The GUI**: `MarvinCaptureGUI.exe` on Windows
+  ([gui/windows/README.md](../gui/windows/README.md)) and `MarvinCapture.app` on
+  macOS ([gui/macos/README.md](../gui/macos/README.md), in `build/macos-arm64/dist`).
+  The two behave the same, the text below applies to both. The macOS app differs
+  only where the platform does: a menu bar instead of the "..." menu alone, the Dock
+  icon (progress bar, "REC" badge, Start / Stop Capture menu, bounce) instead of the
+  taskbar button, and the settings file, which it shares with the command-line
+  program, at `~/Library/Application Support/PinnacleOSS/settings.ini`.
+  Both have a device list, live preview, deck control, DV/HDV/analog capture with
+  scene splitting and the same integrity checks. They remember the window position
+  and size, and keep a separate set of settings (output folders and names,
   formats, passes, idle/duration limits, aspect, standard, picture controls)
   for each camera/capture unit, keyed by the unit's FireWire GUID, so switching
-  device in the list loads that unit's own options (defaults for a new one). It asks before capturing when the output drive has under 25 GB
+  device in the list loads that unit's own options (defaults for a new one). They ask before capturing when the output drive has under 25 GB
   free. During a capture the deck buttons are disabled; "Manual capture"
   records without touching the tape and "Automatic rewind & capture" drives
   the deck (their stop labels: "Stop capture & continue tape" / "Stop capture
@@ -294,8 +301,9 @@ the addresses instead.
 
 ## Diagnostics
 
-`MarvinCaptureCLI --debug` (and `MarvinCaptureGUI --debug`, which mirrors the
-log on the console it was started from) is the one switch: it prints the core's
+`MarvinCaptureCLI --debug` (and `MarvinCaptureGUI --debug` on Windows, or the
+binary inside the app bundle with `--debug` on macOS, which mirror the log on the
+console they were started from) is the one switch: it prints the core's
 debug log, see [cli.md](cli.md#debug-log). The old debug environment variables
 (`PINNACLE_DEBUG_1394`, `_PROBE`, `_DEBUG_EP88`, `_DEBUG_EP84`, `_RAW_DUMP`,
 `_VIDEO_QUEUE`, `_VIDEO_XFER`, `PINNACLE_LOG_LEVEL`) are gone. The code behind

@@ -449,6 +449,9 @@ final class WindowModel {
     @ObservationIgnored private let watchStop = StopFlag()
     @ObservationIgnored private var deviceWatch: Thread?
     @ObservationIgnored private var captureWithDeck = false
+    /// When pin_capture_start was accepted (the core starts asynchronously: the state stays READY for a
+    /// moment). Stops a quick second click from planning and starting another capture.
+    @ObservationIgnored private var startRequestedAt: Double?
     @ObservationIgnored private let keepAwake = KeepAwake()
     @ObservationIgnored private var holdLeft = PeakHold(floor: WindowModel.meterFloorDb)
     @ObservationIgnored private var holdRight = PeakHold(floor: WindowModel.meterFloorDb)
@@ -838,7 +841,18 @@ final class WindowModel {
         return st
     }
 
+    /// True for a moment after an accepted start, until the status shows the capture (or 2 s pass).
+    var captureStartPending: Bool {
+        guard let t = startRequestedAt else { return false }
+        if isCapturing || ProcessInfo.processInfo.systemUptime - t > 2 {
+            startRequestedAt = nil
+            return false
+        }
+        return true
+    }
+
     private func captureStarted(_ o: pin_capture_opts_t) {
+        startRequestedAt = ProcessInfo.processInfo.systemUptime
         captureWithDeck = o.start_deck != 0
         activeIdleStopS = Double(Swift.max(0, o.idle_stop_minutes)) * 60
         activeDurationS = Double(Swift.max(0, o.max_duration_minutes)) * 60
@@ -1134,6 +1148,9 @@ final class WindowModel {
         let st = script.run(on: s)
         report(st, "Command line")
         scriptRunning = st == PIN_OK
+        // The script's captures end with a notification too (an unattended tape run is the
+        // typical case); ask for permission now, as a window-started capture does.
+        if scriptRunning { Notifier.shared.requestAuthorizationIfNeeded() }
     }
 
     // MARK: settings

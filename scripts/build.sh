@@ -46,15 +46,16 @@
 #   itself, so dist/ doesn't need Homebrew; see docs/building.md.
 #
 # Requires cmake, ninja, pkg-config, libusb-1.0, make and a C compiler (and
-# nasm on x86_64). See docs/building.md.
+# nasm on x86_64); for the macOS GUI also swift (Command Line Tools, Swift 6.x)
+# and iconutil. See docs/building.md.
 #
 # Usage:
 #   scripts/build.sh [--config Release|Debug] [--skip-tests] [--skip-gui] [--clean]
 #
 #   --config Release|Debug  build type (default Release)
 #   --skip-tests            don't run ctest
-#   --skip-gui              build the native core and CLI only (no
-#                           MarvinCapture.app; there is no Linux GUI yet)
+#   --skip-gui              build the native core and CLI only (macOS: no
+#                           MarvinCapture.app; Linux has no GUI yet, so no effect)
 #   --clean                 delete build/<os>-<arch>/ first (other platforms'
 #                           output is kept)
 
