@@ -21,13 +21,35 @@ import AppKit
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) var windowController: MainWindowController?
+    private(set) var appModel: AppModel?
+    private var snapshotHook: SnapshotHook?
+    /// Set by --exit-when-done: the exit code the process leaves with.
+    private var exitCode: Int32?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainMenu.install()
-        let wc = MainWindowController(startup: Startup.run())
+        let startup = Startup.run()
+        var model: AppModel?
+        if case .ok = startup {
+            let m = AppModel()
+            m.window.onExitRequested = { [weak self] code in
+                self?.exitCode = code
+                NSApp.terminate(nil)
+            }
+            model = m
+        }
+        appModel = model
+        let wc = MainWindowController(startup: startup, model: model)
         windowController = wc
         wc.showWindow(nil)
         NSApp.activate()
+        if let w = wc.window { snapshotHook = SnapshotHook.installIfRequested(window: w) }
+        model?.start()
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        appModel?.shutdown()   // pin_close; the close flow has stopped any capture before this
+        if let code = exitCode { exit(code) }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

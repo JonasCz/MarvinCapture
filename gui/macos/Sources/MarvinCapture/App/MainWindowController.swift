@@ -27,10 +27,10 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
     /// Return false to veto closing (later: "stop the capture first?").
     var shouldClose: (() -> Bool)?
 
-    init(startup: Startup.Result) {
+    init(startup: Startup.Result, model: AppModel?) {
         let content: AnyView
         switch startup {
-        case .ok: content = AnyView(ContentView())
+        case .ok: content = AnyView(ContentView(app: model!))
         case .failed(let message): content = AnyView(StartupErrorView(message: message))
         }
         let window = NSWindow(

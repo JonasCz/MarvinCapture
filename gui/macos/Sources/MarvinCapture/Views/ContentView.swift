@@ -17,36 +17,147 @@
 import SwiftUI
 import CMarvinCore
 
-/// Placeholder: proves the core loads and the C interop (incl. fixed char
-/// arrays) works. Replaced by the real UI in the next step.
+/// TEMPORARY debug view wired to WindowModel so the model layer can be exercised (device, input,
+/// status texts, capture / stop, deck). Replaced by the real UI in the next step.
 struct ContentView: View {
-    @State private var devices = Pin.enumerateDevices()
+    @Bindable var app: AppModel
+
+    private var model: WindowModel { app.window }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("MarvinCapture").font(.largeTitle.bold())
-            Text(Pin.versionString)
-            Text("API version \(Pin.apiVersion)").foregroundStyle(.secondary)
-            Divider()
-            HStack {
-                Text("Devices (\(devices.count))").font(.headline)
-                Spacer()
-                Button("Refresh") { devices = Pin.enumerateDevices() }
-            }
-            if devices.isEmpty {
-                Text(String(cString: pin_no_devices_hint())).foregroundStyle(.secondary)
-            } else {
-                ForEach(Array(devices.enumerated()), id: \.offset) { _, d in
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(d.nameString).bold()
-                        Text("id \(d.idString)  serial \(d.serialString.isEmpty ? "-" : d.serialString)  state \(d.state.rawValue)  hub depth \(d.hub_depth)")
-                            .font(.callout.monospaced()).foregroundStyle(.secondary)
+        @Bindable var m = app.window
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("MarvinCapture (debug view)").font(.title2.bold())
+
+                HStack {
+                    Picker("Device", selection: $m.selectedDeviceID) {
+                        Text("None").tag(String?.none)
+                        ForEach(m.devices) { d in
+                            Text("\(d.displayName) · \(d.statusText)").tag(String?.some(d.id)).disabled(!d.isUsable)
+                        }
+                    }
+                    .disabled(!m.deviceSelectEnabled)
+                    Button("Open") { m.openSelectedDevice() }.disabled(m.isCapturing || !m.hasSelectedDevice)
+                    Button("Close") { m.closeSession() }.disabled(m.isCapturing || !m.hasSession)
+                }
+                if m.noDevices { Text(m.noDevicesHint).foregroundStyle(.secondary) }
+
+                Picker("Input", selection: $m.inputIndex) {
+                    Text("DV / HDV").tag(0)
+                    Text("S-Video").tag(1)
+                    Text("Composite").tag(2)
+                }
+                .pickerStyle(.segmented).disabled(m.isCapturing)
+
+                if !m.isDvInput {
+                    HStack {
+                        Picker("Standard", selection: $m.selectedStandard) {
+                            ForEach(m.standards) { s in Text(s.name).tag(StdItem?.some(s)) }
+                        }
+                        Picker("Format", selection: $m.analogFormat) {
+                            ForEach(m.analogFormats) { f in Text(f.label).tag(FormatItem?.some(f)) }
+                        }
+                    }.disabled(m.isCapturing)
+                    HStack {
+                        TextField("Folder", text: $m.analogOutputDir)
+                        TextField("Name", text: $m.analogName).frame(width: 160)
+                    }.disabled(m.isCapturing)
+                } else {
+                    HStack {
+                        TextField("Folder", text: $m.dvOutputDir)
+                        TextField("Name", text: $m.dvName).frame(width: 160)
+                    }.disabled(m.isCapturing)
+                }
+
+                Divider()
+                Group {
+                    line("State", m.sessionStateText)
+                    line("Status", m.statusShortText)
+                    line("No-video text", m.noVideoText)
+                    line("Signal", "\(m.signalLockText) · \(m.signalTypeText)")
+                    line("Frames", m.framesTotalText)
+                    line("Sizes", "\(m.sizeText) \(m.storageFreeText)")
+                    line("Deck", m.deckStateText)
+                    line(m.statusTimeTip, m.statusTimeText)
+                    line("Peaks", m.audioPeakText)
+                    line("Title", m.windowTitle)
+                    line("Log", m.lastLogLine)
+                }
+
+                HStack {
+                    if !m.isDvInput {
+                        Button(m.captureButtonText) { analogCapture() }.disabled(!m.captureEnabled)
+                    } else {
+                        Button(m.manualCaptureTitle) { dvManual() }.disabled(!m.playAndCaptureEnabled)
+                        Button(m.primaryDvTitle) { dvAuto() }.disabled(!m.dvAutoCaptureEnabled)
+                        Button("Rew") { m.userRequestedDeck(.rew) }.disabled(!m.deckRewEnabled)
+                        Button("Play") { m.userRequestedDeck(.play) }.disabled(!m.deckPlayEnabled)
+                        Button("Stop") { m.userRequestedDeck(.stop) }.disabled(!m.deckStopEnabled)
+                        Button("FF") { m.userRequestedDeck(.ff) }.disabled(!m.deckFfEnabled)
+                    }
+                    Toggle("Muted", isOn: $m.isMuted)
+                }
+
+                if m.infoOpen {
+                    HStack {
+                        Text("\(m.infoTitle): \(m.infoMessage)").foregroundStyle(m.infoSeverity == .error ? .red : .orange)
+                        Button("Dismiss") { m.dismissInfo() }
                     }
                 }
             }
-            Spacer()
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .alert(item: $app.alert) { a in Alert(title: Text(a.title), message: Text(a.message)) }
+        .sheet(isPresented: $app.showHelp) { HelpSheet(app: app) }
+    }
+
+    private func line(_ label: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(label).foregroundStyle(.secondary).frame(width: 110, alignment: .trailing)
+            Text(value).textSelection(.enabled)
+        }
+    }
+
+    // MARK: capture flows (the real UI step replaces these dialogs)
+
+    private func analogCapture() { model.isCapturing ? model.stopCapture(stopDeck: false) : startCapture(playFirst: false) }
+    private func dvManual() { model.isCapturing ? model.stopCapture(stopDeck: false) : startCapture(playFirst: false) }
+    private func dvAuto() { model.isCapturing ? model.stopCapture(stopDeck: true) : startCapture(playFirst: true) }
+
+    private func startCapture(playFirst: Bool) {
+        guard let plan = model.planCapture(playFirst: playFirst) else { return }
+        for c in plan.confirmations {
+            let a = NSAlert()
+            a.messageText = c.title
+            a.informativeText = c.message
+            a.addButton(withTitle: c.primaryButton)
+            a.addButton(withTitle: "Cancel")
+            if a.runModal() != .alertFirstButtonReturn { return }
+        }
+        model.startCapture(plan.opts, overwrite: plan.overwrite)
+    }
+}
+
+/// Command-line help (and a parse error) in a sheet.
+struct HelpSheet: View {
+    let app: AppModel
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Command-line options").font(.title3.bold())
+            if let e = app.launchError {
+                Text("Invalid command line: \(e)").foregroundStyle(.red)
+            }
+            ScrollView {
+                Text(app.helpText).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            Button("Close") { dismiss() }.keyboardShortcut(.defaultAction)
+        }
+        .padding(20)
+        .frame(width: 760, height: 520)
     }
 }

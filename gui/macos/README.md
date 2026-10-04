@@ -17,8 +17,18 @@ Running that binary outside the .app needs `DYLD_LIBRARY_PATH=build/macos-arm64/
 - `Sources/CMarvinCore` module map exposing `pin_api.h` (no copy) and linking `marvin-core`.
 - `Sources/MarvinCapture/App` entry point (AppKit main), `AppDelegate`, `MainWindowController`, startup probe.
 - `Sources/MarvinCapture/Core` Swift helpers over the C API (`Pin`, `CoreString`).
+- `Sources/MarvinCapture/Models` `@Observable` models: `WindowModel` (all window state and logic), `AppModel` (command line, launch), `KindSettingsModel`, `DeviceItem`, `ControlSliderModel`, `FormatItem`.
+- `Sources/MarvinCapture/Services` console output, notifications, keep-awake, preview/audio seams.
 - `Sources/MarvinCapture/Views` SwiftUI views.
 - `Tools/make-icon.swift` draws the app icon at build time.
 
 If `libmarvin-core.dylib` is missing or unloadable the process dies at launch (dyld); an API
 version mismatch shows an error in the window instead.
+
+## Developer aids
+
+- `MARVIN_SNAPSHOT=/path/file.png` renders the main window's content view into that PNG every 2 seconds
+  (works without screen-recording permission, also while the window is behind others);
+  `MARVIN_SNAPSHOT_QUIT=seconds` quits the app after that long. Both are harmless in every build.
+- `--debug` mirrors the core's debug log and all engine events to stdout (line buffered; skipped when stdout is /dev/null).
+- Capture-end notifications (user notifications while the app is in the background) only work from the .app bundle.
