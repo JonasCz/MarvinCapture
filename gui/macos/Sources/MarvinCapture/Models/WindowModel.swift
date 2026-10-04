@@ -111,7 +111,7 @@ final class WindowModel {
 
     // MARK: seams and callbacks (set by the view layer / app delegate)
 
-    @ObservationIgnored var preview: PreviewSink = NullPreviewSink()
+    @ObservationIgnored var preview: PreviewSink = MetalPreview()
     @ObservationIgnored var audio: AudioMonitor = NullAudioMonitor()
     /// An abnormal capture end the user must see (not while closing or running command-line steps).
     @ObservationIgnored var onAlert: ((ModelAlert) -> Void)?
@@ -311,7 +311,7 @@ final class WindowModel {
             }
         }
     }
-    /// Set by the preview step: a frame arrived within the last second.
+    /// A frame was presented within the last second (set from the preview sink every tick).
     var previewHasVideo = false
     /// Display aspect the preview frame is sized to (TrackPreviewAspect): what the preview reports for
     /// the frames on screen, else 16:9 when the active aspect override is 16:9, else 4:3.
@@ -534,6 +534,9 @@ final class WindowModel {
         selectedDeviceID = pickInitialDevice(preferred: script == nil || scriptDevice.isEmpty ? nil : scriptDevice)
         if script != nil, let s = scriptSettings { applyScriptSettings(s) }
         startupDone = true
+        if let m = preview as? MetalPreview, let why = m.unavailableReason {
+            showInfo("Preview unavailable", "Metal could not be initialised: \(why)", .warning)
+        }
         openSelectedIfNeeded()
 
         statusTimer = makeTimer(interval: 0.1) { [unowned self] in self.tick() }
@@ -897,6 +900,8 @@ final class WindowModel {
         }
         flushPendingFinished()
         runPendingScriptIfReady()
+        let hasVideo = preview.hasRecentFrame
+        if hasVideo != previewHasVideo { previewHasVideo = hasVideo }
         trackPreviewAspect()
         keepAwake.set(isCapturing)
         afterTick?()

@@ -29,6 +29,8 @@ protocol PreviewSink: AnyObject {
     /// Display aspect of the frames being shown (the core's value with the aspect override applied),
     /// nil until a frame arrived. The window sizes the preview frame from it.
     var frameDar: (num: Int, den: Int)? { get }
+    /// A frame was presented within the last second (the window's "no video" overlay follows this).
+    var hasRecentFrame: Bool { get }
 }
 
 /// The audio monitor (pin_monitor_read pump into the system output). The model owns the mute state
@@ -47,6 +49,7 @@ protocol AudioMonitor: AnyObject {
 @MainActor
 final class NullPreviewSink: PreviewSink {
     var frameDar: (num: Int, den: Int)? { nil }
+    var hasRecentFrame: Bool { false }
     func attach(session: Pin.Session) {}
     func detach() {}
 }

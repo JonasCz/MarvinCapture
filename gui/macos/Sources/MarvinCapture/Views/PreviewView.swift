@@ -16,14 +16,18 @@
 
 import SwiftUI
 
-/// The seam for the video renderer: the next step replaces this view's body with the Metal layer
-/// (an NSViewRepresentable) and attaches it through `WindowModel.preview`. It fills whatever
-/// frame PreviewArea gives it, which already has the picture's aspect, so nothing is letterboxed here.
+/// The video preview: the Metal layer view (see Preview/) filling the frame PreviewArea gives it, which
+/// already has the picture's aspect, so nothing is letterboxed here. The model's `preview` sink owns
+/// the view and attaches to the session.
 struct PreviewView: View {
     let model: WindowModel
 
     var body: some View {
-        Color.black
-            .accessibilityLabel("Video preview")
+        if let metal = model.preview as? MetalPreview {
+            PreviewLayerRepresentable(preview: metal)
+                .accessibilityLabel("Video preview")
+        } else {
+            Color.black.accessibilityLabel("Video preview")
+        }
     }
 }
