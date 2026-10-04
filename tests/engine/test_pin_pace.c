@@ -50,17 +50,18 @@ typedef struct {
     int late;           /* frames whose present time is before their arrival */
 } result_t;
 
-/* n frames of a `period` source starting at t0; jitter(i) gives each arrival's
- * extra lateness. Steps are judged from frame `settle` on. */
-static result_t run(double period, int n, int settle, double (*jitter)(int))
+/* n frames of a source running at `period` (the nominal one, times
+ * 1 + `ppm`/1e6) starting at t0; jitter(i) gives each arrival's extra
+ * lateness. Steps are judged from frame `settle` on. */
+static result_t run(double period, double ppm, int n, int settle, double (*jitter)(int))
 {
     pin_pace_t pc;
     memset(&pc, 0, sizeof(pc));
     result_t r = { 0, 0, 0 };
     double prev = 0;
     for (int i = 0; i < n; i++) {
-        double arrive = 100.0 + i * period + jitter(i);
-        double t = pin_pace_frame(&pc, arrive, 1);
+        double arrive = 100.0 + i * period * (1 + ppm / 1e6) + jitter(i);
+        double t = pin_pace_frame(&pc, arrive, period, 1);
         if (i >= settle) {
             double err = fabs(t - prev - period);
             if (err > r.worst_step) r.worst_step = err;
@@ -79,22 +80,30 @@ static double pairs(int i) { return (i & 1) ? 0 : 0.040; }                /* two
 int main(void)
 {
     /* analog: arrivals already even, so the delay stays near its minimum */
-    result_t r = run(0.040, 500, 50, steady);
-    CHECK(r.worst_step < 0.0002, "steady 25 fps: even steps");
+    result_t r = run(0.040, 0, 500, 50, steady);
+    CHECK(r.worst_step < 0.0001, "steady 25 fps: even steps");
     CHECK(r.max_delay < 0.006, "steady 25 fps: small delay");
     CHECK(r.late == 0, "steady 25 fps: never before arrival");
 
-    /* NTSC rate with 16 ms of jitter: the grid smooths it to under 1 ms */
-    r = run(1001.0 / 30000, 1000, 200, coarse_sleep);
+    /* a source 0.1 % off its nominal rate (an analog VCR): the grid follows,
+     * the delay stays small */
+    r = run(0.040, 1000, 3000, 100, steady);
+    printf("0.1%% off: worst step %.3f ms, delay %.1f ms, %d late\n", r.worst_step * 1000, r.max_delay * 1000, r.late);
+    CHECK(r.worst_step < 0.0002, "0.1% off: even steps");
+    CHECK(r.max_delay < 0.010, "0.1% off: small delay");
+    CHECK(r.late == 0, "0.1% off: never before arrival");
+
+    /* NTSC rate with 16 ms of jitter: the grid smooths it to well under 1 ms */
+    r = run(1001.0 / 30000, 0, 1000, 200, coarse_sleep);
     printf("jittery: worst step %.3f ms, delay %.1f ms, %d late\n", r.worst_step * 1000, r.max_delay * 1000, r.late);
-    CHECK(r.worst_step < 0.001, "jittery 29.97 fps: steps within 1 ms");
+    CHECK(r.worst_step < 0.0003, "jittery 29.97 fps: steps within 0.3 ms");
     CHECK(r.max_delay < 0.030, "jittery 29.97 fps: delay bounded");
     CHECK(r.late < 10, "jittery 29.97 fps: (almost) never before arrival");
 
     /* bursts of two pictures every two periods */
-    r = run(0.040, 1000, 200, pairs);
+    r = run(0.040, 0, 1000, 200, pairs);
     printf("bursts: worst step %.3f ms, delay %.1f ms, %d late\n", r.worst_step * 1000, r.max_delay * 1000, r.late);
-    CHECK(r.worst_step < 0.001, "bursts: even steps");
+    CHECK(r.worst_step < 0.0005, "bursts: even steps");
     CHECK(r.late == 0, "bursts: never before arrival");
 
     /* a dropped frame keeps its slot: the next present time is two periods on */
@@ -102,14 +111,18 @@ int main(void)
     memset(&pc, 0, sizeof(pc));
     double t = 0;
     for (int i = 0; i < 100; i++)
-        t = pin_pace_frame(&pc, 10.0 + i * 0.040, 1);
-    double t2 = pin_pace_frame(&pc, 10.0 + 101 * 0.040, 2);
+        t = pin_pace_frame(&pc, 10.0 + i * 0.040, 0.040, 1);
+    double t2 = pin_pace_frame(&pc, 10.0 + 101 * 0.040, 0.040, 2);
     CHECK(fabs(t2 - t - 0.080) < 0.0005, "dropped frame: grid skips its slot");
 
-    /* a long gap (paused, no signal) starts over: shown as they come until
-     * the rate is learnt again */
-    double t3 = pin_pace_frame(&pc, 20.0, 1);
-    CHECK(t3 == 20.0, "after a gap: shown on arrival");
+    /* a long gap (paused, no signal) starts the grid over at the next arrival */
+    double t3 = pin_pace_frame(&pc, 20.0, 0.040, 1);
+    CHECK(t3 > 20.0 && t3 < 20.0 + 0.010, "after a gap: shortly after arrival");
+    double t4 = pin_pace_frame(&pc, 20.040, 0.040, 1);
+    CHECK(fabs(t4 - t3 - 0.040) < 0.0002, "after a gap: paced from the second frame on");
+
+    /* rate not known: shown as it comes */
+    CHECK(pin_pace_frame(&pc, 30.0, 0, 1) == 30.0, "no rate: shown on arrival");
 
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);

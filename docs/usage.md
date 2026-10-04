@@ -33,8 +33,9 @@ Two ways in, both on the same core library:
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
   The preview is paced by a small jitter buffer in the core (`pin_pace.h`):
   each frame is shown on the first display refresh at or after a time on an
-  even grid at the source frame rate, a few ms after it arrived (more for a
-  jittery source), and the audio monitor is held back by the same delay. On
+  even grid at the source's nominal frame rate (25 / 29.97 fps, from the
+  sequence header for HDV), a few ms after it arrived (more for a jittery
+  source), and the audio monitor is held back by the same delay. On
   Windows 10 with monitors at different refresh rates, the compositor runs at
   the primary monitor's rate, also for windows on the other monitor: a 25 fps
   preview on a 144 Hz monitor is then shown at 60 Hz (holds of 2 and 3

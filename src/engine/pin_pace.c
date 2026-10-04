@@ -18,48 +18,35 @@
 
 #include "pin_pace.h"
 
-/* loop gains: phase, and rate (critically damped: rate = phase^2 / 4) */
-#define PACE_PHASE_GAIN 0.03
-#define PACE_RATE_GAIN (PACE_PHASE_GAIN * PACE_PHASE_GAIN / 4)
-#define PACE_LEARN_S 0.5   /* arrivals averaged for the first rate estimate */
+/* Phase correction per frame: slow enough that arrival jitter barely moves
+ * the grid (a 16 ms jitter moves it by under 0.2 ms), fast enough to follow
+ * a source a fraction of a percent off its nominal rate. */
+#define PACE_PHASE_GAIN 0.01
 
-double pin_pace_frame(pin_pace_t *pc, double now, int frames)
+double pin_pace_frame(pin_pace_t *pc, double now, double period, int frames)
 {
     if (frames < 1)
         frames = 1;
     double gap = now - pc->last;
-    if (pc->last == 0 || gap > 0.5 || gap < -0.001) {
-        /* first frame, or after a pause / no signal: learn the rate again */
-        pc->period = 0;
-        pc->learn_t = now;
-        pc->learn_n = 0;
-        pc->last = now;
+    pc->last = now;
+    if (period <= 0) {
+        pc->grid = 0;
         return now;
     }
-    pc->last = now;
-
-    if (pc->period == 0) {
-        pc->learn_n += frames; /* frame periods since learn_t */
-        double span = now - pc->learn_t;
-        double per = pc->learn_n ? span / pc->learn_n : 0;
+    if (pc->grid == 0 || period != pc->period || gap > 0.5 || gap < -0.001) {
+        /* first frame, a new rate, or after a pause / no signal */
         pc->grid = now;
-        if (span < PACE_LEARN_S || per < 1.0 / 120 || per > 0.1)
-            return now; /* show it as it comes until the rate is known */
-        pc->period = per;
+        pc->period = period;
     } else {
-        pc->grid += frames * pc->period;
+        pc->grid += frames * period;
         double late = now - pc->grid;
         if (late > 0.25 || late < -0.25) {
-            /* lost lock (the source's clock jumped): learn again */
-            pc->period = 0;
-            pc->learn_t = now;
-            pc->learn_n = 0;
-            return now;
+            pc->grid = now; /* lost lock (the source's clock jumped): start over */
+        } else {
+            pc->grid += PACE_PHASE_GAIN * late;
+            double decayed = pc->late * 0.995;
+            pc->late = late > decayed ? late : decayed;
         }
-        pc->grid += PACE_PHASE_GAIN * late;
-        pc->period += PACE_RATE_GAIN * late / frames;
-        double decayed = pc->late * 0.995;
-        pc->late = late > decayed ? late : decayed;
     }
 
     /* Grow the delay gently (a step would hold one frame visibly longer);

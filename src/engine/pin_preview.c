@@ -289,17 +289,20 @@ static int pick_write_slot(pin_preview_t *p)
 }
 
 /* Makes slot idx (filled by the caller under out_mtx) the newest queued frame. */
-static void publish_slot(pin_preview_t *p, int idx)
+static void publish_slot(pin_preview_t *p, int idx, double period)
 {
     pv_buf_t *b = &p->bufs[idx];
     b->valid = 1;
     b->queued = 1;
     b->seq = ++p->seq;
-    b->present_time = pin_pace_frame(&p->pace, pin_previewer_clock(), 1 + p->out_skipped);
+    b->present_time = pin_pace_frame(&p->pace, pin_previewer_clock(), period, 1 + p->out_skipped);
     p->out_skipped = 0;
     p->ready_idx = idx;
     pthread_cond_broadcast(&p->out_cond);
 }
+
+/* nominal frame period of a 50 / 60 Hz analog or DV source */
+static double source_period(int is_pal) { return is_pal ? 1.0 / 25 : 1001.0 / 30000; }
 
 static int ensure_cap(uint8_t **buf, size_t *cap, size_t need)
 {
@@ -314,7 +317,8 @@ static int ensure_cap(uint8_t **buf, size_t *cap, size_t need)
 }
 
 static void publish_from_avframe(pin_preview_t *p, const AVFrame *f, pin_matrix_t matrix,
-                                  int dar_num, int dar_den, int interlaced, int tff)
+                                  int dar_num, int dar_den, int interlaced, int tff,
+                                  double period)
 {
     int shift_x = 1, shift_y = 1;
     if (f->format == AV_PIX_FMT_YUV411P) { shift_x = 2; shift_y = 0; }
@@ -345,11 +349,11 @@ static void publish_from_avframe(pin_preview_t *p, const AVFrame *f, pin_matrix_
     b->full_range = 0;
     b->dar_num = dar_num; b->dar_den = dar_den;
     b->interlaced = interlaced; b->tff = tff;
-    publish_slot(p, idx);
+    publish_slot(p, idx, period);
     pthread_mutex_unlock(&p->out_mtx);
 }
 
-static void decode_analog(pin_preview_t *p, const uint8_t *yuyv, unsigned w, unsigned h)
+static void decode_analog(pin_preview_t *p, const uint8_t *yuyv, unsigned w, unsigned h, int is_pal)
 {
     pthread_mutex_lock(&p->out_mtx);
     int idx = pick_write_slot(p);
@@ -382,7 +386,7 @@ static void decode_analog(pin_preview_t *p, const uint8_t *yuyv, unsigned w, uns
     if (asp == PIN_ASPECT_16_9) { b->dar_num = 16; b->dar_den = 9; }
     else { b->dar_num = 4; b->dar_den = 3; }
     b->interlaced = 1; b->tff = 1;
-    publish_slot(p, idx);
+    publish_slot(p, idx, source_period(is_pal));
     pthread_mutex_unlock(&p->out_mtx);
 }
 
@@ -407,10 +411,9 @@ static void decode_dv(pin_preview_t *p, const uint8_t *data, size_t len, int is_
             pin_aspect_t asp = p->aspect_override;
             int dn = 4, dd = 3;
             if (asp == PIN_ASPECT_16_9) { dn = 16; dd = 9; }
-            publish_from_avframe(p, frame, PIN_MATRIX_BT601, dn, dd, 0, 0);
+            publish_from_avframe(p, frame, PIN_MATRIX_BT601, dn, dd, 0, 0, source_period(is_pal));
         }
     }
-    (void)is_pal;
 out:
     av_frame_free(&frame);
     av_packet_free(&pkt);
@@ -509,7 +512,10 @@ static void decode_hdv(pin_preview_t *p, const uint8_t *ts_packets, size_t len, 
             int dn = 16, dd = 9;
             if (asp == PIN_ASPECT_4_3) { dn = 4; dd = 3; }
             /* BT.709, 1080i top-field-first, per the plan. */
-            publish_from_avframe(p, frame, PIN_MATRIX_BT709, dn, dd, 1, 1);
+            /* the rate from the sequence header: 25 or 29.97 for 1080i, up to 60 for 720p */
+            AVRational fr = p->hdv_ctx->framerate;
+            double period = fr.num > 0 && fr.den > 0 ? (double)fr.den / fr.num : 0;
+            publish_from_avframe(p, frame, PIN_MATRIX_BT709, dn, dd, 1, 1, period);
         }
     }
 out:
@@ -561,7 +567,7 @@ static void *pv_thread(void *arg)
         if (!work)
             continue;
         switch (kind) {
-        case PV_IN_ANALOG: decode_analog(p, work, w, h); break;
+        case PV_IN_ANALOG: decode_analog(p, work, w, h, is_pal); break;
         case PV_IN_DV:      decode_dv(p, work, len, is_pal); break;
         case PV_IN_HDV:      decode_hdv(p, work, len, pid); break;
         default: break;

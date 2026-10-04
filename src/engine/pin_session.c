@@ -1185,6 +1185,7 @@ typedef struct {
     int bus_sig_valid;
     const dv_reassembler_t *reasm; /* live reassembler: latest PAT/PMT for the write gate */
     hdv_err_state_t hdv_err;       /* continuity / reference tracking for the error stats */
+    unsigned units_out;            /* frames / pictures handed to dv_on_unit() (replay pacing) */
 } dv_ctx_t;
 
 /* HDV capture gate: a session's sink opens at an arbitrary picture, but a
@@ -1247,6 +1248,7 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
 {
     dv_ctx_t *ctx = user;
     pin_session_t *s = ctx->s;
+    ctx->units_out++;
 
     pin_session_lock(s);
     if (s->stream_kind == PIN_KIND_ANALOG || s->stream_kind == 0) {
@@ -2625,6 +2627,8 @@ static int replay_run(pin_session_t *s)
     }
 
     uint8_t *chunk = malloc(frame_size ? (size_t)frame_size : 65536);
+    unsigned units_paced = 0;
+    int chunks_idle = 0; /* raw dump: chunks in a row that ended no frame */
     s->loop_stop = 0;
     while (!s->loop_stop) {
         if (handle_inline_commands(s, 0)) { s->loop_stop = 1; break; }
@@ -2666,12 +2670,26 @@ static int replay_run(pin_session_t *s)
         } else {
             dv_reassembler_feed(&reasm, chunk, n);
         }
-        /* real-time pacing for frame mode (NTSC 29.97 / PAL 25 fps), else a
-         * small sleep so a raw-dump replay doesn't spin a core at full tilt. */
-        if (frame_size)
+        /* real-time pacing (NTSC 29.97 / PAL 25 fps): per frame in frame mode;
+         * a raw dump per frame the reassembler emitted, so it runs at the true
+         * rate too (the preview's jitter buffer and audio monitoring count on
+         * it). A frame spans a few chunks; only a dump that yields no frames
+         * at all sleeps, so it doesn't spin a core at full tilt. */
+        if (frame_size) {
             pace_frame(&next_t, frame_size == 144000 ? 1.0 / 25.0 : 1001.0 / 30000.0);
-        else
-            sleep_ms(5);
+        } else if (units_paced == ctx.units_out) {
+            if (++chunks_idle > 16)
+                sleep_ms(5);
+        } else {
+            chunks_idle = 0;
+            pin_session_lock(s);
+            double period = s->is_60hz ? 1001.0 / 30000.0 : 1.0 / 25.0;
+            pin_session_unlock(s);
+            while (units_paced != ctx.units_out) {
+                pace_frame(&next_t, period);
+                units_paced++;
+            }
+        }
     }
     free(chunk);
 

@@ -24,14 +24,14 @@
  * decoded in bursts. Showing each one as soon as it is decoded passes that
  * jitter straight to the screen, where a frame landing just before or just
  * after a display refresh is held one refresh shorter or longer than its
- * neighbours. Instead each frame gets a slot on a smoothed grid at the
- * source rate, plus a delay that covers how late frames come relative to
- * that grid. The grid is a phase-locked loop on the arrivals: it follows
- * the source clock (phase and rate) slowly, so it tracks it but not its
- * jitter. Until the rate is known (the first half second) frames are shown
- * as they come. A renderer that shows each frame on
- * the first refresh at or after its time gets a cadence as even as the
- * display allows. The delay adapts: a few ms for analog, more for a bursty
+ * neighbours. Instead each frame gets a slot on a grid at the source's
+ * nominal frame rate (sources are within a few ppm of it), plus a delay
+ * that covers how late frames come relative to that grid. A very slow phase
+ * correction keeps the grid on the arrivals as the source's and the PC's
+ * clocks drift apart, so that drift is absorbed smoothly instead of as a
+ * repeated or skipped frame. A renderer that shows each frame on the first
+ * refresh at or after its time gets a cadence as even as the display
+ * allows. The delay adapts: a few ms for analog, more for a bursty
  * source; pin_previewer_delay() reports it so audio monitoring can be held
  * back by the same amount.
  *
@@ -48,23 +48,23 @@ extern "C" {
 
 #define PIN_PACE_DELAY_MIN 0.004
 #define PIN_PACE_DELAY_MAX 0.200
-#define PIN_PACE_DELAY_STEP 0.0005 /* most the delay grows by per frame */
+#define PIN_PACE_DELAY_STEP 0.0002 /* most the delay grows by per frame */
 
 typedef struct {
-    double grid;    /* smoothed arrival time of the last frame */
-    double last;    /* raw arrival time of the last frame, 0 = start over */
-    double period;  /* estimated frame period, 0 = still learning it */
-    double learn_t; /* learning: arrival of the first frame, and frames since */
-    int learn_n;
+    double grid;    /* grid slot of the last frame, 0 = start over */
+    double last;    /* arrival time of the last frame */
+    double period;  /* the frame period the grid runs at */
     double late;    /* decaying peak of how late frames come relative to the grid */
     double delay;   /* current jitter delay */
 } pin_pace_t;
 
 /* A frame arrived at `now` (seconds, any monotonic clock): returns the time
- * to show it at. `frames` is how many source frames it stands for, 1 plus
- * any dropped since the previous one, so the grid skips their slots too.
+ * to show it at. `period` is the source's nominal frame period (1/25,
+ * 1001/30000, ...); 0 if not known, and the frame is shown as it comes.
+ * `frames` is how many source frames it stands for, 1 plus any dropped
+ * since the previous one, so the grid skips their slots too.
  * Zero-initialise the struct to start. */
-double pin_pace_frame(pin_pace_t *pc, double now, int frames);
+double pin_pace_frame(pin_pace_t *pc, double now, double period, int frames);
 
 #ifdef __cplusplus
 }

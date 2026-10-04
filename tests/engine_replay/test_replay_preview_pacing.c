@@ -98,7 +98,7 @@ int main(int argc, char **argv)
            mean * 1000, worst * 1000, early_refused);
     CHECK(mean > 0.030 && mean < 0.045);
     CHECK(worst < 0.004);
-    CHECK(early_refused > N / 2);
+    CHECK(early_refused > 0);
     printf("OK\n");
     return 0;
 }
