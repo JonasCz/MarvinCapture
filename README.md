@@ -37,7 +37,7 @@ Modern, native GUIs for Windows and Mac, plus a flexible command-line applicatio
 
 ## Supported hardware:
 
-|  | PID | internal name | product | status |
+|  | PID | internal name | model no | status |
 |---|---|---|---|---|
 | <a href="docs/images/500-usb.jpg"><img src="docs/images/500-usb.jpg" width="80" alt="500-USB"></a> | `0213` | Marvin-Lite | **500-USB** | supported, tested, DV/HDV/analog in |
 | <a href="docs/images/510-usb.jpg"><img src="docs/images/510-usb.jpg" width="80" alt="510-USB"></a> | `0223` | Marvin-510 | **510-USB** | supported, tested, DV/HDV/analog in |
