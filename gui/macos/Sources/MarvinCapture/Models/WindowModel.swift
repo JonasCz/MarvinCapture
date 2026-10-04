@@ -121,6 +121,11 @@ final class WindowModel {
     @ObservationIgnored var onExitRequested: ((Int32) -> Void)?
     /// Runs at the end of every 100 ms tick (the close flow watches for READY here).
     @ObservationIgnored var afterTick: (() -> Void)?
+    /// More tick listeners (Dock tile); run after `afterTick`.
+    @ObservationIgnored var tickObservers: [() -> Void] = []
+    /// A capture ended or failed (the same situations as the background notifications: not while
+    /// closing): the Dock bounces if the app is in the background. `critical` = abnormal end.
+    @ObservationIgnored var onAttention: ((_ critical: Bool) -> Void)?
     /// Set by the close flow so no dialog / notification fires for the stop the user asked for.
     /// Observable: the view shows the "Finalizing files…" overlay while it is set.
     var isFinalizingForClose = false
@@ -905,6 +910,7 @@ final class WindowModel {
         trackPreviewAspect()
         keepAwake.set(isCapturing)
         afterTick?()
+        for o in tickObservers { o() }
     }
 
     private func applyStatus(_ st: pin_status_snapshot_t) {
@@ -1057,7 +1063,10 @@ final class WindowModel {
                 // A dialog with how much was captured. A normal end only goes to the status bar. Not
                 // while closing or running unattended command-line steps.
                 if !quiet && !scriptRunning { onAlert?(ModelAlert(title: "Capture stopped", message: e.text)) }
-                if !quiet { Notifier.shared.postIfInactive(title: "Capture stopped", body: e.text) }
+                if !quiet {
+                    Notifier.shared.postIfInactive(title: "Capture stopped", body: e.text)
+                    onAttention?(true)
+                }
                 pendingFinished = nil
             } else if !quiet {
                 pendingFinished = (e.text, 0)   // a no-video event may follow right away
@@ -1066,7 +1075,10 @@ final class WindowModel {
             // A capture that received no video at all (an empty tape): no file was written. A warning
             // banner; a command-line script reports it itself through its exit code (Done).
             if !quiet && !scriptRunning { showInfo("No video received", e.text, .warning) }
-            if !quiet { Notifier.shared.postIfInactive(title: "No video received", body: e.text) }
+            if !quiet {
+                Notifier.shared.postIfInactive(title: "No video received", body: e.text)
+                onAttention?(true)   // nothing was written: as bad as a failure to someone waiting
+            }
             pendingFinished = nil
         default:
             break
@@ -1079,6 +1091,7 @@ final class WindowModel {
         if p.age >= 1 {
             pendingFinished = nil
             Notifier.shared.postIfInactive(title: "Capture finished", body: p.text)
+            onAttention?(false)
         } else {
             p.age += 1
             pendingFinished = p

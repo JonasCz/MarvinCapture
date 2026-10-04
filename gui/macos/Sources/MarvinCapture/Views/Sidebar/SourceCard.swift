@@ -81,13 +81,9 @@ private struct MoreMenu: View {
 
     var body: some View {
         Menu {
-            Button {
-                NewWindow.open { error in
-                    if let error { app.window.showInfo("Could not open a new window", error, .error) }
-                }
-            } label: { Label("New Window", systemImage: "macwindow.badge.plus") }
+            Button { NewWindow.open(reportingTo: app.window) } label: { Label("New Window", systemImage: "macwindow.badge.plus") }
                 .help("Opens another capture window, for example for a second device")
-            Button { app.openHelpFromMenu() } label: { Label("Command-line Help", systemImage: "terminal") }
+            Button { app.openHelpFromMenu() } label: { Label("Command-Line Help", systemImage: "terminal") }
             Divider()
             Button { About.show() } label: { Label("About MarvinCapture", systemImage: "info.circle") }
         } label: {

@@ -31,7 +31,7 @@ struct AnalogPanel: View {
                     nameLabel: "Analog name and title",
                     nameHelp: "File name (the extension follows the format), also stored as the title metadata of the file",
                     folderLabel: "Choose analog output folder",
-                    onChooseFolder: { chooseFolder(current: model.analogOutputDir) { model.analogOutputDir = $0 } })
+                    onChooseFolder: { model.chooseOutputFolder() })
                 HStack(alignment: .top, spacing: 8) {
                     Field("Format") {
                         Picker("Format", selection: $m.analogFormat) {

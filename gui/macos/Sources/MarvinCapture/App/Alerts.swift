@@ -38,10 +38,11 @@ final class Alerts {
     /// Shows the alert as a sheet and returns the index of the clicked button. Buttons are in the
     /// usual order (first = right-most / default unless `defaultIndex` says otherwise). Alerts asked
     /// while one is open wait their turn.
-    func ask(title: String, message: String, buttons: [Button], defaultIndex: Int = 0) async -> Int {
+    func ask(title: String, message: String, buttons: [Button], defaultIndex: Int = 0,
+             bringForward: Bool = true) async -> Int {
         await acquire()
         defer { release() }
-        bringToFront()
+        if bringForward { bringToFront() }
 
         let alert = NSAlert()
         alert.alertStyle = .warning
@@ -63,9 +64,10 @@ final class Alerts {
         return max(0, r.rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue)
     }
 
-    /// An information alert with a single OK.
-    func notify(title: String, message: String) async {
-        _ = await ask(title: title, message: message, buttons: [Button(title: "OK")])
+    /// An information alert with a single OK. `bringForward: false` leaves the app in the background
+    /// (the Dock bounce calls the user back) instead of taking the focus.
+    func notify(title: String, message: String, bringForward: Bool = true) async {
+        _ = await ask(title: title, message: message, buttons: [Button(title: "OK")], bringForward: bringForward)
     }
 
     // MARK: serialisation

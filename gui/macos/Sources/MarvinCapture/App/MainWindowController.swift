@@ -48,7 +48,17 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
         // After the content is set, so the saved frame wins; centre on first launch.
         window.setContentSize(NSSize(width: 1100, height: 700))
         window.center()
-        window.setFrameAutosaveName(Self.frameAutosaveName)
+        if Instance.isPrimary {
+            window.setFrameAutosaveName(Self.frameAutosaveName)
+        } else {
+            // Another instance is running: start from the saved frame but never write it (setting the
+            // autosave name would), offset 30 pt per older instance, kept on screen.
+            window.setFrameUsingName(Self.frameAutosaveName)
+            let step = CGFloat(30 * (Instance.ordinal % 8))
+            var frame = window.frame.offsetBy(dx: step, dy: -step)
+            if let screen = window.screen ?? NSScreen.main { frame = window.constrainFrameRect(frame, to: screen) }
+            window.setFrame(frame, display: false)
+        }
         // Developer aid: MARVIN_WINDOW_SIZE=WxH forces the content size (and lifts the minimum), to
         // look at narrow layouts and take snapshots of a known size.
         if let s = ProcessInfo.processInfo.environment["MARVIN_WINDOW_SIZE"] {

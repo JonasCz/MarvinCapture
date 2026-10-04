@@ -31,8 +31,9 @@ enum StatusItem: Int, CaseIterable {
 struct StatusBarMetrics {
     static let fileMinWidth: CGFloat = 80
     static let spacing: CGFloat = 24
-    /// Between the storage size and its free-space part (they read as one item).
-    static let innerSpacing: CGFloat = 6
+    /// Between the storage size and its free-space part (they read as one item). The core's free text
+    /// starts with "· ", so this is the whole gap before the dot: about one space, not two.
+    static let innerSpacing: CGFloat = 4
     static let iconWidth: CGFloat = 14
     static let iconGap: CGFloat = 6
     static let meterBarWidth: CGFloat = 100
