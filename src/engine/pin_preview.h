@@ -18,8 +18,9 @@
 
 /*
  * Preview decode: turns whatever is arriving (analog YUYV frames, DV
- * frames, HDV pictures) into planar YUV in a triple buffer a render thread
- * can lock/unlock without ever blocking the capture path. Runs on its own
+ * frames, HDV pictures) into planar YUV in a short queue a render thread
+ * can lock/unlock without ever blocking the capture path; each frame carries
+ * the time to show it at (a jitter buffer, see pin_pace.h). Runs on its own
  * low-priority thread; drops a frame rather than fall behind.
  *
  *   - Analog: YUYV 4:2:2 -> planar Y/Cb/Cr, a straight byte shuffle, no
@@ -67,7 +68,15 @@ void pin_previewer_set_aspect_override(pin_preview_t *p, pin_aspect_t aspect);
 
 int pin_previewer_wait(pin_preview_t *p, uint64_t after_seq, int timeout_ms);
 pin_status_t pin_previewer_lock(pin_preview_t *p, pin_frame_t *out);
+pin_status_t pin_previewer_lock_due(pin_preview_t *p, double now, pin_frame_t *out);
+int pin_previewer_next_time(pin_preview_t *p, double *t);
 void pin_previewer_unlock(pin_preview_t *p);
+
+/* The clock frame present_time values are on (pin_clock_now()), and the
+ * jitter delay currently added to them (seconds), which audio monitoring
+ * holds its output back by. */
+double pin_previewer_clock(void);
+double pin_previewer_delay(pin_preview_t *p);
 void pin_previewer_enable(pin_preview_t *p, int enabled);
 
 #ifdef __cplusplus

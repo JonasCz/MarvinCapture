@@ -3340,15 +3340,21 @@ void pin_session_monitor_enable(pin_session_t *s, int enabled)
 #define PIN_MON_MAX_MS 200
 #define PIN_MON_TARGET_MS 80
 
+/* The newest `hold` frames stay in the ring: the preview's jitter buffer
+ * shows each picture that much later than it arrived (pin_previewer_delay()),
+ * so the sound is held back by the same amount to stay in sync. Both limits
+ * above count on top of it. */
 int pin_session_monitor_read(pin_session_t *s, int16_t *out, int max_frames)
 {
     if (!s || !out || max_frames <= 0) return 0;
+    size_t hold = (size_t)(48000 * pin_previewer_delay(s->preview));
     pthread_mutex_lock(&s->mon_mtx);
-    size_t max_buffered = (size_t)48000 * PIN_MON_MAX_MS / 1000;
-    size_t target_buffered = (size_t)48000 * PIN_MON_TARGET_MS / 1000;
+    size_t max_buffered = (size_t)48000 * PIN_MON_MAX_MS / 1000 + hold;
+    size_t target_buffered = (size_t)48000 * PIN_MON_TARGET_MS / 1000 + hold;
     if (s->mon_fill > max_buffered)
         s->mon_fill = target_buffered;
-    int n = (int)(s->mon_fill < (size_t)max_frames ? s->mon_fill : (size_t)max_frames);
+    size_t ready = s->mon_fill > hold ? s->mon_fill - hold : 0;
+    int n = (int)(ready < (size_t)max_frames ? ready : (size_t)max_frames);
     size_t start = (s->mon_head + s->mon_cap_frames - s->mon_fill) % s->mon_cap_frames;
     for (int i = 0; i < n; i++) {
         size_t pos = (start + i) % s->mon_cap_frames;
@@ -3363,8 +3369,9 @@ int pin_session_monitor_read(pin_session_t *s, int16_t *out, int max_frames)
 int pin_session_monitor_available(pin_session_t *s)
 {
     if (!s) return 0;
+    size_t hold = (size_t)(48000 * pin_previewer_delay(s->preview));
     pthread_mutex_lock(&s->mon_mtx);
-    int n = (int)s->mon_fill;
+    int n = s->mon_fill > hold ? (int)(s->mon_fill - hold) : 0;
     pthread_mutex_unlock(&s->mon_mtx);
     return n;
 }

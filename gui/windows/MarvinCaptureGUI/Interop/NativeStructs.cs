@@ -294,6 +294,7 @@ public unsafe struct PinFrame
     public int DarNum, DarDen;
     public int Interlaced;
     public int TopFieldFirst;
+    public double PresentTime;
 
     public nint PlaneAt(int i) => i switch { 0 => Plane0, 1 => Plane1, 2 => Plane2, _ => 0 };
     public int StrideAt(int i) => i switch { 0 => Stride0, 1 => Stride1, 2 => Stride2, _ => 0 };

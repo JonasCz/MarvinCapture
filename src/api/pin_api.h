@@ -685,10 +685,19 @@ typedef struct {
     int dar_num, dar_den;       /* display aspect ratio, aspect override applied */
     int interlaced;
     int top_field_first;
+    double present_time;        /* pin_clock_now() time to show it at (jitter buffer) */
 } pin_frame_t;
 
 /* The preview decodes on its own low-priority thread and never slows a
- * capture: if the renderer falls behind, frames are skipped. */
+ * capture: if the renderer falls behind, frames are skipped.
+ *
+ * Pacing: each decoded frame gets a present_time on a smoothed grid at the
+ * source frame rate, a few ms (more for a jittery source) after it was
+ * decoded, so USB / decode jitter doesn't reach the screen. A renderer
+ * that cares calls pin_preview_lock_due() once per display refresh with
+ * the time of the refresh it just saw, and presents whatever it gets; a
+ * frame then appears on the first refresh at or after its present_time.
+ * Audio monitoring (pin_monitor_read()) is held back by the same delay. */
 
 /* Blocks up to timeout_ms for a frame newer than after_seq. Returns 1 if
  * one is available, 0 on timeout, -1 if the session is closing. */
@@ -698,6 +707,19 @@ PIN_API int pin_preview_wait(pin_session_t *s, uint64_t after_seq, int timeout_m
  * hold them only long enough to upload. Returns PIN_ERR_STATE if none. */
 PIN_API pin_status_t pin_preview_lock(pin_session_t *s, pin_frame_t *out);
 PIN_API void pin_preview_unlock(pin_session_t *s);
+
+/* Like pin_preview_lock(), but borrows the newest frame whose present_time
+ * is <= now, dropping older ones. PIN_ERR_STATE if none is due yet. */
+PIN_API pin_status_t pin_preview_lock_due(pin_session_t *s, double now, pin_frame_t *out);
+
+/* The earliest present_time of the frames waiting to be shown; returns 0
+ * (and leaves *t alone) if there are none. Lets a renderer sleep instead of
+ * waking every refresh. */
+PIN_API int pin_preview_next_time(pin_session_t *s, double *t);
+
+/* Seconds on the monotonic clock present_time is on. On Windows it is
+ * QueryPerformanceCounter, so DXGI / DWM timestamps compare directly. */
+PIN_API double pin_clock_now(void);
 
 /* Stop decoding while the preview isn't visible (window minimised etc.). */
 PIN_API void pin_preview_enable(pin_session_t *s, int enabled);
@@ -724,7 +746,9 @@ PIN_API void pin_yuv_to_rgb_matrix(pin_matrix_t m, int full_range, float out[12]
  * itself bounds the ring's latency so a GUI that reads a little slowly
  * doesn't build up an ever-growing delay -- once the buffered amount
  * exceeds ~200 ms, the oldest frames are dropped down to ~80 ms before
- * the next pin_monitor_read() copies out of it. */
+ * the next pin_monitor_read() copies out of it. The newest few ms (the
+ * preview's jitter delay, see pin_preview_lock_due()) are held back on
+ * top of that, so sound and picture stay in step. */
 PIN_API void pin_monitor_enable(pin_session_t *s, int enabled);
 
 /* Reads up to max_frames interleaved stereo frames; returns frames read. */

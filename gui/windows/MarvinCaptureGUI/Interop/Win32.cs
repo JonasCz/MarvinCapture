@@ -160,4 +160,39 @@ internal static partial class Win32
     [LibraryImport("gdi32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool GdiFlush();
+
+    // ---- preview pacing: the compositor's refresh timing, and a sub-ms sleep
+
+    /// <summary>
+    /// DWM_TIMING_INFO. dwmapi.h packs it to 1 byte; only the fields read here are
+    /// declared, at their native offsets (checked against the Windows SDK header).
+    /// </summary>
+    [StructLayout(LayoutKind.Explicit, Size = 292)]
+    public struct DWM_TIMING_INFO
+    {
+        [FieldOffset(0)] public uint CbSize;
+        [FieldOffset(12)] public ulong QpcRefreshPeriod;
+        [FieldOffset(28)] public ulong QpcVBlank;
+    }
+
+    [LibraryImport("dwmapi.dll")]
+    public static partial int DwmGetCompositionTimingInfo(nint hwnd, ref DWM_TIMING_INFO info);
+
+    public const uint CREATE_WAITABLE_TIMER_HIGH_RESOLUTION = 0x2;
+    public const uint TIMER_ALL_ACCESS = 0x1F0003;
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    public static partial nint CreateWaitableTimerExW(nint attributes, nint name, uint flags, uint access);
+
+    [LibraryImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool SetWaitableTimer(nint timer, in long dueTime, int period, nint completion, nint arg,
+        [MarshalAs(UnmanagedType.Bool)] bool resume);
+
+    [LibraryImport("kernel32.dll")]
+    public static partial uint WaitForSingleObject(nint handle, uint milliseconds);
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool CloseHandle(nint handle);
 }

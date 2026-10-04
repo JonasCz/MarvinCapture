@@ -17,6 +17,14 @@ namespace PinnacleCapture.Preview;
 /// presents on a genuinely new frame -- there is no timer, no polling loop,
 /// so idle CPU stays near zero exactly as the spec asks for.
 ///
+/// Pacing: every frame carries the time the core's jitter buffer wants it
+/// shown at (PinFrame.PresentTime). The render thread sleeps until the first
+/// compositor refresh at or after that time and presents then, so the hold
+/// time of each frame is decided by the refresh grid, not by when the frame
+/// happened to be decoded. The refresh grid comes from DWM's timing info,
+/// which follows the rate DWM actually composes at (on Windows 10 with mixed
+/// refresh rate monitors that is the primary monitor's, see docs).
+///
 /// Threading contract: every D3D call (device context use, ResizeBuffers,
 /// Present) happens either on the render thread or under `_gate`. The UI
 /// thread only ever touches `_gate`-guarded state through
@@ -57,6 +65,7 @@ public sealed class D3DPreview : IDisposable
     private double _appliedScaleX, _appliedScaleY;
 
     private Thread? _renderThread;
+    private nint _timer; // high-resolution waitable timer for the pacing sleeps, 0 = fall back to Thread.Sleep
     private volatile bool _running;
     private volatile bool _paused;
     private readonly ManualResetEventSlim _wake = new(false);
@@ -99,6 +108,8 @@ public sealed class D3DPreview : IDisposable
         _panel.CompositionScaleChanged += (_, __) => OnPanelSizeChanged();
 
         OnPanelSizeChanged();
+
+        _timer = Win32.CreateWaitableTimerExW(0, 0, Win32.CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, Win32.TIMER_ALL_ACCESS);
 
         _running = true;
         _renderThread = new Thread(RenderLoop) { IsBackground = true, Name = "PinnaclePreviewRender" };
@@ -315,7 +326,17 @@ public sealed class D3DPreview : IDisposable
             return;
         }
 
-        if (_paused || Native.PreviewLock(session, out var frame) != PinStatus.Ok)
+        if (_paused)
+        {
+            return;
+        }
+        if (!Native.PreviewNextTime(session, out double due))
+        {
+            Thread.Sleep(5); // a newer frame exists but none is queued (cannot normally happen): don't spin
+            return;
+        }
+        double refresh = WaitForRefresh(due);
+        if (_paused || Native.PreviewLockDue(session, refresh, out var frame) != PinStatus.Ok)
         {
             return;
         }
@@ -343,6 +364,84 @@ public sealed class D3DPreview : IDisposable
         }
         HasSignal = true;
         Interlocked.Exchange(ref _lastFrameTick, Environment.TickCount64);
+    }
+
+    // ---- pacing ---------------------------------------------------------------------------
+
+    /// <summary>
+    /// Sleeps until the first compositor refresh at or after <paramref name="due"/>
+    /// (pin_clock_now() seconds) and returns that refresh's time; presenting right
+    /// after it puts the frame on screen a fixed number of refreshes later, the same
+    /// for every frame. Without DWM timing (no compositor), just waits for due.
+    /// </summary>
+    private double WaitForRefresh(double due)
+    {
+        // Bounded (200 refreshes at most), whatever the clocks say.
+        for (int i = 0; i < 200 && _running && !_paused; i++)
+        {
+            double now = Native.ClockNow();
+            if (!LastRefresh(now, out double refresh, out double period))
+            {
+                if (due <= now)
+                {
+                    return now;
+                }
+                SleepSeconds(Math.Min(due - now, 0.1));
+                continue;
+            }
+            if (due <= refresh)
+            {
+                return refresh;
+            }
+            if (due - refresh > 0.5)
+            {
+                return due; // clocks disagree: show it now rather than stall
+            }
+            SleepSeconds(refresh + period - now + 0.0005); // just past the next refresh
+        }
+        return Native.ClockNow();
+    }
+
+    /// <summary>The latest compositor refresh at or before now, on the pin_clock_now() clock.</summary>
+    private static bool LastRefresh(double now, out double refresh, out double period)
+    {
+        refresh = period = 0;
+        var info = new Win32.DWM_TIMING_INFO { CbSize = (uint)Marshal.SizeOf<Win32.DWM_TIMING_INFO>() };
+        if (Win32.DwmGetCompositionTimingInfo(0, ref info) < 0 || info.QpcRefreshPeriod == 0 || info.QpcVBlank == 0)
+        {
+            return false;
+        }
+        // DWM times are QueryPerformanceCounter ticks (Stopwatch's clock); move them onto the core's clock.
+        double freq = System.Diagnostics.Stopwatch.Frequency;
+        double offset = now - System.Diagnostics.Stopwatch.GetTimestamp() / freq;
+        period = info.QpcRefreshPeriod / freq;
+        if (period < 0.002 || period > 0.1)
+        {
+            return false;
+        }
+        // QpcVBlank can be a past or the next refresh, and goes stale while nothing on screen
+        // changes; the refresh period is exact, so extrapolate the grid to now.
+        double vblank = info.QpcVBlank / freq + offset;
+        refresh = vblank + Math.Floor((now - vblank) / period) * period;
+        return true;
+    }
+
+    private void SleepSeconds(double seconds)
+    {
+        if (seconds <= 0)
+        {
+            return;
+        }
+        if (_timer != 0)
+        {
+            long dueTime = -(long)(seconds * 10_000_000); // relative, 100 ns units
+            if (Win32.SetWaitableTimer(_timer, dueTime, 0, 0, 0, false))
+            {
+                Win32.WaitForSingleObject(_timer, 1000);
+                return;
+            }
+        }
+        Thread.Sleep(Math.Max(1, (int)(seconds * 1000)));
     }
 
     private unsafe void UploadFrame(in PinFrame frame)
@@ -449,6 +548,11 @@ public sealed class D3DPreview : IDisposable
         _running = false;
         _wake.Set();
         _renderThread?.Join(500);
+        if (_timer != 0)
+        {
+            Win32.CloseHandle(_timer);
+            _timer = 0;
+        }
 
         _srvY?.Dispose(); _srvU?.Dispose(); _srvV?.Dispose();
         _texY?.Dispose(); _texU?.Dispose(); _texV?.Dispose();

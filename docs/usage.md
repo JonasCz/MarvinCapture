@@ -31,6 +31,15 @@ Two ways in, both on the same core library:
   same rule (`pin_capture_passes_allowed`, `pin_capture_opts_normalize`), so
   `--passes 2` without `--idle-min` / a duration limit also captures once.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
+  The preview is paced by a small jitter buffer in the core (`pin_pace.h`):
+  each frame is shown on the first display refresh at or after a time on an
+  even grid at the source frame rate, a few ms after it arrived (more for a
+  jittery source), and the audio monitor is held back by the same delay. On
+  Windows 10 with monitors at different refresh rates, the compositor runs at
+  the primary monitor's rate, also for windows on the other monitor: a 25 fps
+  preview on a 144 Hz monitor is then shown at 60 Hz (holds of 2 and 3
+  refreshes, 33 / 50 ms) unless the 144 Hz monitor is the primary one
+  (Windows 11 handles mixed refresh rates better).
 - **The command-line program** `MarvinCaptureCLI` in `build\windows-x86_64\dist` next to the GUI
   (`build/<os>-<arch>/dist` on macOS and Linux)
   does everything the GUI does from a command line: device list, deck control,

@@ -84,6 +84,11 @@ if(EXISTS "${PIN_TRACE_PAL}")
     pin_engine_replay_test(test_replay_preview "${PIN_TRACE_PAL}")
 endif()
 
+# 1e': the preview's jitter buffer (present_time on an even grid, lock_due).
+if(EXISTS "${PIN_TRACE_PAL}")
+    pin_engine_replay_test(test_replay_preview_pacing "${PIN_TRACE_PAL}")
+endif()
+
 # 1f: pin_script_run() against the replay device (the command-line sequencer).
 if(EXISTS "${PIN_TRACE_PAL}")
     pin_engine_replay_test(test_pin_script_run "${PIN_TRACE_PAL}")

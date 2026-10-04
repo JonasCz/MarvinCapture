@@ -588,6 +588,20 @@ pin_status_t pin_preview_lock(pin_session_t *s, pin_frame_t *out)
 
 void pin_preview_unlock(pin_session_t *s) { if (s) pin_previewer_unlock(s->preview); }
 
+pin_status_t pin_preview_lock_due(pin_session_t *s, double now, pin_frame_t *out)
+{
+    if (!s || !out) return PIN_ERR_ARG;
+    out->size = sizeof(*out);
+    return pin_previewer_lock_due(s->preview, now, out);
+}
+
+int pin_preview_next_time(pin_session_t *s, double *t)
+{
+    return s && t ? pin_previewer_next_time(s->preview, t) : 0;
+}
+
+double pin_clock_now(void) { return pin_previewer_clock(); }
+
 void pin_preview_enable(pin_session_t *s, int enabled) { if (s) pin_previewer_enable(s->preview, enabled); }
 
 void pin_set_aspect(pin_session_t *s, pin_aspect_t aspect) { pin_session_set_aspect(s, aspect); }

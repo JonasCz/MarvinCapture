@@ -25,12 +25,17 @@
 
 #include "../core/pin_log.h"
 #include "hdv_aux.h"
+#include "pin_pace.h"
 
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 typedef enum { PV_IN_NONE = 0, PV_IN_ANALOG, PV_IN_DV, PV_IN_HDV } pv_in_kind_t;
 
@@ -45,7 +50,15 @@ typedef struct {
     int dar_num, dar_den;
     int interlaced, tff;
     int valid;
+    int queued;           /* decoded, not yet handed out by a lock */
+    uint64_t seq;
+    double present_time;  /* pin_previewer_clock() time to show it at, see pin_pace.h */
 } pv_buf_t;
+
+/* Decoded frames waiting to be shown. A few more than the largest jitter
+ * delay needs (PIN_PACE_DELAY_MAX at 30 fps is 6 frames), so a burst of HDV
+ * pictures still fits. Slot memory is only allocated once a slot is used. */
+#define PV_NBUF 10
 
 struct pin_preview {
     pthread_t thread;
@@ -61,13 +74,17 @@ struct pin_preview {
     unsigned pending_w, pending_h;
     int pending_is_pal;
     int pending_video_pid;
+    int pending_skipped;   /* pushes the drop-if-busy slot discarded since the decoder last took one */
 
     pthread_mutex_t out_mtx;
     pthread_cond_t out_cond;
-    pv_buf_t bufs[3];
+    pv_buf_t bufs[PV_NBUF];
     int ready_idx;   /* -1 or the newest fully-decoded buffer */
     int locked_idx;  /* -1 or the buffer currently on loan via pin_previewer_lock */
     uint64_t seq;
+
+    pin_pace_t pace;      /* the jitter buffer, see pin_pace.h */
+    int out_skipped;      /* source frames dropped before the next decoded one */
 
     pin_aspect_t aspect_override;
 
@@ -152,7 +169,7 @@ void pin_previewer_destroy(pin_preview_t *p)
     if (p->hdv_ctx) avcodec_free_context(&p->hdv_ctx);
     free(p->pending_buf);
     free(p->hdv_es);
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < PV_NBUF; i++)
         free_buf(&p->bufs[i]);
     pthread_mutex_destroy(&p->in_mtx);
     pthread_cond_destroy(&p->in_cond);
@@ -198,6 +215,8 @@ static void push_pending(pin_preview_t *p, pv_in_kind_t kind, const uint8_t *dat
         p->pending_buf = nb;
         p->pending_cap = len;
     }
+    if (p->pending_kind != PV_IN_NONE)
+        p->pending_skipped++;
     memcpy(p->pending_buf, data, len);
     p->pending_len = len;
     p->pending_kind = kind;
@@ -230,17 +249,56 @@ void pin_previewer_push_hdv(pin_preview_t *p, const uint8_t *ts_packets, size_t 
 }
 
 /* --- output side ----------------------------------------------------------
- * Triple buffer: the decode thread always writes into a slot that is
- * neither `ready_idx` (the one a caller might lock next) nor `locked_idx`
- * (the one a caller currently holds), so pin_previewer_lock() never blocks
- * the decoder and the decoder never overwrites what a caller is reading. */
+ * A small queue of decoded frames, each with the time it should be shown
+ * at. The decode thread writes into a slot that is neither queued, nor
+ * `ready_idx` (the newest, what pin_previewer_lock() hands out), nor
+ * `locked_idx` (the one a caller currently holds), so a lock never blocks
+ * the decoder and the decoder never overwrites what a caller is reading.
+ * If every slot is taken the oldest queued frame is dropped. */
+
+double pin_previewer_clock(void)
+{
+#ifdef _WIN32
+    /* QueryPerformanceCounter, so a Windows renderer can compare it with
+     * DXGI / DWM timestamps without converting between clocks */
+    static LARGE_INTEGER freq;
+    LARGE_INTEGER c;
+    if (!freq.QuadPart)
+        QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&c);
+    return (double)c.QuadPart / (double)freq.QuadPart;
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (double)ts.tv_sec + ts.tv_nsec / 1e9;
+#endif
+}
 
 static int pick_write_slot(pin_preview_t *p)
 {
-    for (int i = 0; i < 3; i++)
-        if (i != p->ready_idx && i != p->locked_idx)
+    int oldest = -1;
+    for (int i = 0; i < PV_NBUF; i++) {
+        if (i == p->ready_idx || i == p->locked_idx)
+            continue;
+        if (!p->bufs[i].queued)
             return i;
-    return 0; /* unreachable with 3 slots and at most 2 reserved */
+        if (oldest < 0 || p->bufs[i].seq < p->bufs[oldest].seq)
+            oldest = i;
+    }
+    return oldest; /* never -1: at most 2 of PV_NBUF slots are reserved */
+}
+
+/* Makes slot idx (filled by the caller under out_mtx) the newest queued frame. */
+static void publish_slot(pin_preview_t *p, int idx)
+{
+    pv_buf_t *b = &p->bufs[idx];
+    b->valid = 1;
+    b->queued = 1;
+    b->seq = ++p->seq;
+    b->present_time = pin_pace_frame(&p->pace, pin_previewer_clock(), 1 + p->out_skipped);
+    p->out_skipped = 0;
+    p->ready_idx = idx;
+    pthread_cond_broadcast(&p->out_cond);
 }
 
 static int ensure_cap(uint8_t **buf, size_t *cap, size_t need)
@@ -287,11 +345,7 @@ static void publish_from_avframe(pin_preview_t *p, const AVFrame *f, pin_matrix_
     b->full_range = 0;
     b->dar_num = dar_num; b->dar_den = dar_den;
     b->interlaced = interlaced; b->tff = tff;
-    b->valid = 1;
-
-    p->ready_idx = idx;
-    p->seq++;
-    pthread_cond_broadcast(&p->out_cond);
+    publish_slot(p, idx);
     pthread_mutex_unlock(&p->out_mtx);
 }
 
@@ -328,10 +382,7 @@ static void decode_analog(pin_preview_t *p, const uint8_t *yuyv, unsigned w, uns
     if (asp == PIN_ASPECT_16_9) { b->dar_num = 16; b->dar_den = 9; }
     else { b->dar_num = 4; b->dar_den = 3; }
     b->interlaced = 1; b->tff = 1;
-    b->valid = 1;
-    p->ready_idx = idx;
-    p->seq++;
-    pthread_cond_broadcast(&p->out_cond);
+    publish_slot(p, idx);
     pthread_mutex_unlock(&p->out_mtx);
 }
 
@@ -496,7 +547,16 @@ static void *pv_thread(void *arg)
         if (work && len <= work_cap)
             memcpy(work, p->pending_buf, len);
         p->pending_kind = PV_IN_NONE; /* consumed: drop-if-busy applies to the NEXT push */
+        int skipped = p->pending_skipped;
+        p->pending_skipped = 0;
         pthread_mutex_unlock(&p->in_mtx);
+
+        /* one analog / DV push is one source frame; an HDV push is not one picture */
+        if (kind != PV_IN_HDV && skipped) {
+            pthread_mutex_lock(&p->out_mtx);
+            p->out_skipped += skipped;
+            pthread_mutex_unlock(&p->out_mtx);
+        }
 
         if (!work)
             continue;
@@ -532,6 +592,27 @@ done:
     return rc;
 }
 
+/* Lends slot idx out and drops it and every older frame from the queue. */
+static void lend_slot(pin_preview_t *p, int idx, pin_frame_t *out)
+{
+    pv_buf_t *b = &p->bufs[idx];
+    for (int i = 0; i < PV_NBUF; i++)
+        if (p->bufs[i].queued && p->bufs[i].seq <= b->seq)
+            p->bufs[i].queued = 0;
+    p->locked_idx = idx;
+    out->size = sizeof(*out);
+    out->seq = b->seq;
+    out->width = b->w; out->height = b->h;
+    out->chroma_shift_x = b->shift_x; out->chroma_shift_y = b->shift_y;
+    out->plane[0] = b->y; out->plane[1] = b->u; out->plane[2] = b->v;
+    out->stride[0] = b->stride[0]; out->stride[1] = b->stride[1]; out->stride[2] = b->stride[2];
+    out->matrix = b->matrix;
+    out->full_range = b->full_range;
+    out->dar_num = b->dar_num; out->dar_den = b->dar_den;
+    out->interlaced = b->interlaced; out->top_field_first = b->tff;
+    out->present_time = b->present_time;
+}
+
 pin_status_t pin_previewer_lock(pin_preview_t *p, pin_frame_t *out)
 {
     if (!p)
@@ -541,20 +622,56 @@ pin_status_t pin_previewer_lock(pin_preview_t *p, pin_frame_t *out)
         pthread_mutex_unlock(&p->out_mtx);
         return PIN_ERR_STATE;
     }
-    p->locked_idx = p->ready_idx;
-    pv_buf_t *b = &p->bufs[p->locked_idx];
-    out->size = sizeof(*out);
-    out->seq = p->seq;
-    out->width = b->w; out->height = b->h;
-    out->chroma_shift_x = b->shift_x; out->chroma_shift_y = b->shift_y;
-    out->plane[0] = b->y; out->plane[1] = b->u; out->plane[2] = b->v;
-    out->stride[0] = b->stride[0]; out->stride[1] = b->stride[1]; out->stride[2] = b->stride[2];
-    out->matrix = b->matrix;
-    out->full_range = b->full_range;
-    out->dar_num = b->dar_num; out->dar_den = b->dar_den;
-    out->interlaced = b->interlaced; out->top_field_first = b->tff;
+    lend_slot(p, p->ready_idx, out);
     pthread_mutex_unlock(&p->out_mtx);
     return PIN_OK;
+}
+
+pin_status_t pin_previewer_lock_due(pin_preview_t *p, double now, pin_frame_t *out)
+{
+    if (!p)
+        return PIN_ERR_STATE;
+    pthread_mutex_lock(&p->out_mtx);
+    int pick = -1;
+    for (int i = 0; i < PV_NBUF; i++) {
+        const pv_buf_t *b = &p->bufs[i];
+        if (b->queued && b->present_time <= now && (pick < 0 || b->seq > p->bufs[pick].seq))
+            pick = i;
+    }
+    if (pick < 0) {
+        pthread_mutex_unlock(&p->out_mtx);
+        return PIN_ERR_STATE;
+    }
+    lend_slot(p, pick, out);
+    pthread_mutex_unlock(&p->out_mtx);
+    return PIN_OK;
+}
+
+int pin_previewer_next_time(pin_preview_t *p, double *t)
+{
+    if (!p)
+        return 0;
+    pthread_mutex_lock(&p->out_mtx);
+    int found = 0;
+    for (int i = 0; i < PV_NBUF; i++) {
+        const pv_buf_t *b = &p->bufs[i];
+        if (b->queued && (!found || b->present_time < *t)) {
+            *t = b->present_time;
+            found = 1;
+        }
+    }
+    pthread_mutex_unlock(&p->out_mtx);
+    return found;
+}
+
+double pin_previewer_delay(pin_preview_t *p)
+{
+    if (!p)
+        return 0;
+    pthread_mutex_lock(&p->out_mtx);
+    double d = p->pace.delay;
+    pthread_mutex_unlock(&p->out_mtx);
+    return d;
 }
 
 void pin_previewer_unlock(pin_preview_t *p)

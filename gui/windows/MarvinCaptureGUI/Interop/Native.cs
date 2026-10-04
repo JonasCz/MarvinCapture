@@ -338,6 +338,22 @@ public static unsafe partial class Native
     }
 
     [LibraryImport(Lib)]
+    private static partial PinStatus pin_preview_lock_due(SafeHandle s, double now, ref PinFrame out_);
+    public static PinStatus PreviewLockDue(SafeHandle s, double now, out PinFrame frame)
+    {
+        frame = PinFrame.Create();
+        return pin_preview_lock_due(s, now, ref frame);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial int pin_preview_next_time(SafeHandle s, out double t);
+    public static bool PreviewNextTime(SafeHandle s, out double t) => pin_preview_next_time(s, out t) != 0;
+
+    [LibraryImport(Lib)]
+    private static partial double pin_clock_now();
+    public static double ClockNow() => pin_clock_now();
+
+    [LibraryImport(Lib)]
     private static partial void pin_preview_unlock(SafeHandle s);
     public static void PreviewUnlock(SafeHandle s) => pin_preview_unlock(s);
 
