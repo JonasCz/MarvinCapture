@@ -57,8 +57,12 @@ struct DvPanel: View {
         Card {
             HStack(spacing: 12) {
                 CardHeader("Tape")
+                // Greyed out while a deck command is pending.
                 Text(model.deckStateText)
-                    .font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                    .font(.caption)
+                    .foregroundStyle(model.deckBusy ? Color(nsColor: .tertiaryLabelColor) : Color(nsColor: .labelColor))
+                    .lineLimit(1).truncationMode(.tail)
+                    .help(model.deckTip)
             }
             DeckRow(model: model)
             // Secondary: record whatever arrives, without deck control.

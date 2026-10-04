@@ -336,6 +336,18 @@ public static unsafe partial class Native
     public static string DeckStateName(PinDeckState s) => PtrToUtf8(pin_deck_state_name(s));
 
     [LibraryImport(Lib)]
+    private static partial void pin_format_deck_tip(PinDeckState s, int busy, byte* out_, nuint cap);
+
+    /// <summary>"Deck: Playing", or "Deck: Playing — waiting for the deck to respond" while a command is pending.</summary>
+    public static string FormatDeckTip(PinDeckState s, bool busy)
+    {
+        const int cap = 96;
+        byte* buf = stackalloc byte[cap];
+        pin_format_deck_tip(s, busy ? 1 : 0, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
     private static partial int pin_deck_cmd_allowed(PinState state, int deckAvailable, PinDeckState deck, PinDeckCmd cmd);
 
     /// <summary>Whether the deck button for cmd is enabled (core rule; deckAvailable = a camera is on the bus).</summary>

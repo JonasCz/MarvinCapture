@@ -396,8 +396,8 @@ final class WindowModel {
     private(set) var statusTimeText = "--:--:--:--"
     private(set) var statusTimeTip = "Tape timecode"
     private(set) var deckStateText = "Deck: —"
-    /// deckStateText as if busy, so a layout can reserve the width of the " …".
-    private(set) var deckStateReserveText = "Deck: — …"
+    /// Tooltip / accessibility label of the deck status, from the core ("Deck: Playing — waiting for the deck to respond" while busy).
+    private(set) var deckTip = "Deck: —"
     private(set) var signalLocked = false
     private(set) var signalLockText = "No signal"
     private(set) var signalTypeText = ""
@@ -752,9 +752,8 @@ final class WindowModel {
         isPlayChecked = state == PIN_DECK_PLAYING || state == PIN_DECK_RECORDING
         isStopChecked = state == PIN_DECK_STOPPED
         isFfChecked = state == PIN_DECK_FAST_FORWARD
-        let text = Pin.deckStateName(state)
-        deckStateReserveText = text + " …"
-        deckStateText = busy ? text + " …" : text
+        deckStateText = Pin.deckStateName(state)
+        deckTip = Pin.deckTip(state, busy: busy)
     }
 
     // MARK: capture

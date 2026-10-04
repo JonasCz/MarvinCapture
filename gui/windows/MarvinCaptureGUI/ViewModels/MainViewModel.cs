@@ -399,8 +399,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _statusTimeText = "--:--:--:--";
     [ObservableProperty] private string _statusTimeTip = "Tape timecode";
     [ObservableProperty] private string _deckStateText = "Deck: —";
-    /// <summary>DeckStateText as if busy: the status bar lays it out invisibly so the " …" never shifts its neighbours.</summary>
-    [ObservableProperty] private string _deckStateReserveText = "Deck: — …";
+    /// <summary>Tooltip / automation name of the deck status, from the core ("Deck: Playing — waiting for the deck to respond" while busy).</summary>
+    [ObservableProperty] private string _deckTip = "Deck: —";
     [ObservableProperty] private bool _signalLocked;
     [ObservableProperty] private string _signalLockText = "No signal";
     [ObservableProperty] private string _signalTypeText = "";
@@ -681,9 +681,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             IsPlayChecked = state is PinDeckState.Playing or PinDeckState.Recording;
             IsStopChecked = state == PinDeckState.Stopped;
             IsFfChecked = state == PinDeckState.FastForward;
-            var text = Native.DeckStateName(state);
-            DeckStateReserveText = text + " …";
-            DeckStateText = busy ? text + " …" : text;
+            DeckStateText = Native.DeckStateName(state);
+            DeckTip = Native.FormatDeckTip(state, busy);
         }
         finally
         {

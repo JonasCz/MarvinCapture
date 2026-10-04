@@ -82,17 +82,14 @@ private struct DeckItem: View {
     let model: WindowModel
     var body: some View {
         HStack(spacing: StatusBarMetrics.iconGap) {
-            StatusIcon(name: "recordingtape")
-            // The invisible busy-width text reserves room for the trailing " …".
-            ZStack(alignment: .leading) {
-                Text(model.deckStateReserveText).hidden()
-                Text(model.deckStateText)
-            }
+            // Orange while a deck command is pending (the tooltip says so too).
+            StatusIcon(name: "recordingtape", color: model.deckBusy ? .orange : nil)
+            Text(model.deckStateText)
         }
         .fixedSize()
-        .help("Deck status")
+        .help(model.deckTip)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Deck: \(model.deckStateText)")
+        .accessibilityLabel(model.deckTip)
     }
 }
 

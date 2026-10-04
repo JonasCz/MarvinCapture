@@ -138,6 +138,10 @@ enum Pin {
     @discardableResult
     static func deck(_ s: Session, _ cmd: pin_deck_cmd_t) -> pin_status_t { pin_deck(s, cmd) }
     static func deckStateName(_ d: pin_deck_state_t) -> String { String(cString: pin_deck_state_name(d)) }
+    /// "Deck: Playing", or "Deck: Playing — waiting for the deck to respond" while a command is pending.
+    static func deckTip(_ d: pin_deck_state_t, busy: Bool) -> String {
+        format { pin_format_deck_tip(d, busy ? 1 : 0, $0, $1) }
+    }
     static func deckCmdAllowed(state: pin_state_t, deckAvailable: Bool, deck: pin_deck_state_t,
                                cmd: pin_deck_cmd_t) -> Bool {
         pin_deck_cmd_allowed(state, deckAvailable ? 1 : 0, deck, cmd) != 0

@@ -62,8 +62,7 @@ struct StatusBarMetrics {
             .mute: 8 + muteWidth,
         ]
         if model.isDvInput {
-            widths[.deck] = spacing + iconGap + iconWidth
-                + max(textWidth(model.deckStateText), textWidth(model.deckStateReserveText))
+            widths[.deck] = spacing + iconGap + iconWidth + textWidth(model.deckStateText)
         }
         if model.hasDiskInfo {
             widths[.storage] = spacing + iconTextWidth(model.sizeText)

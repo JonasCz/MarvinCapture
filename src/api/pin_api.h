@@ -895,6 +895,11 @@ PIN_API uint32_t pin_next_file_number(const char *path);
  * "Rewinding", "Camera recording", "No tape", else "—" (an em dash). Static, never NULL. */
 PIN_API const char *pin_deck_state_name(pin_deck_state_t s);
 
+/* Tooltip of the deck status: "Deck: Playing", or while the deck has a command pending
+ * (busy != 0; status snapshot deck_busy) "Deck: Playing — waiting for the deck to respond"
+ * (em dash). 80 bytes are enough. */
+PIN_API void pin_format_deck_tip(pin_deck_state_t s, int busy, char *out, size_t cap);
+
 /* Whether the deck button for cmd is enabled. Inputs are what the status snapshot
  * has (state, deck; deck_available = the input is DV/HDV with camera_present != 0,
  * i.e. false only when no camera answered on the bus). All commands need state READY

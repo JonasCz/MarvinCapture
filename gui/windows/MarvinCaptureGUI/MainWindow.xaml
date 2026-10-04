@@ -9,6 +9,8 @@
     <Grid x:Name="RootGrid" Loaded="RootGrid_Loaded" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
         <Grid.Resources>
             <controls:DbThumbConverter x:Key="DbConverter" />
+            <!-- deck status icon while a deck command is pending: a fixed orange that reads on light and dark -->
+            <SolidColorBrush x:Key="DeckBusyBrush" Color="#F7922D" />
 
             <!-- A "card": grouped controls on the window surface. -->
             <Style x:Key="CardStyle" TargetType="Border">
@@ -202,7 +204,7 @@
                                         <Button Grid.Column="1" VerticalAlignment="Stretch" Width="40" Padding="0" Tag="analog" Click="Browse_Click"
                                                 IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
                                                 AutomationProperties.Name="Choose analog output folder" ToolTipService.ToolTip="{x:Bind VM.AnalogOutputDir, Mode=OneWay}">
-                                            <FontIcon Glyph="&#xED25;" FontSize="14" />
+                                            <FontIcon Glyph="&#xF12B;" FontSize="14" />
                                         </Button>
                                     </Grid>
                                     <Grid ColumnSpacing="8">
@@ -409,7 +411,7 @@
                                         <Button Grid.Column="1" VerticalAlignment="Stretch" Width="40" Padding="0" Tag="dv" Click="Browse_Click"
                                                 IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
                                                 AutomationProperties.Name="Choose DV output folder" ToolTipService.ToolTip="{x:Bind VM.DvOutputDir, Mode=OneWay}">
-                                            <FontIcon Glyph="&#xED25;" FontSize="14" />
+                                            <FontIcon Glyph="&#xF12B;" FontSize="14" />
                                         </Button>
                                     </Grid>
                                     <controls:SameHeightSwitchPanel x:Name="KindSwitch" ActiveIndex="{x:Bind VM.SelectedKindTabIndex, Mode=OneWay}" />
@@ -420,10 +422,19 @@
                                 <StackPanel Spacing="12">
                                     <StackPanel Orientation="Horizontal" Spacing="12">
                                         <TextBlock Text="Tape" Style="{StaticResource CardHeaderStyle}" VerticalAlignment="Center" />
+                                        <!-- the deck state: greyed out while a deck command is pending -->
                                         <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}"
                                                    TextTrimming="CharacterEllipsis"
                                                    Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
-                                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+                                                   ToolTipService.ToolTip="{x:Bind VM.DeckTip, Mode=OneWay}"
+                                                   Foreground="{ThemeResource TextFillColorPrimaryBrush}"
+                                                   Visibility="{x:Bind local:MainWindow.Collapsed(VM.DeckBusy), Mode=OneWay}" />
+                                        <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
+                                                   ToolTipService.ToolTip="{x:Bind VM.DeckTip, Mode=OneWay}"
+                                                   Foreground="{ThemeResource TextFillColorDisabledBrush}"
+                                                   Visibility="{x:Bind local:MainWindow.Shown(VM.DeckBusy), Mode=OneWay}" />
                                     </StackPanel>
                                     <Grid ColumnSpacing="8" x:Name="DeckRow">
                                         <Grid.ColumnDefinitions>
@@ -566,16 +577,23 @@
 
                 <!-- deck status (DV / HDV input only) -->
                 <StackPanel Grid.Column="1" x:Name="StatusDeckHost" Margin="24,0,0,0" VerticalAlignment="Center">
-                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="Deck status">
-                        <FontIcon Glyph="&#xEC58;" Style="{StaticResource StatusIconStyle}" />
-                        <!-- the invisible busy-width text reserves room for the trailing " …" -->
-                        <Grid>
-                            <TextBlock Text="{x:Bind VM.DeckStateReserveText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
-                                       Opacity="0" AutomationProperties.AccessibilityView="Raw" />
-                            <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
-                                       HorizontalAlignment="Left"
-                                       AutomationProperties.Name="{x:Bind local:MainWindow.Label('Deck', VM.DeckStateText), Mode=OneWay}" />
-                        </Grid>
+                    <StackPanel Style="{StaticResource StatusItemStyle}" ToolTipService.ToolTip="{x:Bind VM.DeckTip, Mode=OneWay}">
+                        <!-- tape (cassette) icon drawn as a path, like SF Symbols "recordingtape";
+                             orange while a deck command is pending (two copies, toggled, so each keeps its brush) -->
+                        <Viewbox Width="14" Height="14" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw"
+                                 Visibility="{x:Bind local:MainWindow.Collapsed(VM.DeckBusy), Mode=OneWay}">
+                            <Path Width="16" Height="16" StrokeThickness="1.3" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Stroke="{ThemeResource TextFillColorSecondaryBrush}"
+                                  Data="M3,3 H13 A2,2 0 0 1 15,5 V11 A2,2 0 0 1 13,13 H3 A2,2 0 0 1 1,11 V5 A2,2 0 0 1 3,3 Z M3.2,7 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 M9.6,7 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 M5.5,10.6 H10.5" />
+                        </Viewbox>
+                        <Viewbox Width="14" Height="14" VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw"
+                                 Visibility="{x:Bind local:MainWindow.Shown(VM.DeckBusy), Mode=OneWay}">
+                            <Path Width="16" Height="16" StrokeThickness="1.3" StrokeLineJoin="Round" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  Stroke="{StaticResource DeckBusyBrush}"
+                                  Data="M3,3 H13 A2,2 0 0 1 15,5 V11 A2,2 0 0 1 13,13 H3 A2,2 0 0 1 1,11 V5 A2,2 0 0 1 3,3 Z M3.2,7 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 M9.6,7 a1.6,1.6 0 1 0 3.2,0 a1.6,1.6 0 1 0 -3.2,0 M5.5,10.6 H10.5" />
+                        </Viewbox>
+                        <TextBlock Text="{x:Bind VM.DeckStateText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
+                                   AutomationProperties.Name="{x:Bind VM.DeckTip, Mode=OneWay}" />
                     </StackPanel>
                 </StackPanel>
 
@@ -596,7 +614,7 @@
                 <StackPanel Grid.Column="2" x:Name="StatusTimeHost" Margin="24,0,0,0" VerticalAlignment="Center">
                     <StackPanel Style="{StaticResource StatusItemStyle}"
                                 ToolTipService.ToolTip="{x:Bind VM.StatusTimeTip, Mode=OneWay}">
-                        <FontIcon Glyph="&#xE916;" Style="{StaticResource StatusIconStyle}" />
+                        <FontIcon Glyph="&#xE121;" Style="{StaticResource StatusIconStyle}" />
                         <TextBlock Text="{x:Bind VM.StatusTimeText, Mode=OneWay}" Style="{StaticResource StatusTextStyle}"
                                    AutomationProperties.Name="{x:Bind local:MainWindow.Label(VM.StatusTimeTip, VM.StatusTimeText), Mode=OneWay}" />
                     </StackPanel>
@@ -607,9 +625,9 @@
                     <StackPanel Style="{StaticResource StatusItemStyle}"
                                 ToolTipService.ToolTip="Signal: lock state, source type and video format"
                                 AutomationProperties.Name="{x:Bind local:MainWindow.SignalName(VM.SignalLockText, VM.SignalTypeText), Mode=OneWay}">
-                        <FontIcon Glyph="&#xE73E;" FontSize="12" Foreground="{ThemeResource SystemFillColorSuccessBrush}"
+                        <FontIcon Glyph="&#xEC61;" FontSize="12" Foreground="{ThemeResource SystemFillColorSuccessBrush}"
                                   Visibility="{x:Bind VM.SignalLocked, Mode=OneWay}" />
-                        <FontIcon Glyph="&#xE7BA;" FontSize="12" Foreground="{ThemeResource SystemFillColorCautionBrush}"
+                        <FontIcon Glyph="&#xE814;" FontSize="12" Foreground="{ThemeResource SystemFillColorCautionBrush}"
                                   Visibility="{x:Bind local:MainWindow.Collapsed(VM.SignalLocked), Mode=OneWay}" />
                         <TextBlock Text="{x:Bind local:MainWindow.SignalText(VM.SignalLockText, VM.SignalTypeText), Mode=OneWay}"
                                    Style="{StaticResource StatusTextStyle}" />

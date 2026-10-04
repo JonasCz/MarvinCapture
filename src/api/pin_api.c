@@ -594,6 +594,14 @@ const char *pin_deck_state_name(pin_deck_state_t s)
     return EM_DASH;
 }
 
+void pin_format_deck_tip(pin_deck_state_t s, int busy, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    snprintf(out, cap, busy ? "Deck: %s " EM_DASH " waiting for the deck to respond" : "Deck: %s",
+             pin_deck_state_name(s));
+}
+
 int pin_deck_cmd_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck,
                          pin_deck_cmd_t cmd)
 {

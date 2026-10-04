@@ -242,6 +242,12 @@ static void test_deck_name(void)
     CHECK_STR(pin_deck_state_name(PIN_DECK_UNKNOWN), "\xe2\x80\x94", "unknown");
     CHECK_STR(pin_deck_state_name((pin_deck_state_t)99), "\xe2\x80\x94", "out of range");
 
+    char tip[96];
+    pin_format_deck_tip(PIN_DECK_PLAYING, 0, tip, sizeof(tip));
+    CHECK_STR(tip, "Deck: Playing", "tip idle");
+    pin_format_deck_tip(PIN_DECK_PLAYING, 1, tip, sizeof(tip));
+    CHECK_STR(tip, "Deck: Playing \xe2\x80\x94 waiting for the deck to respond", "tip busy");
+
     CHECK(pin_deck_cmd_allowed(PIN_STATE_READY, 1, PIN_DECK_STOPPED, PIN_DECK_CMD_PLAY) == 1, "wrapper");
     CHECK(pin_capture_action_allowed(PIN_STATE_READY, 0, PIN_CAPTURE_START_AUTO) == 0, "wrapper");
 }
