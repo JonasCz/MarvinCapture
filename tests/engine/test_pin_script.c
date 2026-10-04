@@ -132,9 +132,9 @@ static void test_conditions(void)
     CHECK(!pin_dur_parse("+01:02:03", &d, why, sizeof(why)), "dur with +");
     CHECK(!pin_dur_parse("00:00:61", &d, why, sizeof(why)) && strstr(why, "seconds"), "dur seconds 61");
 
-    /* without a value: one minute for the states */
-    CHECK(pin_script_cond_parse("idle", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_IDLE, 0, 1, 0, 0), "idle default");
-    CHECK(pin_script_cond_parse("signal", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_SIGNAL, 0, 1, 0, 0), "signal default");
+    /* without a value: 5 s for idle and signal, one minute for nosignal */
+    CHECK(pin_script_cond_parse("idle", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_IDLE, 0, 0, 5, 0), "idle default");
+    CHECK(pin_script_cond_parse("signal", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_SIGNAL, 0, 0, 5, 0), "signal default");
     CHECK(pin_script_cond_parse("nosignal", &c, why, sizeof(why)) && cond_is(&c, PIN_COND_NOSIGNAL, 0, 1, 0, 0),
           "nosignal default");
     /* with a value, both DUR forms */
@@ -175,7 +175,7 @@ static void test_conditions(void)
     CHECK(!pin_script_cond_parse("bogus", &c, why, sizeof(why)), "bogus");
     CHECK(!pin_script_cond_parse("", &c, why, sizeof(why)), "empty");
 
-    expect_cond_text("idle", "idle=00:01:00");
+    expect_cond_text("idle", "idle=00:00:05");
     expect_cond_text("signal=00:00:05:12", "signal=00:00:05:12");
     expect_cond_text("nosignal=00:00:30:00", "nosignal=00:00:30");
     expect_cond_text("timecode=00:14:30:00", "timecode=00:14:30:00");
@@ -216,10 +216,10 @@ static void test_cli_examples(void)
     /* the first example of docs/cli.md */
     CHECK(PARSE(sc, err, "--rew", "--wait", "--play", "--capture", "tape01.avi", "--wait") == PIN_OK, "example 1");
     expect_text(sc, 0, "rew");
-    expect_text(sc, 1, "wait-any idle=00:01:00");
+    expect_text(sc, 1, "wait-any idle=00:00:05");
     expect_text(sc, 2, "play");
     expect_text(sc, 3, "capture tape01.avi");
-    expect_text(sc, 4, "wait-any idle=00:01:00");
+    expect_text(sc, 4, "wait-any idle=00:00:05");
     CHECK(sc->nsteps == 5, "example 1 has 5 steps");
     CHECK(!sc->help, "no help");
     pin_script_destroy(sc);
@@ -255,7 +255,7 @@ static void test_cli_examples(void)
               == PIN_OK, "wait-all example");
     w = find_step(sc, 4);
     CHECK(w && w->wait_all && w->nconds == 2, "wait-all item");
-    expect_text(sc, 4, "wait-all idle=00:01:00,nosignal=00:00:10");
+    expect_text(sc, 4, "wait-all idle=00:00:05,nosignal=00:00:10");
     pin_script_destroy(sc);
 
     /* streaming to stdout parses and carries the flag */
@@ -283,16 +283,16 @@ static void test_wait_forms(void)
     CHECK(PARSE(sc, err, "--wait", "signal,wallclock=00:00:10", "--wait") == PIN_OK, "--wait with a list");
     w = find_step(sc, 0);
     CHECK(w && !w->wait_all && w->nconds == 2, "--wait is wait-any");
-    expect_text(sc, 0, "wait-any signal=00:01:00,wallclock=00:00:10");
-    expect_text(sc, 1, "wait-any idle=00:01:00");
+    expect_text(sc, 0, "wait-any signal=00:00:05,wallclock=00:00:10");
+    expect_text(sc, 1, "wait-any idle=00:00:05");
     pin_script_destroy(sc);
 
     /* inline forms */
     CHECK(PARSE(sc, err, "--wait-any=idle,signal", "--wait-all=signal,nosignal=00:00:02:10", "--wait=idle") == PIN_OK,
           "inline = forms");
-    expect_text(sc, 0, "wait-any idle=00:01:00,signal=00:01:00");
-    expect_text(sc, 1, "wait-all signal=00:01:00,nosignal=00:00:02:10");
-    expect_text(sc, 2, "wait-any idle=00:01:00");
+    expect_text(sc, 0, "wait-any idle=00:00:05,signal=00:00:05");
+    expect_text(sc, 1, "wait-all signal=00:00:05,nosignal=00:00:02:10");
+    expect_text(sc, 2, "wait-any idle=00:00:05");
     pin_script_destroy(sc);
 
     /* chaining, any number */
@@ -381,7 +381,7 @@ static void test_settings_state(void)
 
     /* a bare "--capture x" after "--wait" with the equals form */
     CHECK(PARSE(sc, err, "--play", "--wait=idle", "--capture=z.ts") == PIN_OK && sc->nsteps == 3, "= forms");
-    expect_text(sc, 1, "wait-any idle=00:01:00");
+    expect_text(sc, 1, "wait-any idle=00:00:05");
     expect_text(sc, 2, "capture z.ts");
     pin_script_destroy(sc);
 }
@@ -459,7 +459,7 @@ static void test_clone_and_text_range(void)
     c = pin_script_clone(sc);
     pin_script_destroy(sc);
     CHECK(c && c->nsteps == 2, "clone survives the original");
-    expect_text(c, 1, "wait-any idle=00:01:00");
+    expect_text(c, 1, "wait-any idle=00:00:05");
     CHECK(pin_script_step_description(c, 2, buf, sizeof(buf)) == PIN_ERR_ARG, "index out of range");
     CHECK(pin_script_step_description(c, -1, buf, sizeof(buf)) == PIN_ERR_ARG, "negative index");
     pin_script_destroy(c);

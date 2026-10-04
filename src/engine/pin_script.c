@@ -108,8 +108,10 @@ int pin_dur_parse(const char *s, pin_tc_t *out, char *why, size_t why_cap)
     return pin_tc_parse(buf, out, why, why_cap);
 }
 
-/* Default duration of idle, signal and nosignal: one minute. */
-static const char *k_default_dur = "00:01:00";
+/* Default durations when the value is left out. */
+static const char *k_default_idle = "00:00:05";
+static const char *k_default_signal = "00:00:05";
+static const char *k_default_nosignal = "00:01:00";
 
 int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, size_t why_cap)
 {
@@ -123,11 +125,11 @@ int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, si
     const char *eq = strchr(tok, '=');
     size_t n = eq ? (size_t)(eq - tok) : strlen(tok);
     const char *val = eq ? eq + 1 : NULL;
-    int optional = 0;   /* the value may be left out (default one minute) */
+    const char *dflt = NULL; /* the value may be left out: this default */
     int is_tc = 0;      /* the value is a timecode, not a duration */
-    if (n == 4 && strncmp(tok, "idle", n) == 0) { c.kind = PIN_COND_IDLE; optional = 1; }
-    else if (n == 6 && strncmp(tok, "signal", n) == 0) { c.kind = PIN_COND_SIGNAL; optional = 1; }
-    else if (n == 8 && strncmp(tok, "nosignal", n) == 0) { c.kind = PIN_COND_NOSIGNAL; optional = 1; }
+    if (n == 4 && strncmp(tok, "idle", n) == 0) { c.kind = PIN_COND_IDLE; dflt = k_default_idle; }
+    else if (n == 6 && strncmp(tok, "signal", n) == 0) { c.kind = PIN_COND_SIGNAL; dflt = k_default_signal; }
+    else if (n == 8 && strncmp(tok, "nosignal", n) == 0) { c.kind = PIN_COND_NOSIGNAL; dflt = k_default_nosignal; }
     else if (n == 8 && strncmp(tok, "timecode", n) == 0) { c.kind = PIN_COND_TIMECODE; is_tc = 1; }
     else if (n == 9 && strncmp(tok, "wallclock", n) == 0) c.kind = PIN_COND_WALLCLOCK;
     else if (n == 8 && strncmp(tok, "captured", n) == 0) c.kind = PIN_COND_CAPTURED;
@@ -138,8 +140,8 @@ int pin_script_cond_parse(const char *tok, pin_script_cond_t *out, char *why, si
     }
     char name[16];
     snprintf(name, sizeof(name), "%.*s", (int)n, tok);
-    if (!val && optional) {
-        val = k_default_dur;
+    if (!val && dflt) {
+        val = dflt;
     } else if (!val) {
         if (why && why_cap)
             snprintf(why, why_cap, "%s needs a value (%s=%s)", name, name, is_tc ? "HH:MM:SS:FF" : "HH:MM:SS");
@@ -302,12 +304,12 @@ const char *pin_script_help_text(void)
         "Wait conditions (DUR is HH:MM:SS or HH:MM:SS:FF, no leading +):\n"
         "  idle[=DUR]               the deck was moving after the last transport\n"
         "                           command and is now stopped or paused, and has\n"
-        "                           stayed still for DUR (default 00:01:00; never\n"
+        "                           stayed still for DUR (default 00:00:05; never\n"
         "                           less than about 3 s). Met at once if no transport\n"
         "                           command was sent since the last idle wait and the\n"
         "                           deck is stopped or paused. DV/HDV input only.\n"
         "  signal[=DUR]             a signal has been present without a break for\n"
-        "                           DUR (default 00:01:00)\n"
+        "                           DUR (default 00:00:05)\n"
         "  nosignal[=DUR]           no signal without a break for DUR (default\n"
         "                           00:01:00)\n"
         "  timecode=HH:MM:SS:FF     the deck timecode reaches or passes this value\n"
@@ -748,7 +750,7 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             if (!inl) {
                 it->nconds = 1;
                 it->conds[0].kind = PIN_COND_IDLE;
-                pin_dur_parse(k_default_dur, &it->conds[0].tc, NULL, 0);
+                pin_dur_parse(k_default_idle, &it->conds[0].tc, NULL, 0);
             } else {
                 char buf[256];
                 if (strlen(inl) >= sizeof(buf))

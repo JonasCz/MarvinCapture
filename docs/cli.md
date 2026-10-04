@@ -82,8 +82,8 @@ when unknown), without a leading `+`.
 
 | Condition | Met when |
 |---|---|
-| `idle[=DUR]` | The deck was moving after the last transport command and is now stopped or paused, and has stood still for `DUR` (default one minute, never less than about 3 s). Covers "at the start" after `--rew`, "at the end" after `--ff`, end of tape after `--play`. Already idle with no transport command since: met at once. DV/HDV input only. |
-| `signal[=DUR]` | A signal has been present for `DUR` without a break. Default one minute. |
+| `idle[=DUR]` | The deck was moving after the last transport command and is now stopped or paused, and has stood still for `DUR` (default 5 s, never less than about 3 s). Covers "at the start" after `--rew`, "at the end" after `--ff`, end of tape after `--play`. Already idle with no transport command since: met at once. DV/HDV input only. |
+| `signal[=DUR]` | A signal has been present for `DUR` without a break. Default 5 s. |
 | `nosignal[=DUR]` | No signal (no DV data / no analog lock) for `DUR` without a break. Default one minute. |
 | `timecode=HH:MM:SS:FF` | The deck timecode reaches or passes this value in the direction the tape moves. Fails (exit 3) if the deck goes idle first. The value is required. DV/HDV input only. |
 | `wallclock=DUR` | `DUR` of real time has passed since the wait started. |

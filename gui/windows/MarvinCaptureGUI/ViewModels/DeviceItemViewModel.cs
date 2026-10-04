@@ -17,7 +17,7 @@ public sealed partial class DeviceItemViewModel
     public bool IsBehindHub => HubDepth > 0;
 
     /// <summary>Line under the id in the picker for a device behind a hub.</summary>
-    public string HubLine => "(⚠ connected via USB hub)";
+    public string HubLine => "⚠ connected via USB hub";
 
     /// <summary>The core's advice for a device behind a hub (pin_usb_hub_hint), else null: the entry's tooltip.</summary>
     public string? HubHint => IsBehindHub ? HubHintText.Value : null;
