@@ -1,9 +1,9 @@
 <Project>
-  <!-- Keep all dotnet intermediates and output under the repo's build\ dir
+  <!-- Keep all dotnet intermediates and output under the repo's build\windows-x86_64\gui\ dir
        (gitignored) instead of obj\ and bin\ next to the project. Set here, before
        the SDK props are imported, so it also applies to restore and IDE builds. -->
   <PropertyGroup>
-    <PinnacleGuiBuildRoot>$(MSBuildThisFileDirectory)..\..\build\gui\</PinnacleGuiBuildRoot>
+    <PinnacleGuiBuildRoot>$(MSBuildThisFileDirectory)..\..\build\windows-x86_64\gui\</PinnacleGuiBuildRoot>
     <BaseIntermediateOutputPath>$(PinnacleGuiBuildRoot)obj\</BaseIntermediateOutputPath>
     <BaseOutputPath>$(PinnacleGuiBuildRoot)bin\</BaseOutputPath>
   </PropertyGroup>

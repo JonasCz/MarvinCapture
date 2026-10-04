@@ -31,18 +31,22 @@ scripts\build.ps1
 ```
 
 builds everything (needs MSYS2 UCRT64 and the .NET 10 SDK; see
-[docs/building.md](docs/building.md)) into `build\dist`:
+[docs/building.md](docs/building.md)) into `build\windows-x86_64\dist`:
 
 ```
-build\dist\MarvinCaptureGUI.exe        the GUI
-build\dist\MarvinCaptureCLI.exe        the command-line program
-build\dist\marvin-core.dll             the core library
-build\dist\firmware\                   FPGA bitstreams
+build\windows-x86_64\dist\MarvinCaptureGUI.exe        the GUI
+build\windows-x86_64\dist\MarvinCaptureCLI.exe        the command-line program
+build\windows-x86_64\dist\marvin-core.dll             the core library
+build\windows-x86_64\dist\firmware\                   FPGA bitstreams
 ```
+
+On macOS and Linux, `bash scripts/build.sh` builds the core and
+`MarvinCaptureCLI` into `build/<os>-<arch>/dist` (for example
+`build/macos-arm64/dist`, `build/linux-x86_64/dist`).
 
 The device has to be bound to WinUSB, not the vendor driver
 ([docs/windows-driver.md](docs/windows-driver.md)). Then either run
-`MarvinCaptureGUI.exe`, or from `build\dist`:
+`MarvinCaptureGUI.exe`, or from `build\windows-x86_64\dist`:
 
 ```powershell
 .\MarvinCaptureCLI.exe                                   # help and the device list

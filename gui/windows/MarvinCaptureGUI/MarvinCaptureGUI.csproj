@@ -27,7 +27,7 @@
 
     <!-- Where marvin-core.dll (built by the top-level CMake build) lives.
          Override with: dotnet build -p:PinnacleCoreDir=C:\path\to\dir -->
-    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\build\core</PinnacleCoreDir>
+    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\build\windows-x86_64\core</PinnacleCoreDir>
     <!-- The MinGW-built core needs libwinpthread-1.dll at runtime; copied from here if present. -->
     <PinnacleRuntimeDllDir Condition="'$(PinnacleRuntimeDllDir)' == ''">C:\msys64\ucrt64\bin</PinnacleRuntimeDllDir>
 

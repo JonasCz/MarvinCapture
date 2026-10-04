@@ -63,8 +63,12 @@ void pin_log_set_sink(pin_log_sink_fn fn, void *user);
  * deliberately: on MinGW targets, "printf" resolves to the ms_printf
  * archetype, which doesn't know %zu/%lld and would warn on the size_t/long
  * formats this codebase uses throughout. gnu_printf is available and
- * correct on every GCC/Clang target this project builds on. */
-#if defined(__GNUC__)
+ * correct on every GCC target this project builds on. Apple Clang doesn't
+ * know gnu_printf (it would silently drop the check), so it gets "printf",
+ * which on Darwin is the C99 one that does know %zu/%lld. */
+#if defined(__clang__) && defined(__APPLE__)
+__attribute__((format(printf, 2, 3)))
+#elif defined(__GNUC__)
 __attribute__((format(gnu_printf, 2, 3)))
 #endif
 void pin_logf(pin_log_level_t level, const char *fmt, ...);

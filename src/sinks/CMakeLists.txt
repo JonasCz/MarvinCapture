@@ -96,7 +96,14 @@ target_compile_options(pinnacle_sinks PRIVATE ${PIN_FFMPEG_STATIC_CFLAGS_OTHER})
 target_link_directories(pinnacle_sinks PUBLIC ${PIN_FFMPEG_STATIC_LIBRARY_DIRS})
 target_link_libraries(pinnacle_sinks PUBLIC pinnacle_core Threads::Threads
     ${PIN_FFMPEG_STATIC_LIBRARIES})
-target_link_options(pinnacle_sinks PUBLIC ${PIN_FFMPEG_STATIC_LDFLAGS_OTHER})
+set(_pin_ffmpeg_ldflags ${PIN_FFMPEG_STATIC_LDFLAGS_OTHER})
+if(APPLE)
+    # macOS: libavutil.pc lists "-framework CoreFoundation -framework ...";
+    # as separate list items CMake de-duplicates the repeated "-framework"
+    # and the linker then sees bare "CoreVideo" etc. Keep each pair together.
+    string(REPLACE "-framework;" "-Wl,-framework," _pin_ffmpeg_ldflags "${_pin_ffmpeg_ldflags}")
+endif()
+target_link_options(pinnacle_sinks PUBLIC ${_pin_ffmpeg_ldflags})
 
 if(EXISTS ${CMAKE_SOURCE_DIR}/tests/sinks/CMakeLists.txt)
     add_subdirectory(${CMAKE_SOURCE_DIR}/tests/sinks ${CMAKE_BINARY_DIR}/tests/sinks)

@@ -15,8 +15,8 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 # Top-level build: the native core (marvin-core), MarvinCaptureCLI and the ctest
-# suite. scripts/build.ps1 drives this and then builds the GUI; see
-# docs/building.md.
+# suite. scripts/build.ps1 (Windows, then also the GUI) and scripts/build.sh
+# (macOS/Linux) drive this; see docs/building.md.
 
 cmake_minimum_required(VERSION 3.20)
 project(pinnacle-oss C)
@@ -51,6 +51,15 @@ file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
 target_include_directories(pinnacle_core PUBLIC ${CMAKE_SOURCE_DIR}/src/core)
 target_link_libraries(pinnacle_core PUBLIC PkgConfig::LIBUSB Threads::Threads)
+if(APPLE)
+    # The sources include <libusb-1.0/libusb.h>; libusb-1.0.pc only adds
+    # .../include/libusb-1.0, which on Linux and MSYS2 sits under a default
+    # include dir anyway but not on macOS (Homebrew's /opt/homebrew/include).
+    foreach(_dir IN LISTS LIBUSB_INCLUDE_DIRS)
+        get_filename_component(_parent "${_dir}" DIRECTORY)
+        target_include_directories(pinnacle_core PUBLIC "${_parent}")
+    endforeach()
+endif()
 if(WIN32)
     # MMCSS, for the analog read loop's thread priority
     target_link_libraries(pinnacle_core PUBLIC avrt)
@@ -132,8 +141,38 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PIN_LIBUSB_DLL} $<TARGET_FILE_DIR:marvin-core>)
         endif()
     else()
-        target_link_options(marvin-core PRIVATE -static-libgcc)
+        if(NOT APPLE)
+            # Apple clang has no libgcc and rejects the flag.
+            target_link_options(marvin-core PRIVATE -static-libgcc)
+        endif()
         set_target_properties(marvin-core PROPERTIES C_VISIBILITY_PRESET hidden)
+    endif()
+    if(APPLE)
+        # Bundle libusb like libusb-1.0.dll on Windows: copy Homebrew's
+        # dylib next to the core and point the core at that copy
+        # (@loader_path), so the build directory and dist/ don't need
+        # Homebrew at run time. install_name_tool breaks the signature,
+        # which arm64 requires, hence the ad-hoc re-signing.
+        find_library(PIN_LIBUSB_DYLIB NAMES usb-1.0 HINTS ${LIBUSB_LIBRARY_DIRS} NO_DEFAULT_PATH)
+        if(NOT PIN_LIBUSB_DYLIB)
+            message(FATAL_ERROR "libusb-1.0 dylib not found in ${LIBUSB_LIBRARY_DIRS}")
+        endif()
+        # The name the core records for it, e.g.
+        # /opt/homebrew/opt/libusb/lib/libusb-1.0.0.dylib
+        execute_process(COMMAND otool -D ${PIN_LIBUSB_DYLIB}
+            OUTPUT_VARIABLE _pin_libusb_id OUTPUT_STRIP_TRAILING_WHITESPACE)
+        string(REGEX REPLACE "^[^\n]*\n" "" _pin_libusb_id "${_pin_libusb_id}")
+        get_filename_component(_pin_libusb_name "${_pin_libusb_id}" NAME)
+        set(_pin_libusb_copy $<TARGET_FILE_DIR:marvin-core>/${_pin_libusb_name})
+        add_custom_command(TARGET marvin-core POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy ${PIN_LIBUSB_DYLIB} ${_pin_libusb_copy}
+            COMMAND chmod u+w ${_pin_libusb_copy}
+            COMMAND install_name_tool -id @rpath/${_pin_libusb_name} ${_pin_libusb_copy}
+            COMMAND install_name_tool -change ${_pin_libusb_id}
+                @loader_path/${_pin_libusb_name} $<TARGET_FILE:marvin-core>
+            COMMAND codesign --force --sign - ${_pin_libusb_copy}
+            COMMAND codesign --force --sign - $<TARGET_FILE:marvin-core>
+            VERBATIM)
     endif()
 
     # The FPGA bitstreams go in firmware/ next to the core library, where
@@ -149,6 +188,18 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
 
     add_executable(MarvinCaptureCLI src/cli/marvin_capture_cli.c)
     target_link_libraries(MarvinCaptureCLI PRIVATE marvin-core)
+    if(NOT WIN32)
+        # Find the core library next to the executable (build tree and
+        # build/<os>-<arch>/dist alike), not via an absolute build path.
+        if(APPLE)
+            set(_pin_cli_rpath "@loader_path")
+        else()
+            set(_pin_cli_rpath "$ORIGIN")
+        endif()
+        set_target_properties(MarvinCaptureCLI PROPERTIES
+            BUILD_WITH_INSTALL_RPATH ON
+            INSTALL_RPATH "${_pin_cli_rpath}")
+    endif()
 
     # Hardware-free ctest coverage of the session engine, driven through
     # pin_api.h against the replay (virtual device) source -- see

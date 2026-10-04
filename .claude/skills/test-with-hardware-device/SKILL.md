@@ -8,14 +8,14 @@ description: Test the Pinnacle 500-USB driver against the real attached device (
 This is **manual testing against the physical device**. It is separate from the
 automated code tests (`ctest`, replay tests), which need no device; see the
 `build-and-test` skill for those and for building. Build first
-(`scripts\build.ps1`), then work from `build\dist`.
+(`scripts\build.ps1`), then work from `build\windows-x86_64\dist`.
 
 ## Rules of the road
 
 - **One owner at a time.** The GUI and the CLI cannot hold the device together.
   The device table (`MarvinCaptureCLI` without arguments) shows `in use (pid N)`;
   ask the user to close the GUI, don't kill it.
-- **Don't rebuild `build\dist` while the GUI is open**, and don't run heavy jobs
+- **Don't rebuild `build\windows-x86_64\dist` while the GUI is open**, and don't run heavy jobs
   during a latency-sensitive capture.
 - **Replug rule:** if the device ends up needing a physical replug / power
   cycle, stop and ask the user. A wedged command channel usually recovers on the
@@ -28,7 +28,7 @@ automated code tests (`ctest`, replay tests), which need no device; see the
 - Leave the deck stopped and the tape rewound when you are done
   (`--rew --wait`).
 
-## The tool: MarvinCaptureCLI (run from `build\dist`)
+## The tool: MarvinCaptureCLI (run from `build\windows-x86_64\dist`)
 
 It is the only shipped command-line tool (the old pinlist, pincli, pinanalog,
 pindeck are gone). It finds `firmware\` next to `marvin-core.dll`; the exe needs
@@ -79,7 +79,7 @@ EP 0x84 logging live on as `#if 0` blocks in `src/core/pinnacle_stream.c` and
 script). Test hooks that remain: `PIN_REPLAY=<file>` (virtual replay device, no
 hardware).
 
-The GUI takes `--debug` too: start `build\dist\MarvinCaptureGUI.exe --debug`
+The GUI takes `--debug` too: start `build\windows-x86_64\dist\MarvinCaptureGUI.exe --debug`
 from a console, or with stdout redirected to a file, to read its log.
 
 ## Smoke test (what to run after changing the core)

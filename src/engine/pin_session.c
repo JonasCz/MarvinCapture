@@ -54,6 +54,9 @@
 #if defined(__linux__)
 #include <sys/vfs.h>
 #include <linux/magic.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h> /* _NSGetExecutablePath */
+#include <sys/mount.h>   /* statfs, f_fstypename */
 #endif
 #include <unistd.h>
 #endif
@@ -266,15 +269,19 @@ static int exe_dir(char *out, size_t cap)
     memcpy(out, path, n2);
     out[n2] = 0;
     return 0;
-#elif defined(__APPLE__)
-    (void)out; (void)cap;
-    return -1; /* _NSGetExecutablePath needs <mach-o/dyld.h>; not wired up in this Windows/Linux pass */
 #else
     char path[4096];
+#if defined(__APPLE__)
+    char raw[4096];
+    uint32_t raw_size = sizeof(raw);
+    if (_NSGetExecutablePath(raw, &raw_size) != 0 || !realpath(raw, path))
+        return -1;
+#else
     ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
     if (n <= 0)
         return -1;
     path[n] = 0;
+#endif
     char *slash = strrchr(path, '/');
     if (!slash)
         return -1;
@@ -3033,8 +3040,11 @@ static int fat32_and_free(const char *path, uint64_t *free_bytes, int *fat32)
 #if defined(__linux__)
     struct statfs sf;
     *fat32 = (statfs(path, &sf) == 0 && sf.f_type == MSDOS_SUPER_MAGIC);
+#elif defined(__APPLE__)
+    struct statfs sf; /* "msdos" is FAT12/16/32; exFAT is "exfat" (no 4 GiB limit) */
+    *fat32 = (statfs(path, &sf) == 0 && strcmp(sf.f_fstypename, "msdos") == 0);
 #else
-    *fat32 = 0; /* macOS: f_fstypename "msdos" -- not wired up in this pass */
+    *fat32 = 0;
 #endif
     return 0;
 #endif

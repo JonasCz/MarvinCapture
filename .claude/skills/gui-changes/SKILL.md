@@ -89,15 +89,15 @@ computed in C#. Low-disk uses two copies of the storage elements toggled by
 
 ## Debugging
 
-- Core debug log: start `build\dist\MarvinCaptureGUI.exe --debug` from a console or
+- Core debug log: start `build\windows-x86_64\dist\MarvinCaptureGUI.exe --debug` from a console or
   with stdout redirected to a file (AV/C traffic, bring-up steps; `docs/cli.md`).
 - Crashes / unhandled exceptions: `%LOCALAPPDATA%\PinnacleOSS\crash.log`
   (absent = clean run). If the core DLL fails to load or reports an API
   version other than 3, the app shows an error window instead of the UI.
 - Quick GUI-only build: `dotnet build gui\windows\MarvinCaptureGUI -c Debug
-  -p:Platform=x64`; the run target is `bind\Debug
-et10.0-windows10.0.19041.0\win-x64\`
-  and needs `marvin-core.dll` copied from `build\core` (done by the csproj).
+  -p:Platform=x64`; the run target is
+  `build\windows-x86_64\gui\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\`
+  and needs `marvin-core.dll` copied from `build\windows-x86_64\core` (done by the csproj).
 - Hardware/replay testing of capture behaviour: see test-with-hardware-device.
 - Packages: WindowsAppSDK 2.5.1, CommunityToolkit.Mvvm 8.4.2, Vortice D3D11.
   App is unpackaged, self-contained, x64, JIT (field-style `[ObservableProperty]`
@@ -159,8 +159,8 @@ et10.0-windows10.0.19041.0\win-x64\`
 Use `scripts\build.ps1` (see the build-and-test skill). It builds the core,
 runs ctest, then the GUI. The XAML/C# compiler errors appear before the copy
 step. If it fails with MSB3027 "file is locked by MarvinCaptureGUI (pid)", the
-app is running from `build\dist`: the code compiled fine, but ask the user to
+app is running from `build\windows-x86_64\dist`: the code compiled fine, but ask the user to
 close it (don't kill it) and re-run. Don't run `ctest` directly from
-`build\core` (exit 0xc0000139 = DLL path not set); the script sets PATH.
+`build\windows-x86_64\core` (exit 0xc0000139 = DLL path not set); the script sets PATH.
 
 Commit and push straight to main (single-developer repo).

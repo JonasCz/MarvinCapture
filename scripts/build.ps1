@@ -1,19 +1,23 @@
 <#
 .SYNOPSIS
-  Builds everything and assembles a runnable output in build\dist.
+  Builds everything and assembles a runnable output in build\windows-x86_64\dist.
 
 .DESCRIPTION
   1. (first time only) builds the minimal static FFmpeg into third_party\.
   2. Configures and builds the native core (marvin-core.dll, MarvinCaptureCLI)
-     with MSYS2 UCRT64 gcc into build\core, and runs the ctest suite.
-  3. Builds the WinUI 3 app against that core.
-  4. Assembles build\dist:
+     with MSYS2 UCRT64 gcc into build\windows-x86_64\core, and runs the ctest suite.
+  3. Builds the WinUI 3 app against that core (intermediates in
+     build\windows-x86_64\gui).
+  4. Assembles build\windows-x86_64\dist:
 
-       build\dist\MarvinCaptureGUI.exe       the GUI
-       build\dist\MarvinCaptureCLI.exe       the command-line program
-       build\dist\marvin-core.dll            the core library (+ libusb-1.0.dll,
-                                             libwinpthread-1.dll)
-       build\dist\firmware\                  FPGA bitstreams
+       MarvinCaptureGUI.exe       the GUI
+       MarvinCaptureCLI.exe       the command-line program
+       marvin-core.dll            the core library (+ libusb-1.0.dll,
+                                  libwinpthread-1.dll)
+       firmware\                  FPGA bitstreams
+
+  Build output is per platform (build\<os>-<arch>\), so a macOS or Linux build
+  (scripts/build.sh) can live in the same tree.
 
   Requires MSYS2 (UCRT64: gcc, cmake, ninja, libusb, pkgconf, nasm, make,
   diffutils) and the .NET 10 SDK. See docs\building.md.
@@ -21,7 +25,7 @@
 .PARAMETER Config     Release (default) or Debug.
 .PARAMETER SkipTests  Don't run ctest.
 .PARAMETER SkipGui    Build the native core and CLI only.
-.PARAMETER Clean      Delete build\ first.
+.PARAMETER Clean      Delete build\windows-x86_64\ first (other platforms' output is kept).
 .PARAMETER Msys2      MSYS2 root (default C:\msys64).
 #>
 [CmdletBinding()]
@@ -35,7 +39,8 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $root 'build'
+# per-platform output dir, named like third_party\ffmpeg-windows-x86_64
+$build = Join-Path $root 'build\windows-x86_64'
 $core = Join-Path $build 'core'
 $dist = Join-Path $build 'dist'
 
@@ -54,7 +59,7 @@ if (-not (Test-Path (Join-Path $ucrt 'gcc.exe'))) {
 $env:PATH = "$ucrt;$env:PATH"
 
 if ($Clean -and (Test-Path $build)) {
-    Step 'Cleaning build\'
+    Step 'Cleaning build\windows-x86_64\'
     Remove-Item -Recurse -Force $build
 }
 
@@ -83,8 +88,8 @@ if (-not $SkipTests) {
     Run ctest @('--test-dir', $core, '--output-on-failure')
 }
 
-# --- 3. Assemble build\dist ---------------------------------------------------
-Step 'Assembling build\dist'
+# --- 3. Assemble build\windows-x86_64\dist ------------------------------------
+Step 'Assembling build\windows-x86_64\dist'
 # MarvinCaptureCLI.exe goes next to the GUI: they share marvin-core.dll and firmware\
 # (the GUI build below copies the same files again).
 New-Item -ItemType Directory -Force $dist | Out-Null
@@ -104,13 +109,13 @@ if (-not $SkipGui) {
 }
 
 # --- Check ---------------------------------------------------------------------
-Step 'Checking build\dist'
+Step 'Checking build\windows-x86_64\dist'
 $expect = @('MarvinCaptureCLI.exe', 'marvin-core.dll', 'libusb-1.0.dll', 'libwinpthread-1.dll',
             'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin', 'firmware\fx2-marvin.bin')
 if (-not $SkipGui) {
     $expect += 'MarvinCaptureGUI.exe'
 }
 $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dist $_)) }
-if ($missing) { throw "missing from build\dist: $($missing -join ', ')" }
+if ($missing) { throw "missing from build\windows-x86_64\dist: $($missing -join ', ')" }
 
 Write-Host "`nDone: $dist" -ForegroundColor Green

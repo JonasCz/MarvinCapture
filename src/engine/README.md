@@ -112,12 +112,14 @@ scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
 
 This directory is normally built as part of the top-level `CMakeLists.txt`
 (`add_subdirectory(src/engine)`), which also builds the session engine
-above, `src/sinks` and `marvin-core`/`MarvinCaptureCLI`:
+above, `src/sinks` and `marvin-core`/`MarvinCaptureCLI`. The build scripts
+(`scripts/build.sh` on macOS/Linux, `scripts\build.ps1` on Windows) do all of
+it; after one script run, iterate in the CMake tree they leave in
+`build/<os>-<arch>/core` (e.g. `build/macos-arm64/core`):
 
 ```
-cmake -S . -B build -G Ninja
-cmake --build build
-ctest --test-dir build --output-on-failure
+cmake --build build/macos-arm64/core
+ctest --test-dir build/macos-arm64/core --output-on-failure
 ```
 
 `pinnacle_engine_pure` (the hardware-free modules at the top of this file)

@@ -341,7 +341,7 @@ int pin_settings_device_key(const char *serial, const char *id, const char *key,
         out[n++] = o;
     }
     out[n++] = '.';
-    out[n] = ' ';
+    out[n] = '\0';
     if (key && *key) {
         if (n + strlen(key) + 1 > out_size)
             return -1;

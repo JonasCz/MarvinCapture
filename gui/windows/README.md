@@ -21,7 +21,10 @@ cd gui\windows\MarvinCaptureGUI
 dotnet build -c Debug -p:Platform=x64
 ```
 
-The output lands in `bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\`.
+`gui/windows/Directory.Build.props` moves `obj\` and `bin\` out of the project
+into the repo's `build\windows-x86_64\gui\`, so the output lands in
+`build\windows-x86_64\gui\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\`.
+(`scripts\build.ps1` instead sets `OutDir` to `build\windows-x86_64\dist\`.)
 For a release build, use `-c Release`.
 
 ### Where the core DLL comes from (`PinnacleCoreDir`)
@@ -33,7 +36,7 @@ copy.
 
 | Property | Default | Purpose |
 |---|---|---|
-| `PinnacleCoreDir` | `..\..\..\build\core` | Folder with `marvin-core.dll` (and `libusb-1.0.dll` if present) |
+| `PinnacleCoreDir` | `..\..\..\build\windows-x86_64\core` | Folder with `marvin-core.dll` (and `libusb-1.0.dll` if present) |
 | `PinnacleRuntimeDllDir` | `C:\msys64\ucrt64\bin` | Where `libwinpthread-1.dll` is taken from. MinGW/UCRT64 builds of the core need it. |
 
 To build against a core built elsewhere:
@@ -45,7 +48,7 @@ dotnet build -c Debug -p:Platform=x64 -p:PinnacleCoreDir=C:\path\to\core\build
 ## Run
 
 ```powershell
-.\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
+..\..\..\build\windows-x86_64\gui\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\MarvinCaptureGUI.exe
 ```
 
 If `marvin-core.dll` can't be loaded, or it reports an API version other

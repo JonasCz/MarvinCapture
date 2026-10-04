@@ -9,7 +9,7 @@ the same syntax.
 > Status: implemented. The parser, the step sequencer and the help text are in
 > the core (`pin_script_parse`, `pin_script_run`, `pin_script_cancel`,
 > `pin_script_help`, API version 3), used by `MarvinCaptureCLI`
-> (`src/cli/marvin_capture_cli.c`, in `build\dist` next to the GUI) and by the
+> (`src/cli/marvin_capture_cli.c`, in `build\windows-x86_64\dist` next to the GUI) and by the
 > GUI's command line.
 
 ## Model

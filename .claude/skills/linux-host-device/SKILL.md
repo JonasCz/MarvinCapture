@@ -22,10 +22,14 @@ an old prebuilt slice makes test_stdout_sinks fail with "no NUT muxer"). Source 
 reused by copying `third_party/ffmpeg-src` from a previous tree first:
 ```
 cd ~/marvin-main && bash scripts/build-ffmpeg.sh        # ~30 s with the tarball present, minutes otherwise
-cmake -B build -S . && cmake --build build -j6 && (cd build && ctest)
+bash scripts/build.sh --skip-gui                         # core, CLI, ctest
 ```
-Outputs: `build/MarvinCaptureCLI`, `build/libmarvin-core.so`, 27 ctests (all pass on Linux as of
-the rename). `MarvinCaptureCLI --help` ends with "No devices found." when no device is attached.
+Outputs: `build/linux-x86_64/dist/MarvinCaptureCLI`, `build/linux-x86_64/dist/libmarvin-core.so`
+(CMake tree in `build/linux-x86_64/core`), 27 ctests (all pass on Linux as of the rename).
+**Untested on the host:** scripts/build.sh and the per-platform `build/linux-x86_64/` layout
+replaced the old `cmake -B build -S . && cmake --build build -j6 && (cd build && ctest)`
+(outputs then in `build/`); fall back to that if the script fails, and fix this skill.
+`MarvinCaptureCLI --help` ends with "No devices found." when no device is attached.
 
 ## Running against the device
 
@@ -36,14 +40,14 @@ the CLI says `device already open in another process` (that is EACCES).
 
 No camera is attached, so only bring-up can be tested. Quick checks from `~/marvin-main`:
 
-- `./build/MarvinCaptureCLI` (no arguments): help and the device table -- model name, `(untested)` flag, GUID serial.
-- DV bring-up to "ready": `timeout 60 ./build/MarvinCaptureCLI --debug --wait wallclock=00:00:05 2> d.log`
+- `./build/linux-x86_64/dist/MarvinCaptureCLI` (no arguments): help and the device table -- model name, `(untested)` flag, GUID serial.
+- DV bring-up to "ready": `timeout 60 ./build/linux-x86_64/dist/MarvinCaptureCLI --debug --wait wallclock=00:00:05 2> d.log`
   (the first action is a wait, so the session comes up as DV) expects `NodeID 0xc000ffc0 ... node 0 of 1`
   and "no camera answered on the 1394 bus" in the log.
-- Analog bring-up: `timeout 40 ./build/MarvinCaptureCLI --debug -i composite --wait wallclock=00:00:05 2> a.log`
+- Analog bring-up: `timeout 40 ./build/linux-x86_64/dist/MarvinCaptureCLI --debug -i composite --wait wallclock=00:00:05 2> a.log`
   (decoder answers, "no signal", exit 0). **Always** wrap the CLI in `timeout`: a capture without a
   terminating `--wait` runs until Ctrl-C and hangs the ssh call (then `pkill MarvinCaptureCLI`).
-- Crash hunting: `gdb -batch -ex run -ex bt --args ./build/MarvinCaptureCLI ...` (gdb is installed).
+- Crash hunting: `gdb -batch -ex run -ex bt --args ./build/linux-x86_64/dist/MarvinCaptureCLI ...` (gdb is installed).
 
 Do not run anything that loads the FX2 firmware (`pinnacle_ensure_fx2`) against
 the 510-USB: it is a no-op there (`fx2_firmware` is NULL for every model but

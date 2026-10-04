@@ -74,7 +74,43 @@ if [[ "${1:-}" == "--clean" ]]; then
     shift || true
 fi
 
+# sha256 of a file: sha256sum (Linux, MSYS2, macOS 15+) or shasum (older macOS).
+sha256_of() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | awk '{print $1}'
+    else
+        shasum -a 256 "$1" | awk '{print $1}'
+    fi
+}
+
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+
+# FFmpeg's configure refuses a source path with whitespace in it ("Out of
+# tree builds are impossible ..."), and its Makefiles would not cope either.
+# When the checkout lives under such a path (e.g. "~/Documents/Personal
+# software dev/"), build through a whitespace-free symlink to third_party/
+# instead. The symlink's path is derived from the checkout's path so it is
+# the same on every run (the build tree's dependency files record it, so a
+# random one would break incremental rebuilds); the installed .pc files are
+# made prefix-relative afterwards (see below), so nothing outside the build
+# tree depends on it.
+WORK_THIRD_PARTY="${THIRD_PARTY}"
+if [[ "${THIRD_PARTY}" == *[[:space:]]* ]]; then
+    LINK_TMP="${TMPDIR:-/tmp}"
+    LINK_TMP="${LINK_TMP%/}"
+    LINK_DIR="${LINK_TMP}/marvin-ffmpeg-$(printf '%s' "${THIRD_PARTY}" | cksum | awk '{print $1}')"
+    if [[ "${LINK_DIR}" == *[[:space:]]* ]]; then
+        echo "build-ffmpeg.sh: ${THIRD_PARTY} contains whitespace and so does ${LINK_DIR}" >&2
+        exit 1
+    fi
+    mkdir -p "${LINK_DIR}"
+    ln -sfn "${THIRD_PARTY}" "${LINK_DIR}/third_party"
+    WORK_THIRD_PARTY="${LINK_DIR}/third_party"
+    echo "Path has whitespace: building through ${WORK_THIRD_PARTY}"
+fi
+WORK_BUILD_DIR="${WORK_THIRD_PARTY}/ffmpeg-${OS_NAME}-${ARCH_NAME}-build"
+WORK_PREFIX_DIR="${WORK_THIRD_PARTY}/ffmpeg-${OS_NAME}-${ARCH_NAME}"
+WORK_EXTRACT_DIR="${WORK_THIRD_PARTY}/ffmpeg-src/ffmpeg-${FFMPEG_VERSION}"
 
 # ---------------------------------------------------------------------------
 # Fetch + verify
@@ -88,7 +124,7 @@ if [[ ! -f "${TARBALL_PATH}" ]]; then
 fi
 
 echo "Verifying sha256"
-computed_sha256="$(sha256sum "${TARBALL_PATH}" | awk '{print $1}')"
+computed_sha256="$(sha256_of "${TARBALL_PATH}")"
 if [[ "${computed_sha256}" != "${FFMPEG_SHA256}" ]]; then
     echo "build-ffmpeg.sh: sha256 mismatch for ${TARBALL_PATH}" >&2
     echo "  expected: ${FFMPEG_SHA256}" >&2
@@ -106,7 +142,7 @@ fi
 # Configure
 # ---------------------------------------------------------------------------
 mkdir -p "${BUILD_DIR}"
-cd "${BUILD_DIR}"
+cd "${WORK_BUILD_DIR}"
 
 # Components actually used by marvin-core:
 #   encode:  FFV1 (analog capture) + PCM s16le
@@ -116,7 +152,7 @@ cd "${BUILD_DIR}"
 #   parse:   mpegvideo (MPEG-2), mpegaudio (MP2)
 #   proto:   file
 CONFIGURE_ARGS=(
-    --prefix="${PREFIX_DIR}"
+    --prefix="${WORK_PREFIX_DIR}"
 
     # LGPL-only: no --enable-gpl, no --enable-nonfree, no --enable-version3
     # forced (LGPL v2.1+ is fine as-is).
@@ -186,8 +222,8 @@ if [[ "${ARCH_NAME}" == x86_64 || "${ARCH_NAME}" == i?86 ]] && ! command -v nasm
 fi
 
 echo "Configuring FFmpeg ${FFMPEG_VERSION} for ${OS_NAME}-${ARCH_NAME}"
-echo "${EXTRACT_DIR}/configure ${CONFIGURE_ARGS[*]}"
-"${EXTRACT_DIR}/configure" "${CONFIGURE_ARGS[@]}" 2>&1 | tee configure.log
+echo "${WORK_EXTRACT_DIR}/configure ${CONFIGURE_ARGS[*]}"
+"${WORK_EXTRACT_DIR}/configure" "${CONFIGURE_ARGS[@]}" 2>&1 | tee configure.log
 
 echo
 echo "=== ffbuild/config.log tail (auto-selected deps, if any) ==="
@@ -199,9 +235,21 @@ grep -iE "requires|selecting|error" ffbuild/config.log 2>/dev/null | tail -40 ||
 make -j"${NPROC}"
 make install
 
-# scripts/build.ps1 rebuilds FFmpeg when this stamp no longer matches this script
-# (the script holds the whole component list).
-sha256sum "${SCRIPT_DIR}/build-ffmpeg.sh" | awk '{print $1}' > "${PREFIX_DIR}/build-script.sha256"
+if [[ "${WORK_PREFIX_DIR}" != "${PREFIX_DIR}" ]]; then
+    # Installed through the symlink: make the .pc files relative to their own
+    # location so they keep working after the symlink is gone.
+    for pc in "${PREFIX_DIR}"/lib/pkgconfig/*.pc; do
+        sed -e 's|^prefix=.*$|prefix=${pcfiledir}/../..|' \
+            -e 's|^libdir=.*$|libdir=${prefix}/lib|' \
+            -e 's|^includedir=.*$|includedir=${prefix}/include|' \
+            "${pc}" > "${pc}.tmp"
+        mv "${pc}.tmp" "${pc}"
+    done
+fi
+
+# scripts/build.ps1 and scripts/build.sh rebuild FFmpeg when this stamp no
+# longer matches this script (the script holds the whole component list).
+sha256_of "${SCRIPT_DIR}/build-ffmpeg.sh" > "${PREFIX_DIR}/build-script.sha256"
 
 # ---------------------------------------------------------------------------
 # Report

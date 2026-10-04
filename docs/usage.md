@@ -31,7 +31,8 @@ Two ways in, both on the same core library:
   same rule (`pin_capture_passes_allowed`, `pin_capture_opts_normalize`), so
   `--passes 2` without `--idle-min` / a duration limit also captures once.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
-- **The command-line program** `MarvinCaptureCLI` in `build\dist` next to the GUI
+- **The command-line program** `MarvinCaptureCLI` in `build\windows-x86_64\dist` next to the GUI
+  (`build/<os>-<arch>/dist` on macOS and Linux)
   does everything the GUI does from a command line: device list, deck control,
   DV/HDV and analog capture, streaming to stdout, in one command line
   ([cli.md](cli.md)). It finds its FPGA bitstreams in `firmware\` next to
