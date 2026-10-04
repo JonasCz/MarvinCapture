@@ -7,7 +7,7 @@ DV video from tape is increasingly hard to capture (ingest) on modern systems, o
 
 This is an attempt to fix that, by writing a new, modern, cross platform integrated driver and user-space capture application, targeting Pinnacle's MovieBox series of USB capture devices which feature a FireWire input for DV, in addition to analog.
 
-These devices implement a lossless DV-to-USB bridge, i.e. the box **does not** perform any kind of compression or conversion. The DV data you get is what was sent by the camera. Performance is very reliable, the devices do not have any data loss or audio desync issues (test methodology below)
+These devices implement a lossless DV-to-USB bridge, i.e. the box **does not** perform any kind of compression or conversion. The DV data you get is what was sent by the camera. Performance is very reliable, the devices do not have any data loss or audio desync issues (test methodology below).
 
 These are no longer made, although they are still available on second-hand markets, usually for reasonable prices (30-50€).
 
@@ -18,6 +18,22 @@ Pinnacle's driver internally calls these "Marvin", hence the naming.
 A modern, Native GUI for Windows and Mac, plus a flexible command-line application for Windows, Mac, and Linux, allowing capture to various file formats, with options mostly focused on high quality archival and preservation.
 
 [screenshot windows and mac]
+
+* Native applications for Mac/Windows
+* Command-line interface for Mac/Windows/Linux, exposing all features that the GUI has and designed for use in automated piplelines, exposing deck controls/capture actions, and timeouts. The GUI can also be launched via command line and given configuration and actions to execute.
+* Both sharing a user-space LibUSB based driver.
+* Support for multiple instances at a time, each instance can connect to a different device.
+* DV capture, (dv/avi/mov)
+* HDV capture, including devices which Pinnacle didn't market as supporting it. (ts/m2t/mov/mkv)
+* Composite / S-video capture, to uncompressed AVI or FFV1 in MKV. YUY2 video (4:2:2, 8-bit) and 48 kHz stereo PCM, 16-bit.
+* Scene-splitting by timecode (DV/HDV)
+* Auto-stop (timeout) on no input signal signal (DV/HDV/analog)
+* Auto-stop after total time captured (DV/HDV/analog)
+* Automatic multiple capture-passes, intended for use with tools such as [DVrescue's DVmerge](https://mipops.github.io/dvrescue/sections/merge.html) allowing for error reduction by picking error free blocks from multiple captures. (DV/HDV)
+* Deck control, FF, REW, Play, Pause, (DV/HDV)
+* Manual capture withoug use of deck control. (DV/HDV/analog)
+* Automatic capture, rewind tape and capture. (DV/HDV)
+* Lots of status info, error % (DV/HDV), disk space info, live audio and video preview, and lots of other stuff.
 
 ## Supported hardware:
 
@@ -31,36 +47,32 @@ A modern, Native GUI for Windows and Mac, plus a flexible command-line applicati
 
 Pinnacle also made some devices which are not supported:
 
-* **MovieBox DV**: Analog to DV converter box, lacking USB.
-* **MovieBox**, **Dazzle**: Analog to USB, no DV inputs.
+* **MovieBox DV**: Analog to DV converter box, lacking USB. This one has a square shape similar to the 700 and deluxe, in silver.
+* **MovieBox**, **Dazzle**: Analog to USB, no DV inputs. Also available in a square shape, don't buy any of these for use with this project.
 
+More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the device implements a standard OHCI-1394 host controller on an FPGA, it can likely work with any Firewire-100 device and likely isn't limited to DV, although this project focuses on DV video)
 
+## Reliability & Correctness
 
-An open user-space driver, a command-line program and a Windows capture app for the
-**Pinnacle Studio 500-USB** (`USB\VID_2304&PID_0213`, codename *Marvin-Lite*), a
-discontinued ~2005 analog/DV/HDV capture box. The **510-USB** (`PID_0223`)
-is handled identically and verified on Windows too (bring-up, DV capture, deck
-control, stdout streaming). The 700-USB, MovieBox Plus / 710-USB and MovieBox Deluxe are
-implemented from the vendor driver's code but **untested** (flagged in the GUI
-and the CLI). The models live in one table, see
-[docs/hardware.md](docs/hardware.md#models). The vendor driver is XP/Vista-era
-and increasingly unusable; this reverse-engineers the protocol from scratch and
-implements it on libusb.
+In my experience with writing and using this, this is already far more reliable, bug-free, and pleasant to use than all existing pure-firewire based DV capture solutions. No more random deck not detected or reboot required...
 
-**What works**
+This has also been **extensively tested for correctness**, here meaning not losing data.
 
-- **DV capture** over FireWire, verified: a 5-minute capture is 8,967 frames with
-  zero dropped DIF sequences, zero CIP/DBC discontinuities and zero ffmpeg decode
-  errors.
-- **HDV capture** (MPEG-2 transport stream), verified the same way.
-- **Analog capture** (composite, PAL tested): AVI with uncompressed YUY2 video and
-  48 kHz stereo PCM, frame-exact, audio locked to video. S-video and NTSC are
-  implemented but untested.
-- **Deck control**: play, pause, stop, FF, REW, timecode over AV/C.
-- **MarvinCaptureGUI**, a WinUI 3 app: live preview, capture with scene splitting,
-  DV/AVI/MOV/MKV/FFV1 outputs, deck control, audio monitoring.
+This is done with a Test-DVD containing QR codes, one per frame, and [Linear Timecode](https://en.wikipedia.org/wiki/Linear_timecode). These look like this:
 
-## Quick start
+<a href="docs/images/qr-code-frame.png"><img src="docs/images/qr-code-frame.png" width="180" alt="MovieBox Deluxe"></a>
+
+We can play this DVD in a DVD player, with the output connected to the capture device under test. With this project, over a 60 minute test, both on analog inputs, and on DV (via a camcorder in "AV to DV" mode), we have 0 frames lost (frames missing, that are expected to be there), and 0ms of audio missing (undecodable by [LTCdump](https://github.com/x42/ltc-tools/blob/master/ltcdump.c)).
+
+This capture device is, in my testing so far, the only USB device and software that fully passes this test. (The pinnacle devices lock the sample clock to the incoming video clock, and do not drop or duplicate frames to resample the framerate). 
+
+(Note that this testing harness and test DVD is not part of this repo).
+
+Note that the usual recommendation regarding USB devices still applies: avoid connecting it on a hub where it shares bandwidth with other devices (the UI and CLI will warn if it detects a hub). Although this is much less of an issue with DV than with analog, since the bitrate of DV is 25Mbps, which has plenty of margin with USB2's 480Mbps.
+
+This readme, interface design, testing, and verification are all made by a human. However, reverse engineering of the manufacturer's driver, and this code, was made possible with extensive use of LLMs.
+
+## Build
 
 ```powershell
 scripts\build.ps1
@@ -90,25 +102,6 @@ The device has to be bound to WinUSB, not the vendor driver
 .\MarvinCaptureCLI.exe -i composite --capture out.avi --wait wallclock=00:01:00   # analog, 60 s
 ```
 
-The command language is in [docs/cli.md](docs/cli.md); add `--debug` to see the
-raw AV/C traffic and the bring-up steps.
-
-The device needs about 5.5 s of bring-up before the first byte arrives, and the
-camera must actually be transmitting; see [docs/usage.md](docs/usage.md) for how
-to tell a fault from a quiet camera and how to check that nothing was dropped.
-
-### Connection via USB hub
-
-Plug the device directly into a USB port of the computer, not into a hub
-(including front-panel hubs, docks and monitor hubs): behind a hub it shares
-the hub's bandwidth with the other devices on it, which can drop frames. The
-GUI and CLI warn when they detect a hub between the computer and the device
-("connected via USB hub"). To see where it is plugged in: Windows,
-[USBTreeView](https://www.uwe-sieber.de/usbtreeview_e.html) (Uwe Sieber);
-Linux, `lsusb -t`; macOS, System Information > USB (`system_profiler
-SPUSBDataType`). The warning is advisory: some computers wire their own ports
-through a built-in hub, and then it can be ignored.
-
 ## How it is put together
 
 ```
@@ -118,15 +111,7 @@ MarvinCaptureCLI            ──┘        └─ session engine (src/engine),
                                        └─ hardware layer (src/core) ──▶ libusb ──▶ device
 ```
 
-**The interesting finding:** the FPGA implements a standard OHCI-1394 host
-controller, and EP 0x88 carries its isochronous receive DMA tunnelled over USB.
-The stream is not raw DV: two layers of framing sit on top of the DIF data. Strip
-both and you get a byte-exact DV elementary stream. All endpoints are bulk, so
-there is no isochronous USB at all.
-
 ## Documentation
-
-Everything is indexed in **[docs/README.md](docs/README.md)**. The main pages:
 
 | | |
 |---|---|
@@ -141,20 +126,7 @@ Everything is indexed in **[docs/README.md](docs/README.md)**. The main pages:
 | [docs/windows-driver.md](docs/windows-driver.md) | Switching the device to WinUSB |
 | [gui/windows/README.md](gui/windows/README.md) | The GUI |
 
-## A note on the FPGA bitstreams
-
-`firmware/fpga-ohci.bin` (DV/HDV) and `firmware/fpga-capture.bin` (analog) are
-**Pinnacle's copyright, not ours.** They are static Altera Cyclone EP1C3
-configuration blobs extracted from the vendor driver, and the hardware is inert
-without them. They are included as a pragmatic decision: the device was
-discontinued around 2005, the vendor driver is no longer distributed or
-supported, and without them this repository would be useless to anyone who owns
-the hardware. No claim of ownership is made and no licence is granted by us. If
-the rights holder objects they will be removed and the driver will fall back to
-extracting them from the user's own vendor driver install
-(`scripts/extract-bitstreams.py`). See [firmware/README.md](firmware/README.md).
-
-The vendor driver binaries and installer are **not** included.
+Note this documentation was written by an LLM, primarily for other LLM usage.
 
 ## Licence
 
@@ -164,3 +136,12 @@ that service's users.
 
 The FPGA bitstreams are **excluded** from that grant; they are not ours to
 license. FFmpeg is linked statically under LGPL-2.1+ ([third_party/README.md](third_party/README.md)).
+
+
+## FPGA bitstreams
+
+`firmware/fpga-ohci.bin` (DV/HDV) and `firmware/fpga-capture.bin` (analog) are
+**Pinnacle's copyright, not ours.** They are static Altera Cyclone EP1C3
+configuration blobs extracted from the vendor driver, and the hardware is inert without them. They are included as a pragmatic decision: the device was discontinued around 2005, the vendor driver is no longer distributed or supported, and without them this repository would be useless to anyone who owns the hardware. No claim of ownership is made and no licence is granted by this repository. See [firmware/README.md](firmware/README.md).
+
+The vendor driver binaries and installer are **not** included.
