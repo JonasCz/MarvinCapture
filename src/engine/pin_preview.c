@@ -107,6 +107,12 @@ static void pv_av_log(void *avcl, int level, const char *fmt, va_list vl)
      * sequence header: harmless, the preview just waits for the next GOP */
     if (fmt && strstr(fmt, "Invalid frame dimensions"))
         level = AV_LOG_DEBUG + 1;
+    /* libavformat's dv demuxer (the per-frame audio demux in sink_rewrap.c) logs this at
+     * error level whenever the first subcode pack of a frame is not a timecode pack
+     * (blank 0xFF subcode, as in tests/data/dv-ntsc.dv). It only feeds a metadata tag we
+     * never use; the capture's own timecode comes from dv_subcode.c */
+    if (fmt && strstr(fmt, "timecode is invalid"))
+        level = AV_LOG_DEBUG + 1;
     static __thread int in_line_prefix;
     char line[512];
     int prefix = in_line_prefix;
