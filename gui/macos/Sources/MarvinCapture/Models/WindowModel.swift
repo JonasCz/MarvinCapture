@@ -204,7 +204,7 @@ final class WindowModel {
     }
     var primaryDvTitle: String { isCapturing ? "Stop capture & stop tape" + stopCountdownSuffix : "Automatic rewind & capture" }
     var primaryDvHelp: String {
-        isCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it"
+        isCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and captures it"
     }
     var analogCaptureHint: String { isCapturing ? "Finishes the file safely" : "Records the analog input to the file" }
 

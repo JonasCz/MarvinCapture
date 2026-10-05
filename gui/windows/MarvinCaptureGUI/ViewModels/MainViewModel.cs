@@ -123,7 +123,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool DvAutoCaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.StopTape : PinCaptureAction.StartAuto);
 
     public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
-    public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and records it";
+    public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and captures it";
     public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE896"; // Stop / Download
 
     public string CaptureButtonText => IsCapturing ? "Stop capture" + StopCountdownSuffix : "Capture";
