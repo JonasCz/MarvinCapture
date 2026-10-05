@@ -47,7 +47,7 @@ struct DevicePopUp: NSViewRepresentable {
 
     func updateNSView(_ b: NSPopUpButton, context: Context) {
         context.coordinator.onSelect = onSelect
-        b.isEnabled = enabled
+        b.isEnabled = enabled && context.environment.isEnabled
         // Rebuild only when something visible changed: replacing the menu while it is open would close it.
         let signature = [placeholder, selection ?? "-"]
             + devices.map { "\($0.id)|\($0.name)|\($0.statusText)|\($0.isUsable)|\($0.hubDepth)" }

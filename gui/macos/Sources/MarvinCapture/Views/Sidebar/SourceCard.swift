@@ -30,6 +30,7 @@ struct SourceCard: View {
                 enabled: model.deviceSelectEnabled,
                 placeholder: model.noDevices ? "No devices found" : "Select a device",
                 onSelect: { model.selectedDeviceID = $0 })
+                .disabled(!model.deviceSelectEnabled)   // SwiftUI re-applies its environment state to the control
                 .frame(maxWidth: .infinity)
             // The device itself is in the pop-up; only the USB-hub warning is worth a line of its own.
             if let d = model.selectedDevice, d.isBehindHub { HubWarning(device: d) }

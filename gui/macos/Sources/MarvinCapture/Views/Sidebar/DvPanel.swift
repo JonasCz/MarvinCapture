@@ -55,7 +55,7 @@ struct DvPanel: View {
         Divider()
 
         Card {
-            HStack(spacing: 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
                 CardHeader("Tape")
                 // Greyed out while a deck command is pending.
                 Text(model.deckStateText)

@@ -17,33 +17,38 @@
 import SwiftUI
 
 /// The animated Marvin of the no-signal screen: a port of the drawing and the idle animation in
-/// docs/logo.html (the source of truth for the look, motion and timings; keep them in step), drawn with
-/// a SwiftUI Canvas in the logo's 64 x 64 grid. Decorative only: no hit testing, hidden from
-/// accessibility. It exists only while the no-video card does, so a live picture costs nothing; the
-/// timeline runs at 30 fps and SwiftUI pauses it while the window is hidden or occluded. With "Reduce
-/// motion" on it draws the still pose and has no timeline at all.
+/// docs/logo.html (the source of truth for the look, motion and timings; keep them in step), drawn by
+/// a Metal fragment shader in the logo's 64 x 64 grid (`MarvinMetalView`, MarvinRenderer.swift). Decorative
+/// only: no hit testing, hidden from accessibility. It exists only while the no-video card does, so a
+/// live picture costs nothing. With "Reduce motion" on it draws the still pose once and has no display
+/// link at all.
 ///
-/// Edges are blended in linear light (`colorMode: .linear`): gamma-space blending makes the antialiased
-/// edges of the long, nearly horizontal lines look ropey, and their steps crawl visibly as Marvin tilts.
+/// Not SwiftUI's Canvas + TimelineView: every frame of those made AppKit run a layout and constraint
+/// pass over the whole window (about 15 % CPU at 30 fps, none of it the drawing). A plain layer-backed
+/// view with its own display link leaves SwiftUI and the window alone.
 struct MarvinIdleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var idle = MarvinIdle()
 
     var body: some View {
-        Group {
-            if reduceMotion {
-                Canvas(colorMode: .linear) { ctx, size in MarvinIdle.draw(MarvinIdle.stillPose, in: &ctx, size: size) }
-            } else {
-                // 30 fps: the display rate (TimelineView(.animation)) costs more CPU for little visible gain
-                TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
-                    Canvas(colorMode: .linear) { ctx, size in MarvinIdle.draw(idle.pose(at: timeline.date), in: &ctx, size: size) }
-                }
-            }
-        }
-        .frame(width: 144, height: 120)
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
+        MarvinMetal(animated: !reduceMotion)
+            .frame(width: MarvinMetalView.size.width, height: MarvinMetalView.size.height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
     }
+}
+
+private struct MarvinMetal: NSViewRepresentable {
+    let animated: Bool
+
+    func makeNSView(context: Context) -> MarvinMetalView {
+        let v = MarvinMetalView()
+        v.animated = animated
+        return v
+    }
+
+    func updateNSView(_ view: MarvinMetalView, context: Context) { view.animated = animated }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: MarvinMetalView, context: Context) -> CGSize? { MarvinMetalView.size }
 }
 
 /// One frame of Marvin: everything the drawing needs.
@@ -144,90 +149,21 @@ final class MarvinIdle {
         return MarvinPose(mouth: m, tongue: len, bend: bend, y: y, rotation: rot, gaze: gaze, lid: lid)
     }
 
-    // ------------------------------------------------------------------ drawing
-
     /// Mouth open, tongue straight out, eyes looking down at it.
     static let stillPose = MarvinPose()
 
-    private static func rgb(_ hex: UInt32) -> Color {
-        Color(red: Double((hex >> 16) & 255) / 255, green: Double((hex >> 8) & 255) / 255, blue: Double(hex & 255) / 255)
-    }
-    private static let ink = rgb(0x1a1d42), body = rgb(0x2d3180), cream = rgb(0xfbf3dc)
-    private static let coral = rgb(0xff5f5a), coralDark = rgb(0xd43a48), cheek = rgb(0xff7a6e)
-    private static let bars = [0xddd8c6, 0xdcc050, 0x62b9bf, 0x6fb57c, 0xb76fab, 0xd2604f, 0x5069b5].map { rgb(UInt32($0)) }  // muted SMPTE bars
-    private static let drop = 2.5   // centres body plus tongue in the 64 grid
+    // ------------------------------------------------------------------ tongue geometry
 
-    static func draw(_ pose: MarvinPose, in ctx: inout GraphicsContext, size: CGSize) {
-        // the logo's x 0..64 and y 5..58 (body top to tongue tip) scaled into the view
-        let s = min(size.width / 64, size.height / 53)
-        ctx.translateBy(x: (size.width - 64 * s) / 2, y: (size.height - 53 * s) / 2 - 5 * s)
-        ctx.scaleBy(x: s, y: s)
-        ctx.translateBy(x: 0, y: drop + pose.y)
-        ctx.translateBy(x: 32, y: 28)
-        ctx.rotate(by: .degrees(pose.rotation))
-        ctx.translateBy(x: -32, y: -28)
-
-        // The label and its bars are drawn oversized, and the body on top as a frame with the label cut out,
-        // so the label's edge is antialiased once. Filling the label over the body and then the bars clipped
-        // to the same edge antialiases it twice: the cream half-covering an edge pixel shows through the
-        // bars half-covering it, a light line along the bottom of the bars.
-        ctx.fill(Path(CGRect(x: 8, y: 7.5, width: 48, height: 24)), with: .color(cream))
-        for (i, color) in bars.enumerated() {
-            let x0 = i == 0 ? 8 : 9 + Double(i) * 46 / 7, x1 = i == 6 ? 56 : 9 + Double(i + 1) * 46 / 7 + 0.1
-            ctx.fill(Path(CGRect(x: x0, y: 26.2, width: x1 - x0, height: 5.3)), with: .color(color))
-        }
-        var frame = Path(roundedRect: CGRect(x: 4, y: 4, width: 56, height: 40), cornerRadius: 8)
-        frame.addPath(Path(roundedRect: CGRect(x: 9, y: 8.5, width: 46, height: 22), cornerRadius: 5))
-        ctx.fill(frame, with: .color(body), style: FillStyle(eoFill: true))
-        ctx.fill(Path(roundedRect: CGRect(x: 14, y: 11.5, width: 36, height: 13), cornerRadius: 6.5), with: .color(ink))
-        for cx in [23.0, 41.0] {
-            let eye = Path(ellipseIn: CGRect(x: cx - 4.4, y: 18 - 4.4, width: 8.8, height: 8.8))
-            var c = ctx
-            c.clip(to: eye)
-            c.fill(eye, with: .color(.white))
-            let px = cx + pose.gaze.x * 2, py = 18 + pose.gaze.y * 1.7
-            c.fill(Path(ellipseIn: CGRect(x: px - 2.1, y: py - 2.1, width: 4.2, height: 4.2)), with: .color(ink))
-            // the lid is the window colour and stays inside the window, so it needs no clip
-            ctx.fill(Path(CGRect(x: cx - 5, y: 13.2, width: 10, height: pose.lid * 9.2)), with: .color(ink))
-        }
-        for cx in [15.5, 48.5] {
-            ctx.fill(Path(ellipseIn: CGRect(x: cx - 2.6, y: 37.5 - 2.6, width: 5.2, height: 5.2)), with: .color(cheek))
-        }
-
-        // mouth, by openness m: 0 is the closed smile (a stroked curve), 1 fully open (a filled white shape)
+    /// What the shader needs of the tongue (tongueGeom in docs/logo.html): an arrow laid along a bending
+    /// spine, as the outline polygon (21 points, filled and stroked 1.4 wide in the same colour) and the
+    /// groove polyline (6 points). The shaft slides out first, the head shrinks away last. Nil when the
+    /// tongue is in.
+    static func tongue(_ pose: MarvinPose) -> (outline: [CGPoint], groove: [CGPoint], grooveOpacity: Double)? {
+        let len = pose.tongue
+        guard len > 0.01 else { return nil }
         let m = pose.mouth
-        let xl = 26 - 1.5 * m, xr = 38 + 1.5 * m, y0 = 35.5 - 1.5 * m, top = 40.5 - 6.5 * m, bot = 40.5 + 8.5 * m
-        var mouth = Path()
-        mouth.move(to: CGPoint(x: xl, y: y0))
-        mouth.addQuadCurve(to: CGPoint(x: xr, y: y0), control: CGPoint(x: 32, y: top))
-        mouth.addQuadCurve(to: CGPoint(x: xl, y: y0), control: CGPoint(x: 32, y: bot))
-        mouth.closeSubpath()
-        ctx.fill(mouth, with: .color(.white))
-        if m < 1 { ctx.stroke(mouth, with: .color(cream), style: StrokeStyle(lineWidth: 2.6 * (1 - m), lineJoin: .round)) }
-        do {
-            var c = ctx
-            c.clip(to: mouth)
-            c.fill(Path(CGRect(x: 22, y: y0, width: 20, height: 1.8)), with: .color(ink.opacity(0.2 * m)))
-        }
-
-        // the tongue shows only below the upper lip
-        var lip = Path()
-        lip.move(to: CGPoint(x: -40, y: y0))
-        lip.addLine(to: CGPoint(x: xl, y: y0))
-        lip.addQuadCurve(to: CGPoint(x: xr, y: y0), control: CGPoint(x: 32, y: top))
-        lip.addLine(to: CGPoint(x: 104, y: y0))
-        lip.addLine(to: CGPoint(x: 104, y: 120))
-        lip.addLine(to: CGPoint(x: -40, y: 120))
-        lip.closeSubpath()
-        var c = ctx
-        c.clip(to: lip)
-        drawTongue(in: &c, rootY: (y0 + top) / 2 - 1, len: pose.tongue, bend: pose.bend)
-    }
-
-    /// An arrow laid along a bending spine (tongueGeom in docs/logo.html): the shaft slides out first, the
-    /// head shrinks away last.
-    private static func drawTongue(in ctx: inout GraphicsContext, rootY: Double, len: Double, bend: (Double) -> Double) {
-        guard len > 0.01 else { return }
+        let y0 = 35.5 - 1.5 * m, top = 40.5 - 6.5 * m
+        let rootY = (y0 + top) / 2 - 1
         let shaft = 12.5, head = 9.0, full = shaft + head
         let k = min(1, max(0, len / 0.35)), sl = shaft * max(0, (len - 0.35) / 0.65), hl = head * k
         let wS = 3.1 * k, wH = 7.4 * k
@@ -237,34 +173,23 @@ final class MarvinIdle {
         for target in stops {
             let ds = (target - s) / 4
             for _ in 0..<4 {
-                let a = bend((s + ds / 2) / full)
+                let a = pose.bend((s + ds / 2) / full)
                 x += sin(a) * ds
                 y += cos(a) * ds
                 s += ds
             }
-            let a = bend(s / full)
+            let a = pose.bend(s / full)
             pts.append((x, y, cos(a), -sin(a)))
         }
         func at(_ i: Int, _ w: Double) -> CGPoint { CGPoint(x: pts[i].x + pts[i].nx * w, y: pts[i].y + pts[i].ny * w) }
-        var outline = Path()
-        outline.move(to: CGPoint(x: 32 - wS, y: rootY - 2))
-        outline.addLine(to: CGPoint(x: 32 + wS, y: rootY - 2))
-        for i in 0..<7 { outline.addLine(to: at(i, wS)) }
-        outline.addLine(to: at(6, wH))
-        outline.addLine(to: at(7, wH / 2))
-        outline.addLine(to: at(8, 0))
-        outline.addLine(to: at(7, -wH / 2))
-        outline.addLine(to: at(6, -wH))
-        for i in (0..<7).reversed() { outline.addLine(to: at(i, -wS)) }
-        outline.closeSubpath()
-        ctx.fill(outline, with: .color(coral))
-        ctx.stroke(outline, with: .color(coral), style: StrokeStyle(lineWidth: 1.4, lineJoin: .round))
+        var outline = [CGPoint(x: 32 - wS, y: rootY - 2), CGPoint(x: 32 + wS, y: rootY - 2)]
+        for i in 0..<7 { outline.append(at(i, wS)) }
+        outline += [at(6, wH), at(7, wH / 2), at(8, 0), at(7, -wH / 2), at(6, -wH)]
+        for i in (0..<7).reversed() { outline.append(at(i, -wS)) }
 
-        var groove = Path()
-        groove.move(to: at(2, 0))
-        for i in 3..<7 { groove.addLine(to: at(i, 0)) }
-        groove.addLine(to: CGPoint(x: (pts[6].x * 2 + pts[7].x) / 3, y: (pts[6].y * 2 + pts[7].y) / 3))
-        let opacity = 0.8 * min(1, max(0, (len - 0.5) / 0.3))
-        ctx.stroke(groove, with: .color(coralDark.opacity(opacity)), style: StrokeStyle(lineWidth: 1.3, lineCap: .round, lineJoin: .round))
+        var groove = [at(2, 0)]
+        for i in 3..<7 { groove.append(at(i, 0)) }
+        groove.append(CGPoint(x: (pts[6].x * 2 + pts[7].x) / 3, y: (pts[6].y * 2 + pts[7].y) / 3))
+        return (outline, groove, 0.8 * min(1, max(0, (len - 0.5) / 0.3)))
     }
 }

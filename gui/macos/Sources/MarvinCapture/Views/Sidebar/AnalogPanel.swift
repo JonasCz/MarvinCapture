@@ -24,7 +24,21 @@ struct AnalogPanel: View {
     var body: some View {
         @Bindable var m = model
         Card {
-            CardHeader("Output")
+            HStack {
+                CardHeader("Output")
+                Spacer()
+                // Invisible copy of the DV panel's DV/HDV switch, so the header row is as tall there
+                // and the content below lines up the same in both modes.
+                Picker("", selection: .constant(0)) {
+                    Text("DV").tag(0)
+                    Text("HDV").tag(1)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 110)
+                .hidden()
+                .accessibilityHidden(true)
+            }
             Group {
                 OutputNameRow(
                     name: $m.analogName, directory: model.analogOutputDir,
@@ -47,10 +61,10 @@ struct AnalogPanel: View {
                 }
                 HStack(alignment: .top, spacing: 12) {
                     NumberField(title: "Stop no signal (min)", value: $m.analogIdleStopMinutes,
-                                help: "Stops the capture after this many minutes without signal. 0 disables it (never stops automatically).")
+                                help: "Stops the capture after this many minutes without signal. 0 disables it (never stops automatically).", width: 76)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     NumberField(title: "Stop after (min)", value: $m.analogMaxDurationMinutes,
-                                help: "Stops the capture after this many minutes, whether or not signal is present. 0 disables it (never stops automatically).")
+                                help: "Stops the capture after this many minutes, whether or not signal is present. 0 disables it (never stops automatically).", width: 76)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }

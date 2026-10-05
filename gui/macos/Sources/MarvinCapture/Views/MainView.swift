@@ -23,7 +23,7 @@ struct MainView: View {
     @Bindable var app: AppModel
 
     private var model: WindowModel { app.window }
-    static let sidebarWidth: CGFloat = 384
+    static let sidebarWidth: CGFloat = 320
     /// One padding everywhere: sidebar content and preview to the window / title bar / status bar edges
     /// and to each other.
     static let padding: CGFloat = 16

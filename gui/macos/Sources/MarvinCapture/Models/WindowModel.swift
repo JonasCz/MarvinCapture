@@ -914,11 +914,15 @@ final class WindowModel {
         let r = Swift.min(Swift.max(meterAccR, floor), 0)
         meterAccL = -.infinity
         meterAccR = -.infinity
-        audioPeakLeft = Swift.max(l, audioPeakLeft - fall)
-        audioPeakRight = Swift.max(r, audioPeakRight - fall)
+        // Assign only on change: an @Observable setter notifies even for an equal value, which would
+        // re-render the meters 30 times a second while idle (no device, or silence).
+        let peakL = Swift.max(l, audioPeakLeft - fall), peakR = Swift.max(r, audioPeakRight - fall)
+        if peakL != audioPeakLeft { audioPeakLeft = peakL }
+        if peakR != audioPeakRight { audioPeakRight = peakR }
         // The hold tick follows the true (undecayed) peaks.
-        audioHoldLeft = holdLeft.push(l)
-        audioHoldRight = holdRight.push(r)
+        let holdL = holdLeft.push(l), holdR = holdRight.push(r)
+        if holdL != audioHoldLeft { audioHoldLeft = holdL }
+        if holdR != audioHoldRight { audioHoldRight = holdR }
     }
 
     /// The 100 ms tick: process-wide log lines, status snapshot, session events.
