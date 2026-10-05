@@ -34,8 +34,8 @@ Modern, native GUIs for Windows and Mac, plus a flexible command-line applicatio
 * Automatic multiple capture-passes, intended for use with tools such as [DVrescue's DVmerge](https://mipops.github.io/dvrescue/sections/merge.html) allowing for error reduction by picking error free blocks from multiple captures. (DV/HDV)
 * Deck control, FF, REW, Play, Pause, (DV/HDV)
 * Manual capture withoug use of deck control. (DV/HDV/analog)
-* Automatic capture, rewind tape and capture. (DV/HDV)
-* Lots of status info, error % (DV/HDV), disk space info, live audio and video preview, and lots of other stuff.
+* Automatic capture, rewind tape, start playback and capture. (DV/HDV)
+* Lots of status info, error % (DV/HDV), disk space info, full-quality live audio and video preview, and lots of other stuff.
 
 ## Supported hardware:
 
@@ -64,7 +64,7 @@ In my experience with writing and using this, this is already far more reliable,
 
 This has also been **extensively tested for correctness**, here meaning not losing data.
 
-This is done with a Test-DVD containing QR codes, one per frame, encoding the frame number, and [Linear Timecode](https://en.wikipedia.org/wiki/Linear_timecode), also encoding the frame number, These look like this:
+This is done with a Test-DVD containing QR codes, one per frame, encoding the frame number, and [Linear Timecode](https://en.wikipedia.org/wiki/Linear_timecode), also encoding the frame number, each frame looks like this:
 
 <a href="docs/images/qr-code-frame.png"><img src="docs/images/qr-code-frame.png" width="180" alt="MovieBox Deluxe"></a>
 
@@ -77,6 +77,13 @@ This capture device is, in my testing so far, the only USB device and software t
 Note that the usual recommendation regarding USB devices still applies: avoid connecting it on a hub where it shares bandwidth with other devices (the UI and CLI will warn if it detects a hub). Although this is much less of an issue with DV than with analog, since the bitrate of DV is 25Mbps, which has plenty of margin with USB2's 480Mbps.
 
 This readme, interface design, testing, and verification are all made by a human. However, reverse engineering of the manufacturer's driver, and this code, was made possible with extensive use of LLMs.
+
+## Contributing
+
+Pull requests are welcome, notes:
+* AI-written code is acceptable, however it must have been tested by a human, for correctness and functionality.
+* If you add support for new hardware, you must test with that hardware.
+* If you add support for new output formats or any other features, you must test them thoroughly.
 
 ## Build
 
@@ -118,7 +125,7 @@ The device has to be bound to WinUSB, not the vendor driver
 .\MarvinCaptureCLI.exe -i composite --capture out.avi --wait wallclock=00:01:00   # analog, 60 s
 ```
 
-## How it is put together
+## Software architecture
 
 ```
 MarvinCaptureGUI (WinUI 3)  ──┐
@@ -156,7 +163,7 @@ The FPGA bitstreams are **excluded** from that grant; they are not ours to
 license. FFmpeg is linked statically under LGPL-2.1+ ([third_party/README.md](third_party/README.md)).
 
 
-## FPGA bitstreams
+### FPGA bitstreams
 
 `firmware/fpga-ohci.bin` (DV/HDV) and `firmware/fpga-capture.bin` (analog) are
 **Pinnacle's copyright, not ours.** They are static Altera Cyclone EP1C3
