@@ -155,7 +155,7 @@ final class MarvinIdle {
     // Soft edges (points): the long, nearly horizontal edges of the body and the label otherwise visibly step
     // across pixel rows as Marvin bobs and tilts, even on a Retina display. Both get the same slight blur, and
     // the body a faint shadow outside it.
-    private static let softEdge = 0.6, shadowRadius = 1.4
+    private static let softEdge = 0.1, shadowRadius = 1.4
 
     static func draw(_ pose: MarvinPose, in ctx: inout GraphicsContext, size: CGSize) {
         // the logo's x 0..64 and y 5..58 (body top to tongue tip) scaled into the view
