@@ -35,7 +35,7 @@ struct DvPanel: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 110)
-                .help("Which file options are shown below: DV or HDV (the name and folder are shared)")
+                .help("Which file options are shown below: DV or HDV (the name and folder are shared). Which of these is applied based on the incoming video fromat, not which tab is currently selected.")
                 .accessibilityLabel("File options for")
             }
             Group {
