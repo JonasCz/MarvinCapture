@@ -37,8 +37,8 @@
 #
 #   4. macOS only: builds the Swift GUI with SwiftPM (intermediates in
 #      build/macos-arm64/gui) and assembles dist/MarvinCapture.app. Needs only the
-#      Command Line Tools (no Xcode): the app icon is drawn by gui/macos/Tools/
-#      make-icon.swift and packed with iconutil. There is no Linux GUI yet.
+#      Command Line Tools (no Xcode): the app icon is the committed
+#      gui/macos/Resources/AppIcon.iconset packed with iconutil. There is no Linux GUI yet.
 #
 #   MarvinCaptureCLI finds the core next to itself (rpath @loader_path /
 #   $ORIGIN) and the core finds firmware/ next to itself, so dist/ can be
@@ -186,18 +186,9 @@ else
     GUI_BIN="$(swift build -c "${SWIFT_CONFIG}" --package-path "${GUI_SRC}" --scratch-path "${GUI_BUILD}" \
         --show-bin-path)/MarvinCapture"
 
-    # App icon: drawn with AppKit (no Xcode), cached until the generator changes.
-    ICON_SRC="${GUI_SRC}/Tools/make-icon.swift"
+    # App icon: the committed iconset (the logo, rendered by scripts/make-icons.py) packed with iconutil.
     ICON_ICNS="${GUI_BUILD}/AppIcon.icns"
-    ICON_STAMP="${GUI_BUILD}/AppIcon.sha256"
-    ICON_HASH="$(sha256_of "${ICON_SRC}")"
-    if [[ ! -f "${ICON_ICNS}" || ! -f "${ICON_STAMP}" || "$(tr -d '[:space:]' < "${ICON_STAMP}")" != "${ICON_HASH}" ]]; then
-        step "Generating the app icon"
-        rm -rf "${GUI_BUILD}/AppIcon.iconset"
-        swift "${ICON_SRC}" "${GUI_BUILD}/AppIcon.iconset"
-        iconutil -c icns "${GUI_BUILD}/AppIcon.iconset" -o "${ICON_ICNS}"
-        echo "${ICON_HASH}" > "${ICON_STAMP}"
-    fi
+    iconutil -c icns "${GUI_SRC}/Resources/AppIcon.iconset" -o "${ICON_ICNS}"
 
     step "Assembling build/${PLATFORM}/dist/MarvinCapture.app"
     APP_VERSION="0.1.0"

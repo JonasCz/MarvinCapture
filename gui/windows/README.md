@@ -161,7 +161,8 @@ MarvinCaptureGUI/
                 KindSettingsViewModel (DV / HDV tab), ControlSliderViewModel,
                 DeviceItemViewModel
   Views/        KindSettingsView (format, title, split, idle, passes)
-  Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarButton + TaskbarIcons (ITaskbarList3), DbThumbConverter
+  Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarButton + TaskbarIcons (ITaskbarList3), DbThumbConverter,
+                MarvinIdle (the animated logo on the no-signal screen, XAML shapes)
   Preview/      D3DPreview (swap chain + render thread), Shaders (HLSL)
   Services/     IAudioMonitorService (stub; WASAPI playback is a later phase)
   MainWindow.xaml(.cs), App.xaml(.cs)

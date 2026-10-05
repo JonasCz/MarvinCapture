@@ -195,7 +195,7 @@ The window frame is stored by AppKit, not in that file.
 
 ```
 Package.swift                SwiftPM manifest (macOS 15, Swift 5 language mode)
-Tools/make-icon.swift        draws the app icon at build time
+Resources/AppIcon.iconset   the app icon (the logo) as PNGs; scripts/make-icons.py renders them, build.sh packs them
 Sources/
   CMarvinCore/               module map exposing pin_api.h (no copy) and linking marvin-core
   MarvinCapture/
@@ -209,7 +209,8 @@ Sources/
                              DockTile, Notifier, KeepAwake, ConsoleOutput
     Preview/                 PreviewRenderer (render thread, textures, pacing), PreviewShaders (MSL source,
                              compiled at run time), MetalPreview (view, sink, visibility)
-    Views/                   SwiftUI: MainView, Sidebar/, StatusBar/, PreviewArea, InfoBanner, HelpSheet, ...
+    Views/                   SwiftUI: MainView, Sidebar/, StatusBar/, PreviewArea, MarvinIdleView (the animated logo on the
+                             no-signal screen, Canvas), InfoBanner, HelpSheet, ...
 ```
 
 ## Notes

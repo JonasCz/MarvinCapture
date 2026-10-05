@@ -55,8 +55,8 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
             </Grid.ColumnDefinitions>
-            <FontIcon Glyph="&#xE7F4;" FontSize="16" Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                      VerticalAlignment="Center" AutomationProperties.AccessibilityView="Raw" />
+            <Image x:Name="TitleIcon" Width="16" Height="16" VerticalAlignment="Center"
+                   AutomationProperties.AccessibilityView="Raw" />
             <TextBlock Grid.Column="1" Text="{x:Bind VM.WindowTitle, Mode=OneWay}"
                        Style="{StaticResource CaptionTextBlockStyle}" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" />
@@ -524,8 +524,8 @@
                             Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
                             Visibility="{x:Bind local:MainWindow.Collapsed(VM.PreviewHasVideo), Mode=OneWay}">
                         <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Spacing="12">
-                            <FontIcon Glyph="&#xE714;" FontSize="48" Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                                      AutomationProperties.AccessibilityView="Raw" />
+                            <!-- animated Marvin, drawn (and animated) only while this card shows, see MainWindow.UpdateMarvinIdle -->
+                            <controls:MarvinIdle x:Name="NoVideoMarvin" Width="144" Height="120" HorizontalAlignment="Center" />
                             <TextBlock Text="{x:Bind VM.NoVideoText, Mode=OneWay}" HorizontalAlignment="Center"
                                        TextAlignment="Center" TextWrapping="Wrap" MaxWidth="420"
                                        Style="{StaticResource BodyTextBlockStyle}"

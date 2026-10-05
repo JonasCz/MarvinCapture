@@ -46,9 +46,7 @@ struct NoVideoCard: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "video.slash")
-                .font(.system(size: 48)).foregroundStyle(.tertiary)
-                .accessibilityHidden(true)
+            MarvinIdleView()   // animated only while this card shows
             Text(model.noVideoText)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)

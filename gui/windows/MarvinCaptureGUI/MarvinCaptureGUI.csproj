@@ -24,6 +24,7 @@
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
 
     <!-- Where marvin-core.dll (built by the top-level CMake build) lives.
          Override with: dotnet build -p:PinnacleCoreDir=C:\path\to\dir -->
@@ -46,6 +47,13 @@
 
   <ItemGroup>
     <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!-- Assets\ next to the exe: the window icon and the static logo (title bar; also the no-signal screen's
+       fallback if the animated Marvin cannot be drawn). -->
+  <ItemGroup>
+    <Content Include="Assets\AppIcon.ico" Link="Assets\AppIcon.ico" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\..\docs\images\logo.svg" Link="Assets\logo.svg" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!--

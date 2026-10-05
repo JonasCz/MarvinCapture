@@ -95,7 +95,7 @@ MarvinCapture.app/Contents/
   Frameworks/libmarvin-core.dylib        the core, found through the rpath @executable_path/../Frameworks
   Frameworks/libusb-1.0.0.dylib          bundled libusb
   Resources/firmware/                    FPGA bitstreams (not in Frameworks: non-code files there break codesign)
-  Resources/AppIcon.icns                 drawn by gui/macos/Tools/make-icon.swift, packed with iconutil
+  Resources/AppIcon.icns                 the logo (gui/macos/Resources/AppIcon.iconset), packed with iconutil
   _CodeSignature/                        ad-hoc signature
 ```
 

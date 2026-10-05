@@ -1,3 +1,5 @@
+<p align="center"><img src="docs/images/logo.svg" width="128" alt="MarvinCapture logo"></p>
+
 <h1 align="center">MarvinCapture</h1>
 <p align="center"><b>An open-source user-space driver and application to capture DV and analog video via Pinnacle USB capture devices.</b></p>
 

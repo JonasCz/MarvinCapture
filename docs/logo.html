@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MarvinCapture logo</title>
+<style>
+  :root {
+    --bg: #f3f4f7; --card: #ffffff; --ink: #16181f; --muted: #626879; --line: #dfe2ea;
+    --light-swatch: #ffffff; --dark-swatch: #1b1c22;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111217; --card: #1a1b22; --ink: #eceef4; --muted: #9aa0b2; --line: #2b2d38; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px 16px 64px; background: var(--bg); color: var(--ink);
+         font: 15px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; }
+  .lockup { display: flex; align-items: center; gap: 16px; font-size: 40px; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .lockup b { font-weight: 700; }
+  .lockup span { font-weight: 300; }
+  .sub { color: var(--muted); margin: 0 0 8px; max-width: 70ch; }
+  h2 { font-size: 19px; margin: 34px 0 2px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  section > p, section > ul { color: var(--muted); margin: 0 0 14px; max-width: 75ch; font-size: 14px; }
+  section > ul { padding-left: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); }
+  .pair > div { display: flex; align-items: center; justify-content: center; }
+  .on-light { background: var(--light-swatch); color: #16181f; }
+  .on-dark { background: var(--dark-swatch); color: #eceef4; }
+  .hero > div { padding: 22px 0; }
+  .stage.on-dark { background: #0c0d11; }
+  .sizes { margin-top: 10px; grid-template-columns: 1fr; }
+  .sizes > div { gap: 12px; padding: 12px 6px; align-items: flex-end !important; }
+  .titlebar { margin-top: 10px; display: flex; align-items: center; gap: 8px; height: 32px; padding: 0 0 0 10px;
+              border: 1px solid var(--line); border-radius: 8px 8px 0 0; font-size: 12px; background: var(--light-swatch); color: #16181f; }
+  .titlebar .ctl { margin-left: auto; display: flex; }
+  .titlebar .ctl span { width: 44px; text-align: center; font-size: 11px; color: #555; }
+  svg { display: block; flex: none; }
+  svg.rig { overflow: visible; max-width: 100%; height: auto; }
+  button, a.btn { font: inherit; font-size: 13px; padding: 4px 12px; border-radius: 8px; border: 1px solid var(--line);
+                  background: var(--card); color: var(--ink); cursor: pointer; text-decoration: none; }
+</style>
+</head>
+<body>
+<div id="symbols"></div>
+
+<main>
+  <div class="lockup"><svg viewBox="0 0 64 64" width="72" height="72"><use href="#logo"/></svg><div><b>Marvin</b><span>Capture</span></div></div>
+  <p class="sub">Marvin the cassette: the tape reels are his eyes, the label carries a strip of muted colour bars, and the download arrow is his tongue.</p>
+
+  <section>
+    <h2>Static logo <a class="btn" id="download" download="marvincapture-logo.svg">Download SVG</a></h2>
+    <p>The still version, for the app icon, window title icon and README. Drawn on a 64&times;64 grid; shown at 160 px and at 64 / 48 / 32 / 24 / 16 px.</p>
+    <div class="card">
+      <div class="pair hero" id="static-hero"></div>
+      <div class="pair sizes" id="static-sizes"></div>
+      <div class="titlebar"><svg viewBox="0 0 64 64" width="16" height="16"><use href="#logo"/></svg><span>MarvinCapture</span>
+        <div class="ctl"><span>&#x2500;</span><span>&#x25A1;</span><span>&#x2715;</span></div></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Idle animation <button id="toggle">Pause</button> <button id="tongue">Tongue in / out</button></h2>
+    <p>For the idle / no-video state.</p>
+    <ul>
+      <li>The body bobs and tilts slowly.</li>
+      <li>The eyes glance around and blink, occasionally twice in a row.</li>
+      <li>The tongue bends along its length and ripples, rather than swinging from a hinge.</li>
+      <li>Every few seconds the tongue is slurped back in and the mouth closes into a smile; a few seconds later the mouth opens and the tongue pops back out with a wobble, and he looks down at it.</li>
+    </ul>
+    <div class="card"><div class="pair hero" id="anim-hero"></div></div>
+  </section>
+</main>
+
+<script>
+// ---- palette ---------------------------------------------------------------
+const INK = "#1a1d42", BODY = "#2d3180", CREAM = "#fbf3dc", CORAL = "#ff5f5a", CORAL_DK = "#d43a48", CHEEK = "#ff7a6e";
+const BARS = ["#ddd8c6", "#dcc050", "#62b9bf", "#6fb57c", "#b76fab", "#d2604f", "#5069b5"];   // muted SMPTE bars
+
+const TAU = Math.PI * 2, sin = Math.sin, cos = Math.cos;
+const r = n => +n.toFixed(2), clamp01 = v => Math.max(0, Math.min(1, v)), rnd = (a, b) => a + Math.random() * (b - a);
+const bars = (x, y, w, h) => BARS.map((c, i) =>
+  `<rect x="${r(x + i * w / 7)}" y="${y}" width="${r(w / 7 + 0.1)}" height="${h}" fill="${c}"/>`).join("");
+
+// ---- geometry --------------------------------------------------------------
+// Everything is in the cassette's own frame: body at x 4..60, y 4..44. DROP centres body plus tongue in the 64 grid.
+const DROP = 2.5;
+
+// Mouth, by openness m: 0 is the closed smile (a stroked curve), 1 is fully open (a filled white shape).
+function mouthGeom(m) {
+  const xl = 26 - 1.5 * m, xr = 38 + 1.5 * m, y0 = 35.5 - 1.5 * m, top = 40.5 - 6.5 * m, bot = 40.5 + 8.5 * m;
+  return {
+    d: `M${r(xl)} ${r(y0)}Q32 ${r(top)} ${r(xr)} ${r(y0)}Q32 ${r(bot)} ${r(xl)} ${r(y0)}Z`,
+    lip: `M-40 ${r(y0)}H${r(xl)}Q32 ${r(top)} ${r(xr)} ${r(y0)}H104V120H-40Z`,   // everything below the upper lip
+    stroke: r(2.6 * (1 - m)), y0: r(y0), rootY: (y0 + top) / 2 - 1,
+  };
+}
+
+// Tongue: an arrow laid along a bending spine. len 0..1 is how far it is out (the shaft slides out first, the
+// head shrinks away last); bend(u) is the spine's angle in radians at u = 0 (root) .. 1 (tip).
+const TONGUE = { shaftHalf: 3.1, headHalf: 7.4, shaft: 12.5, head: 9 };
+function tongueGeom(rootY, len, bend) {
+  const full = TONGUE.shaft + TONGUE.head;
+  const k = clamp01(len / 0.35), sl = TONGUE.shaft * Math.max(0, (len - 0.35) / 0.65), hl = TONGUE.head * k;
+  const wS = TONGUE.shaftHalf * k, wH = TONGUE.headHalf * k;
+  const stops = [0, 1, 2, 3, 4, 5, 6].map(i => sl * i / 6).concat(sl + hl * 0.5, sl + hl);
+  let x = 32, y = rootY, s = 0;
+  const pts = stops.map(target => {
+    const ds = (target - s) / 4;
+    for (let i = 0; i < 4; i++) { const a = bend((s + ds / 2) / full); x += sin(a) * ds; y += cos(a) * ds; s += ds; }
+    const a = bend(s / full);
+    return { x, y, nx: cos(a), ny: -sin(a) };
+  });
+  const at = (p, w) => `${r(p.x + p.nx * w)} ${r(p.y + p.ny * w)}`;
+  const shaft = pts.slice(0, 7), base = pts[6], mid = pts[7], tip = pts[8];
+  const d = `M${r(32 - wS)} ${r(rootY - 2)}H${r(32 + wS)}` + shaft.map(p => `L${at(p, wS)}`).join("")
+    + `L${at(base, wH)}L${at(mid, wH / 2)}L${at(tip, 0)}L${at(mid, -wH / 2)}L${at(base, -wH)}`
+    + shaft.slice().reverse().map(p => `L${at(p, -wS)}`).join("") + "Z";
+  const groove = "M" + shaft.slice(2).map(p => at(p, 0)).join("L") + `L${r((base.x * 2 + mid.x) / 3)} ${r((base.y * 2 + mid.y) / 3)}`;
+  return { d, groove, shown: len > 0.01, grooveOpacity: r(0.8 * clamp01((len - 0.5) / 0.3)) };
+}
+
+// The still pose: mouth open, tongue straight out, eyes looking down at it.
+const STILL = { mouth: mouthGeom(1), tongue: null, pupil: [0, 1.7] };
+STILL.tongue = tongueGeom(STILL.mouth.rootY, 1, () => 0);
+
+// Layers the animation drives carry m-* classes.
+function marvin(id, { ground = false } = {}) {
+  const u = n => `url(#${id}${n})`, M = STILL.mouth, T = STILL.tongue;
+  const eye = (cx, k) => `<g clip-path="${u("e" + k)}"><circle cx="${cx}" cy="18" r="4.4" fill="#fff"/>`
+    + `<circle class="m-pupil" cx="${cx}" cy="18" r="2.1" fill="${INK}" transform="translate(${STILL.pupil})"/></g>`
+    // the lid is the window colour and stays inside the window, so it needs no clip
+    + `<rect class="m-lid" x="${cx - 5}" y="13.2" width="10" height="0" fill="${INK}"/>`;
+  return `<defs><clipPath id="${id}l"><rect x="9" y="8.5" width="46" height="22" rx="5"/></clipPath>`
+    + `<clipPath id="${id}eL"><circle cx="23" cy="18" r="4.4"/></clipPath><clipPath id="${id}eR"><circle cx="41" cy="18" r="4.4"/></clipPath>`
+    + `<clipPath id="${id}m"><path class="m-mouth-shape" d="${M.d}"/></clipPath>`
+    + `<clipPath id="${id}lip"><path class="m-lip" d="${M.lip}"/></clipPath></defs>`
+    + (ground ? `<ellipse cx="32" cy="${66 + DROP}" rx="16" ry="2.2" fill="#000" opacity=".18"/>` : "")
+    + `<g class="m-root" transform="translate(0 ${DROP})">`
+    + `<rect x="4" y="4" width="56" height="40" rx="8" fill="${BODY}"/>`
+    + `<rect x="9" y="8.5" width="46" height="22" rx="5" fill="${CREAM}"/>`
+    + `<g clip-path="${u("l")}">${bars(9, 26.2, 46, 4.3)}</g>`
+    + `<rect x="14" y="11.5" width="36" height="13" rx="6.5" fill="${INK}"/>`
+    + eye(23, "L") + eye(41, "R")
+    + `<circle cx="15.5" cy="37.5" r="2.6" fill="${CHEEK}"/><circle cx="48.5" cy="37.5" r="2.6" fill="${CHEEK}"/>`
+    + `<path class="m-mouth m-mouth-shape" d="${M.d}" fill="#fff" stroke="${CREAM}" stroke-width="${M.stroke}" stroke-linejoin="round"/>`
+    + `<rect class="m-mouth-shade" x="22" y="${M.y0}" width="20" height="1.8" fill="${INK}" opacity=".2" clip-path="${u("m")}"/>`
+    + `<g clip-path="${u("lip")}"><path class="m-tongue" d="${T.d}" fill="${CORAL}" stroke="${CORAL}" stroke-width="1.4" stroke-linejoin="round"/>`
+    + `<path class="m-groove" d="${T.groove}" fill="none" stroke="${CORAL_DK}" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" opacity="${T.grooveOpacity}"/></g>`
+    + `</g>`;
+}
+
+// ---- page ------------------------------------------------------------------
+document.getElementById("symbols").innerHTML =
+  `<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="logo" viewBox="0 0 64 64">${marvin("s-")}</symbol></svg>`;
+const icon = px => `<svg viewBox="0 0 64 64" width="${px}" height="${px}"><use href="#logo"/></svg>`;
+const sizes = [64, 48, 32, 24, 16].map(icon).join("");
+document.getElementById("static-hero").innerHTML = `<div class="on-light">${icon(160)}</div><div class="on-dark">${icon(160)}</div>`;
+document.getElementById("static-sizes").innerHTML = `<div class="on-light">${sizes}</div><div class="on-dark">${sizes}</div>`;
+document.getElementById("download").href = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">${marvin("m-").replace(/ class="[^"]*"/g, "")}</svg>`);
+
+const stage = (cls, id) => `<div class="stage ${cls}"><svg class="rig" viewBox="-8 -8 80 86" width="240" height="258">${marvin(id, { ground: true })}</svg></div>`;
+document.getElementById("anim-hero").innerHTML = stage("on-dark", "ad-") + stage("on-light", "al-");
+
+// ---- idle animation --------------------------------------------------------
+const ease = (rate, dt) => 1 - Math.exp(-rate * dt);
+const smooth = k => k * k * (3 - 2 * k);
+const backOut = k => 1 + 2.70158 * Math.pow(k - 1, 3) + 1.70158 * Math.pow(k - 1, 2);   // overshoots, then settles
+const rad = deg => deg * Math.PI / 180;
+
+class Idle {
+  constructor(svgs) {
+    const all = sel => svgs.flatMap(v => [...v.querySelectorAll(sel)]);
+    this.el = Object.fromEntries(["root", "pupil", "lid", "mouth-shape", "mouth", "mouth-shade", "lip", "tongue", "groove"].map(k => [k, all(".m-" + k)]));
+    // The eyes always ease toward one target point. Cursor tracking later only has to feed that target
+    // from the pointer instead of the random glances, and the easing gives the transition between the two.
+    this.gaze = { x: 0, y: 1 }; this.target = { x: 0, y: 0.2 }; this.nextGaze = rnd(0.8, 2);
+    this.nextBlink = rnd(1.5, 3); this.blinkStart = -1;
+    this.state = "out"; this.since = 0; this.until = rnd(4, 7); this.popAt = -10;
+  }
+  go(state, t) { this.state = state; this.since = t; }
+  toggleTongue() { if (this.state === "out" || this.state === "smile") this.until = 0; }
+
+  step(t, dt) {
+    // tongue and mouth: out -> retract -> close -> smile -> open -> extend -> out
+    let len = 0, m = 1;
+    const k = dur => Math.min(1, (t - this.since) / dur);
+    switch (this.state) {
+      case "out":     len = 1; if (t > this.until) this.go("retract", t); break;
+      case "retract": { const p = k(0.32); len = 1 - p * p * p; if (p >= 1) this.go("close", t); break; }
+      case "close":   { const p = k(0.2); m = 1 - smooth(p);
+                        if (p >= 1) { this.go("smile", t); this.until = t + rnd(3, 6); this.nextBlink = Math.min(this.nextBlink, t + 0.05); } break; }
+      case "smile":   m = 0; if (t > this.until) this.go("open", t); break;
+      case "open":    { const p = k(0.2); m = smooth(p); if (p >= 1) { this.go("extend", t); this.popAt = t; } break; }
+      case "extend":  { const p = k(0.45); len = backOut(p); if (p >= 1) { this.go("out", t); this.until = t + rnd(5, 9); } break; }
+    }
+
+    // body
+    const y = 1.3 * sin(TAU * t / 3.2), rot = 1.4 * sin(TAU * t / 5.3);
+
+    // tongue bend: hangs with gravity as the body tilts, sways slowly, carries a ripple that travels from root
+    // to tip, and wobbles for a moment after popping out
+    const sincePop = t - this.popAt, pop = 24 * Math.exp(-3.2 * sincePop);
+    const bend = u => rad(rot * u + 6 * sin(TAU * t / 2.6) * Math.pow(u, 1.2) + 10 * sin(TAU * t / 1.5 - 2.4 * u) * u
+                          + pop * sin(15 * sincePop - 2 * u) * u);
+
+    // gaze: watch the tongue come out, otherwise a random glance every second or three
+    if (this.state === "extend" || (this.state === "out" && sincePop < 1.1)) { this.target = { x: 0, y: 1 }; this.nextGaze = t + 0.3; }
+    else if (t > this.nextGaze) {
+      const c = Math.random();
+      this.target = c < 0.35 ? { x: 0, y: 0.2 } : c < 0.5 ? { x: 0, y: 1 } : { x: rnd(-1, 1), y: rnd(-0.7, 0.8) };
+      this.nextGaze = t + rnd(0.8, 3);
+    }
+    this.gaze.x += (this.target.x - this.gaze.x) * ease(14, dt);
+    this.gaze.y += (this.target.y - this.gaze.y) * ease(14, dt);
+
+    // blinks, occasionally double; a closed eye keeps a thin sliver at the bottom
+    let lid = 0;
+    if (this.blinkStart < 0 && t > this.nextBlink) this.blinkStart = t;
+    if (this.blinkStart >= 0) {
+      const b = (t - this.blinkStart) / 0.17;
+      if (b >= 1) { this.blinkStart = -1; this.nextBlink = t + (Math.random() < 0.2 ? 0.12 : rnd(2.2, 6)); }
+      else lid = 0.86 * Math.pow(sin(Math.PI * b), 0.6);
+    }
+
+    const M = mouthGeom(m), T = tongueGeom(M.rootY, len, bend);
+    const set = (els, name, v) => els.forEach(e => e.setAttribute(name, v));
+    set(this.el.root, "transform", `translate(0 ${r(DROP + y)}) rotate(${r(rot)} 32 28)`);
+    set(this.el.pupil, "transform", `translate(${r(this.gaze.x * 2)} ${r(this.gaze.y * 1.7)})`);
+    set(this.el.lid, "height", r(lid * 9.2));
+    set(this.el["mouth-shape"], "d", M.d);
+    set(this.el.mouth, "stroke-width", M.stroke);
+    set(this.el["mouth-shade"], "y", M.y0);
+    set(this.el["mouth-shade"], "opacity", r(0.2 * m));
+    set(this.el.lip, "d", M.lip);
+    set(this.el.tongue, "d", T.d);
+    set(this.el.tongue, "visibility", T.shown ? "visible" : "hidden");
+    set(this.el.groove, "d", T.groove);
+    set(this.el.groove, "opacity", T.shown ? T.grooveOpacity : 0);
+  }
+}
+
+const idle = new Idle([...document.querySelectorAll("svg.rig")]);
+let running = !matchMedia("(prefers-reduced-motion: reduce)").matches, clock = 0, last = 0;
+const toggle = document.getElementById("toggle");
+const label = () => { toggle.textContent = running ? "Pause" : "Play"; };
+toggle.onclick = () => { running = !running; label(); };
+document.getElementById("tongue").onclick = () => idle.toggleTongue();
+label();
+requestAnimationFrame(function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000 || 0);
+  last = now;
+  if (running) { clock += dt; idle.step(clock, dt); }
+  requestAnimationFrame(frame);
+});
+</script>
+</body>
+</html>

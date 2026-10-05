@@ -136,6 +136,17 @@ public sealed partial class MainWindow : Window
     private void ConfigureAppWindow()
     {
         var aw = AppWindow;
+        try
+        {
+            // title bar, taskbar and Alt+Tab (the exe's own icon is the csproj's ApplicationIcon)
+            aw.SetIcon(Path.Combine(AppContext.BaseDirectory, "Assets", "AppIcon.ico"));
+            TitleIcon.Source = new Microsoft.UI.Xaml.Media.Imaging.SvgImageSource(
+                new Uri(Path.Combine(AppContext.BaseDirectory, "Assets", "logo.svg")));
+        }
+        catch (Exception)
+        {
+            // a missing asset leaves the default icon; never fatal
+        }
         if (aw.Presenter is OverlappedPresenter op)
         {
             op.PreferredMinimumWidth = (int)(MinWidthDip * Scale);
@@ -244,6 +255,14 @@ public sealed partial class MainWindow : Window
         bool minimized = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized };
         bool hidden = !AppWindow.IsVisible || !PreviewPanel.IsLoaded;
         _preview?.SetPaused(minimized || hidden);
+        UpdateMarvinIdle();
+    }
+
+    /// <summary>Marvin animates only while the no-video card is showing and the window is on screen: never during a live picture.</summary>
+    private void UpdateMarvinIdle()
+    {
+        bool minimized = AppWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized };
+        NoVideoMarvin.Active = !VM.PreviewHasVideo && !_closing && !minimized && AppWindow.IsVisible;
     }
 
     // ================================================================== startup
@@ -251,6 +270,7 @@ public sealed partial class MainWindow : Window
     private async void RootGrid_Loaded(object sender, RoutedEventArgs e)
     {
         VM.LoadGlobalSettings();
+        UpdateMarvinIdle();
 
         try
         {
@@ -708,6 +728,9 @@ public sealed partial class MainWindow : Window
                     DispatcherQueue.TryEnqueue(() => OnDevicesChanged(sessionFailed: true));
                 }
                 break;
+            case nameof(MainViewModel.PreviewHasVideo):
+                UpdateMarvinIdle();
+                break;
             case nameof(MainViewModel.IsCapturing):
                 _dvView.IsEditable = _hdvView.IsEditable = VM.IsIdle;
                 break;
@@ -1083,6 +1106,7 @@ public sealed partial class MainWindow : Window
         _statusTimer.Stop();
         _meterTimer.Stop();
         _closing = true;
+        NoVideoMarvin.Active = false;
         Native.DevicesWake();
         _preview?.Dispose();
         _preview = null;
