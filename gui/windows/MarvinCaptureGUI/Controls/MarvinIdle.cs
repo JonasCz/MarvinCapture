@@ -165,7 +165,7 @@ public sealed class MarvinIdle : Grid
 
     private static Path Shape(string data, uint color)
     {
-        // geometry parsed from path data (the bars at the label's two bottom corners follow its rounded corners)
+        // geometry parsed from path data (the body frame, with the label cut out: F0 is the even-odd fill rule)
         var p = (Path)Microsoft.UI.Xaml.Markup.XamlReader.Load(
             "<Path xmlns='http://schemas.microsoft.com/winfx/2006/xaml/presentation' Data='" + data + "'/>");
         p.Fill = Fill(color);
@@ -183,19 +183,18 @@ public sealed class MarvinIdle : Grid
         root.Children.Add(move);
         void Add(UIElement e) => move.Children.Add(e);
 
-        Add(Box(4, 4, 56, 40, 8, Body));
-        Add(Box(9, 8.5, 46, 22, 5, Cream));
+        // The label and its bars are drawn oversized, and the body on top as a frame with the label cut out,
+        // so the label's edge is antialiased once. Filling the label over the body and then the bars along the
+        // same edge antialiases it twice: the cream half-covering an edge pixel shows through the bars
+        // half-covering it, a light line along the bottom of the bars.
+        Add(Box(8, 7.5, 48, 24, 0, Cream));
         for (int i = 0; i < 7; i++)
         {
-            double x = 9 + i * 46.0 / 7, w = 46.0 / 7 + 0.1;
-            string f(double v) => v.ToString("0.##", System.Globalization.CultureInfo.InvariantCulture);
-            Add(i switch
-            {
-                0 => Shape($"M9.05 26.2H{f(x + w)}V30.5H14A5 5 0 0 1 9.05 26.2Z", Bars[i]),
-                6 => Shape($"M{f(x)} 26.2H54.95A5 5 0 0 1 50 30.5H{f(x)}Z", Bars[i]),
-                _ => Box(x, 26.2, w, 4.3, 0, Bars[i]),
-            });
+            double x0 = i == 0 ? 8 : 9 + i * 46.0 / 7, x1 = i == 6 ? 56 : 9 + (i + 1) * 46.0 / 7 + 0.1;
+            Add(Box(x0, 26.2, x1 - x0, 5.3, 0, Bars[i]));
         }
+        Add(Shape("F0 M12 4H52A8 8 0 0 1 60 12V36A8 8 0 0 1 52 44H12A8 8 0 0 1 4 36V12A8 8 0 0 1 12 4Z"
+                  + "M14 8.5H50A5 5 0 0 1 55 13.5V25.5A5 5 0 0 1 50 30.5H14A5 5 0 0 1 9 25.5V13.5A5 5 0 0 1 14 8.5Z", Body));
         Add(Box(14, 11.5, 36, 13, 6.5, Ink));
 
         // eyes: the pupil is not clipped to the eyeball (clips are rectangles only), a dark ring hides what pokes out

@@ -1,24 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
   <!-- MarvinCapture logo, static version. Generated from docs/logo.html (the "Download SVG" button), then tidied. -->
   <defs>
-    <clipPath id="label"><rect x="9" y="8.5" width="46" height="22" rx="5"/></clipPath>
     <clipPath id="eyeL"><circle cx="23" cy="18" r="4.4"/></clipPath>
     <clipPath id="eyeR"><circle cx="41" cy="18" r="4.4"/></clipPath>
     <clipPath id="mouth"><path d="M24.5 34H39.5Q32 49 24.5 34Z"/></clipPath>
     <clipPath id="lip"><rect x="-40" y="34" width="144" height="86"/></clipPath>
   </defs>
   <g transform="translate(0 2.5)">
-    <rect x="4" y="4" width="56" height="40" rx="8" fill="#2d3180"/>
-    <rect x="9" y="8.5" width="46" height="22" rx="5" fill="#fbf3dc"/>
-    <g clip-path="url(#label)">
-      <rect x="9" y="26.2" width="6.67" height="4.3" fill="#ddd8c6"/>
-      <rect x="15.57" y="26.2" width="6.67" height="4.3" fill="#dcc050"/>
-      <rect x="22.14" y="26.2" width="6.67" height="4.3" fill="#62b9bf"/>
-      <rect x="28.71" y="26.2" width="6.67" height="4.3" fill="#6fb57c"/>
-      <rect x="35.29" y="26.2" width="6.67" height="4.3" fill="#b76fab"/>
-      <rect x="41.86" y="26.2" width="6.67" height="4.3" fill="#d2604f"/>
-      <rect x="48.43" y="26.2" width="6.67" height="4.3" fill="#5069b5"/>
-    </g>
+    <!-- label and bars oversized, body on top as a frame with the label cut out: the label edge is antialiased once -->
+    <rect x="8" y="7.5" width="48" height="24" fill="#fbf3dc"/>
+    <rect x="8" y="26.2" width="7.67" height="5.3" fill="#ddd8c6"/>
+    <rect x="15.57" y="26.2" width="6.67" height="5.3" fill="#dcc050"/>
+    <rect x="22.14" y="26.2" width="6.67" height="5.3" fill="#62b9bf"/>
+    <rect x="28.71" y="26.2" width="6.67" height="5.3" fill="#6fb57c"/>
+    <rect x="35.29" y="26.2" width="6.67" height="5.3" fill="#b76fab"/>
+    <rect x="41.86" y="26.2" width="6.67" height="5.3" fill="#d2604f"/>
+    <rect x="48.43" y="26.2" width="7.57" height="5.3" fill="#5069b5"/>
+    <path fill="#2d3180" fill-rule="evenodd" d="M12 4H52A8 8 0 0 1 60 12V36A8 8 0 0 1 52 44H12A8 8 0 0 1 4 36V12A8 8 0 0 1 12 4Z
+      M14 8.5H50A5 5 0 0 1 55 13.5V25.5A5 5 0 0 1 50 30.5H14A5 5 0 0 1 9 25.5V13.5A5 5 0 0 1 14 8.5Z"/>
     <rect x="14" y="11.5" width="36" height="13" rx="6.5" fill="#1a1d42"/>
     <g clip-path="url(#eyeL)">
       <circle cx="23" cy="18" r="4.4" fill="#fff"/>

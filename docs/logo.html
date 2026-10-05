@@ -132,15 +132,17 @@ function marvin(id, { ground = false } = {}) {
     + `<circle class="m-pupil" cx="${cx}" cy="18" r="2.1" fill="${INK}" transform="translate(${STILL.pupil})"/></g>`
     // the lid is the window colour and stays inside the window, so it needs no clip
     + `<rect class="m-lid" x="${cx - 5}" y="13.2" width="10" height="0" fill="${INK}"/>`;
-  return `<defs><clipPath id="${id}l"><rect x="9" y="8.5" width="46" height="22" rx="5"/></clipPath>`
-    + `<clipPath id="${id}eL"><circle cx="23" cy="18" r="4.4"/></clipPath><clipPath id="${id}eR"><circle cx="41" cy="18" r="4.4"/></clipPath>`
+  return `<defs><clipPath id="${id}eL"><circle cx="23" cy="18" r="4.4"/></clipPath><clipPath id="${id}eR"><circle cx="41" cy="18" r="4.4"/></clipPath>`
     + `<clipPath id="${id}m"><path class="m-mouth-shape" d="${M.d}"/></clipPath>`
     + `<clipPath id="${id}lip"><path class="m-lip" d="${M.lip}"/></clipPath></defs>`
     + (ground ? `<ellipse cx="32" cy="${66 + DROP}" rx="16" ry="2.2" fill="#000" opacity=".18"/>` : "")
     + `<g class="m-root" transform="translate(0 ${DROP})">`
-    + `<rect x="4" y="4" width="56" height="40" rx="8" fill="${BODY}"/>`
-    + `<rect x="9" y="8.5" width="46" height="22" rx="5" fill="${CREAM}"/>`
-    + `<g clip-path="${u("l")}">${bars(9, 26.2, 46, 4.3)}</g>`
+    // label and bars oversized, body on top as a frame with the label cut out, so the label edge is antialiased
+    // once (cream under bars both clipped to that edge shows through as a light line)
+    + `<rect x="8" y="7.5" width="48" height="24" fill="${CREAM}"/>${bars(9, 26.2, 46, 5.3)}`
+    + `<rect x="8" y="26.2" width="1.1" height="5.3" fill="${BARS[0]}"/><rect x="54.9" y="26.2" width="1.1" height="5.3" fill="${BARS[6]}"/>`
+    + `<path fill="${BODY}" fill-rule="evenodd" d="M12 4H52A8 8 0 0 1 60 12V36A8 8 0 0 1 52 44H12A8 8 0 0 1 4 36V12A8 8 0 0 1 12 4Z`
+    + `M14 8.5H50A5 5 0 0 1 55 13.5V25.5A5 5 0 0 1 50 30.5H14A5 5 0 0 1 9 25.5V13.5A5 5 0 0 1 14 8.5Z"/>`
     + `<rect x="14" y="11.5" width="36" height="13" rx="6.5" fill="${INK}"/>`
     + eye(23, "L") + eye(41, "R")
     + `<circle cx="15.5" cy="37.5" r="2.6" fill="${CHEEK}"/><circle cx="48.5" cy="37.5" r="2.6" fill="${CHEEK}"/>`
