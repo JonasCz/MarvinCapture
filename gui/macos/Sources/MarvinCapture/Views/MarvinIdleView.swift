@@ -20,8 +20,11 @@ import SwiftUI
 /// docs/logo.html (the source of truth for the look, motion and timings; keep them in step), drawn with
 /// a SwiftUI Canvas in the logo's 64 x 64 grid. Decorative only: no hit testing, hidden from
 /// accessibility. It exists only while the no-video card does, so a live picture costs nothing; the
-/// timeline runs at 30 fps and SwiftUI pauses it while the window is hidden or occluded. With "Reduce
-/// motion" on it draws the still pose and has no timeline at all.
+/// timeline runs at the display's rate and SwiftUI pauses it while the window is hidden or occluded. With
+/// "Reduce motion" on it draws the still pose and has no timeline at all.
+///
+/// Edges are blended in linear light (`colorMode: .linear`): gamma-space blending makes the antialiased
+/// edges of the long, nearly horizontal lines look ropey, and their steps crawl visibly as Marvin tilts.
 struct MarvinIdleView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var idle = MarvinIdle()
@@ -29,10 +32,12 @@ struct MarvinIdleView: View {
     var body: some View {
         Group {
             if reduceMotion {
-                Canvas { ctx, size in MarvinIdle.draw(MarvinIdle.stillPose, in: &ctx, size: size) }
+                Canvas(colorMode: .linear) { ctx, size in MarvinIdle.draw(MarvinIdle.stillPose, in: &ctx, size: size) }
             } else {
-                TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
-                    Canvas { ctx, size in MarvinIdle.draw(idle.pose(at: timeline.date), in: &ctx, size: size) }
+                // Display rate (up to 120 Hz on ProMotion), so each frame's sub-pixel step is small. To cap it
+                // at 30 fps again: TimelineView(.animation(minimumInterval: 1.0 / 30))
+                TimelineView(.animation) { timeline in
+                    Canvas(colorMode: .linear) { ctx, size in MarvinIdle.draw(idle.pose(at: timeline.date), in: &ctx, size: size) }
                 }
             }
         }
@@ -152,50 +157,27 @@ final class MarvinIdle {
     private static let coral = rgb(0xff5f5a), coralDark = rgb(0xd43a48), cheek = rgb(0xff7a6e)
     private static let bars = [0xddd8c6, 0xdcc050, 0x62b9bf, 0x6fb57c, 0xb76fab, 0xd2604f, 0x5069b5].map { rgb(UInt32($0)) }  // muted SMPTE bars
     private static let drop = 2.5   // centres body plus tongue in the 64 grid
-    // Soft edges (points): the long, nearly horizontal edges of the body and the label otherwise visibly step
-    // across pixel rows as Marvin bobs and tilts, even on a Retina display. Both get the same slight blur, and
-    // the body a faint shadow outside it.
-    private static let softEdge = 0.1, shadowRadius = 1.4
 
     static func draw(_ pose: MarvinPose, in ctx: inout GraphicsContext, size: CGSize) {
         // the logo's x 0..64 and y 5..58 (body top to tongue tip) scaled into the view
         let s = min(size.width / 64, size.height / 53)
-        func place(_ c: inout GraphicsContext) {
-            c.translateBy(x: (size.width - 64 * s) / 2, y: (size.height - 53 * s) / 2 - 5 * s)
-            c.scaleBy(x: s, y: s)
-            c.translateBy(x: 0, y: drop + pose.y)
-            c.translateBy(x: 32, y: 28)
-            c.rotate(by: .degrees(pose.rotation))
-            c.translateBy(x: -32, y: -28)
-        }
+        ctx.translateBy(x: (size.width - 64 * s) / 2, y: (size.height - 53 * s) / 2 - 5 * s)
+        ctx.scaleBy(x: s, y: s)
+        ctx.translateBy(x: 0, y: drop + pose.y)
+        ctx.translateBy(x: 32, y: 28)
+        ctx.rotate(by: .degrees(pose.rotation))
+        ctx.translateBy(x: -32, y: -28)
 
-        // body and label each in a layer with the soft edge; the filters are added before the layer is
-        // placed, so their radii are in points whatever the view's size
-        ctx.drawLayer { c in
-            c.addFilter(.shadow(color: .black.opacity(0.3), radius: shadowRadius, y: 0.5))
-            c.addFilter(.blur(radius: softEdge))
-            place(&c)
-            c.fill(Path(roundedRect: CGRect(x: 4, y: 4, width: 56, height: 40), cornerRadius: 8), with: .color(body))
-        }
-        ctx.drawLayer { c in
-            c.addFilter(.blur(radius: softEdge))
-            place(&c)
-            let label = Path(roundedRect: CGRect(x: 9, y: 8.5, width: 46, height: 22), cornerRadius: 5)
-            c.fill(label, with: .color(cream))
+        ctx.fill(Path(roundedRect: CGRect(x: 4, y: 4, width: 56, height: 40), cornerRadius: 8), with: .color(body))
+        let label = Path(roundedRect: CGRect(x: 9, y: 8.5, width: 46, height: 22), cornerRadius: 5)
+        ctx.fill(label, with: .color(cream))
+        do {
+            var c = ctx
             c.clip(to: label)
-            // the bars, fading in over their top edge so they blend into the label
-            c.drawLayer { b in
-                for (i, color) in bars.enumerated() {
-                    b.fill(Path(CGRect(x: 9 + Double(i) * 46 / 7, y: 26.2, width: 46 / 7 + 0.1, height: 4.3)), with: .color(color))
-                }
-                b.blendMode = .destinationIn
-                b.fill(Path(CGRect(x: 9, y: 26.2, width: 46, height: 4.3)),
-                       with: .linearGradient(Gradient(colors: [.clear, .white]),
-                                             startPoint: CGPoint(x: 0, y: 26.2), endPoint: CGPoint(x: 0, y: 27.6)))
+            for (i, color) in bars.enumerated() {
+                c.fill(Path(CGRect(x: 9 + Double(i) * 46 / 7, y: 26.2, width: 46 / 7 + 0.1, height: 4.3)), with: .color(color))
             }
         }
-
-        place(&ctx)
         ctx.fill(Path(roundedRect: CGRect(x: 14, y: 11.5, width: 36, height: 13), cornerRadius: 6.5), with: .color(ink))
         for cx in [23.0, 41.0] {
             let eye = Path(ellipseIn: CGRect(x: cx - 4.4, y: 18 - 4.4, width: 8.8, height: 8.8))
