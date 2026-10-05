@@ -20,8 +20,8 @@ import SwiftUI
 /// docs/logo.html (the source of truth for the look, motion and timings; keep them in step), drawn with
 /// a SwiftUI Canvas in the logo's 64 x 64 grid. Decorative only: no hit testing, hidden from
 /// accessibility. It exists only while the no-video card does, so a live picture costs nothing; the
-/// timeline runs at the display's rate and SwiftUI pauses it while the window is hidden or occluded. With
-/// "Reduce motion" on it draws the still pose and has no timeline at all.
+/// timeline runs at 30 fps and SwiftUI pauses it while the window is hidden or occluded. With "Reduce
+/// motion" on it draws the still pose and has no timeline at all.
 ///
 /// Edges are blended in linear light (`colorMode: .linear`): gamma-space blending makes the antialiased
 /// edges of the long, nearly horizontal lines look ropey, and their steps crawl visibly as Marvin tilts.
@@ -34,9 +34,8 @@ struct MarvinIdleView: View {
             if reduceMotion {
                 Canvas(colorMode: .linear) { ctx, size in MarvinIdle.draw(MarvinIdle.stillPose, in: &ctx, size: size) }
             } else {
-                // Display rate (up to 120 Hz on ProMotion), so each frame's sub-pixel step is small. To cap it
-                // at 30 fps again: TimelineView(.animation(minimumInterval: 1.0 / 30))
-                TimelineView(.animation) { timeline in
+                // 30 fps: the display rate (TimelineView(.animation)) costs more CPU for little visible gain
+                TimelineView(.animation(minimumInterval: 1.0 / 30)) { timeline in
                     Canvas(colorMode: .linear) { ctx, size in MarvinIdle.draw(idle.pose(at: timeline.date), in: &ctx, size: size) }
                 }
             }
@@ -168,16 +167,18 @@ final class MarvinIdle {
         ctx.rotate(by: .degrees(pose.rotation))
         ctx.translateBy(x: -32, y: -28)
 
-        ctx.fill(Path(roundedRect: CGRect(x: 4, y: 4, width: 56, height: 40), cornerRadius: 8), with: .color(body))
-        let label = Path(roundedRect: CGRect(x: 9, y: 8.5, width: 46, height: 22), cornerRadius: 5)
-        ctx.fill(label, with: .color(cream))
-        do {
-            var c = ctx
-            c.clip(to: label)
-            for (i, color) in bars.enumerated() {
-                c.fill(Path(CGRect(x: 9 + Double(i) * 46 / 7, y: 26.2, width: 46 / 7 + 0.1, height: 4.3)), with: .color(color))
-            }
+        // The label and its bars are drawn oversized, and the body on top as a frame with the label cut out,
+        // so the label's edge is antialiased once. Filling the label over the body and then the bars clipped
+        // to the same edge antialiases it twice: the cream half-covering an edge pixel shows through the
+        // bars half-covering it, a light line along the bottom of the bars.
+        ctx.fill(Path(CGRect(x: 8, y: 7.5, width: 48, height: 24)), with: .color(cream))
+        for (i, color) in bars.enumerated() {
+            let x0 = i == 0 ? 8 : 9 + Double(i) * 46 / 7, x1 = i == 6 ? 56 : 9 + Double(i + 1) * 46 / 7 + 0.1
+            ctx.fill(Path(CGRect(x: x0, y: 26.2, width: x1 - x0, height: 5.3)), with: .color(color))
         }
+        var frame = Path(roundedRect: CGRect(x: 4, y: 4, width: 56, height: 40), cornerRadius: 8)
+        frame.addPath(Path(roundedRect: CGRect(x: 9, y: 8.5, width: 46, height: 22), cornerRadius: 5))
+        ctx.fill(frame, with: .color(body), style: FillStyle(eoFill: true))
         ctx.fill(Path(roundedRect: CGRect(x: 14, y: 11.5, width: 36, height: 13), cornerRadius: 6.5), with: .color(ink))
         for cx in [23.0, 41.0] {
             let eye = Path(ellipseIn: CGRect(x: cx - 4.4, y: 18 - 4.4, width: 8.8, height: 8.8))
