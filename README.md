@@ -75,11 +75,11 @@ Requires adding udev rule allowing the application disable the CPU C3 deep sleep
 
 ### MacOS
 
-"Just works".
+* Works with no further actions.
 
 ### Windows
 
-Recommended to set power plan to "performance".
+* Recommended to set power plan to "performance".
 
 ### Background
 
