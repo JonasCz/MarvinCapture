@@ -245,6 +245,114 @@ needed for capture or deck control:
 Bring-up is 5.4 s instead of ~16 s, and most of what remains is the
 bitstream upload and the 1.5 s FPGA settle time.
 
+## Warm start
+
+The FPGA keeps its design across USB resets, process exits and program
+restarts; only a power loss clears it. The vendor driver never looks: it
+remembers on the host which design it loaded and uploads on first use. We
+cannot remember across processes, so `pinnacle_probe_fpga()`
+([`src/core/pinnacle_device.c`](../src/core/pinnacle_device.c)) asks the device
+which design it holds, and the bring-up skips what that makes unnecessary. Only
+for models with `warm_ok` in the model table (500-USB 0213 and 510-USB 0223;
+both measured, nothing else). There is no switch to force the
+cold path (the `PINNACLE_COLD` override used for the measurements below was removed;
+return `PINNACLE_FPGA_UNKNOWN` at the top of `pinnacle_probe_fpga` to get it back).
+
+### How the design is recognised
+
+| state | `06 00` | I2C read of `0xf0` reg 1 at alt 1 | EP 0x02 type-5 vendor read at alt 1 |
+|---|---|---|---|
+| no design (power-up) | `0` (confirmed on the 510-USB on Windows after a replug: `06 00` read `0`, then `1` after the upload) | not asked | not asked |
+| Capture (analog) | `1` | **acknowledged** (`02 01 xx`) | no reply (not asked) |
+| OHCI (DV/HDV) | `1` | not acknowledged (`02 00 07`) | **`0x81`** within a few ms |
+
+Both machines (510-USB on Windows, 500-USB on macOS) gave the same values. The
+logic:
+
+1. `06 00` -> not `1`: no design. Cold path with the power-up.
+2. Select alt 1 and read `0xf0` reg 1 over I2C (the capture block's slave). An
+   acknowledge means Capture. Nothing is sent on EP 0x02, so a Capture design is
+   never given command-channel traffic.
+3. Only when a DV start asks for it: a type-5 vendor read (index 0) on EP 0x02. A
+   reply means the OHCI design runs. (EP 0x84 and EP 0x88 are drained first, a backlog
+   on either stalls the command channel.)
+4. Anything else, or any error: unknown, take the full cold path.
+
+What does not work as a fingerprint, found the hard way:
+
+- The reply byte of `03 f0` (`cb`, `c3`, `cf`): it follows the alt setting (alt 1 gives
+  `cf`, the others `cb`), not the design. (An earlier note here said `03` under
+  OHCI; that is wrong.) The command is the capture block's reset assert, always
+  follow it with `04 f0`.
+- `09 00` (a 9-byte reply, changes with the alt setting).
+- I2C at alt 0: the capture block never answers there, under either design.
+- OHCI registers other than the vendor status: with a link left up by the previous
+  session every read returns `0xc0000000`; right after an upload they read 0.
+
+### What each start does
+
+| start | state found | what is skipped | what still runs |
+|---|---|---|---|
+| analog | Capture | power-up, upload, the 1.1 s wait | decoder init, capture block + codec init (these check the I2C acknowledge, so a wrong guess fails and falls back) |
+| analog | OHCI / other | the 1.1 s wait ends when the capture block answers (0-10 ms after the upload) plus 100 ms | upload, init |
+| analog | none / unknown | nothing | full cold path |
+| DV | OHCI | pre-sequence (~2.4 s), upload (1 s), 1.5 s settle | GUID read, `p1394_link_init` (resets the link controller) |
+| DV | Capture / other | the pre-sequence's decoder init, power-up and chip resets (the device is powered), 1.5 s settle -> 0.5 s | GUID read, `05 00`, upload |
+| DV | none / unknown | nothing | full cold path |
+
+The shortened waits apply only over a running design (`06 00` was `1`), never to
+a power-up, where the vendor's 1 s and our 1.1 s / 1.5 s stay. Measured: when the
+upload call returns (it takes ~1.0 s itself) the FPGA is configured. The capture
+block acknowledged I2C 0 to 1 ms later on the 510-USB (3 runs) and within the
+first 10 ms poll on the 500-USB (5 runs). The OHCI design answered the vendor
+read 1 to 2 ms later on the 510-USB (2 runs, polled right after the upload) and
+on the 500-USB the poll at 250 ms was answered every time (6 runs, 280 ms after
+the upload). Margins: analog polls (10 ms) and adds 100 ms; DV waits 250 ms,
+asks once and waits 250 ms more, 500 ms in all for something that answers in
+under 30 ms; without an answer the old full waits run. Not verified: a true
+power-up (needs a replug), which is why the shortened waits are not used there.
+
+Fallbacks: a failed warm analog bring-up (any I2C error) is redone cold in the same
+call; a DV start whose link init fails after a warm start is redone with a full cold
+start inside `pinnacle_stream_start`; a failed short DV upload retries with the full
+pre-sequence. A wrong guess therefore costs one cold start.
+
+### Switching S-Video <-> composite
+
+`pin_session_set_input()` between the two analog inputs does not leave the analog
+design: the worker stops the capture (as before), writes SAA7113 reg 0x02 / 0x09
+(`pinnacle_analog_set_input`), applies picture and standard again and starts the
+capture; no `pinnacle_analog_open`. The state still goes Preparing -> Ready and the
+auto-standard check runs again. DV <-> analog takes the full path (which now uses the
+detection above).
+
+### Measurements
+
+Seconds from program start to the session being Ready, no camera attached.
+500-USB on macOS, 510-USB on Windows 10.
+
+| start | 510-USB, Windows | 500-USB, macOS |
+|---|---|---|
+| analog, warm (Capture loaded) | 0.26-0.32 | 0.21 |
+| analog, OHCI loaded | 1.43 | 1.33 |
+| analog, cold path (forced on the Mac, after a replug on Windows) | ~3.4 | 2.34 |
+| S-Video <-> composite switch (was a full re-bring-up, ~2.6 s) | 0.06-0.25 | 0.11 |
+| DV, warm (OHCI loaded) | 1.68 | 1.05 |
+| DV, Capture loaded | 3.2 | 2.5 |
+| DV, cold path | not measured | ~5.9 |
+
+Most of the warm DV time is the 1394 bus scan, which waits for a camera that is not
+there.
+
+Frame accuracy after warm starts (QR disc, composite, PAL, FFV1/MKV, 500-USB on macOS;
+analyzer from docs/analog.md): a 5-minute capture after a warm start (7,452 frame numbers
+judged), a 2-minute capture right after a DV -> analog switch (2,951), a 1-minute capture
+right after an S-Video -> composite switch (1,451) and a 1-minute capture after the
+previous process was killed with SIGKILL mid-capture (1,451): 0 missing, 0 duplicate,
+0 undecodable frames, 0 missing audio in each. Forcing a wrong guess (test build that
+claimed Capture over OHCI and OHCI over Capture) took the fallback to the cold path in both
+cases and ended in a working link / working capture.
+
 ## Still unknown
 
 - Extension bank offsets `0x04`, `0x0c`, `0x10` and `0x40`, and registers

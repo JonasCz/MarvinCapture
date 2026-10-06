@@ -213,7 +213,27 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
     dev->iso_channel = 63;
 
     pinnacle_progress(dev, "Starting the FireWire (1394) link", -1);
-    if (p1394_link_init(&link) != 0) {
+    int link_ok = p1394_link_init(&link) == 0;
+    if (!link_ok && dev->warm_dv) {
+        /* The OHCI design that was already running did not take the link init (a stale
+         * state from an earlier session, or not the design we thought): take the cold
+         * path once, with a fresh upload. */
+        pin_logf(PIN_LOG_WARN, "pinnacle: link init failed on the warm start, doing the full "
+                        "cold start\n");
+        pinnacle_status_t cst = pinnacle_init_hardware_cold(dev, dev->bitstream_path);
+        if (cst != PINNACLE_OK) {
+            snprintf(dev->fail_detail, sizeof(dev->fail_detail),
+                     "cold restart after a failed warm start failed: %s", pinnacle_strerror(cst));
+            return cst;
+        }
+        p1394_init(&link, dev);
+        dev->camera_node = 0;
+        dev->pcr_connected = 0;
+        dev->iso_channel = 63;
+        pinnacle_progress(dev, "Starting the FireWire (1394) link", -1);
+        link_ok = p1394_link_init(&link) == 0;
+    }
+    if (!link_ok) {
         stream_fail(dev, &link, "FireWire link init failed");
         return PINNACLE_ERR_USB_TRANSFER;
     }

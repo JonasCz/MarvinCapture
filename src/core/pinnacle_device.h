@@ -88,6 +88,8 @@ typedef struct {
     int iso_channel;           /* channel IR context 0 listens on */
     int pcr_connected;         /* we hold a point-to-point connection on oPCR[0] */
     char fail_detail[200];     /* why the last pinnacle_stream_start failed, for the user */
+    int warm_dv;               /* the last pinnacle_init_hardware reused a running OHCI design */
+    char bitstream_path[512];  /* the DV bitstream path of the last pinnacle_init_hardware (cold fallback) */
     char progress_last[96];    /* last step pinnacle_progress() logged (debug log), "" = none */
     uint64_t progress_ms;      /* monotonic ms when it was logged */
 } pinnacle_device_t;
@@ -152,6 +154,31 @@ pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_fi
  * leaves the command channel (EP 0x02) accepting only 2 writes before it
  * NAKs indefinitely. See docs/protocol.md. */
 pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bitstream_path);
+
+/* What the FPGA holds right now, from pinnacle_probe_fpga(). */
+typedef enum {
+    PINNACLE_FPGA_UNKNOWN = 0, /* not probed (model not enabled) or the probe failed */
+    PINNACLE_FPGA_NONE,        /* no design running ("06 00" -> 0): a cold device, the power-up is needed */
+    PINNACLE_FPGA_OHCI,        /* the DV/HDV design, and it answers on EP 0x02 */
+    PINNACLE_FPGA_CAPTURE,     /* the analog Capture design */
+    PINNACLE_FPGA_OTHER,       /* some design runs but it is not Capture (and, if asked, did not answer as OHCI) */
+} pinnacle_fpga_t;
+
+const char *pinnacle_fpga_name(pinnacle_fpga_t state);
+
+/* Warm-start detection: which design is in the FPGA, without uploading anything.
+ * Only for models with warm_ok in the table (else PINNACLE_FPGA_UNKNOWN: take the full
+ * cold path).
+ * "06 00" says whether any design runs; with alt 1 selected the Capture design
+ * acknowledges an I2C read of its block at 0xf0 and the OHCI design does not;
+ * with check_ohci the OHCI design is then confirmed by a vendor read on EP 0x02
+ * (only asked when the I2C read ruled Capture out, so a Capture design never gets
+ * EP 0x02 traffic). Leaves alt 1 selected. A wrong answer can only cost the cold
+ * path: callers fall back to it on any failure. dev must be open, FX2 alive. */
+pinnacle_fpga_t pinnacle_probe_fpga(pinnacle_device_t *dev, int check_ohci);
+
+/* pinnacle_init_hardware with the warm path switched off. */
+pinnacle_status_t pinnacle_init_hardware_cold(pinnacle_device_t *dev, const char *bitstream_path);
 
 #ifdef __cplusplus
 }

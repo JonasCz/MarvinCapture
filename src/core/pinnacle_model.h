@@ -54,6 +54,10 @@ typedef struct {
      * answered "07 01"), or NULL for the models that boot from EEPROM
      * (pinnacle_ensure_fx2, pinnacle_fx2.h). */
     const char *fx2_firmware;
+    /* 1 = the warm-start detection (pinnacle_probe_fpga, docs/startup.md "Warm
+     * start") was verified on this model: a design already in the FPGA may be
+     * reused instead of uploaded again. Only the 500-USB and 510-USB. */
+    int warm_ok;
 } pinnacle_model_t;
 
 extern const pinnacle_model_t pinnacle_model_table[];

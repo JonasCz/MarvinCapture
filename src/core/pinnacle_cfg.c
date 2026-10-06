@@ -17,6 +17,7 @@
  */
 
 #include "pinnacle_cfg.h"
+#include "pinnacle_analog.h"
 #include "pin_log.h"
 
 #include <errno.h>
@@ -28,6 +29,13 @@
 #define CFG_TIMEOUT_MS 2000
 #define FPGA_BITSTREAM_BYTES 78422
 #define FPGA_CHUNK 16384
+
+static uint64_t now_ms(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000u + (uint64_t)ts.tv_nsec / 1000000u;
+}
 
 static void sleep_ms(unsigned ms)
 {
@@ -107,7 +115,7 @@ pinnacle_status_t pinnacle_cfg_chip_reset(pinnacle_device_t *dev, uint8_t addr)
     return st;
 }
 
-pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path)
+pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path, int fast)
 {
     FILE *f = fopen(path, "rb");
     if (!f) {
@@ -157,7 +165,37 @@ pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path)
      * the last bitstream byte and "06 00"; pinnacle_device.c found that
      * asking too early wedges the DV design. Keep the long wait. */
     pinnacle_progress(dev, "Waiting for the FPGA to start up", -1);
-    sleep_ms(1100);
+    if (fast) {
+        /* Over a running design: the FPGA is configured when the upload returns (the
+         * transfer itself takes ~1 s) and the capture block's I2C slave answers a
+         * millisecond later (measured 0..1 ms on both machines). Poll for it, then give
+         * it 100 ms more; with no answer the whole 1.1 s has passed. */
+        uint64_t t0 = now_ms();
+        int acked = 0;
+        if (libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
+                                             PINNACLE_ALT_SETTING_CAPTURE) == 0) {
+            while (now_ms() - t0 < 1100) {
+                uint8_t v = 0;
+                if (pinnacle_i2c_read(dev, 0xf0, 1, &v) == PINNACLE_OK) {
+                    acked = 1;
+                    break;
+                }
+                sleep_ms(10);
+            }
+        }
+        if (acked) {
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: capture block answered %u ms after the upload\n",
+                     (unsigned)(now_ms() - t0));
+            sleep_ms(100);
+        } else {
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: capture block did not answer, waited the full 1.1 s\n");
+            uint64_t spent = now_ms() - t0;
+            if (spent < 1100)
+                sleep_ms((unsigned)(1100 - spent));
+        }
+    } else {
+        sleep_ms(1100);
+    }
 
     st = pinnacle_cfg_op(dev, 0x06, 0x00, &ready);
     if (st == PINNACLE_OK && ready != 0x01) {

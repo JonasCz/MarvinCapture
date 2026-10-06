@@ -32,6 +32,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -345,39 +348,34 @@ static pinnacle_status_t power_up(pinnacle_analog_t *a)
     return pinnacle_cfg_chip_reset(dev, CAPTURE_ADDR);
 }
 
-pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *dev,
-                                       const char *capture_bitstream_path,
-                                       const pinnacle_analog_config_t *cfg)
+/* The bring-up proper. fpga says what pinnacle_probe_fpga() found. warm = the Capture design
+ * is already in the FPGA (and acknowledged): no power-up, no upload. Everything after that is
+ * the same in both cases: the decoder and the capture block are initialised from scratch. */
+static pinnacle_status_t analog_bringup(pinnacle_analog_t *a, const char *capture_bitstream_path,
+                                        pinnacle_fpga_t fpga, int warm)
 {
-    memset(a, 0, sizeof(*a));
-    a->dev = dev;
-    if (cfg)
-        a->cfg = *cfg;
-    else
-        pinnacle_analog_config_defaults(&a->cfg);
-    apply_geometry(a);
-    pin_logf(PIN_LOG_DEBUG, "pinnacle: analog bring-up: %s input, %s, %ux%u\n",
-             a->cfg.input == PINNACLE_INPUT_SVIDEO ? "S-Video" : "composite",
-             pinnacle_std_name(a->cfg.standard), a->width, a->height);
+    pinnacle_device_t *dev = a->dev;
+    pinnacle_status_t st;
 
-    /* "06 00" answers 01 while some bitstream is running. A cold device
-     * first needs the power-up sequence before its loader answers "05". */
-    uint8_t up = 0;
-    pinnacle_progress(dev, "Checking the device", -1);
-    pinnacle_status_t st = pinnacle_ensure_fx2(dev, capture_bitstream_path);
-    if (st != PINNACLE_OK)
-        return st;
-    st = pinnacle_cfg_op(dev, 0x06, 0x00, &up);
-    if (st != PINNACLE_OK)
-        return st;
-    if (up != 0x01) {
-        pinnacle_progress(dev, "Powering up the device", -1);
-        if ((st = power_up(a)) != PINNACLE_OK)
+    if (!warm) {
+        /* "06 00" answers 01 while some bitstream is running. A cold device
+         * first needs the power-up sequence before its loader answers "05". */
+        uint8_t up = 0;
+        st = pinnacle_cfg_op(dev, 0x06, 0x00, &up);
+        if (st != PINNACLE_OK)
+            return st;
+        if (up != 0x01) {
+            pinnacle_progress(dev, "Powering up the device", -1);
+            if ((st = power_up(a)) != PINNACLE_OK)
+                return st;
+            fpga = PINNACLE_FPGA_NONE;
+        }
+        /* A design was running (not a power-up): the upload's settle wait can end early. */
+        int running = fpga == PINNACLE_FPGA_CAPTURE || fpga == PINNACLE_FPGA_OHCI ||
+                      fpga == PINNACLE_FPGA_OTHER;
+        if ((st = pinnacle_fpga_load(dev, capture_bitstream_path, running)) != PINNACLE_OK)
             return st;
     }
-
-    if ((st = pinnacle_fpga_load(dev, capture_bitstream_path)) != PINNACLE_OK)
-        return st;
     if (libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
                                          PINNACLE_ALT_SETTING_CAPTURE) != 0)
         return PINNACLE_ERR_USB_TRANSFER;
@@ -397,7 +395,8 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
         (st = saa_write(a, 0x11, 0x0c)) != PINNACLE_OK)
         return st;
 
-    /* Capture block and codec, in the vendor's order. */
+    /* Capture block and codec, in the vendor's order. The AC'97 writes check the capture
+     * block's I2C acknowledge, which is what proves a warm start really has the design. */
     pinnacle_progress(dev, "Initialising the audio codec", -1);
     if ((st = cap_reset(a)) != PINNACLE_OK ||
         (st = cap_write(a, CAP_FORMAT, 0x00)) != PINNACLE_OK ||
@@ -407,6 +406,53 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
         (st = ac97_init(a)) != PINNACLE_OK)
         return st;
     return PINNACLE_OK;
+}
+
+pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *dev,
+                                       const char *capture_bitstream_path,
+                                       const pinnacle_analog_config_t *cfg)
+{
+    memset(a, 0, sizeof(*a));
+    a->dev = dev;
+    if (cfg)
+        a->cfg = *cfg;
+    else
+        pinnacle_analog_config_defaults(&a->cfg);
+    apply_geometry(a);
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: analog bring-up: %s input, %s, %ux%u\n",
+             a->cfg.input == PINNACLE_INPUT_SVIDEO ? "S-Video" : "composite",
+             pinnacle_std_name(a->cfg.standard), a->width, a->height);
+
+    pinnacle_progress(dev, "Checking the device", -1);
+    pinnacle_status_t st = pinnacle_ensure_fx2(dev, capture_bitstream_path);
+    if (st != PINNACLE_OK)
+        return st;
+
+    pinnacle_fpga_t fpga = pinnacle_probe_fpga(dev, 0);
+    if (fpga == PINNACLE_FPGA_CAPTURE) {
+        pin_logf(PIN_LOG_INFO, "pinnacle: FPGA: capture design already loaded, skipping the upload\n");
+        st = analog_bringup(a, capture_bitstream_path, fpga, 1);
+        if (st == PINNACLE_OK)
+            return PINNACLE_OK;
+        pin_logf(PIN_LOG_WARN, "pinnacle: warm start failed (%s), doing the full cold start\n",
+                 pinnacle_strerror(st));
+        pinnacle_analog_config_t keep = a->cfg;
+        memset(a, 0, sizeof(*a));
+        a->dev = dev;
+        a->cfg = keep;
+        apply_geometry(a);
+        return analog_bringup(a, capture_bitstream_path, fpga, 0);
+    }
+    if (fpga != PINNACLE_FPGA_UNKNOWN)
+        pin_logf(PIN_LOG_INFO, "pinnacle: FPGA: %s, uploading the capture design\n",
+                 pinnacle_fpga_name(fpga));
+    return analog_bringup(a, capture_bitstream_path, fpga, 0);
+}
+
+pinnacle_status_t pinnacle_analog_set_input(pinnacle_analog_t *a, pinnacle_input_t input)
+{
+    a->cfg.input = input;
+    return saa_apply_input(a);
 }
 
 pinnacle_status_t pinnacle_analog_set_standard(pinnacle_analog_t *a, pinnacle_std_t std)
@@ -530,6 +576,17 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
  * turns anything over 16 KiB into a scatter-gather list, and big buffers
  * need several TRBs. 512 x 8 KiB keeps 200 ms queued.
  *
+ * macOS is different: libusb's darwin backend pays two Mach messages per
+ * submit plus a thread hop per completion, so the cost is per transfer and
+ * 8 KiB (2500/s) took ~15% of a core. 64 KiB took ~3% and lost nothing in
+ * 2-minute QR-checked captures under a CPU hog (8 to 128 KiB all clean at
+ * 200 ms queued). With a very short queue, bigger transfers lose a little
+ * sooner at equal queued time, so the Mac queue is 6 MiB (~300 ms) of 64 KiB.
+ * On Windows 8 to 64 KiB were all loss-free too but saved only ~4 points of
+ * one core (the encoder dominates) and had less margin with a short queue,
+ * so Windows stays at 8 KiB. To retry other sizes, change the two defines below
+ * (the env overrides PINNACLE_VIDEO_XFER / _QUEUE that did this were removed).
+ *
  * On Windows, WinUSB by default hands a pipe's reads to the host controller
  * one at a time, however many are queued: each completion goes back up
  * through WinUSB before the next read is armed, and a late DPC there leaves
@@ -537,8 +594,13 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
  * reads straight down, so the whole queue is armed at the controller. It
  * needs whole-packet transfers, which ours are. */
 #define VIDEO_QUEUE_MAX 1024
+#ifdef __APPLE__
+#define VIDEO_QUEUE 96
+#define VIDEO_XFER (64u * 1024)
+#else
 #define VIDEO_QUEUE 512
 #define VIDEO_XFER (8u * 1024)
+#endif
 #define AUDIO_QUEUE 8
 
 struct slot {
@@ -549,6 +611,15 @@ struct slot {
 static void LIBUSB_CALL slot_cb(struct libusb_transfer *xfer)
 {
     struct slot *s = xfer->user_data;
+#ifdef __APPLE__
+    /* libusb's darwin backend completes transfers on its own event thread (the first call
+     * here runs on it); give it the same QoS as the read loop. */
+    static __thread int qos_done;
+    if (!qos_done) {
+        qos_done = 1;
+        pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+    }
+#endif
     s->done = 1;
     if (xfer->status != LIBUSB_TRANSFER_COMPLETED) {
         s->failed = 1;
@@ -688,6 +759,9 @@ static void thread_boost(thread_boost_t *b)
     }
     b->old_priority = GetThreadPriority(GetCurrentThread());
     b->raised = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0;
+#elif defined(__APPLE__)
+    /* The closest thing to MMCSS: the top QoS class (user-interactive). */
+    b->raised = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
 #endif
 }
 
@@ -712,8 +786,7 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
      * device's short packet ends each transfer. */
     unsigned audio_bytes = (a->audio_samples_per_packet * 4 + PACKET_HEADER + 511) & ~511u;
 
-    const unsigned vdepth = VIDEO_QUEUE;
-    const unsigned vbytes = VIDEO_XFER;
+    unsigned vdepth = VIDEO_QUEUE, vbytes = VIDEO_XFER;
 
     /* Before anything is queued: WinUSB only changes the policy on an idle pipe. */
     int raw_video = set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 1);

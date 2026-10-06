@@ -70,7 +70,7 @@ is I2C over the config channel:
 | I2C address | what |
 |---|---|
 | `0x4a` | Philips SAA7113H video decoder |
-| `0xf0` | the FPGA's capture block. It exists only with the Capture bitstream: probing it with "03 f0" answers `03` under OHCI and `cb` under Capture. |
+| `0xf0` | the FPGA's capture block. It exists only with the Capture bitstream: with alt 1..3 selected an I2C read of it is acknowledged under Capture and not under OHCI (that is how the warm start recognises the design, [startup.md](startup.md#warm-start)). The reply byte of "03 f0" (`cb`, `c3`, `cf`) only follows the alt setting and says nothing about the design. |
 
 Streams, alt setting 3:
 
@@ -292,11 +292,51 @@ not the issue. The size of each transfer was:
 | 16 KiB | 3-8 per 1000 |
 | **8 KiB**, 4 KiB | **none** |
 
-Default: 512 transfers of 8 KiB (200 ms queued). A 3-minute capture with
+Default on Linux and Windows: 512 transfers of 8 KiB (200 ms queued). A 3-minute capture with
 that setting had 4,500 frames with 0 missing, 0 truncated and 0 audio
 gaps, and the 3.7 GB AVI (4 RIFF segments) decodes without an error. usbfs turns anything over
 16 KiB into a scatter-gather list, and large buffers need several TRBs; the
 per-transfer cost of those seems to be what opens the gaps.
+
+### macOS and Windows: size vs CPU and losses
+
+The Linux table above is xHCI/usbfs specific. macOS (libusb darwin backend:
+a `ReadPipeAsync` and a `GetPipePropertiesV3` Mach message per submit, a
+completion on libusb's event thread, a wake-pipe write and a thread hop to
+the read loop) and Windows (WinUSB RAW_IO) behave differently. 2-minute PAL
+captures to FFV1/MKV with the QR disc, Apple Silicon (composite) and a
+510-USB on Windows 10 (S-video), about 4 MiB queued unless noted:
+
+| size | macOS: USB threads (read loop + event thread) | macOS: whole process | Windows: whole process | losses |
+|---|---|---|---|---|
+| 8 KiB | ~15% of a core | ~75% | 27.6% | none on either |
+| 16 KiB | ~7% | ~64% | 24.5% | none |
+| 32 KiB | ~4.5% | ~63% | 23.5% | none |
+| 64 KiB | ~3% | ~64% | 23.5% | none |
+| 128 KiB | ~2% | ~58% | not tested | none |
+
+(The whole-process figure is mostly the FFV1 encoder threads; the Mac FFmpeg is a native
+arm64 build, `-O3` with NEON. The per-submit `GetPipeProperties` call is in libusb's darwin
+backend up to 1.0.30 and current master, so it cannot be avoided by updating.) With ten
+`yes` hogs on the Mac, or one busy loop per core on Windows, 8 KiB and 64 KiB
+at 200 ms queued were both loss-free (QR analyzer: 0 missing, duplicate,
+undecodable, 0 audio gaps). Shortening the queue to find the margin, same
+hogs, 60 s runs:
+
+| queued | macOS 8 KiB | macOS 64 KiB | Windows 8 KiB | Windows 64 KiB |
+|---|---|---|---|---|
+| ~51 ms | 0 missing | 0 | 0 missing | 10 missing |
+| ~25 ms | 8 missing | 9 missing, 6 undecodable | 201 missing | 687 missing |
+| ~13 ms | 272 missing | 673 missing, 494 undecodable | | |
+
+So bigger transfers do not lose data by themselves, but at equal queued time
+they have less margin. macOS therefore uses 96 x 64 KiB (6 MiB, ~300 ms),
+which keeps the 200 ms margin and more, for a fifth of the USB CPU. Windows
+stays at 8 KiB: the saving there is only ~4 points of one core. (The sizes were
+found with env overrides, since removed; they are the `VIDEO_XFER` / `VIDEO_QUEUE`
+defines in `pinnacle_analog.c`.) On macOS the read loop and
+libusb's event thread run at the user-interactive QoS class (the MMCSS
+equivalent); under the hog it made no measurable difference.
 
 ## Keeping the USB thread on time
 
@@ -334,6 +374,12 @@ FFV1 to MKV, method below):
 |---|---|---|---|
 | before | 8 | 12 | 4 |
 | after | **0** | **0** | **0** of 90,000 |
+
+Later 5-minute captures (S-Video on Windows, composite on macOS), with the analyzer
+now handling partial and wrapping captures (run-in and logo gaps are not counted):
+0 missing, duplicate or undecodable frames and no missing audio in all of them,
+also right after a DV -> analog switch, after an input switch and after the previous
+process was killed (SIGKILL).
 
 Audio: no gaps either time, and the A/V offset stayed at -14.8 ms for the
 whole hour (before: average -15.5 ms, peaks of -55 ms). The three changes

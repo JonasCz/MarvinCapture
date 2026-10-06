@@ -59,6 +59,7 @@ final class PreviewLayerView: NSView {
         if window != nil {
             let l = displayLink(target: self, selector: #selector(tick(_:)))
             l.isPaused = true
+            l.preferredFrameRateRange = CAFrameRateRange(minimum: 24, maximum: 60, preferred: 60)   // no 120 Hz ticks on ProMotion
             l.add(to: .main, forMode: .common)
             link = l
         }

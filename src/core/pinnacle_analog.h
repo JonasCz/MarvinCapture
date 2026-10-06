@@ -110,6 +110,11 @@ pinnacle_status_t pinnacle_analog_open(pinnacle_analog_t *a, pinnacle_device_t *
                                        const pinnacle_analog_config_t *cfg);
 
 pinnacle_status_t pinnacle_analog_set_standard(pinnacle_analog_t *a, pinnacle_std_t std);
+
+/* Selects the other analog input (S-Video / composite) of an open, stopped capture
+ * without a new bring-up: SAA7113 reg 0x02 (source select) and reg 0x09 (BYPS). The
+ * caller restarts the capture (pinnacle_analog_start) afterwards. */
+pinnacle_status_t pinnacle_analog_set_input(pinnacle_analog_t *a, pinnacle_input_t input);
 pinnacle_status_t pinnacle_analog_set_picture(pinnacle_analog_t *a, const pinnacle_picture_t *p);
 pinnacle_status_t pinnacle_analog_get_status(pinnacle_analog_t *a, pinnacle_analog_status_t *st);
 

@@ -1184,3 +1184,33 @@ int p1394_ir_stop(pinnacle_1394_t *l)
     b_reg(&m, OHCI_IR0_CLEAR, CTX_RUN);
     return b_send(l, &m, 0);
 }
+
+/* Warm-start check for a design that may already be running (pinnacle_probe_fpga).
+ * Only the OHCI design answers a type-5 vendor read (index 0, the status read of
+ * p1394_link_init); the Capture design does not (checked: no reply in 500 ms). The
+ * caller has selected alt 1, the setting that has EP 0x02. Before asking, whatever a
+ * previous session left unread on EP 0x84 / EP 0x88 is thrown away: a backlog on
+ * either stalls the command channel (see the dv_drain comment in pinnacle_stream.c). */
+int p1394_vendor_alive(pinnacle_device_t *dev, uint32_t *status)
+{
+    pinnacle_1394_t l;
+    static uint8_t junk[32768];   /* only ever written; one probe at a time per process */
+    uint32_t v = 0;
+
+    for (int i = 0; i < 64; i++) {
+        int n = 0;
+        if (libusb_bulk_transfer(dev->handle, PINNACLE_EP_DV_IN, junk, sizeof(junk), &n, 10) != 0 ||
+            n == 0)
+            break;
+    }
+    p1394_init(&l, dev);
+    for (int i = 0; i < 16; i++) {
+        if (p1394_pump(&l, 10) <= 0)
+            break;
+    }
+    if (vendor_read(&l, 0, &v) != 0)
+        return 0;
+    if (status)
+        *status = v;
+    return 1;
+}

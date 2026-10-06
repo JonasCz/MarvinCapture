@@ -78,13 +78,36 @@ final class MainWindowController: NSWindowController, NSWindowDelegate {
             window.appearance = NSAppearance(named: a.lowercased() == "dark" ? .darkAqua : .aqua)
         }
         trackWindowTitle()
+        trackVisibility()
+    }
+
+    private var visibilityObservers: [NSObjectProtocol] = []
+
+    /// Tells the model when nothing of the window can be seen (minimised, covered, app hidden).
+    private func trackVisibility() {
+        guard let model, let w = window else { return }
+        let update: @Sendable (Notification) -> Void = { [weak self, weak w] _ in
+            MainActor.assumeIsolated {
+                guard let w else { return }
+                _ = self
+                model.window.setUIVisible(w.occlusionState.contains(.visible) && !w.isMiniaturized && !NSApp.isHidden)
+            }
+        }
+        let nc = NotificationCenter.default
+        for n in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didMiniaturizeNotification, NSWindow.didDeminiaturizeNotification] {
+            visibilityObservers.append(nc.addObserver(forName: n, object: w, queue: .main, using: update))
+        }
+        for n in [NSApplication.didHideNotification, NSApplication.didUnhideNotification] {
+            visibilityObservers.append(nc.addObserver(forName: n, object: nil, queue: .main, using: update))
+        }
     }
 
     /// The title bar shows the model's window title (device, state, file); re-arms after every change.
     private func trackWindowTitle() {
         guard let model else { return }
         withObservationTracking {
-            window?.title = model.window.windowTitle
+            let t = model.window.windowTitle
+            if window?.title != t { window?.title = t }
         } onChange: { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.trackWindowTitle() } }
         }

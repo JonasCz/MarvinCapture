@@ -100,7 +100,7 @@ private final class StopFlag: @unchecked Sendable {
 /// (startup, device watch, status tick, capture start/stop, close). All engine access goes through
 /// `Pin`; every text and enable rule comes from the core (`pin_format_*`, `pin_deck_cmd_allowed`, ...).
 ///
-/// Update model: `start()` runs a 100 ms timer calling `tick()` (pin_get_status + draining
+/// Update model: `start()` runs a 200 ms timer calling `tick()` (pin_get_status + draining
 /// pin_poll_event) and a ~30 Hz meter timer; the device list is driven by a background thread blocked
 /// in pin_devices_wait. There is no other polling.
 @MainActor @Observable
@@ -119,7 +119,7 @@ final class WindowModel {
     @ObservationIgnored var onEngineEvent: ((EngineEvent) -> Void)?
     /// `--exit-when-done`: the steps finished; quit with this exit code.
     @ObservationIgnored var onExitRequested: ((Int32) -> Void)?
-    /// Runs at the end of every 100 ms tick (the close flow watches for READY here).
+    /// Runs at the end of every 200 ms tick (the close flow watches for READY here).
     @ObservationIgnored var afterTick: (() -> Void)?
     /// More tick listeners (Dock tile); run after `afterTick`.
     @ObservationIgnored var tickObservers: [() -> Void] = []
@@ -407,11 +407,16 @@ final class WindowModel {
     private(set) var storageFreeText = ""
     private(set) var framesTip = ""
     private(set) var sizeText = "0 B / 0 B"
-    private(set) var audioPeakLeft = WindowModel.meterFloorDb
-    private(set) var audioPeakRight = WindowModel.meterFloorDb
-    private(set) var audioPeakText = "L — R —"
-    private(set) var audioHoldLeft = WindowModel.meterFloorDb
-    private(set) var audioHoldRight = WindowModel.meterFloorDb
+    // The meters are pushed into AppKit views (LevelMeterView), not observed: a 30 Hz change must not
+    // run the SwiftUI graph. Only the accessibility text is observed (refreshed at most every 0.5 s).
+    @ObservationIgnored private(set) var audioPeakLeft = WindowModel.meterFloorDb
+    @ObservationIgnored private(set) var audioPeakRight = WindowModel.meterFloorDb
+    @ObservationIgnored private(set) var audioHoldLeft = WindowModel.meterFloorDb
+    @ObservationIgnored private(set) var audioHoldRight = WindowModel.meterFloorDb
+    @ObservationIgnored weak var leftMeter: LevelMeterView?
+    @ObservationIgnored weak var rightMeter: LevelMeterView?
+    private(set) var meterAccessibilityText = "silent"
+    @ObservationIgnored private var meterTextTime = 0.0
     private(set) var windowTitle = "MarvinCapture"
     private(set) var tapePercent = -1
     private(set) var lastLogLine = ""
@@ -452,6 +457,16 @@ final class WindowModel {
     @ObservationIgnored private var loading = false
     @ObservationIgnored private var settingsScope: String?
     @ObservationIgnored private(set) var isClosing = false
+    /// False while the window is minimised, fully covered or the app is hidden (set by the window
+    /// controller). Nothing is on screen to update then: the meters stop and the status is applied at
+    /// 1 Hz (unless capturing / closing), so SwiftUI and Core Animation stay idle.
+    @ObservationIgnored private var uiVisible = true
+    @ObservationIgnored private var hiddenTicks = 0
+    func setUIVisible(_ v: Bool) {
+        guard v != uiVisible else { return }
+        uiVisible = v
+        if v { tick() }   // catch up at once
+    }
     @ObservationIgnored private var statusTimer: Timer?
     @ObservationIgnored private var meterTimer: Timer?
     @ObservationIgnored private let watchStop = StopFlag()
@@ -555,14 +570,15 @@ final class WindowModel {
         }
         openSelectedIfNeeded()
 
-        statusTimer = makeTimer(interval: 0.1) { [unowned self] in self.tick() }
-        meterTimer = makeTimer(interval: 1.0 / 30.0) { [unowned self] in self.updateMeters() }
+        statusTimer = makeTimer(interval: 0.2, tolerance: 0.04) { [unowned self] in self.tick() }
+        meterTimer = makeTimer(interval: 1.0 / 30.0, tolerance: 0.01) { [unowned self] in self.updateMeters() }
         startDeviceWatch()
     }
 
-    private func makeTimer(interval: TimeInterval, _ body: @escaping @MainActor () -> Void) -> Timer {
+    private func makeTimer(interval: TimeInterval, tolerance: TimeInterval, _ body: @escaping @MainActor () -> Void) -> Timer {
         // .common: ticks keep running during menu tracking and live resize.
         let t = Timer(timeInterval: interval, repeats: true) { _ in MainActor.assumeIsolated { body() } }
+        t.tolerance = tolerance   // lets the system coalesce the wakeups
         RunLoop.main.add(t, forMode: .common)
         return t
     }
@@ -746,14 +762,14 @@ final class WindowModel {
     }
 
     private func applyDeckStatus(_ state: pin_deck_state_t, busy: Bool) {
-        deckBusy = busy
-        deckState = state
-        isRewChecked = state == PIN_DECK_REWINDING
-        isPlayChecked = state == PIN_DECK_PLAYING || state == PIN_DECK_RECORDING
-        isStopChecked = state == PIN_DECK_STOPPED
-        isFfChecked = state == PIN_DECK_FAST_FORWARD
-        deckStateText = Pin.deckStateName(state)
-        deckTip = Pin.deckTip(state, busy: busy)
+        set(\.deckBusy, busy)
+        set(\.deckState, state)
+        set(\.isRewChecked, state == PIN_DECK_REWINDING)
+        set(\.isPlayChecked, state == PIN_DECK_PLAYING || state == PIN_DECK_RECORDING)
+        set(\.isStopChecked, state == PIN_DECK_STOPPED)
+        set(\.isFfChecked, state == PIN_DECK_FAST_FORWARD)
+        set(\.deckStateText, Pin.deckStateName(state))
+        set(\.deckTip, Pin.deckTip(state, busy: busy))
     }
 
     // MARK: capture
@@ -895,15 +911,18 @@ final class WindowModel {
     // MARK: polling
 
     // The core reports the loudest peak since the previous status read and resets it, so every read
-    // (the 100 ms tick and the meter tick) goes through feedMeter; the meter tick publishes the max
+    // (the 200 ms tick and the meter tick) goes through feedMeter; the meter tick publishes the max
     // with a decay.
     private func feedMeter(_ st: pin_status_snapshot_t) {
         meterAccL = Swift.max(meterAccL, Double(st.audio_peak_db.0))
         meterAccR = Swift.max(meterAccR, Double(st.audio_peak_db.1))
     }
 
+    private static func meterQuant(_ db: Double) -> Double { (db * 2).rounded() / 2 }
+
     /// Meter timer (~30 Hz): fresh status read, peak with a short decay.
     func updateMeters() {
+        guard uiVisible else { return }
         if let s = session, let st = Pin.status(s) { feedMeter(st) }
         let now = ProcessInfo.processInfo.systemUptime
         let dt = meterLastTick == 0 ? 0 : Swift.min(0.25, now - meterLastTick)
@@ -914,25 +933,36 @@ final class WindowModel {
         let r = Swift.min(Swift.max(meterAccR, floor), 0)
         meterAccL = -.infinity
         meterAccR = -.infinity
-        // Assign only on change: an @Observable setter notifies even for an equal value, which would
-        // re-render the meters 30 times a second while idle (no device, or silence).
-        let peakL = Swift.max(l, audioPeakLeft - fall), peakR = Swift.max(r, audioPeakRight - fall)
-        if peakL != audioPeakLeft { audioPeakLeft = peakL }
-        if peakR != audioPeakRight { audioPeakRight = peakR }
+        // Quantised to 0.5 dB (the bar is 100 pt for 60 dB, so well under a pixel); the meter views
+        // ignore unchanged values.
+        let peakL = Self.meterQuant(Swift.max(l, audioPeakLeft - fall)), peakR = Self.meterQuant(Swift.max(r, audioPeakRight - fall))
+        audioPeakLeft = peakL
+        audioPeakRight = peakR
         // The hold tick follows the true (undecayed) peaks.
-        let holdL = holdLeft.push(l), holdR = holdRight.push(r)
-        if holdL != audioHoldLeft { audioHoldLeft = holdL }
-        if holdR != audioHoldRight { audioHoldRight = holdR }
+        audioHoldLeft = Self.meterQuant(holdLeft.push(l))
+        audioHoldRight = Self.meterQuant(holdRight.push(r))
+        leftMeter?.set(level: audioPeakLeft, hold: audioHoldLeft)
+        rightMeter?.set(level: audioPeakRight, hold: audioHoldRight)
+        if now - meterTextTime >= 0.5 {
+            meterTextTime = now
+            func f(_ db: Double) -> String { db <= Self.meterFloorDb ? "silent" : String(format: "%.0f dBFS", db) }
+            let t = "left \(f(audioPeakLeft)), right \(f(audioPeakRight))"
+            if t != meterAccessibilityText { meterAccessibilityText = t }
+        }
     }
 
-    /// The 100 ms tick: process-wide log lines, status snapshot, session events.
+    /// The 200 ms tick: process-wide log lines, status snapshot, session events.
     func tick() {
         // The core's own log lines (process-wide, session or not). Only the console sees these: some
         // warnings are routine retries, not worth a banner. The session's events go to both.
         while let pe = Pin.pollEvent(nil) { ConsoleOutput.write(event: pe) }
 
         if let s = session {
-            if let st = Pin.status(s) { applyStatus(st) }
+            hiddenTicks += 1
+            if uiVisible || isCapturing || isClosing || captureStartPending || hiddenTicks >= 5 {
+                hiddenTicks = 0
+                if let st = Pin.status(s) { applyStatus(st) }
+            }
             while let s = session, let e = Pin.pollEvent(s) { handleEvent(e) }
         }
         flushPendingFinished()
@@ -946,56 +976,55 @@ final class WindowModel {
     }
 
     private func applyStatus(_ st: pin_status_snapshot_t) {
-        sessionState = st.state
-        sessionStateText = Pin.formatState(st)
+        set(\.sessionState, st.state)
+        set(\.sessionStateText, Pin.formatState(st))
 
-        statusLine = Pin.formatStatusLine(st)
+        set(\.statusLine, Pin.formatStatusLine(st))
         let behindHub = openDevice?.isBehindHub ?? false
         let (short, hubReady) = Pin.formatStatusShort(st, behindHub: behindHub)
-        statusShortText = short
+        set(\.statusShortText, short)
         let capturingState = Pin.stateIsCapturing(st.state)
-        statusSubText = capturingState ? sessionStateText : ""
-        statusTip = !statusSubText.isEmpty && statusSubText != statusShortText ? "\(statusSubText)\n\(statusShortText)" : statusShortText
+        set(\.statusSubText, capturingState ? sessionStateText : "")
+        set(\.statusTip, !statusSubText.isEmpty && statusSubText != statusShortText ? "\(statusSubText)\n\(statusShortText)" : statusShortText)
         if hubReady, let hint = openDevice?.hubHint { statusTip = hint }
 
         let tc = cString(st.timecode)
-        timecode = tc.isEmpty ? "--:--:--:--" : tc
+        set(\.timecode, tc.isEmpty ? "--:--:--:--" : tc)
         if st.input == PIN_INPUT_DV {
-            statusTimeText = timecode
-            statusTimeTip = "Tape timecode"
+            set(\.statusTimeText, timecode)
+            set(\.statusTimeTip, "Tape timecode")
         } else {
             let total = Int(Swift.max(0, st.elapsed_s))
-            statusTimeText = String(format: "%02d:%02d:%02d", total / 3600, total / 60 % 60, total % 60)
-            statusTimeTip = "Time since capture start"
+            set(\.statusTimeText, String(format: "%02d:%02d:%02d", total / 3600, total / 60 % 60, total % 60))
+            set(\.statusTimeTip, "Time since capture start")
         }
 
-        signalLocked = st.signal != 0
-        signalLockText = signalLocked ? "Locked" : "No signal"
-        signalTypeText = Pin.formatSignal(st)
+        set(\.signalLocked, st.signal != 0)
+        set(\.signalLockText, signalLocked ? "Locked" : "No signal")
+        set(\.signalTypeText, Pin.formatSignal(st))
 
-        framesTotalText = Pin.formatFrames(st)
-        framesTip = Pin.formatFramesDetail(st)
-        sizeText = Pin.formatSizes(st)
+        set(\.framesTotalText, Pin.formatFrames(st))
+        set(\.framesTip, Pin.formatFramesDetail(st))
+        set(\.sizeText, Pin.formatSizes(st))
 
         feedMeter(st)
-        audioPeakText = "Audio peak left \(Self.formatDb(st.audio_peak_db.0)), right \(Self.formatDb(st.audio_peak_db.1))"
 
-        tapePercent = Int(st.tape_percent)
+        set(\.tapePercent, Int(st.tape_percent))
         if lastStreamKind != st.stream_kind {
             lastStreamKind = st.stream_kind
             if st.stream_kind == PIN_KIND_DV || st.stream_kind == PIN_KIND_HDV {
-                selectedKindTabIndex = st.stream_kind == PIN_KIND_HDV ? 1 : 0
+                set(\.selectedKindTabIndex, st.stream_kind == PIN_KIND_HDV ? 1 : 0)
             }
             applyPreviewAspect()
             pushOutputHint()
         }
 
-        diskLow = st.disk_low != 0
-        storageFreeText = Pin.formatStorageFree(st)
-        storageTip = Pin.formatStorageDetail(st)
-        hasDiskInfo = st.disk_free_bytes > 0
+        set(\.diskLow, st.disk_low != 0)
+        set(\.storageFreeText, Pin.formatStorageFree(st))
+        set(\.storageTip, Pin.formatStorageDetail(st))
+        set(\.hasDiskInfo, st.disk_free_bytes > 0)
 
-        isCapturing = capturingState
+        set(\.isCapturing, capturingState)
 
         applyDeckStatus(st.deck, busy: st.deck_busy != 0)
 
@@ -1004,37 +1033,41 @@ final class WindowModel {
         let detail = cString(st.detail)
         switch st.state {
         case PIN_STATE_PREPARING:
-            noVideoText = detail.isEmpty ? "Preparing device…" : detail
+            set(\.noVideoText, detail.isEmpty ? "Preparing device…" : detail)
         case PIN_STATE_ERROR:
             let e = cString(st.error_text)
-            noVideoText = e.isEmpty ? "Device error" : e
+            set(\.noVideoText, e.isEmpty ? "Device error" : e)
         default:
-            noVideoText = detail.isEmpty ? (isDvInput ? "No camera or deck signal." : "No video signal.") : detail
+            set(\.noVideoText, detail.isEmpty ? (isDvInput ? "No camera or deck signal." : "No video signal.") : detail)
         }
         let counting = st.state == PIN_STATE_CAPTURING && st.signal == 0 && st.idle_stop_remaining_s >= 0
         if counting {
             let left = Pin.formatRemaining(st.idle_stop_remaining_s)
-            noSignalCountdownText = "Stopping capture in \(left)"
-            noSignalCountdownFraction = activeIdleStopS > 0 ? Swift.min(Swift.max(st.idle_stop_remaining_s / activeIdleStopS, 0), 1) : 0
-            stopCountdownSuffix = " (\(left))"
+            set(\.noSignalCountdownText, "Stopping capture in \(left)")
+            set(\.noSignalCountdownFraction, activeIdleStopS > 0 ? Swift.min(Swift.max(st.idle_stop_remaining_s / activeIdleStopS, 0), 1) : 0)
+            set(\.stopCountdownSuffix, " (\(left))")
         } else {
-            stopCountdownSuffix = ""
+            set(\.stopCountdownSuffix, "")
         }
-        noSignalCountdownVisible = counting
-        progressVisible = st.state == PIN_STATE_PREPARING
-        progressIndeterminate = st.progress_percent < 0
-        progressValue = Double(Swift.max(0, st.progress_percent))
+        set(\.noSignalCountdownVisible, counting)
+        set(\.progressVisible, st.state == PIN_STATE_PREPARING)
+        set(\.progressIndeterminate, st.progress_percent < 0)
+        set(\.progressValue, Double(Swift.max(0, st.progress_percent)))
         let p = Pin.statusProgress(st, idleTotalS: activeIdleStopS, durationTotalS: activeDurationS)
-        progressMode = p.mode
-        progressFraction = p.fraction
+        set(\.progressMode, p.mode)
+        set(\.progressFraction, p.fraction)
 
         // Deck buttons have nothing to talk to without a camera (analog inputs report -1).
-        deckAvailable = !isDvInput || st.camera_present != 0
+        set(\.deckAvailable, !isDvInput || st.camera_present != 0)
 
-        windowTitle = Pin.formatWindowTitle(st, deviceName: selectedDevice?.displayName ?? Self.defaultDeviceName)
+        set(\.windowTitle, Pin.formatWindowTitle(st, deviceName: selectedDevice?.displayName ?? Self.defaultDeviceName))
     }
 
-    private static func formatDb(_ db: Float) -> String { db <= -143 ? "silent" : String(format: "%.1f dBFS", db) }
+    /// Assigns only when the value changed: an @Observable setter notifies even for an equal value, which
+    /// would re-run every view reading the property on each 200 ms tick.
+    private func set<T: Equatable>(_ kp: ReferenceWritableKeyPath<WindowModel, T>, _ v: T) {
+        if self[keyPath: kp] != v { self[keyPath: kp] = v }
+    }
 
     private func handleEvent(_ e: Pin.Event) {
         // Log lines also arrive through the process-wide queue (drained in tick), which prints them.

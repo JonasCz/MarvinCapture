@@ -117,6 +117,10 @@ static void run_case(const char *trace, const char *base, const char *ext, int d
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);
+    if (!pin_test_file_exists(argv[1])) {
+        printf("SKIP: %s not present (see tests/data/README.md)\n", argv[1]);
+        return 0;
+    }
     run_case(argv[1], "unplug_raw", "dv", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS);
     run_case(argv[1], "unplug_avi", "avi", PIN_FMT_DV_AVI, PIN_FMT_HDV_TS);
     if (pin_test_file_exists(argv[2]))

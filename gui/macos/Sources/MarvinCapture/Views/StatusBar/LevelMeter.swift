@@ -14,76 +14,133 @@
 // You should have received a copy of the GNU Affero General Public License
 // along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+import AppKit
 import SwiftUI
 
 /// Thin horizontal audio level meter: a bar for the current peak (dBFS), coloured by zone
 /// (green, yellow near full scale, red at it), and a tick for the held peak of the last 10 s.
-/// Port of Controls/LevelMeter.cs; drawn in a Canvas so a 30 Hz update stays cheap.
-struct LevelMeter: View {
+/// Port of Controls/LevelMeter.cs. A layer-backed NSView the model pushes values into at 30 Hz, so
+/// a meter update repaints these 100x4 pt and nothing else (no SwiftUI graph update, no layout).
+final class LevelMeterView: NSView {
     static let floorDb = WindowModel.meterFloorDb
     static let width: CGFloat = 100
     static let height: CGFloat = 4
-
-    let level: Double
-    let hold: Double
 
     /// Zone limits (dBFS): green up to -18, yellow up to -6, red above.
     private static let yellowFrom = -18.0
     private static let redFrom = -6.0
 
+    private var level = LevelMeterView.floorDb
+    private var hold = LevelMeterView.floorDb
+
+    // Plain layers, no drawRect: an update only moves a few frames (actions off).
+    private let track = CALayer()
+    private let zoneLayers = [CALayer(), CALayer(), CALayer()]   // green, yellow, red
+    private let holdLayer = CALayer()
+
+    override var intrinsicContentSize: NSSize { NSSize(width: Self.width, height: Self.height) }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    override func isAccessibilityElement() -> Bool { false }
+
+    override init(frame: NSRect) {
+        super.init(frame: NSRect(x: 0, y: 0, width: Self.width, height: Self.height))
+        wantsLayer = true
+        layer?.masksToBounds = false
+        track.frame = CGRect(x: 0, y: 0, width: Self.width, height: Self.height)
+        track.cornerRadius = Self.height / 2
+        track.masksToBounds = true            // clips the zone bars to the rounded track
+        for z in zoneLayers { track.addSublayer(z) }
+        layer?.addSublayer(track)
+        layer?.addSublayer(holdLayer)
+        applyColors()
+        layoutBars()
+    }
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColors()
+    }
+
+    private func applyColors() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            track.backgroundColor = NSColor.labelColor.withAlphaComponent(0.12).cgColor
+            zoneLayers[0].backgroundColor = NSColor.systemGreen.cgColor
+            zoneLayers[1].backgroundColor = NSColor.systemYellow.cgColor
+            zoneLayers[2].backgroundColor = NSColor.systemRed.cgColor
+            holdLayer.backgroundColor = (hold > -1 ? NSColor.systemRed : NSColor.labelColor).cgColor
+        }
+    }
+
+    func set(level: Double, hold: Double) {
+        guard level != self.level || hold != self.hold else { return }
+        let redChanged = (hold > -1) != (self.hold > -1)
+        self.level = level
+        self.hold = hold
+        if redChanged { applyColors() }
+        layoutBars()
+    }
+
     private static func fraction(_ db: Double) -> CGFloat {
         CGFloat(Swift.min(Swift.max((db - floorDb) / -floorDb, 0), 1))
     }
 
-    var body: some View {
-        Canvas { ctx, size in
-            let w = size.width, h = size.height
-            let track = Path(roundedRect: CGRect(x: 0, y: 0, width: w, height: h), cornerRadius: h / 2)
-            ctx.fill(track, with: .color(.primary.opacity(0.12)))
-
-            let barW = Self.fraction(level) * w
-            if barW > 0 {
-                var inner = ctx
-                inner.clip(to: track)
-                let zones: [(from: Double, to: Double, color: Color)] = [
-                    (Self.floorDb, Self.yellowFrom, .green),
-                    (Self.yellowFrom, Self.redFrom, .yellow),
-                    (Self.redFrom, 0, .red),
-                ]
-                for z in zones {
-                    let x0 = Self.fraction(z.from) * w
-                    let x1 = Swift.min(Self.fraction(z.to) * w, barW)
-                    if x1 > x0 { inner.fill(Path(CGRect(x: x0, y: 0, width: x1 - x0, height: h)), with: .color(z.color)) }
-                }
-            }
-            if hold > Self.floorDb {
-                // The tick turns red when the last 10 s came within 1 dB of clipping.
-                let x = Swift.max(0, Self.fraction(hold) * w - 2)
-                ctx.fill(Path(CGRect(x: x, y: 0, width: 2, height: h)), with: .color(hold > -1 ? .red : .primary))
-            }
+    private func layoutBars() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        let w = Self.width, h = Self.height
+        let barW = Self.fraction(level) * w
+        let zones: [(from: Double, to: Double)] = [(Self.floorDb, Self.yellowFrom), (Self.yellowFrom, Self.redFrom), (Self.redFrom, 0)]
+        for (i, z) in zones.enumerated() {
+            let x0 = Self.fraction(z.from) * w
+            let x1 = Swift.min(Self.fraction(z.to) * w, barW)
+            zoneLayers[i].frame = x1 > x0 ? CGRect(x: x0, y: 0, width: x1 - x0, height: h) : .zero
         }
-        .frame(width: Self.width, height: Self.height)
+        if hold > Self.floorDb {
+            // The tick turns red when the last 10 s came within 1 dB of clipping.
+            holdLayer.frame = CGRect(x: Swift.max(0, Self.fraction(hold) * w - 2), y: 0, width: 2, height: h)
+            holdLayer.isHidden = false
+        } else {
+            holdLayer.isHidden = true
+        }
+        CATransaction.commit()
     }
 }
 
-/// Both channels, labelled L and R, as one accessible element reading the peak text.
+/// SwiftUI host of one meter. Deliberately reads no observed state: the model pushes values into the
+/// view it registers here (`WindowModel.leftMeter` / `rightMeter`).
+private struct LevelMeterRepresentable: NSViewRepresentable {
+    let register: (LevelMeterView) -> Void
+    func makeNSView(context: Context) -> LevelMeterView {
+        let v = LevelMeterView()
+        register(v)
+        return v
+    }
+    func updateNSView(_ v: LevelMeterView, context: Context) {}
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: LevelMeterView, context: Context) -> CGSize? {
+        CGSize(width: LevelMeterView.width, height: LevelMeterView.height)
+    }
+}
+
+/// Both channels, labelled L and R, as one accessible element (the label is refreshed by the model at
+/// ~2 Hz while the peaks change).
 struct LevelMeters: View {
     let model: WindowModel
 
     var body: some View {
         VStack(spacing: 2) {
-            row("L", model.audioPeakLeft, model.audioHoldLeft)
-            row("R", model.audioPeakRight, model.audioHoldRight)
+            row("L") { model.leftMeter = $0 }
+            row("R") { model.rightMeter = $0 }
         }
-        .help(model.audioPeakText)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(model.audioPeakText)
+        .accessibilityLabel("Audio level meters")
+        .accessibilityValue(model.meterAccessibilityText)
     }
 
-    private func row(_ name: String, _ level: Double, _ hold: Double) -> some View {
+    private func row(_ name: String, _ register: @escaping (LevelMeterView) -> Void) -> some View {
         HStack(spacing: 6) {
             Text(name).font(.system(size: 9)).foregroundStyle(.secondary).frame(width: 10, alignment: .leading)
-            LevelMeter(level: level, hold: hold)
+            LevelMeterRepresentable(register: register).frame(width: LevelMeterView.width, height: LevelMeterView.height)
         }
     }
 }

@@ -174,6 +174,10 @@ struct pin_session {
     int ctl_dirty_picture, ctl_dirty_gain;
     int analog_restart;           /* analog: the standard changed; restart video at the target */
     pinnacle_std_t analog_target_std;
+    /* analog: s->analog is open (Capture design running, decoder and codec initialised) and
+     * the device was left in that state: an input switch to the other analog input only
+     * needs the decoder input changed. Cleared whenever the design may have changed. */
+    int analog_valid;
 
     /* capture pipeline (only valid while CAPTURING) */
     pin_capture_opts_t capture_opts;
@@ -198,6 +202,9 @@ struct pin_session {
     pin_capture_opts_t output_hint; /* pin_set_output_hint(): format/path while READY, for
                                         est_seconds_left before a capture actually starts */
     int have_output_hint;
+    char free_cache_dir[PIN_PATH_MAX]; /* pin_session_get_status(): free-space lookup, kept ~1 s */
+    uint64_t free_cache_bytes;
+    double free_cache_t;
     pin_scene_fifo_item_t scene_fifo[PIN_SCENE_FIFO_CAP];
     unsigned scene_fifo_head, scene_fifo_count; /* ring, oldest at head */
     pin_split_t split;       /* content-split lookahead (zeroed = not initialised) */

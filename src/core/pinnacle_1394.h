@@ -178,6 +178,11 @@ int p1394_disconnect(pinnacle_1394_t *l, uint16_t node, uint32_t *opcr);
 int p1394_ir_start(pinnacle_1394_t *l, unsigned channel);
 int p1394_ir_stop(pinnacle_1394_t *l);
 
+/* 1 if the OHCI design answers a type-5 vendor read (index 0; *status gets the value,
+ * 0x81 on the 500-USB and 510-USB), 0 if not within ~0.5 s. alt 1 must be selected.
+ * Drains stale EP 0x84 / EP 0x88 data first. Used by pinnacle_probe_fpga(). */
+int p1394_vendor_alive(pinnacle_device_t *dev, uint32_t *status);
+
 #ifdef __cplusplus
 }
 #endif

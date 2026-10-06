@@ -51,6 +51,14 @@ reserved for `--capture -`. Syntax and semantics: `docs/cli.md`.
 Switching between DV and analog is just another invocation (the next run's
 bring-up reloads the other FPGA bitstream); no replug needed.
 
+Warm start: a run finds out which design the FPGA already holds
+(`pinnacle_probe_fpga`, docs/startup.md "Warm start") and skips the upload when it
+is the wanted one, so back-to-back runs of the same kind start in 0.2 s (analog) /
+~1 s (DV). The debug log says `FPGA: capture design already loaded, skipping the
+upload` / `OHCI design already loaded ...`. There is no switch to force the cold path any
+more; a true power-up state (nothing loaded) needs a replug. `-i` may be repeated in one command line (`-i composite --wait ...
+-i svideo --wait ...`): S-Video <-> composite switches without a new bring-up.
+
 ## Debug logging: `--debug`
 
 `--debug` prints every core log level (prefixed `debug:`/`info:`/`warning:`/

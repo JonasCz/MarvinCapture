@@ -63,11 +63,14 @@ pinnacle_status_t pinnacle_cfg_chip_reset(pinnacle_device_t *dev, uint8_t addr);
 
 /* Loads an FPGA bitstream: alt 0, "05 00" must answer ready, the bitstream
  * goes out on EP 0x02, the FPGA gets ~1 s to configure, then "06 00" must
- * answer up. The caller selects the alt setting the new design uses. Works
+ * answer up. The caller selects the alt setting the new design uses. With
+ * fast (a design was running before, so this is no power-up) the 1.1 s settle
+ * wait ends when the capture block answers on I2C (alt 3 is selected for that
+ * poll; the design is Capture, so only for the capture bitstream). Works
  * on a device that is already running another bitstream -- that is how the
  * vendor driver switches between DV (OHCI) and analog (Capture) without a
  * replug. */
-pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path);
+pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path, int fast);
 
 #ifdef __cplusplus
 }

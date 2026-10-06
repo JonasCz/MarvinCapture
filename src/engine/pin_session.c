@@ -2087,6 +2087,7 @@ static void do_run_dv(pin_session_t *s)
         return;
     }
 
+    s->analog_valid = 0; /* the OHCI design replaces Capture */
     char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
     if (pin_session_firmware_path(s->dev.model, PIN_KIND_DV, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
         set_error(s, PIN_ERR_FIRMWARE, why);
@@ -2367,7 +2368,7 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
     return 0;
 }
 
-static void do_run_analog(pin_session_t *s, pin_input_t input)
+static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
 {
     char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
     if (pin_session_firmware_path(s->dev.model, PIN_KIND_ANALOG, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
@@ -2386,11 +2387,34 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
     if (s->requested_std != PIN_STD_AUTO)
         cfg.standard = (pinnacle_std_t)(s->requested_std - 1); /* enums line up 1:1, see pin_std_t */
 
-    pin_logf(PIN_LOG_DEBUG, "session: analog bring-up, FPGA bitstream %s\n", fw);
-    pinnacle_status_t pst = pinnacle_analog_open(&s->analog, &s->dev, fw, &cfg);
-    if (pst != PINNACLE_OK) {
-        set_init_error(s, pst, fw);
-        return;
+    pinnacle_status_t pst = PINNACLE_OK;
+    s->analog_valid = 0;
+    if (reuse) {
+        /* Input switch between S-Video and composite: the Capture design, the codec and the
+         * capture block are as the last run left them (stopped). Only the decoder's input
+         * (and the standard / picture, which a user may have changed meanwhile) are set. */
+        pin_logf(PIN_LOG_DEBUG, "session: switching the analog input without a new bring-up\n");
+        pinnacle_progress(&s->dev, "Switching the input", -1);
+        pinnacle_analog_t *a = &s->analog;
+        a->cfg.picture = s->want_picture;
+        pst = pinnacle_analog_set_input(a, cfg.input);
+        if (pst == PINNACLE_OK && s->requested_std != PIN_STD_AUTO)
+            pst = pinnacle_analog_set_standard(a, cfg.standard);
+        else if (pst == PINNACLE_OK)
+            pst = pinnacle_analog_set_picture(a, &s->want_picture);
+        if (pst != PINNACLE_OK) {
+            pin_logf(PIN_LOG_WARN, "session: input switch failed (%s), opening the device again\n",
+                     pinnacle_strerror(pst));
+            reuse = 0;
+        }
+    }
+    if (!reuse) {
+        pin_logf(PIN_LOG_DEBUG, "session: analog bring-up, FPGA bitstream %s\n", fw);
+        pst = pinnacle_analog_open(&s->analog, &s->dev, fw, &cfg);
+        if (pst != PINNACLE_OK) {
+            set_init_error(s, pst, fw);
+            return;
+        }
     }
     pinnacle_lock_update(s->lock, PINNACLE_LOCK_READY, s->dev.guid_hi, s->dev.guid_lo);
 
@@ -2421,6 +2445,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
         set_error(s, PIN_ERR_USB, NULL);
         return;
     }
+    s->analog_valid = 1;
     set_state(s, PIN_STATE_READY);
 
     analog_ctx_t ctx = { .s = s };
@@ -2439,6 +2464,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
     for (;;) {
         pinnacle_status_t lst = pinnacle_analog_capture_loop(&s->analog, &sink, &stats, &s->loop_stop);
         if (lst != PINNACLE_OK && !s->loop_stop && !s->analog_restart) {
+            s->analog_valid = 0;
             device_gone = stream_failed(s);
             break;
         }
@@ -2465,6 +2491,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input)
             pin_session_lock(s);
             set_error(s, PIN_ERR_USB, NULL);
             pin_session_unlock(s);
+            s->analog_valid = 0;
             break;
         }
     }
@@ -2818,7 +2845,9 @@ static void *worker_main(void *arg)
                 set_error(s, PIN_ERR_STATE, "The replay device only provides the DV / HDV input");
                 pin_session_unlock(s);
             } else {
-                do_run_analog(s, cmd.input);
+                /* S-Video <-> composite needs no new bring-up when the analog design is
+                 * still up from the last run on this device. */
+                do_run_analog(s, cmd.input, s->analog_valid && s->dev.handle != NULL);
             }
             /* returning here means the loop was told to stop (new
              * SET_INPUT, or CLOSE): go back to the top and process it. */
@@ -3353,8 +3382,18 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         char dir[PIN_PATH_MAX];
         dir_of(hint_path, dir, sizeof(dir));
         uint64_t free_bytes = 0;
-        int fat32_unused = 0;
-        fat32_and_free(dir, &free_bytes, &fat32_unused);
+        /* Status is polled 40 times a second by the GUIs and statvfs/statfs are real syscalls (visible in
+         * the macOS GUI's profile): ask again after a second, or when the directory changed. */
+        double now_s = pin_previewer_clock();
+        if (strcmp(s->free_cache_dir, dir) == 0 && s->free_cache_t > 0 && now_s - s->free_cache_t < 1.0) {
+            free_bytes = s->free_cache_bytes;
+        } else {
+            int fat32_unused = 0;
+            fat32_and_free(dir, &free_bytes, &fat32_unused);
+            snprintf(s->free_cache_dir, sizeof(s->free_cache_dir), "%s", dir);
+            s->free_cache_bytes = free_bytes;
+            s->free_cache_t = now_s;
+        }
         out->disk_free_bytes = free_bytes;
         int src = 0;
         double measured = s->state == PIN_STATE_CAPTURING ? pin_rate_bytes_per_s(&s->rate_win, 10.0) : -1;

@@ -158,9 +158,10 @@ fi
 step "Assembling build/${PLATFORM}/dist"
 mkdir -p "${DIST}"
 cp -f "${CORE}/MarvinCaptureCLI" "${DIST}/"
-"${ROOT}/scripts/sync-cli-help.sh" "${DIST}/MarvinCaptureCLI"   # help text -> docs/cli.md
 cp -f "${CORE}/${CORE_LIB}" "${DIST}/"
 [[ -n "${LIBUSB_LIB}" ]] && cp -f "${CORE}/${LIBUSB_LIB}" "${DIST}/"
+# After the libraries are in dist: the CLI loads them (a clean tree has no dist yet).
+"${ROOT}/scripts/sync-cli-help.sh" "${DIST}/MarvinCaptureCLI"   # help text -> docs/cli.md
 rm -rf "${DIST}/firmware"
 mkdir -p "${DIST}/firmware"
 cp -f "${ROOT}/firmware/fpga-ohci.bin" "${ROOT}/firmware/fpga-capture.bin" \

@@ -21,6 +21,7 @@
 #include "pinnacle_cfg.h"
 #include "pinnacle_enum.h"
 #include "pinnacle_fx2.h"
+#include "pinnacle_1394.h"
 #include "protocol_data.h"
 
 #include <errno.h>
@@ -525,21 +526,103 @@ pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_fi
     return PINNACLE_ERR_NO_FX2_FIRMWARE;
 }
 
+const char *pinnacle_fpga_name(pinnacle_fpga_t state)
+{
+    switch (state) {
+    case PINNACLE_FPGA_NONE: return "none (cold device)";
+    case PINNACLE_FPGA_OHCI: return "OHCI (DV/HDV) design";
+    case PINNACLE_FPGA_CAPTURE: return "Capture (analog) design";
+    case PINNACLE_FPGA_OTHER: return "a design that is not Capture";
+    default: return "unknown";
+    }
+}
+
+pinnacle_fpga_t pinnacle_probe_fpga(pinnacle_device_t *dev, int check_ohci)
+{
+    static const uint8_t cap_read[5] = { 0x02, 0xf0, 0x01, 0x01, 0x01 }; /* I2C read, f0 reg 1 */
+    uint8_t up = 0, reply[16];
+    int n = 0;
+    uint64_t t0 = mono_ms();
+
+    if (!dev->model || !dev->model->warm_ok) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: warm start is not enabled for this model\n");
+        return PINNACLE_FPGA_UNKNOWN;
+    }
+    /* To force the full cold path again (timing, testing the fallbacks), return
+     * PINNACLE_FPGA_UNKNOWN here; the env override PINNACLE_COLD=1 that did it was removed. */
+    pinnacle_progress(dev, "Checking what the FPGA holds", -1);
+    if (pinnacle_cfg_op(dev, 0x06, 0x00, &up) != PINNACLE_OK)
+        return PINNACLE_FPGA_UNKNOWN;
+    if (up != 0x01) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA probe: no design running (06 -> %02x), %u ms\n", up,
+                 (unsigned)(mono_ms() - t0));
+        return PINNACLE_FPGA_NONE;
+    }
+    /* The capture block's I2C slave answers only with the Capture design loaded, and only
+     * with alt 1..3 selected (at alt 0 it does not answer under any design). */
+    if (libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
+                                         PINNACLE_ALT_SETTING_OPERATIONAL) != 0 ||
+        pinnacle_cfg_xfer(dev, cap_read, sizeof(cap_read), reply, sizeof(reply), &n) != PINNACLE_OK) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA probe failed\n");
+        return PINNACLE_FPGA_UNKNOWN;
+    }
+    if (n >= 3 && reply[0] == 0x02 && reply[1] == 0x01) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA probe: capture block acknowledged, %u ms\n",
+                 (unsigned)(mono_ms() - t0));
+        return PINNACLE_FPGA_CAPTURE;
+    }
+    if (!check_ohci)
+        return PINNACLE_FPGA_OTHER;
+    uint32_t status = 0;
+    if (p1394_vendor_alive(dev, &status)) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA probe: OHCI vendor status 0x%08x, %u ms\n", status,
+                 (unsigned)(mono_ms() - t0));
+        return PINNACLE_FPGA_OHCI;
+    }
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: FPGA probe: neither Capture nor OHCI answered, %u ms\n",
+             (unsigned)(mono_ms() - t0));
+    return PINNACLE_FPGA_OTHER;
+}
+
+/* After a design was uploaded over a running one: the FPGA is configured when the
+ * transfer returns (the upload itself takes ~1 s), and the OHCI design answers a vendor
+ * read a few ms later. Wait 250 ms, ask once, then give it another 250 ms; whatever
+ * happens, never less than 250 ms and, without an answer, the full legacy 1.5 s. */
+static void dv_settle_fast(pinnacle_device_t *dev)
+{
+    uint64_t t0 = mono_ms();
+    sleep_ms(250);
+    uint32_t status = 0;
+    if (libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
+                                         PINNACLE_ALT_SETTING_OPERATIONAL) == 0 &&
+        p1394_vendor_alive(dev, &status)) {
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: OHCI design answered %u ms after the upload\n",
+                 (unsigned)(mono_ms() - t0));
+        sleep_ms(250);
+        return;
+    }
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: OHCI design did not answer yet, waiting the full 1.5 s\n");
+    uint64_t spent = mono_ms() - t0;
+    if (spent < 1500)
+        sleep_ms((unsigned)(1500 - spent));
+}
+
+static pinnacle_status_t pinnacle_init_hardware_ex(pinnacle_device_t *dev,
+                                                   const char *bitstream_path, int allow_warm);
+
 pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bitstream_path)
 {
-    dev->have_guid = 0;
-    pinnacle_progress(dev, "Resetting the device and reading its identity", -1);
-    int rc = libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
-                                               PINNACLE_ALT_SETTING_IDLE);
-    if (rc != 0)
-        return PINNACLE_ERR_USB_TRANSFER;
+    return pinnacle_init_hardware_ex(dev, bitstream_path, 1);
+}
 
-    /* Classic units may boot without firmware (VID/PID-only EEPROM): see
-     * pinnacle_ensure_fx2. */
-    pinnacle_status_t fx2 = pinnacle_ensure_fx2(dev, bitstream_path);
-    if (fx2 != PINNACLE_OK)
-        return fx2;
+pinnacle_status_t pinnacle_init_hardware_cold(pinnacle_device_t *dev, const char *bitstream_path)
+{
+    return pinnacle_init_hardware_ex(dev, bitstream_path, 0);
+}
 
+/* The cold-boot config-channel sequence and, for classic units, the GUID read. */
+static pinnacle_status_t prebitstream_full(pinnacle_device_t *dev)
+{
     /* Full captured cold-boot sequence on the low-level config channel,
      * immediately before the FPGA bitstream upload begins -- see
      * PINNACLE_CONFIG_PREBITSTREAM_SEQ in protocol_data.h. Confirmed required:
@@ -574,8 +657,80 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
     /* The replay above carried the CR family's GUID read; classic units get theirs here. */
     if (dev->model && !dev->model->cr_config && read_guid_a0(dev) != PINNACLE_OK)
         pin_logf(PIN_LOG_WARN, "pinnacle: could not read the device GUID (classic model)\n");
+    return PINNACLE_OK;
+}
+
+static pinnacle_status_t pinnacle_init_hardware_ex(pinnacle_device_t *dev,
+                                                   const char *bitstream_path, int allow_warm)
+{
+    dev->have_guid = 0;
+    dev->warm_dv = 0;
+    snprintf(dev->bitstream_path, sizeof(dev->bitstream_path), "%s", bitstream_path ? bitstream_path : "");
+    pinnacle_progress(dev, "Resetting the device and reading its identity", -1);
+    int rc = libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
+                                               PINNACLE_ALT_SETTING_IDLE);
+    if (rc != 0)
+        return PINNACLE_ERR_USB_TRANSFER;
+
+    /* Classic units may boot without firmware (VID/PID-only EEPROM): see
+     * pinnacle_ensure_fx2. */
+    pinnacle_status_t fx2 = pinnacle_ensure_fx2(dev, bitstream_path);
+    if (fx2 != PINNACLE_OK)
+        return fx2;
+
+    /* Warm start: the OHCI design is already running (a DV session before, or a restart
+     * of the program). The pre-sequence, the upload and the settle wait exist only to
+     * get a design into the FPGA; none of them is needed then. p1394_link_init, which
+     * the stream start runs next, resets the link controller itself. The GUID is the one
+     * thing the pre-sequence delivers that the link needs. Any doubt -> cold path. */
+    pinnacle_fpga_t fpga = PINNACLE_FPGA_UNKNOWN;
+    if (allow_warm) {
+        fpga = pinnacle_probe_fpga(dev, 1);
+        if (fpga == PINNACLE_FPGA_OHCI) {
+            uint32_t hi = 0, lo = 0;
+            if (pinnacle_read_guid(dev, &hi, &lo) == PINNACLE_OK) {
+                pin_logf(PIN_LOG_INFO,
+                         "pinnacle: FPGA: OHCI design already loaded, skipping the upload\n");
+                dev->warm_dv = 1;
+                return PINNACLE_OK;
+            }
+            pin_logf(PIN_LOG_WARN, "pinnacle: warm start: could not read the GUID, cold start\n");
+        } else if (fpga != PINNACLE_FPGA_UNKNOWN) {
+            pin_logf(PIN_LOG_INFO, "pinnacle: FPGA: %s, uploading the OHCI design\n",
+                     pinnacle_fpga_name(fpga));
+        }
+        if (libusb_set_interface_alt_setting(dev->handle, PINNACLE_INTERFACE_NUM,
+                                             PINNACLE_ALT_SETTING_IDLE) != 0)
+            return PINNACLE_ERR_USB_TRANSFER;
+    }
+
+    /* Over a design that is already running the device is powered up and its loader
+     * answers: the GUID and "05 00" (loader ready) are all that the sequence has to
+     * deliver. If that does not work out, or the upload then fails, the full sequence runs. */
+    int short_start = 0;
+    if ((fpga == PINNACLE_FPGA_CAPTURE || fpga == PINNACLE_FPGA_OTHER) && dev->model &&
+        dev->model->cr_config) {
+        uint32_t hi = 0, lo = 0;
+        uint8_t loader = 0;
+        short_start = pinnacle_read_guid(dev, &hi, &lo) == PINNACLE_OK &&
+                      pinnacle_cfg_op(dev, 0x05, 0x00, &loader) == PINNACLE_OK && loader == 0x01;
+        if (short_start)
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: a design is running: skipping the power-up sequence\n");
+    }
+    if (!short_start) {
+        pinnacle_status_t pre = prebitstream_full(dev);
+        if (pre != PINNACLE_OK)
+            return pre;
+    }
 
     pinnacle_status_t status = upload_bitstream(dev, bitstream_path);
+    if (status != PINNACLE_OK && short_start) {
+        pin_logf(PIN_LOG_WARN, "pinnacle: upload failed after the short start, retrying with the "
+                        "full power-up sequence\n");
+        status = prebitstream_full(dev);
+        if (status == PINNACLE_OK)
+            status = upload_bitstream(dev, bitstream_path);
+    }
     if (status != PINNACLE_OK)
         return status;
 
@@ -588,13 +743,18 @@ pinnacle_status_t pinnacle_init_hardware(pinnacle_device_t *dev, const char *bit
      * small OUT-endpoint buffer filling because the FPGA-side consumer
      * wasn't booted yet. */
     pinnacle_progress(dev, "Waiting for the FPGA to start up", -1);
-    sleep_ms(1500);
+    /* Over a design that was running (not a power-up): the FPGA is ready as soon as the
+     * upload returns, so ask for it instead of sleeping for the whole 1.5 s. */
+    if (fpga == PINNACLE_FPGA_CAPTURE || fpga == PINNACLE_FPGA_OHCI || fpga == PINNACLE_FPGA_OTHER)
+        dv_settle_fast(dev);
+    else
+        sleep_ms(1500);
 
     pinnacle_progress(dev, "Finishing FPGA start-up", -1);
     /* "06 00" -> "06 01" exchange on the config channel right after the
      * bitstream upload, before switching to the operational alt setting --
      * the second half of the fix described above. */
-    ready = config_replay_seq(dev, PINNACLE_CONFIG_POSTBITSTREAM_SEQ,
+    pinnacle_status_t ready = config_replay_seq(dev, PINNACLE_CONFIG_POSTBITSTREAM_SEQ,
                                PINNACLE_CONFIG_POSTBITSTREAM_SEQ_COUNT);
     if (ready != PINNACLE_OK)
         return ready;

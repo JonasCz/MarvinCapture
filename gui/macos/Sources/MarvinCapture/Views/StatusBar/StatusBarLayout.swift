@@ -44,11 +44,19 @@ struct StatusBarMetrics {
     /// The one status font: small system size, tabular digits so numbers don't jitter.
     static let nsFont = NSFont.monospacedDigitSystemFont(ofSize: NSFont.smallSystemFontSize, weight: .regular)
 
+    /// Measuring text is the costly part of the fit and the texts rarely change: remember the widths.
+    @MainActor private static var widthCache: [String: CGFloat] = [:]
+
+    @MainActor
     static func textWidth(_ s: String) -> CGFloat {
-        ceil((s as NSString).size(withAttributes: [.font: nsFont]).width)
+        if let w = widthCache[s] { return w }
+        let w = ceil((s as NSString).size(withAttributes: [.font: nsFont]).width)
+        if widthCache.count > 256 { widthCache.removeAll() }
+        widthCache[s] = w
+        return w
     }
 
-    static func iconTextWidth(_ s: String) -> CGFloat { iconWidth + iconGap + textWidth(s) }
+    @MainActor static func iconTextWidth(_ s: String) -> CGFloat { iconWidth + iconGap + textWidth(s) }
 
     /// The items to show for the texts now (deck on DV/HDV input only, storage with disk info only),
     /// dropping the lowest-priority ones until they fit next to the file text's minimum width.

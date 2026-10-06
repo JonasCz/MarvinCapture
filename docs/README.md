@@ -21,6 +21,12 @@
   registers, clocks and A/V sync; also the vendor driver, the other Marvin
   models and the three bitstreams.
 
+**Handoff notes**
+
+- [handoff/linux-testing.md](handoff/linux-testing.md): what to test on the Linux host, and how.
+- [handoff/macos-cpu-usage.md](handoff/macos-cpu-usage.md): macOS GUI CPU results and what remains.
+- [handoff/dv-timecode-warning.md](handoff/dv-timecode-warning.md): the DV "invalid timecode" warning.
+
 **Elsewhere**
 
 - [../firmware/README.md](../firmware/README.md): the FPGA bitstreams and their licence.
