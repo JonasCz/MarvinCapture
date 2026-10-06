@@ -396,8 +396,15 @@ instead of 0666 if that matters.) Without it, the same effect system-wide for th
 | held (`cpu_dma_latency` writable) | 0 | 0 | 0 | 0 | 0 of 7,451 frames |
 | not available (default user) | 8 | 10 | 13 | 3 | 0 |
 
-The second run's losses were all in the first ~3 s of the capture. The Windows runs in this
-document were made with the "High performance" power plan.
+The second run's losses were all in the first ~3 s of the capture.
+
+Windows shows the same thing with the **Power saver** plan (510-USB, S-Video, 5-minute QR
+captures, 8 KiB x 512, MMCSS Capture class, RAW_IO on): 1 missing/duplicate frame in the
+first run, 12 (one burst of four short runs, ~0.5 s) in the second, 0 in a third that was
+stopped at 288 s; audio was never affected. All earlier Windows runs in this document
+(0 lost in 65 minutes) used "High performance". So for capture on Windows, use the High
+performance plan (or a "Bitsum Highest Performance"-style plan). The app has no Windows
+counterpart to `cpu_dma_latency` yet.
 
 ## Keeping the USB thread on time
 
