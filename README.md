@@ -76,6 +76,8 @@ This capture device is, in my testing so far, the only USB device and software t
 
 Note that the usual recommendation regarding USB devices still applies: avoid connecting it on a hub where it shares bandwidth with other devices (the UI and CLI will warn if it detects a hub). Although this is much less of an issue with DV than with analog, since the bitrate of DV is 25Mbps, which has plenty of margin with USB2's 480Mbps.
 
+On Linux, an otherwise idle machine can drop frames when the CPU sleeps deeply between USB completions. The capture asks the kernel not to (`/dev/cpu_dma_latency`, which needs a udev rule to be writable by normal users), or you can turn off deep C-states / use the performance governor; see [Power saving and capture reliability](docs/analog.md#power-saving-and-capture-reliability-linux). The Windows "High performance" power plan is what the Windows tests used.
+
 This readme, interface design, testing, and verification are all made by a human. However, reverse engineering of the manufacturer's driver, and this code, was made possible with extensive use of LLMs.
 
 ## Contributing

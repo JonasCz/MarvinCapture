@@ -90,7 +90,7 @@ needs `numpy`, `zxingcpp` (pip), `ffmpeg` and `ltcdump`, and the script calls
 `SCRIPT_DIR/ltcdump.exe` (lines 185 and 190): build `ltcdump` (libltc) and symlink it as
 `ltcdump.exe` next to the script, or change those two paths.
 
-### d. USB transfer size (optional experiment)
+### d. USB transfer size (experiment)
 
 Linux stays at 512 x 8 KiB (200 ms queued). That is where the loss was measured: on Intel
 xHCI 64 KiB and up lost ~20 % of the data, 16-20 KiB still gave 3-9 short frames per 1000,
@@ -150,3 +150,32 @@ expect the same, including `test_stdout_sinks` (needs the current FFmpeg build).
 Per item: pass or fail, the timings, analyzer counts, CPU numbers, and any log line that did
 not match the expectations above. Update this file and the docs it links with what Linux
 actually showed.
+
+## Results, Linux (2026-10-06; i5-9500T HP ProDesk Mini, Ubuntu, kernel 6.14, **500-USB** 2304:0213)
+
+- **Build:** needs `ninja-build` (installed by the user); `scripts/build.sh --skip-gui` works.
+  ctest 33/33. Passwordless sudo is enabled on the host.
+- **Warm starts (b):** all pass (analog warm, analog over DV with upload, DV warm, DV over analog,
+  input switch with no second bring-up, 0.2 s for the switch itself). Time to Ready for a
+  warm analog start 0.45-1.15 s (auto standard waits for lock), DV over analog ~2.6 s.
+- **Transfer size (d) and the real cause:** at the old 512 x 8 KiB, an idle machine dropped
+  frames (5-150 per 2 minutes) in 15-35 ms bursts. Not queue depth (at most 3 of 1024 pending),
+  not priority (SCHED_FIFO changed nothing), not 8 KiB itself: wake-up latency from deep CPU idle
+  states. Fixed by holding `/dev/cpu_dma_latency` at 0 (0 drops in 10 runs from 8 to 64 KiB), by
+  disabling C3+ (0 in 3), or by a busy loop on any core. Without that, 4 KiB x 1024 had fewer drops
+  (7 vs 47 in 4 x 90 s) and is now the Linux default. Details: docs/analog.md, "Power saving and
+  capture reliability (Linux)". The core now requests the limit itself when the node is writable
+  (udev rule in that section).
+- **QR (c), composite, PAL, analyzer on Windows:** 5 min with the limit held: 0 undecodable, 0 missing,
+  0 duplicate, 0 audio gaps. 5 min without it (default user): 13 missing, 10 undecodable, 3 duplicate
+  (all in the first ~3 s). 3 min after a DV -> analog switch and 3 min after `kill -9` of a running
+  capture, limit held: 0 everywhere. S-Video was not run on Linux (the DVD is on composite there).
+- **CPU (e), 8 KiB / 4 KiB / 2 KiB:** USB read-loop thread ~13% / ~23% / ~24% of a core; the
+  FFV1 encoder threads ~30% each x4; the sampling itself perturbs drops.
+- **Teardown (f):** 50 composite runs, 15 S-Video, 10 DV, 15 SIGINT at 1-4 s, 5 `kill -9`: all rc 0
+  (or 124/130 as expected), no core, device still fine afterwards. The Windows segfault did not show.
+- **DV read loop** now gets the same boost (`pin_thread_boost.c`, shared with analog): a SCHED_FIFO 10
+  thread is visible in `ps -eLo tid,cls,rtprio` for both DV and analog. Not yet verified on
+  Windows/macOS beyond a Windows core build and ctest (43/43).
+- **Not done:** cold start after a replug (a), which needs the user.
+

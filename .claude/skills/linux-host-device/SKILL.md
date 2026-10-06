@@ -26,9 +26,12 @@ bash scripts/build.sh --skip-gui                         # core, CLI, ctest
 ```
 Outputs: `build/linux-x86_64/dist/MarvinCaptureCLI`, `build/linux-x86_64/dist/libmarvin-core.so`
 (CMake tree in `build/linux-x86_64/core`), 27 ctests (all pass on Linux as of the rename).
-**Untested on the host:** scripts/build.sh and the per-platform `build/linux-x86_64/` layout
-replaced the old `cmake -B build -S . && cmake --build build -j6 && (cd build && ctest)`
-(outputs then in `build/`); fall back to that if the script fails, and fix this skill.
+`scripts/build.sh` needs `ninja` (installed on the host); it works with the per-platform layout.
+Passwordless sudo is enabled for jonas. The attached device may be the 500-USB (2304:0213) or
+the 510-USB; the CLI's device table says which. `/dev/cpu_dma_latency` is `root 0600`; for
+capture tests that should be clean on a quiet machine, `sudo chmod 666 /dev/cpu_dma_latency`
+(and back to 600 after), see docs/analog.md "Power saving and capture reliability". Do not
+`pkill -f` a pattern that appears in your own ssh command line (it kills the session).
 `MarvinCaptureCLI --help` ends with "No devices found." when no device is attached.
 
 ## Running against the device

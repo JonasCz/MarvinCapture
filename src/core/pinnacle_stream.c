@@ -19,6 +19,7 @@
 #include "pinnacle_stream.h"
 #include "pinnacle_1394.h"
 #include "pin_log.h"
+#include "pin_thread_boost.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -484,6 +485,10 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
         return PINNACLE_ERR_USB_TRANSFER;
     }
 
+    /* This thread reaps and resubmits every transfer; keep it ahead of the sinks and the GUI. */
+    pin_thread_boost_t boost;
+    pin_thread_boost(&boost);
+
     unsigned submitted = 0;
     for (unsigned i = 0; i < allocated; i++) {
         if (libusb_submit_transfer(slots[i].xfer) != 0) {
@@ -641,8 +646,10 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
          * freeing any of it would be a use after free. Leak it (a few MB, once). */
         pin_logf(PIN_LOG_WARN, "pinnacle: a cancelled USB transfer did not complete; "
                         "leaking the read queue instead of freeing it\n");
+        pin_thread_unboost(&boost);
         return status;
     }
+    pin_thread_unboost(&boost);
     for (unsigned i = 0; i < allocated; i++) {
         if (slots[i].xfer) {
             free(slots[i].xfer->buffer);

@@ -292,7 +292,10 @@ not the issue. The size of each transfer was:
 | 16 KiB | 3-8 per 1000 |
 | **8 KiB**, 4 KiB | **none** |
 
-Default on Linux and Windows: 512 transfers of 8 KiB (200 ms queued). A 3-minute capture with
+That table is from one Intel host; a later one (HP ProDesk Mini, i5-9500T, Cannon Lake xHCI,
+500-USB) found that the real cause there was CPU idle states, not the size (next section).
+Default on Windows: 512 transfers of 8 KiB (200 ms queued); on Linux 1024 x 4 KiB (see below).
+A 3-minute capture with
 that setting had 4,500 frames with 0 missing, 0 truncated and 0 audio
 gaps, and the 3.7 GB AVI (4 RIFF segments) decodes without an error. usbfs turns anything over
 16 KiB into a scatter-gather list, and large buffers need several TRBs; the
@@ -338,6 +341,64 @@ defines in `pinnacle_analog.c`.) On macOS the read loop and
 libusb's event thread run at the user-interactive QoS class (the MMCSS
 equivalent); under the hog it made no measurable difference.
 
+## Power saving and capture reliability (Linux)
+
+On the i5-9500T host (Ubuntu, kernel 6.14, `intel_pstate` powersave, an otherwise idle
+machine) 2-minute composite captures showed repeated frames (the `drops` counter) in bursts:
+the USB event loop saw no completions for 15-35 ms, the queue never drained (at most 3 of
+1024 transfers pending, the thread was not late), the FPGA's FIFO overflowed and frames came
+in short. The process was running at SCHED_FIFO, and priority made no difference. What did:
+
+| condition (8 KiB x 512, 90-120 s runs) | drops |
+|---|---|
+| idle machine, default | 0-150 per run, typically 5-40 |
+| process pinned to the xHCI IRQ's CPU (0) | 150 |
+| process kept off that CPU | 0-23 |
+| one `yes` busy loop on any single core (even CPU 0) | 0 (4 runs) |
+| a 50% duty-cycle spin thread (500 us on / 500 us off) | 0 and 1 |
+| a 10% duty-cycle spin thread (50 / 450 us) | 2 and 3 |
+| C3 and deeper idle states disabled (`cpuidle/state[3-8]/disable`) | 0 (3 runs) |
+| `/dev/cpu_dma_latency` held at 0 | **0 in all 10 runs, 8 KiB to 64 KiB** |
+
+So the cause is wake-up latency out of deep CPU idle states (package C-states): when
+nothing else keeps the CPU busy, the xHCI's event interrupt and the transfer completions wait
+long enough for the device to overrun. With the latency limit held, even 64 KiB transfers,
+which lost 20% of the data before, were clean. Without it the transfer size matters
+somewhat: over four interleaved 90 s runs per size, drops summed to 47 (8 KiB), 7 (4 KiB),
+8 (2 KiB) and 14 (1 KiB). The USB thread then costs ~13% of a core at 8 KiB and ~23% at 4 KiB
+or 2 KiB. So Linux uses 1024 x 4 KiB (still 200 ms queued).
+
+The core asks for the limit itself: while an analog capture runs, `pinnacle_analog_read_loop`
+opens `/dev/cpu_dma_latency` and writes 0 (the kernel keeps the request while the descriptor
+is open). The log says `CPU idle-state limit (cpu_dma_latency) set` or `not available`. The
+node is `root:root 0600` by default, so for a normal user it is "not available". To allow it:
+
+```
+echo 'KERNEL=="cpu_dma_latency", MODE="0666"' | sudo tee /etc/udev/rules.d/99-cpu-dma-latency.rules
+sudo udevadm control --reload && sudo udevadm trigger /dev/cpu_dma_latency
+```
+
+(Any local user can then hold the machine out of deep idle while the app runs; use a group
+instead of 0666 if that matters.) Without it, the same effect system-wide for the user to pick:
+
+- keep a core busy during the capture (anything that loads one core, even `yes > /dev/null`)
+- kernel parameters `intel_idle.max_cstate=1` (or `processor.max_cstate=1`), or at run time
+  `sudo cpupower idle-set -D 2` (disables states with latency above 2 us)
+- firmware: limit C-states / disable package C-states, disable PCIe ASPM or "Deep Sleep" options
+- the `performance` CPU governor / "high performance" power profile (not separately tested here)
+- laptops: plug in AC; USB autosuspend off for the device is the default on this host
+  (`power/control` = `on`) and was not the issue
+
+5-minute QR captures (composite, PAL, FFV1/MKV, 1024 x 4 KiB) analyzed with the QR script:
+
+| idle-state limit | drops (counter) | undecodable | missing | duplicate | missing audio |
+|---|---|---|---|---|---|
+| held (`cpu_dma_latency` writable) | 0 | 0 | 0 | 0 | 0 of 7,451 frames |
+| not available (default user) | 8 | 10 | 13 | 3 | 0 |
+
+The second run's losses were all in the first ~3 s of the capture. The Windows runs in this
+document were made with the "High performance" power plan.
+
 ## Keeping the USB thread on time
 
 The transfer size fixes most of it on Linux. Windows needed three more
@@ -354,9 +415,12 @@ things, all in `pinnacle_analog.c`:
   (`libusb_endpoint_set_raw_io`); it is always on, and the read loop logs
   `RAW_IO video on audio on` at start.
 - **A high-priority USB thread.** The thread running the libusb event loop
+  (analog and DV) is raised by `pin_thread_boost` in `pin_thread_boost.c`: on Windows it
   joins MMCSS's "Capture" class (`AvSetMmThreadCharacteristicsW`; failing
-  that, `THREAD_PRIORITY_HIGHEST`), so the encoder threads and the GUI
-  cannot starve it. The log says `thread priority raised`.
+  that, `THREAD_PRIORITY_HIGHEST`), on macOS it takes the user-interactive QoS class, on
+  Linux SCHED_FIFO 10 (or nice -10, if the rlimits allow either), so the encoder
+  threads and the GUI cannot starve it. The analog log says `thread priority raised`.
+  Priority alone did not help on Linux (see above).
 - **Nothing else on that thread.** It only reaps, reassembles and resubmits.
   Finished frames and audio blocks are copied into a ring (30 frames, 64
   audio blocks, about 1 s) and a delivery thread calls the sink from

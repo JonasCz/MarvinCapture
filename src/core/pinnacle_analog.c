@@ -26,6 +26,7 @@
 #include "pinnacle_analog.h"
 #include "pinnacle_cfg.h"
 #include "pin_log.h"
+#include "pin_thread_boost.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -574,7 +575,12 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
  *
  * So it is per-transfer cost on the host side, not queue depth; usbfs
  * turns anything over 16 KiB into a scatter-gather list, and big buffers
- * need several TRBs. 512 x 8 KiB keeps 200 ms queued.
+ * need several TRBs. A later Linux host (i5-9500T, 500-USB) showed the stalls
+ * are really wake-ups from deep CPU idle states, which any busy core or a
+ * cpu_dma_latency request of 0 (see pin_thread_boost.c) removes at every size up to
+ * 64 KiB; without that, 4 KiB had fewer drops than 8 KiB (7 vs 47 in four
+ * 90 s runs), so Linux uses 1024 x 4 KiB (200 ms queued). docs/analog.md,
+ * "Power saving and capture reliability".
  *
  * macOS is different: libusb's darwin backend pays two Mach messages per
  * submit plus a thread hop per completion, so the cost is per transfer and
@@ -597,6 +603,9 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
 #ifdef __APPLE__
 #define VIDEO_QUEUE 96
 #define VIDEO_XFER (64u * 1024)
+#elif defined(__linux__)
+#define VIDEO_QUEUE 1024
+#define VIDEO_XFER (4u * 1024)
 #else
 #define VIDEO_QUEUE 512
 #define VIDEO_XFER (8u * 1024)
@@ -735,47 +744,6 @@ static int set_raw_io(pinnacle_device_t *dev, uint8_t ep, unsigned bytes, int en
 #endif
 }
 
-/* The thread that runs the USB event loop also reaps and resubmits every
- * transfer, so give it priority over the encoder threads and the GUI. On
- * Windows that is MMCSS's "Capture" class (the scheduler boosts the thread
- * but still reserves some CPU for everything else); failing that, HIGHEST. */
-typedef struct {
-#if defined(_WIN32)
-    HANDLE mmcss;
-    int old_priority;
-#endif
-    int raised;
-} thread_boost_t;
-
-static void thread_boost(thread_boost_t *b)
-{
-    memset(b, 0, sizeof(*b));
-#if defined(_WIN32)
-    DWORD task = 0;
-    b->mmcss = AvSetMmThreadCharacteristicsW(L"Capture", &task);
-    if (b->mmcss) {
-        b->raised = 1;
-        return;
-    }
-    b->old_priority = GetThreadPriority(GetCurrentThread());
-    b->raised = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0;
-#elif defined(__APPLE__)
-    /* The closest thing to MMCSS: the top QoS class (user-interactive). */
-    b->raised = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
-#endif
-}
-
-static void thread_unboost(thread_boost_t *b)
-{
-#if defined(_WIN32)
-    if (b->mmcss)
-        AvRevertMmThreadCharacteristics(b->mmcss);
-    else if (b->raised)
-        SetThreadPriority(GetCurrentThread(), b->old_priority);
-#endif
-    b->raised = 0;
-}
-
 pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analog_raw_cb cb,
                                             void *user, volatile int *stop_flag)
 {
@@ -791,11 +759,15 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
     /* Before anything is queued: WinUSB only changes the policy on an idle pipe. */
     int raw_video = set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 1);
     int raw_audio = set_raw_io(dev, PINNACLE_EP_AUDIO_IN, audio_bytes, 1);
-    thread_boost_t boost;
-    thread_boost(&boost);
+    pin_thread_boost_t boost;
+    pin_thread_boost(&boost);
     pin_logf(PIN_LOG_INFO, "pinnacle: analog read loop: %u x %u B, RAW_IO video %s audio %s, "
              "thread priority %s\n", vdepth, vbytes, raw_video ? "on" : "off",
-             raw_audio ? "on" : "off", boost.raised ? "raised" : "normal");
+             raw_audio ? "on" : "off", pin_thread_boost_desc(&boost));
+#if defined(__linux__)
+    pin_logf(PIN_LOG_INFO, "pinnacle: CPU idle-state limit (cpu_dma_latency) %s\n",
+             boost.pmqos_fd >= 0 ? "set" : "not available");
+#endif
 
     if (!vq || !aq || queue_init(vq, dev, PINNACLE_EP_VIDEO_IN, vdepth, vbytes) != 0 ||
         queue_init(aq, dev, PINNACLE_EP_AUDIO_IN, AUDIO_QUEUE, audio_bytes) != 0) {
@@ -836,7 +808,7 @@ out:
         set_raw_io(dev, PINNACLE_EP_VIDEO_IN, vbytes, 0);
     if (raw_audio)
         set_raw_io(dev, PINNACLE_EP_AUDIO_IN, audio_bytes, 0);
-    thread_unboost(&boost);
+    pin_thread_unboost(&boost);
     return status;
 }
 
