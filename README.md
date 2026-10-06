@@ -60,7 +60,7 @@ More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the 
 
 ## Reliability, performance & correctness
 
-For best performance & reliability, the following are recommended:
+For best performance & reliability, the following are recommended (The GUI and CLI will also warn you about them):
 
 ### All systems:
 
@@ -98,8 +98,6 @@ This capture device is, in my testing so far, the only USB device and software t
 (Note that this test DVD generation, and testing tool is not part of this repo).
 
 Note that the usual recommendation regarding USB devices still applies: avoid connecting it on a hub where it shares bandwidth with other devices (the UI and CLI will warn if it detects a hub). Although this is much less of an issue with DV than with analog, since the bitrate of DV is 25Mbps, which has plenty of margin with USB2's 480Mbps.
-
-An otherwise idle computer can drop frames when the CPU sleeps deeply between USB completions. On Linux the capture asks the kernel not to (`/dev/cpu_dma_latency`, which needs a udev rule to be writable by normal users; without it, a core is kept busy instead), on Windows use the "High performance" power plan. The CLI and the Windows GUI show these as "Performance recommendations"; see [Power saving and capture reliability](docs/analog.md#power-saving-and-capture-reliability-linux). The Windows "High performance" power plan is what the Windows tests used.
 
 This readme, interface design, testing, and verification are all made by a human. However, reverse engineering of the manufacturer's driver, and this code, was made possible with extensive use of LLMs.
 
