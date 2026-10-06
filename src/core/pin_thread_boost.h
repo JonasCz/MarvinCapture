@@ -48,6 +48,9 @@ typedef struct {
     int old_policy, old_nice;
     struct sched_param old_param;
     int pmqos_fd;               /* open /dev/cpu_dma_latency, or -1 */
+    int busy;                   /* the keep-busy thread is running (pmqos was refused) */
+    pthread_t busy_thread;
+    volatile int busy_stop;
 #endif
 } pin_thread_boost_t;
 

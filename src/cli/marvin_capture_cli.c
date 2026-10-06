@@ -262,6 +262,43 @@ static const char *dev_state_name(pin_dev_state_t s)
     return "?";
 }
 
+/* One "  - " bullet, wrapped under its text like the help. */
+static void print_bullet(FILE *f, const char *text)
+{
+    char line[1400];
+    snprintf(line, sizeof(line), "  - %s\n", text);
+    print_wrapped(f, line, stdout_columns());
+}
+
+/* Everything that costs capture reliability, in one block: USB hubs between the computer and
+ * a device, then the computer's own power settings (pin_perf_check). Prints nothing if there
+ * is nothing to say. */
+static void print_performance_recommendations(FILE *f, int behind_hub)
+{
+    int host = pin_perf_check();
+    if (!behind_hub && !host)
+        return;
+    fprintf(f, "\nPerformance recommendations:\n");
+    if (behind_hub) {
+        char text[1024];
+        snprintf(text, sizeof(text), "One or more devices are connected via a USB hub. %s",
+                 pin_usb_hub_hint());
+        print_bullet(f, text);
+    }
+    for (int kind = 1; kind <= PIN_PERF_POWER_PLAN; kind <<= 1) {
+        if (!(host & kind))
+            continue;
+        print_bullet(f, pin_perf_text(kind));
+        const char *fix = pin_perf_fix(kind);
+        while (*fix) {
+            const char *eol = strchr(fix, '\n');
+            int n = eol ? (int)(eol - fix) : (int)strlen(fix);
+            fprintf(f, "    %.*s\n", n, fix);
+            fix += n + (eol ? 1 : 0);
+        }
+    }
+}
+
 static void print_device_table(FILE *f)
 {
     pin_device_info_t devs[16];
@@ -303,8 +340,7 @@ static void print_device_table(FILE *f)
         fprintf(f, "  (%d more device(s) not shown)\n", n - shown);
     if (no_driver)
         fprintf(f, "A device has no driver: bind WinUSB to it (e.g. with Zadig), see docs/usage.md.\n");
-    if (behind_hub)
-        fprintf(f, "Warning, device behind a USB hub: %s\n", pin_usb_hub_hint());
+    print_performance_recommendations(f, behind_hub);
 }
 
 /* ---- main --------------------------------------------------------------- */
@@ -399,8 +435,7 @@ int main(int argc, char **argv)
             if (devs[i].state == PIN_DEV_OPEN_HERE) { d = &devs[i]; break; }
         if (d)
             say("Device: %s (%s)%s%s", d->name, d->id, d->serial[0] ? ", serial " : "", d->serial);
-        if (d && d->hub_depth > 0)
-            say("warning: %s", pin_usb_hub_hint());
+        print_performance_recommendations(stderr, d && d->hub_depth > 0);
     }
 
     st = pin_script_run(s, sc);

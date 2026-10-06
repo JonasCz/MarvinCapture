@@ -19,6 +19,7 @@
 #include "pin_thread_boost.h"
 
 #include <string.h>
+#include <stdlib.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -32,6 +33,28 @@
 #include <sys/resource.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#endif
+
+#ifdef __linux__
+#ifndef SCHED_IDLE
+#define SCHED_IDLE 5 /* only declared with _GNU_SOURCE */
+#endif
+#endif
+
+#if defined(__linux__)
+/* Keeps one core out of the idle states when /dev/cpu_dma_latency is not available (a busy
+ * core is enough: every wake-up the xHCI needs is then served by a running CPU or a shallow
+ * one). SCHED_IDLE, so it only ever uses time nothing else wants. */
+static void *busy_main(void *arg)
+{
+    pin_thread_boost_t *b = arg;
+    struct sched_param sp = { .sched_priority = 0 };
+    pthread_setschedparam(pthread_self(), SCHED_IDLE, &sp);
+    while (!b->busy_stop)
+        for (int i = 0; i < 100000; i++)
+            __asm__ __volatile__("" ::: "memory");
+    return NULL;
+}
 #endif
 
 void pin_thread_boost(pin_thread_boost_t *b)
@@ -64,6 +87,9 @@ void pin_thread_boost(pin_thread_boost_t *b)
             b->pmqos_fd = -1;
         }
     }
+    if (b->pmqos_fd < 0 &&
+        pthread_create(&b->busy_thread, NULL, busy_main, b) == 0)
+        b->busy = 1;
     /* Real-time FIFO if RLIMIT_RTPRIO / CAP_SYS_NICE allow it (a low priority is enough: the
      * thread sleeps in poll() between completions); otherwise a negative nice value, which
      * needs RLIMIT_NICE. Without either the thread stays at normal priority. */
@@ -100,6 +126,11 @@ void pin_thread_unboost(pin_thread_boost_t *b)
     if (b->pmqos_fd >= 0)
         close(b->pmqos_fd);
     b->pmqos_fd = -1;
+    if (b->busy) {
+        b->busy_stop = 1;
+        pthread_join(b->busy_thread, NULL);
+        b->busy = 0;
+    }
 #endif
     b->raised = 0;
 }

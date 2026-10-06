@@ -62,7 +62,7 @@ if(APPLE)
 endif()
 if(WIN32)
     # MMCSS, for the analog read loop's thread priority
-    target_link_libraries(pinnacle_core PUBLIC avrt)
+    target_link_libraries(pinnacle_core PUBLIC avrt powrprof)
 endif()
 
 # --- Hardware-free regression tests. ---

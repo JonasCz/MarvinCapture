@@ -58,7 +58,30 @@ Pinnacle also made some devices which are not supported:
 
 More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the device implements a standard OHCI-1394 host controller on an FPGA, it can likely work with any Firewire-100 device and likely isn't limited to DV, although this project focuses on DV video)
 
-## Reliability & Correctness
+## Reliability, performance & correctness
+
+For best performance & reliability, the following are recommended:
+
+### All systems:
+
+Connect the device directly to a USB root port, not via a hub, to ensure it doesn't have to share bandwidth with other devices. The GUI and CLI will warn you when a potential hub connection is detected. You can also use a utlity like [usbtreeview](https://www.uwe-sieber.de/usbtreeview_e.html) (Windows) to check your USB ports.
+
+### Linux:
+
+Requires adding udev rule allowing the application disable the CPU C3 deep sleep / idle states.
+
+* `echo 'KERNEL=="cpu_dma_latency", MODE="0666"' | sudo tee /etc/udev/rules.d/99-cpu-dma-latency.rules`
+* `sudo udevadm control --reload && sudo udevadm trigger /dev/cpu_dma_latency`
+
+### MacOS
+
+"Just works".
+
+### Windows
+
+Recommended to set power plan to "performance".
+
+### Background
 
 In my experience with writing and using this, this is already far more reliable, bug-free, and pleasant to use than all existing pure-firewire based DV capture solutions. No more random deck not detected and reboot required to get it back...
 
@@ -76,7 +99,7 @@ This capture device is, in my testing so far, the only USB device and software t
 
 Note that the usual recommendation regarding USB devices still applies: avoid connecting it on a hub where it shares bandwidth with other devices (the UI and CLI will warn if it detects a hub). Although this is much less of an issue with DV than with analog, since the bitrate of DV is 25Mbps, which has plenty of margin with USB2's 480Mbps.
 
-On Linux, an otherwise idle machine can drop frames when the CPU sleeps deeply between USB completions. The capture asks the kernel not to (`/dev/cpu_dma_latency`, which needs a udev rule to be writable by normal users), or you can turn off deep C-states / use the performance governor; see [Power saving and capture reliability](docs/analog.md#power-saving-and-capture-reliability-linux). The Windows "High performance" power plan is what the Windows tests used.
+An otherwise idle computer can drop frames when the CPU sleeps deeply between USB completions. On Linux the capture asks the kernel not to (`/dev/cpu_dma_latency`, which needs a udev rule to be writable by normal users; without it, a core is kept busy instead), on Windows use the "High performance" power plan. The CLI and the Windows GUI show these as "Performance recommendations"; see [Power saving and capture reliability](docs/analog.md#power-saving-and-capture-reliability-linux). The Windows "High performance" power plan is what the Windows tests used.
 
 This readme, interface design, testing, and verification are all made by a human. However, reverse engineering of the manufacturer's driver, and this code, was made possible with extensive use of LLMs.
 

@@ -766,7 +766,8 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
              raw_audio ? "on" : "off", pin_thread_boost_desc(&boost));
 #if defined(__linux__)
     pin_logf(PIN_LOG_INFO, "pinnacle: CPU idle-state limit (cpu_dma_latency) %s\n",
-             boost.pmqos_fd >= 0 ? "set" : "not available");
+             boost.pmqos_fd >= 0 ? "set" : boost.busy ? "not available, keeping a core busy instead"
+                                            : "not available");
 #endif
 
     if (!vq || !aq || queue_init(vq, dev, PINNACLE_EP_VIDEO_IN, vdepth, vbytes) != 0 ||

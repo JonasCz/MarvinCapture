@@ -72,6 +72,21 @@ public static unsafe partial class Native
     public static string UsbHubHint() => PtrToUtf8(pin_usb_hub_hint());
 
     [LibraryImport(Lib)]
+    private static partial int pin_perf_check();
+
+    [LibraryImport(Lib)]
+    private static partial nint pin_perf_text(int kind);
+
+    /// <summary>PIN_PERF_POWER_PLAN: the Windows power plan is Power saver or Balanced.</summary>
+    public const int PerfPowerPlan = 0x2;
+
+    /// <summary>Bitmask of the core's host performance recommendations that apply now (PIN_PERF_*).</summary>
+    public static int PerfCheck() => pin_perf_check();
+
+    /// <summary>The core's message for one PIN_PERF_* bit.</summary>
+    public static string PerfText(int kind) => PtrToUtf8(pin_perf_text(kind));
+
+    [LibraryImport(Lib)]
     private static partial int pin_devices_wait(int timeoutMs);
 
     [LibraryImport(Lib)]

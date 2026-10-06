@@ -177,5 +177,9 @@ actually showed.
 - **DV read loop** now gets the same boost (`pin_thread_boost.c`, shared with analog): a SCHED_FIFO 10
   thread is visible in `ps -eLo tid,cls,rtprio` for both DV and analog. Not yet verified on
   Windows/macOS beyond a Windows core build and ctest (43/43).
+- **Recommendations block:** the CLI prints a "Performance recommendations" block after the device
+  list and at the start of a run (hub + host items, `pin_perf_check`); the unprivileged-user
+  fallback (idle-class spin thread) gave 0 drops in four 2-minute captures; the udev commands
+  in the message were run and work (node 0666, "set", block gone; rule removed again afterwards).
 - **Not done:** cold start after a replug (a), which needs the user.
 

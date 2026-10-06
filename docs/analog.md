@@ -368,10 +368,16 @@ somewhat: over four interleaved 90 s runs per size, drops summed to 47 (8 KiB), 
 8 (2 KiB) and 14 (1 KiB). The USB thread then costs ~13% of a core at 8 KiB and ~23% at 4 KiB
 or 2 KiB. So Linux uses 1024 x 4 KiB (still 200 ms queued).
 
-The core asks for the limit itself: while an analog capture runs, `pinnacle_analog_read_loop`
-opens `/dev/cpu_dma_latency` and writes 0 (the kernel keeps the request while the descriptor
-is open). The log says `CPU idle-state limit (cpu_dma_latency) set` or `not available`. The
-node is `root:root 0600` by default, so for a normal user it is "not available". To allow it:
+The core asks for the limit itself: while a capture runs, the USB read loop
+(`pin_thread_boost`, `pin_thread_boost.c`) opens `/dev/cpu_dma_latency` and writes 0 (the kernel
+keeps the request while the descriptor is open). The node is `root:root 0600` by default, so
+for a normal user the request is refused. Then it starts a keep-busy thread instead: an
+idle-class (SCHED_IDLE) spin loop that holds one core out of the idle states and takes only
+time nothing else wants. As a normal user, with that fallback, four 2-minute captures had 0
+drops (it costs one core's worth of heat and power). The analog log says `CPU idle-state limit
+(cpu_dma_latency) set` or `not available, keeping a core busy instead`. The CLI (device list
+and at the start of a run) prints these as "Performance recommendations" (together with the
+USB hub warning) with the fix below, which is also what makes the CPU run quieter and cooler:
 
 ```
 echo 'KERNEL=="cpu_dma_latency", MODE="0666"' | sudo tee /etc/udev/rules.d/99-cpu-dma-latency.rules
@@ -398,13 +404,18 @@ instead of 0666 if that matters.) Without it, the same effect system-wide for th
 
 The second run's losses were all in the first ~3 s of the capture.
 
-Windows shows the same thing with the **Power saver** plan (510-USB, S-Video, 5-minute QR
-captures, 8 KiB x 512, MMCSS Capture class, RAW_IO on): 1 missing/duplicate frame in the
+Windows with the **Power saver** plan (510-USB, S-Video, 5-minute QR captures, 8 KiB x 512,
+MMCSS Capture class, RAW_IO on) lost frames now and then: 1 missing/duplicate frame in the
 first run, 12 (one burst of four short runs, ~0.5 s) in the second, 0 in a third that was
 stopped at 288 s; audio was never affected. All earlier Windows runs in this document
-(0 lost in 65 minutes) used "High performance". So for capture on Windows, use the High
-performance plan (or a "Bitsum Highest Performance"-style plan). The app has no Windows
-counterpart to `cpu_dma_latency` yet.
+(0 lost in 65 minutes) used "High performance". A later A/B on the same plan, 4-minute runs
+alternating `timeBeginPeriod(1)` + EcoQoS opt-out (`PROCESS_POWER_THROTTLING_EXECUTION_SPEED`)
+with neither: 0, 1, 0 drops with them and 0, 0, 0 without (and the three runs before had 1, 12, 0
+without), so they showed no benefit and were not kept. There is no Windows counterpart to
+`cpu_dma_latency` (a plan switch is system-wide and does not revert if the process dies, so
+the app does not do it). The CLI and the GUI (a dismissible bar with an "Open power options"
+link) recommend the "High performance" plan when the active one is Power saver or Balanced
+(Balanced is unmeasured; custom plans are not flagged).
 
 ## Keeping the USB thread on time
 

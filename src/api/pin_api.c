@@ -34,6 +34,7 @@
 #include "../engine/pin_stop.h"
 #include "../engine/pin_ui_text.h"
 #include "../engine/pin_usb_topology.h"
+#include "../core/pin_host_perf.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pin_log.h"
@@ -170,6 +171,10 @@ static void device_info_store(pin_device_info_t *out, int index, size_t stride, 
 }
 
 const char *pin_usb_hub_hint(void) { return pin_usb_hub_hint_text(); }
+
+int pin_perf_check(void) { return pin_host_perf_check(); }
+const char *pin_perf_text(int kind) { return pin_host_perf_text(kind); }
+const char *pin_perf_fix(int kind) { return pin_host_perf_fix(kind); }
 
 int pin_enumerate(pin_device_info_t *out, int max)
 {

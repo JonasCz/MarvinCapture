@@ -34,6 +34,31 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [NotifyPropertyChangedFor(nameof(HasSelectedDevice), nameof(DeviceComboHeight))]
     private DeviceItemViewModel? _selectedDevice;
 
+    // The Windows power plan warning (the core decides: pin_perf_check). Closing it hides it until
+    // the plan has been fine once and is bad again.
+    [ObservableProperty]
+    private bool _powerPlanWarningOpen;
+
+    private bool _powerPlanDismissed;
+
+    public string PowerPlanWarningText => Native.PerfText(Native.PerfPowerPlan);
+
+    public void RefreshPerfWarnings()
+    {
+        bool bad = (Native.PerfCheck() & Native.PerfPowerPlan) != 0;
+        if (!bad)
+        {
+            _powerPlanDismissed = false;
+        }
+        PowerPlanWarningOpen = bad && !_powerPlanDismissed;
+    }
+
+    public void DismissPowerPlanWarning()
+    {
+        _powerPlanDismissed = true;
+        PowerPlanWarningOpen = false;
+    }
+
     /// <summary>The picker's fixed height: one caption line more for a device behind a USB hub.</summary>
     public double DeviceComboHeight => SelectedDevice is { IsBehindHub: true } ? 72 : 56;
 

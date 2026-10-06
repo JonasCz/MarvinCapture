@@ -150,6 +150,17 @@ PIN_API int pin_enumerate(pin_device_info_t *out, int max);
  * check (USBTreeView / lsusb -t / System Information). Static, never NULL. */
 PIN_API const char *pin_usb_hub_hint(void);
 
+/* Performance recommendations about the computer itself (power saving that makes analog capture
+ * lose frames), next to the per-device hub hint above. pin_perf_check() returns a bitmask of the
+ * PIN_PERF_* items that apply right now (0 = nothing to recommend); pin_perf_text() is the
+ * message for one bit, and pin_perf_fix() the shell commands that fix it (one per line, "" if
+ * the front end should open the OS settings instead). Static strings, never NULL. */
+#define PIN_PERF_CPU_LATENCY 0x1   /* Linux: /dev/cpu_dma_latency is not writable */
+#define PIN_PERF_POWER_PLAN  0x2   /* Windows: power plan is Power saver or Balanced */
+PIN_API int pin_perf_check(void);
+PIN_API const char *pin_perf_text(int kind);
+PIN_API const char *pin_perf_fix(int kind);
+
 /* Sets (or, with NULL/"", clears) the process-wide replay source: a file
  * pin_enumerate() lists as a virtual "replay:<basename>" device and
  * pin_open() can open by that id (or by the full path). Lets a GUI's "Open

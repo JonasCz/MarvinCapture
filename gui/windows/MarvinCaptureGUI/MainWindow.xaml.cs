@@ -102,6 +102,28 @@ public sealed partial class MainWindow : Window
 
         ParseCommandLine();
         Closed += MainWindow_Closed;
+        VM.RefreshPerfWarnings();
+        Activated += (_, _) => VM.RefreshPerfWarnings(); // the plan may have been changed meanwhile
+    }
+
+    private void PowerPlanBar_Closed(InfoBar sender, InfoBarClosedEventArgs args)
+    {
+        if (args.Reason == InfoBarCloseReason.CloseButton)
+        {
+            VM.DismissPowerPlanWarning();
+        }
+    }
+
+    private void OpenPowerOptions_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("control.exe", "/name Microsoft.PowerOptions") { UseShellExecute = true });
+        }
+        catch (Exception)
+        {
+            // nothing sensible to do; the message already names the setting
+        }
     }
 
     // ================================================================== x:Bind helpers

@@ -80,6 +80,15 @@
                              Severity="{x:Bind local:MainWindow.Severity(VM.InfoSeverity), Mode=OneWay}"
                              AutomationProperties.LiveSetting="Assertive" />
 
+                    <InfoBar IsOpen="{x:Bind VM.PowerPlanWarningOpen, Mode=OneWay}" IsClosable="True"
+                             Severity="Warning" Title="Power plan"
+                             Message="{x:Bind VM.PowerPlanWarningText}"
+                             Closed="PowerPlanBar_Closed">
+                        <InfoBar.ActionButton>
+                            <HyperlinkButton Content="Open power options" Click="OpenPowerOptions_Click" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
+
                     <!-- ============ source: device + input -->
                     <Border Style="{StaticResource CardStyle}">
                         <StackPanel Spacing="10">
