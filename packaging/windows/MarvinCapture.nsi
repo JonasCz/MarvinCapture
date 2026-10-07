@@ -150,12 +150,14 @@ Function .onInit
   SetShellVarContext all
   StrCpy $DriverLog "$TEMP\MarvinCapture-driver-install.log"
 
-  ; upgrade: default to the folder of the existing installation
-  ${If} $INSTDIR == "$PROGRAMFILES64\${APP_NAME}"
-    ReadRegStr $0 HKLM "${UNINST_KEY}" "InstallLocation"
-    ${If} $0 != ""
+  ; upgrade: default to the folder of the existing installation, and leave the
+  ; driver (already installed then) unticked
+  ReadRegStr $0 HKLM "${UNINST_KEY}" "InstallLocation"
+  ${If} $0 != ""
+    ${If} $INSTDIR == "$PROGRAMFILES64\${APP_NAME}"
       StrCpy $INSTDIR $0
     ${EndIf}
+    Call UntickDriverSection
   ${EndIf}
 FunctionEnd
 
@@ -238,9 +240,16 @@ Section /o "Add the command-line tool to the system PATH" SecPath
   ${EndIf}
 SectionEnd
 
+; Called from .onInit on an upgrade (defined here, after SecDriver exists).
+Function UntickDriverSection
+  SectionGetFlags ${SecDriver} $1
+  IntOp $1 $1 & ${SECTION_OFF}
+  SectionSetFlags ${SecDriver} $1
+FunctionEnd
+
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain}      "The ${APP_NAME} program (GUI and command-line tool), its libraries and the FPGA firmware files."
-  !insertmacro MUI_DESCRIPTION_TEXT ${SecDriver}    "Installs a WinUSB driver (generated with libwdi, self-signed) for the Studio 500/510/700-USB and MovieBox Plus 710 / Deluxe. It replaces the original Pinnacle driver for these devices (that driver stays installed and can be switched back). Plug the device in first if you can; otherwise Windows uses the driver when you plug it in."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecMain}     "The ${APP_NAME} program (GUI and command-line tool), its libraries and the FPGA firmware files."
+  !insertmacro MUI_DESCRIPTION_TEXT ${SecDriver}    "Install the WinUSB driver for MovieBox 500 / 510 / 700 / 710 / Deluxe. Not needed if you're installing an update."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "Start menu entries for ${APP_NAME} and its uninstaller."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop}   "A shortcut to ${APP_NAME} on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath}      "Adds the install folder to the system PATH so MarvinCaptureCLI can be run from any terminal."
