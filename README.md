@@ -64,6 +64,10 @@ More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the 
 
 ### macOS
 
+Download and run the .pkg installer to install the GUI application and command line tools.
+
+<details>
+<summary>Notes for installing unsigned apps on MacOS. (MacOS refusing to install, offering "move to trash", etc.)</summary>
 Needs an Apple Silicon Mac and macOS 15 or later. No installers are available for intel, although it should work if you build it yourself.
 
 1. Download `MarvinCapture-<version>-macos-arm64.pkg`.
@@ -79,8 +83,14 @@ This installs:
 If macOS says the app "is damaged and can't be opened" or offers to move it to the Trash, run `xattr -cr /Applications/MarvinCapture.app` and open it again. No driver or further device access permission is needed.
 
 To uninstall: if you only installed the app, drag it to the Trash. Otherwise run `sudo /Applications/MarvinCapture.app/Contents/Resources/uninstall.sh` (or `sudo /usr/local/lib/marvincapture/uninstall.sh`), which removes the app and CLI, and the installer's records. Recordings and settings are kept.
+</details>
 
 ### Windows
+
+Download and run the installer, which will install the GUI, CLI, and associate the libusb driver with the device.
+
+<details>
+<summary>Notes for installing unsigned apps ("Windows protected your PC", "Unknown publisher", etc.), and manual driver installation.</summary>
 
 Needs 64-bit Windows 10 or later (Intel/AMD).
 
@@ -96,13 +106,14 @@ It also installs the **WinUSB driver** for all five devices (500-USB, 510-USB, 7
 To uninstall: Settings > Apps > Installed apps > MarvinCapture (or the Start menu entry). This also removes the WinUSB driver packages and certificates it added (untick "Remove the USB driver" to keep them); the device then goes back to Pinnacle's driver if that is installed, after a replug.
 
 To go back to Pinnacle's driver without uninstalling: Device Manager > the device > Update driver > Browse my computer > Let me pick from a list > the Pinnacle entry for your model.
+</details>
 
 ### Linux
 
 A `.deb` for Ubuntu 22.04+ / Debian 12+ (amd64, arm64); CLI only, there is no Linux GUI. Install it with apt, which also pulls in libusb (`dpkg -i` doesn't):
 
 ```
-sudo apt install ./marvincapture_<version>_amd64.deb
+sudo apt install ~/Downloads/marvincapture_<version>_amd64.deb
 ```
 
 This installs `/usr/bin/MarvinCaptureCLI` (program, core library and firmware are in `/usr/lib/marvincapture/`) and two udev rules: one gives all users access to the capture devices, the other to `/dev/cpu_dma_latency` (see below), so no sudo is needed to capture. Unplug and replug the device after installing.
@@ -119,14 +130,20 @@ Connect the device directly to a USB root port, not via a hub, to ensure it does
 
 ### Linux:
 
+Installing the .deb package installs everything that's needed.
+
+<details>
+<summary>Manual udev rule installation if building from source.</summary>
+
 Requires a udev rule giving non-root users access to the USB device. The .deb package installs it; when building from source, add it yourself, then unplug and replug the device:
 
 * `echo 'SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2304", ATTR{idProduct}=="0213|0223|0212|0224|0206", MODE="0666", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/60-marvincapture.rules && sudo udevadm control --reload && sudo udevadm trigger`
 
-Also requires a udev rule allowing the application to disable the CPU C3 deep sleep / idle states. The .deb package installs it; when building from source, add it yourself:
+Also requires a udev rule allowing the application to disable the CPU C3 deep sleep / idle states. The .deb package installs it; when building from source, add it yourself. If this is not done, the application will warn about it and use a workaround (an active thread to prevent the CPU from entering power saving states, note this causes fan noise and heat):
 
 * `echo 'KERNEL=="cpu_dma_latency", MODE="0666"' | sudo tee /etc/udev/rules.d/99-cpu-dma-latency.rules`
 * `sudo udevadm control --reload && sudo udevadm trigger /dev/cpu_dma_latency`
+</details>
 
 ### MacOS
 
@@ -134,7 +151,7 @@ Also requires a udev rule allowing the application to disable the CPU C3 deep sl
 
 ### Windows
 
-* Recommended to set power plan to "performance".
+* Recommended to set power plan to "performance". The GUI will warn you if this is not set.
 
 ### Background
 
