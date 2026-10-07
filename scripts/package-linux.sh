@@ -76,7 +76,7 @@ DEB_ARCH="$(dpkg --print-architecture)"
 BUILD="${ROOT}/build/linux-${ARCH}"
 DIST="${BUILD}/dist"
 OUT="${BUILD}/installer"
-VERSION="$(tr -d '[:space:]' < "${ROOT}/VERSION")"
+VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT}/VERSION" | head -n 1)"
 [[ "${VERSION}" =~ ^[0-9][0-9A-Za-z.+~-]*$ ]] || die "VERSION '${VERSION}' is not a valid Debian version"
 PKG="marvincapture"
 DEB="${OUT}/${PKG}_${VERSION}_${DEB_ARCH}.deb"
@@ -184,6 +184,7 @@ Architecture: ${DEB_ARCH}
 Maintainer: Jonas Cz.
 Installed-Size: ${INSTALLED_KB}
 Depends: ${DEPENDS}
+Recommends: libcurl4t64 | libcurl4
 Homepage: https://github.com/JonasCz/MarvinCapture
 Description: capture driver and command-line tool for Pinnacle Marvin USB DV boxes
  MarvinCapture is a user-space (libusb) driver and command-line program for

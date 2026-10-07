@@ -144,8 +144,19 @@ e.g. `libusb-1.0-0`).
 
 Each builds the platform first (pass `--skip-build` / `-SkipBuild` to reuse
 `dist/`) and writes to `build/<os>-<arch>/installer/`. The version comes from the
-top-level `VERSION` file. All are unsigned for now (see the README's Installation
+`"version"` field of the top-level `VERSION` file. All are unsigned for now (see the README's Installation
 section for what users see).
+
+`VERSION` is JSON: `"version"` (dotted number, compiled into the core as
+`pin_app_version()`), `"release_notes"` (plain text) and `"download_url"` (the
+download page). The CLI (`--help`, before the device list) and both GUIs (a
+banner at startup) fetch the copy on the `main` branch from
+raw.githubusercontent.com and announce a newer `"version"`; offline or on any
+error they show nothing. So to release: bump `VERSION`, build and package, publish
+the installers, then push `VERSION` to `main`. `MARVIN_UPDATE_URL` replaces the
+address (an http(s) URL or a local file, for testing; empty turns the check off).
+On macOS and Linux the core loads libcurl at run time for the check (the `.deb`
+only recommends it); Windows uses WinHTTP.
 
 | Script | Output | Notes |
 |---|---|---|

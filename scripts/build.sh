@@ -192,7 +192,7 @@ else
     iconutil -c icns "${GUI_SRC}/Resources/AppIcon.iconset" -o "${ICON_ICNS}"
 
     step "Assembling build/${PLATFORM}/dist/MarvinCapture.app"
-    APP_VERSION="$(tr -d '[:space:]' < "${ROOT}/VERSION")"
+    APP_VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT}/VERSION" | head -n 1)"
     APP_BUILD="$(git -C "${ROOT}" rev-list --count HEAD 2>/dev/null || echo 1)"
     rm -rf "${APP}"
     mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Frameworks" "${APP}/Contents/Resources"

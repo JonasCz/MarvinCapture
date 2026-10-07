@@ -80,6 +80,16 @@
                              Severity="{x:Bind local:MainWindow.Severity(VM.InfoSeverity), Mode=OneWay}"
                              AutomationProperties.LiveSetting="Assertive" />
 
+                    <InfoBar IsOpen="{x:Bind VM.UpdateOpen, Mode=TwoWay}" IsClosable="True"
+                             Severity="Informational"
+                             Title="{x:Bind VM.UpdateTitle, Mode=OneWay}"
+                             Message="{x:Bind VM.UpdateMessage, Mode=OneWay}">
+                        <InfoBar.ActionButton>
+                            <HyperlinkButton Content="Download" Click="UpdateDownload_Click"
+                                             Visibility="{x:Bind local:MainWindow.Shown(VM.UpdateHasUrl), Mode=OneWay}" />
+                        </InfoBar.ActionButton>
+                    </InfoBar>
+
                     <InfoBar IsOpen="{x:Bind VM.PowerPlanWarningOpen, Mode=OneWay}" IsClosable="True"
                              Severity="Warning" Title="Power plan"
                              Message="{x:Bind VM.PowerPlanWarningText}"

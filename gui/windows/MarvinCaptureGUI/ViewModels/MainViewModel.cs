@@ -457,6 +457,49 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _infoMessage = "";
     [ObservableProperty] private int _infoSeverity; // InfoBarSeverity: 0 info, 1 success, 2 warning, 3 error
 
+    // "New version available" notice (own InfoBar so an error banner does not replace it)
+    [ObservableProperty] private bool _updateOpen;
+    [ObservableProperty] private string _updateTitle = "";
+    [ObservableProperty] private string _updateMessage = "";
+    [ObservableProperty] private string _updateUrl = "";
+    public bool UpdateHasUrl => UpdateUrl.Length > 0;
+    partial void OnUpdateUrlChanged(string value) => OnPropertyChanged(nameof(UpdateHasUrl));
+
+    /// <summary>Asks the core whether a newer release exists (blocking network call: runs on a
+    /// worker thread) and shows the notice on the UI thread. Fail-soft: anything but a clean
+    /// "newer version available" shows nothing.</summary>
+    public void CheckForUpdate(Microsoft.UI.Dispatching.DispatcherQueue ui)
+    {
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                if (Native.UpdateCheck(out var info, 5000) != PinStatus.Ok || info.Available == 0)
+                {
+                    return;
+                }
+                string title = Native.FormatUpdate(in info);
+                string notes = info.Notes.Trim();
+                string url = info.DownloadUrl;
+                if (title.Length == 0)
+                {
+                    return;
+                }
+                ui.TryEnqueue(() =>
+                {
+                    UpdateTitle = title;
+                    UpdateMessage = notes;
+                    UpdateUrl = url;
+                    UpdateOpen = true;
+                });
+            }
+            catch (Exception)
+            {
+                // no network / old core: no notice
+            }
+        });
+    }
+
     /// <summary>Raised for every drained engine event, after the VM has applied it.</summary>
     public event EventHandler<EngineEventArgs>? EngineEvent;
 

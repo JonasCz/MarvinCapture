@@ -38,6 +38,7 @@ add_library(pinnacle_engine_pure STATIC
     pin_usb_topology.c
     pin_pace.c
     pin_ui_text.c
+    pin_update.c
 )
 
 target_include_directories(pinnacle_engine_pure PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
@@ -78,6 +79,7 @@ pinnacle_engine_test(test_pin_vidfmt)
 pinnacle_engine_test(test_pin_usb_topology)
 pinnacle_engine_test(test_pin_pace)
 pinnacle_engine_test(test_pin_ui_text)
+pinnacle_engine_test(test_pin_update)
 foreach(t test_dv_error test_hdv_error test_pin_vidfmt)
     target_compile_definitions(${t} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/data")
 endforeach()

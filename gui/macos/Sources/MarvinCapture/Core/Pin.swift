@@ -55,6 +55,32 @@ enum Pin {
         return String(cString: buf)
     }
 
+    // MARK: update check
+
+    /// A newer release, as reported by pin_update_check().
+    struct UpdateInfo: Sendable {
+        let current: String
+        let latest: String
+        let downloadURL: String
+        let notes: String
+        /// The core's ready-made one-liner ("MarvinCapture 1.1 is available (you have 1.0).").
+        let summary: String
+    }
+
+    /// The app version the core reports (e.g. "1.0").
+    static var appVersion: String { String(cString: pin_app_version()) }
+
+    /// Blocking network call: run it off the main thread. nil = check failed / disabled, or no newer version.
+    static func checkForUpdate(timeoutMs: UInt32) -> UpdateInfo? {
+        var info = pin_update_info_t()
+        info.size = UInt32(MemoryLayout<pin_update_info_t>.size)
+        guard pin_update_check(&info, timeoutMs) == PIN_OK, info.available != 0 else { return nil }
+        let summary = format { out, cap in pin_format_update(&info, out, cap) }
+        return UpdateInfo(current: cString(info.current), latest: cString(info.latest),
+                          downloadURL: cString(info.download_url), notes: cString(info.notes),
+                          summary: summary)
+    }
+
     // MARK: size-versioned structs
 
     /// A zeroed status snapshot with `size` set, ready for pin_get_status().

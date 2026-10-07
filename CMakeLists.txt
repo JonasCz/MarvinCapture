@@ -38,6 +38,14 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+# The release version: "version" of the top-level VERSION file (JSON; the same file
+# is published for the update check, see src/engine/pin_update_net.c).
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/VERSION)
+file(READ ${CMAKE_SOURCE_DIR}/VERSION _pin_version_json)
+string(JSON PIN_APP_VERSION GET "${_pin_version_json}" version)
+add_compile_definitions(PIN_APP_VERSION="${PIN_APP_VERSION}")
+message(STATUS "MarvinCapture version ${PIN_APP_VERSION}")
+
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBUSB REQUIRED IMPORTED_TARGET libusb-1.0)
 
@@ -92,13 +100,15 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
         src/engine/pin_hdv_audio.c
         src/engine/pin_script_run.c
         src/engine/pin_devices_wait.c
+        src/engine/pin_update_net.c
     )
     target_include_directories(pinnacle_engine PUBLIC ${CMAKE_SOURCE_DIR}/src/engine)
     target_link_libraries(pinnacle_engine PUBLIC pinnacle_core pinnacle_sinks
         pinnacle_engine_pure Threads::Threads)
     if(WIN32)
-        # pin_devices_wait.c: CM_Register_Notification (device hotplug).
-        target_link_libraries(pinnacle_engine PUBLIC cfgmgr32)
+        # pin_devices_wait.c: CM_Register_Notification (device hotplug);
+        # pin_update_net.c: WinHTTP.
+        target_link_libraries(pinnacle_engine PUBLIC cfgmgr32 winhttp)
     else()
         # pin_session.c: dladdr() finds the core library's own directory.
         target_link_libraries(pinnacle_engine PUBLIC ${CMAKE_DL_LIBS})

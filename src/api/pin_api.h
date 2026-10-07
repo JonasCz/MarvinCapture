@@ -99,7 +99,8 @@ typedef enum {
 } pin_status_t;
 
 PIN_API uint32_t pin_api_version(void);          /* == PIN_API_VERSION */
-PIN_API const char *pin_version_string(void);    /* "marvin-core 0.x (git ...)" */
+PIN_API const char *pin_version_string(void);    /* "marvin-core 1.0" */
+PIN_API const char *pin_app_version(void);       /* "1.0": the "version" of the top-level VERSION file */
 PIN_API const char *pin_strerror(pin_status_t s);
 
 /* Optional. Where the FPGA bitstreams live. Searched in order: this dir,
@@ -1012,6 +1013,34 @@ PIN_API int pin_device_open_problem(const pin_device_info_t *d, char *out, size_
 
 /* The hint shown while pin_enumerate() finds nothing; platform-specific. Static. */
 PIN_API const char *pin_no_devices_hint(void);
+
+/* ---- update check ---------------------------------------------------------
+ * The published VERSION file (JSON: "version", "release_notes", "download_url") is
+ * fetched from the project's GitHub repository and compared with pin_app_version().
+ * The environment variable MARVIN_UPDATE_URL replaces the address (http(s) URL or a
+ * local file path; empty turns the check off). */
+
+#define PIN_UPDATE_NOTES_MAX 2048
+
+typedef struct {
+    uint32_t size;
+    int32_t available;                  /* 1: `latest` is newer than `current` */
+    char current[PIN_NAME_MAX];         /* pin_app_version() */
+    char latest[PIN_NAME_MAX];          /* the published version */
+    char download_url[PIN_PATH_MAX];    /* where to get it (a web page) */
+    char notes[PIN_UPDATE_NOTES_MAX];   /* release notes, plain text, may contain '
+' */
+} pin_update_info_t;
+
+/* Blocking (network): call it off the UI thread. timeout_ms bounds the whole fetch
+ * (0 = 5000). PIN_OK when the published file was read and parsed, whether or not it
+ * is newer (see `available`); any other status means the check could not be done and
+ * should be ignored silently (offline, repository not reachable, malformed file). */
+PIN_API pin_status_t pin_update_check(pin_update_info_t *info, uint32_t timeout_ms);
+
+/* The one-line notice for an available update: "MarvinCapture 1.1 is available (you
+ * have 1.0)." "" when info->available is 0. */
+PIN_API void pin_format_update(const pin_update_info_t *info, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

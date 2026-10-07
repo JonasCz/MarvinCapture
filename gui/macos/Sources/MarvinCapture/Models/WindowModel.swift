@@ -428,8 +428,13 @@ final class WindowModel {
     private(set) var infoTitle = ""
     private(set) var infoMessage = ""
     private(set) var infoSeverity = InfoSeverity.info
+    /// Optional button on the banner (the update notice's "Download"); nil = none.
+    private(set) var infoActionTitle: String?
+    private(set) var infoActionURL: URL?
 
     func showInfo(_ title: String, _ message: String, _ severity: InfoSeverity) {
+        infoActionTitle = nil
+        infoActionURL = nil
         infoTitle = title
         infoMessage = message
         infoSeverity = severity
@@ -437,6 +442,34 @@ final class WindowModel {
     }
 
     func dismissInfo() { infoOpen = false }
+
+    /// Opens the banner's action link (if any) and closes the banner.
+    func performInfoAction() {
+        if let url = infoActionURL { NSWorkspace.shared.open(url) }
+        infoOpen = false
+    }
+
+    /// Looks for a newer release once, in the background (first instance only). Fail-soft: nothing is
+    /// shown when the check fails, is disabled (MARVIN_UPDATE_URL empty) or there is no newer version.
+    private func checkForUpdate() {
+        guard Instance.isPrimary else { return }
+        Task.detached(priority: .utility) {
+            let found = Pin.checkForUpdate(timeoutMs: 5000)   // blocks on the network: never on the main thread
+            guard let found else { return }
+            await MainActor.run { [weak self] in self?.showUpdate(found) }
+        }
+    }
+
+    private func showUpdate(_ u: Pin.UpdateInfo) {
+        // Don't replace an error / warning the user still has to read.
+        if infoOpen && (infoSeverity == .error || infoSeverity == .warning) { return }
+        let notes = u.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        showInfo("Update available", notes.isEmpty ? u.summary : "\(u.summary)\n\(notes)", .info)
+        if !u.downloadURL.isEmpty, let url = URL(string: u.downloadURL) {
+            infoActionTitle = "Download"
+            infoActionURL = url
+        }
+    }
 
     private func report(_ st: pin_status_t, _ what: String) {
         if st != PIN_OK { showInfo(what, Pin.strerror(st), st == PIN_ERR_STATE ? .warning : .error) }
@@ -573,6 +606,7 @@ final class WindowModel {
         statusTimer = makeTimer(interval: 0.2, tolerance: 0.04) { [unowned self] in self.tick() }
         meterTimer = makeTimer(interval: 1.0 / 30.0, tolerance: 0.01) { [unowned self] in self.updateMeters() }
         startDeviceWatch()
+        checkForUpdate()
     }
 
     private func makeTimer(interval: TimeInterval, tolerance: TimeInterval, _ body: @escaping @MainActor () -> Void) -> Timer {

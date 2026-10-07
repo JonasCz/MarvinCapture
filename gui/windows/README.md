@@ -103,6 +103,18 @@ file when stdout is redirected (`MarvinCaptureGUI.exe --debug > log.txt`);
 without a console it has no effect. This replaces the old `PINNACLE_LOG_LEVEL`
 environment variable.
 
+## Update check
+
+Right after start the GUI asks the core (`pin_update_check`, 5 s timeout, on a
+background thread) whether a newer release exists. If so, a closable
+informational banner shows `pin_format_update`'s text, the release notes and a
+"Download" button that opens the release page in the default browser. Any
+failure (offline, bad answer, no newer version) shows nothing. The banner has
+its own InfoBar, so an error banner does not replace it. `MARVIN_UPDATE_URL`
+overrides where the core fetches the release info from (a URL or a local JSON
+file path; for testing:
+`{"version":"9.9","release_notes":"...","download_url":"..."}`).
+
 Each window runs as its own process. "..." > "New window" starts a second one,
 for example to use a second device.
 

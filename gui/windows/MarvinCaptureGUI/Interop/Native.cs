@@ -42,6 +42,37 @@ public static unsafe partial class Native
 
     private static string PtrToUtf8(nint p) => p == 0 ? string.Empty : (Marshal.PtrToStringUTF8(p) ?? string.Empty);
 
+    [LibraryImport(Lib)]
+    private static partial nint pin_app_version();
+
+    /// <summary>The application version ("1.0"), the core's VERSION file.</summary>
+    public static string AppVersion() => PtrToUtf8(pin_app_version());
+
+    // ---- update check ---------------------------------------------------
+
+    [LibraryImport(Lib)]
+    private static partial PinStatus pin_update_check(ref PinUpdateInfo info, uint timeoutMs);
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_update(in PinUpdateInfo info, byte* out_, nuint cap);
+
+    /// <summary>Blocking network call (run it off the UI thread). Ok = the check completed;
+    /// <paramref name="info"/>.Available says whether a newer version exists.</summary>
+    public static PinStatus UpdateCheck(out PinUpdateInfo info, uint timeoutMs)
+    {
+        info = PinUpdateInfo.Create();
+        return pin_update_check(ref info, timeoutMs);
+    }
+
+    /// <summary>"MarvinCapture 1.1 is available (you have 1.0)."</summary>
+    public static string FormatUpdate(in PinUpdateInfo info)
+    {
+        const int cap = 256;
+        byte* buf = stackalloc byte[cap];
+        pin_format_update(in info, buf, (nuint)cap);
+        return Utf8Fixed.Get(buf, cap);
+    }
+
     // ---- devices ------------------------------------------------------
 
     [LibraryImport(Lib)]

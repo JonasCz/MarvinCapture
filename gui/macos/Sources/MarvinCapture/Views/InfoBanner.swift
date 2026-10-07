@@ -24,6 +24,8 @@ struct InfoBanner: View {
     var body: some View {
         if model.infoOpen {
             InfoBannerContent(severity: model.infoSeverity, title: model.infoTitle, message: model.infoMessage,
+                              actionTitle: model.infoActionTitle,
+                              onAction: { model.performInfoAction() },
                               onClose: { model.dismissInfo() })
         }
     }
@@ -33,6 +35,8 @@ struct InfoBannerContent: View {
     let severity: InfoSeverity
     let title: String
     let message: String
+    var actionTitle: String?
+    var onAction: (() -> Void)?
     var onClose: (() -> Void)?
 
     private var symbol: String {
@@ -76,6 +80,10 @@ struct InfoBannerContent: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
             .accessibilityLabel("\(severityName): \(title). \(message)")
+            if let actionTitle, let onAction {
+                Button(actionTitle, action: onAction)
+                    .controlSize(.small)
+            }
             if let onClose {
                 Button(action: onClose) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
                     .buttonStyle(.borderless)

@@ -131,6 +131,31 @@ public unsafe struct PinCaptureOpts
 }
 
 [StructLayout(LayoutKind.Sequential)]
+public unsafe struct PinUpdateInfo
+{
+    public const int NotesMax = 2048;
+
+    public uint Size;
+    public int Available;               // 1: latest is newer than current
+    public fixed byte CurrentBuf[PinLimits.NameMax];
+    public fixed byte LatestBuf[PinLimits.NameMax];
+    public fixed byte DownloadUrlBuf[PinLimits.PathMax];
+    public fixed byte NotesBuf[NotesMax];
+
+    public string Current { get { fixed (byte* p = CurrentBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string Latest { get { fixed (byte* p = LatestBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string DownloadUrl { get { fixed (byte* p = DownloadUrlBuf) return Utf8Fixed.Get(p, PinLimits.PathMax); } }
+    public string Notes { get { fixed (byte* p = NotesBuf) return Utf8Fixed.Get(p, NotesMax); } }
+
+    public static PinUpdateInfo Create()
+    {
+        var u = new PinUpdateInfo();
+        u.Size = (uint)sizeof(PinUpdateInfo);
+        return u;
+    }
+}
+
+[StructLayout(LayoutKind.Sequential)]
 public unsafe struct PinOutputCheck
 {
     public uint Size;

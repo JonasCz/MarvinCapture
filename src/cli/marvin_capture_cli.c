@@ -299,6 +299,33 @@ static void print_performance_recommendations(FILE *f, int behind_hub)
     }
 }
 
+/* "Update available" block (pin_update_check). Prints nothing when this is the newest
+ * version or the check could not be done (offline, ...). */
+static void print_update_notice(FILE *f)
+{
+    pin_update_info_t u;
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+    if (pin_update_check(&u, 3000) != PIN_OK || !u.available)
+        return;
+    char text[256];
+    pin_format_update(&u, text, sizeof(text));
+    fprintf(f, "Update available:\n");
+    print_bullet(f, text);
+    const char *notes = u.notes;
+    while (*notes) {
+        const char *eol = strchr(notes, '\n');
+        int n = eol ? (int)(eol - notes) : (int)strlen(notes);
+        char line[PIN_UPDATE_NOTES_MAX + 8];
+        snprintf(line, sizeof(line), "    %.*s\n", n, notes);
+        print_wrapped(f, line, stdout_columns());
+        notes += n + (eol ? 1 : 0);
+    }
+    if (u.download_url[0])
+        fprintf(f, "    Download: %s\n", u.download_url);
+    fputc('\n', f);
+}
+
 static void print_device_table(FILE *f)
 {
     pin_device_info_t devs[16];
@@ -395,6 +422,7 @@ int main(int argc, char **argv)
     if (pin_script_help_requested(sc)) {
         print_wrapped(stdout, pin_script_help(), stdout_columns());
         fputc('\n', stdout);
+        print_update_notice(stdout);
         print_device_table(stdout);
         pin_script_free(sc);
         return 0;

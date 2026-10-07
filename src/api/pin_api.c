@@ -33,6 +33,7 @@
 #include "../engine/pin_script.h"
 #include "../engine/pin_stop.h"
 #include "../engine/pin_ui_text.h"
+#include "../engine/pin_update.h"
 #include "../engine/pin_usb_topology.h"
 #include "../core/pin_host_perf.h"
 #include "../core/pinnacle_enum.h"
@@ -56,10 +57,19 @@ uint32_t pin_api_version(void) { return PIN_API_VERSION; }
 
 const char *pin_version_string(void)
 {
-#ifndef PIN_GIT_DESCRIBE
-#define PIN_GIT_DESCRIBE "unknown"
-#endif
-    return "marvin-core 0.1 (" PIN_GIT_DESCRIBE ")";
+    return "marvin-core " PIN_APP_VERSION;
+}
+
+const char *pin_app_version(void) { return PIN_APP_VERSION; }
+
+pin_status_t pin_update_check(pin_update_info_t *info, uint32_t timeout_ms)
+{
+    return pin_update_net_check(info, timeout_ms);
+}
+
+void pin_format_update(const pin_update_info_t *info, char *out, size_t cap)
+{
+    pin_update_format(info, out, cap);
 }
 
 const char *pin_strerror(pin_status_t s)

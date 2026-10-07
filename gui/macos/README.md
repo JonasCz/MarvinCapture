@@ -276,6 +276,10 @@ Environment variables, all harmless in a normal run:
   to look at narrow layouts and take snapshots of a known size.
 - `MARVIN_APPEARANCE=dark|light` forces the window's appearance (the
   `-AppleInterfaceStyle` argument is not honoured on every AppKit path).
+- `MARVIN_UPDATE_URL=<http(s) URL or file path>` overrides where the core looks for the
+  latest version (a VERSION JSON); empty disables the update check. For testing the
+  "update available" banner, point it at a local file such as
+  `{"version":"9.9","release_notes":"Test","download_url":"https://github.com/JonasCz/MarvinCapture/releases/latest"}`.
 - `MARVIN_SECONDARY=1` makes this process behave as a later instance (it never
   writes the saved window frame and cascades). "New Window" sets it for the process
   it starts, which is how a bare binary (no bundle id) knows.

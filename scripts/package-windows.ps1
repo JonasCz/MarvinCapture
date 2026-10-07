@@ -91,8 +91,10 @@ function Get-Download {
 }
 
 # --- version ---------------------------------------------------------------------
-$version = (Get-Content (Join-Path $root 'VERSION') -Raw).Trim()
-if ($version -notmatch '^\d+\.\d+\.\d+$') { throw "VERSION must look like 1.2.3 (got '$version')" }
+$version = [string](Get-Content (Join-Path $root 'VERSION') -Raw | ConvertFrom-Json).version
+if ($version -notmatch '^\d+(\.\d+){0,3}$') { throw "VERSION's ""version"" must look like 1.2 or 1.2.3 (got '$version')" }
+# four-part for the file version resource
+$versionNum = (@($version.Split('.')) + @('0', '0', '0'))[0..3] -join '.'
 $exeName = "MarvinCapture-$version-windows-x86_64-setup.exe"
 Write-Host "MarvinCapture $version"
 
@@ -125,8 +127,8 @@ if ($nsisVer -match 'v(\d+)\.' -and [int]$Matches[1] -lt 3) { throw "NSIS 3.x is
 # --- 1. application build ----------------------------------------------------------
 if (-not $SkipBuild) {
     Step 'Building the application (scripts\build.ps1)'
-    $a = @('-Config', $Config, '-Msys2', $Msys2)
-    if ($SkipTests) { $a += '-SkipTests' }
+    $a = @{ Config = $Config; Msys2 = $Msys2 }
+    if ($SkipTests) { $a.SkipTests = $true }
     & (Join-Path $PSScriptRoot 'build.ps1') @a
     if (-not $?) { throw 'build.ps1 failed' }
 }
@@ -236,7 +238,7 @@ $licText = [IO.File]::ReadAllText((Join-Path $root 'LICENSE')) -replace "`r?`n",
 $nsisArgs = @(
     '/V2',
     "/DVERSION=$version",
-    "/DVERSION_NUM=$version.0",
+    "/DVERSION_NUM=$versionNum",
     "/DDIST=$dist",
     "/DROOT=$root",
     "/DWDI_SIMPLE=$wdiExe",

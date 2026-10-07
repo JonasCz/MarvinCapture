@@ -103,6 +103,7 @@ public sealed partial class MainWindow : Window
         ParseCommandLine();
         Closed += MainWindow_Closed;
         VM.RefreshPerfWarnings();
+        VM.CheckForUpdate(DispatcherQueue); // background; shows a banner only if a newer version exists
         Activated += (_, _) => VM.RefreshPerfWarnings(); // the plan may have been changed meanwhile
     }
 
@@ -111,6 +112,21 @@ public sealed partial class MainWindow : Window
         if (args.Reason == InfoBarCloseReason.CloseButton)
         {
             VM.DismissPowerPlanWarning();
+        }
+    }
+
+    private void UpdateDownload_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            if (Uri.TryCreate(VM.UpdateUrl, UriKind.Absolute, out var uri) && (uri.Scheme == "https" || uri.Scheme == "http"))
+            {
+                Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+            }
+        }
+        catch (Exception)
+        {
+            // no browser: nothing sensible to do
         }
     }
 
@@ -984,7 +1000,7 @@ public sealed partial class MainWindow : Window
 
     private async void About_Click(object sender, RoutedEventArgs e)
     {
-        var appVersion = typeof(App).Assembly.GetName().Version?.ToString(3) ?? "0.0.0";
+        var appVersion = Native.AppVersion();
         var text = $"MarvinCapture {appVersion}\n" +
                    $"{Native.VersionString()} (API {Native.ApiVersion()})\n\n" +
                    "Open driver for the Pinnacle Studio 500-USB.\n" +

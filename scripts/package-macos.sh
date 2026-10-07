@@ -77,7 +77,7 @@ STAGE="${OUT}/stage"
 RES="${ROOT}/packaging/macos"
 
 [[ -f "${ROOT}/VERSION" ]] || die "missing ${ROOT}/VERSION"
-VERSION="$(tr -d '[:space:]' < "${ROOT}/VERSION")"
+VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${ROOT}/VERSION" | head -n 1)"
 [[ "${VERSION}" =~ ^[0-9]+(\.[0-9]+)*$ ]] || die "VERSION '${VERSION}' is not a dotted number"
 
 # --- 1. Build -----------------------------------------------------------------------

@@ -40,3 +40,6 @@ third_party/ffmpeg-*/
 __pycache__/
 *.pyc
 .DS_Store
+
+# --- Release builds copied here for upload ---------------------------------
+releases/
