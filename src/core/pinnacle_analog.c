@@ -997,7 +997,7 @@ typedef struct {
     uint32_t index;
     /* Audio starts with the first frame. A packet's counter is the video
      * frame it began in, so gaps are found by device time instead. */
-    int have_audio_start;
+    int have_audio_start, audio_started;
     uint16_t first_vseq;
     uint64_t next_atime;         /* device time the next audio packet should carry */
     uint64_t packet_ticks, frame_ticks;
@@ -1178,8 +1178,14 @@ static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
     uint64_t t = header_time(d);
     int r = 0;
 
-    if ((uint16_t)(seq - s->first_vseq) >= 0x8000)
-        return 0;   /* older than where output started */
+    /* Only the first packets can predate the first frame. Once one is in,
+     * the rest follow it: a 16-bit counter compared to the start would
+     * look "older" again 32768 frames on and drop the next 32768. */
+    if (!s->audio_started) {
+        if ((uint16_t)(seq - s->first_vseq) >= 0x8000)
+            return 0;   /* older than where output started */
+        s->audio_started = 1;
+    }
     if (s->draining && (uint16_t)(seq - s->last_vseq - 1) < 0x8000) {
         s->audio_done = 1;   /* past the last delivered frame */
         return 0;
