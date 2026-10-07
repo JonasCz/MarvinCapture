@@ -45,6 +45,7 @@
 #include "pin_preview.h"
 #include "pin_hdv_audio.h"
 #include "pin_audio_resample.h"
+#include "pin_closer.h"
 
 #include <pthread.h>
 #include <stdint.h>
@@ -184,7 +185,8 @@ struct pin_session {
     pinnacle_analog_t analog;
     dv_reassembler_t reasm;
     pin_writer_t *writer;
-    pin_sink_t *sink;
+    pin_sink_t *sink;             /* the writer's consumer writes to this one (its user pointer) */
+    pin_closer_t *closer;         /* finishes the files handed over (pin_closer.h) */
     pin_format_t active_format;
     unsigned scene_index;         /* 1-based */
     unsigned pass_index;          /* 1-based */
@@ -217,7 +219,6 @@ struct pin_session {
     char stop_text[PIN_TEXT_MAX];
     int stop_no_video;       /* the capture ended without a single video unit written */
     uint64_t units_total;    /* video units written by this capture's closed files */
-    uint64_t last_close_units; /* ... by the file closed last */
     int file_announced;      /* PIN_EVT_FILE_OPENED was sent for the open file (it is created
                                 by its first video unit, see sink_lazy.c) */
     char naming_base[PIN_PATH_MAX]; /* extension-stripped */

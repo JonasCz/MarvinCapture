@@ -35,6 +35,7 @@ int pin_stop_abnormal(pin_stop_reason_t reason)
     case PIN_STOP_ERROR:
     case PIN_STOP_PIPE_SLOW:
     case PIN_STOP_PIPE_CLOSED:
+    case PIN_STOP_DISK_SLOW:
         return 1;
     default:
         return 0;
@@ -67,6 +68,7 @@ static const char *default_detail(pin_stop_reason_t reason)
     case PIN_STOP_ERROR:       return "of an error";
     case PIN_STOP_PIPE_SLOW:   return "the program reading the output can't keep up";
     case PIN_STOP_PIPE_CLOSED: return "the program reading the output exited";
+    case PIN_STOP_DISK_SLOW:   return "the output drive could not keep up";
     default:                   return NULL;
     }
 }

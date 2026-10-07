@@ -711,27 +711,65 @@ static double learned_ffv1_bph(pin_session_t *s)
     return s->ffv1_learned_bph;
 }
 
-/* Closes the current sink, first adding what it wrote to the capture's byte
- * total (bytes_written in the status is per file, total_bytes_written sums the
- * closed files plus the open one). The writer must already be stopped. */
-static pin_status_t close_sink_counted(pin_session_t *s)
+/* Folds what the closed files had beyond their hand-over counts into the
+ * capture's totals. Caller holds the lock. */
+static void closer_collect(pin_session_t *s)
 {
-    if (!s->sink) return PIN_OK;
+    int64_t bytes, units;
+    pin_closer_take(s->closer, &bytes, &units);
+    s->bytes_closed = (uint64_t)((int64_t)s->bytes_closed + bytes);
+    s->units_total = (uint64_t)((int64_t)s->units_total + units);
+}
+
+/* Every file handed over is closed and counted. Caller holds the lock (the
+ * closer never takes it). */
+static void closer_drain(pin_session_t *s)
+{
+    pin_closer_wait(s->closer);
+    closer_collect(s);
+}
+
+/* The closer thread, after each file: it is announced once it has a unit
+ * (a file shorter than one status tick was not yet), and reported closed
+ * unless it was never created. */
+static void file_closed(void *user, const pin_closer_done_t *d)
+{
+    pin_session_t *s = user;
+    if (d->units > 0 && !d->announced)
+        pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, d->path);
+    if (d->units > 0 || d->status != PIN_OK)
+        pin_session_push_event(s, PIN_EVT_FILE_CLOSED, (int32_t)d->status, d->path);
+}
+
+/* Hands the open file (writer and sink) to the closer, which drains and
+ * finalises it on its own thread, so the capture can go on into the next
+ * file at once. What it has written so far goes into the capture's totals
+ * now (bytes_written in the status is per file, total_bytes_written sums the
+ * closed files plus the open one); the rest when it is closed. Caller holds
+ * the lock (or the worker has ended). */
+static void hand_over_file(pin_session_t *s)
+{
+    if (!s->sink)
+        return;
     pin_sink_status_t sst;
     memset(&sst, 0, sizeof(sst));
-    if (s->sink->get_status) {
+    if (s->sink->get_status)
         s->sink->get_status(s->sink, &sst);
-        s->bytes_closed += sst.bytes_written;
-    } else {
-        s->bytes_closed += s->bytes_written;
-    }
-    s->last_close_units = sst.units_written;
+    else
+        sst.bytes_written = s->bytes_written;
+    s->bytes_closed += sst.bytes_written;
     s->units_total += sst.units_written;
-    if (sst.units_written > 0 && !s->file_announced) {   /* a capture shorter than one status tick */
-        s->file_announced = 1;
-        pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, s->current_file);
-    }
-    return s->sink->close(s->sink);
+    pin_writer_stats_t wst;
+    memset(&wst, 0, sizeof(wst));
+    if (s->writer)
+        pin_writer_get_stats(s->writer, &wst);
+    /* HDV to MOV / MKV remuxes the whole temp .ts when the file is closed */
+    int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
+    uint64_t reserve = wst.backlog_bytes + (remux ? sst.bytes_written + wst.backlog_bytes : 0);
+    pin_closer_submit(s->closer, s->writer, s->sink, s->current_file, s->file_announced,
+                      sst.bytes_written, sst.units_written, reserve);
+    s->writer = NULL;
+    s->sink = NULL;
 }
 
 /* Feeds the 10-minute rate window (measured bytes/s) and, once a minute, saves
@@ -756,8 +794,7 @@ static void rate_sample(pin_session_t *s)
 static void split_do(void *user)
 {
     pin_session_t *s = user;
-    if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-    if (s->sink) { close_sink_counted(s); s->sink = NULL; }
+    hand_over_file(s);
     s->scene_index++;
     open_sink_for_scene(s);
     pin_session_push_event(s, PIN_EVT_SCENE, (int32_t)s->scene_index, NULL);
@@ -860,17 +897,19 @@ static void scene_cut(pin_session_t *s, long cut_frame_index)
 static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, size_t len,
                            void *user)
 {
-    pin_session_t *s = user;
+    /* its own sink, not s->sink: a file handed to the closer still drains
+     * while the next one is open */
+    pin_sink_t *sink = user;
     (void)index;
-    if (!s->sink)
+    if (!sink)
         return 0;
     pin_status_t st;
     if (kind == PIN_UNIT_VIDEO)
-        st = s->sink->write_video(s->sink, data, len);
+        st = sink->write_video(sink, data, len);
     else if (kind == PIN_UNIT_AUDIO)
-        st = s->sink->write_audio(s->sink, (const int16_t *)data, len / 4);
+        st = sink->write_audio(sink, (const int16_t *)data, len / 4);
     else
-        st = s->sink->write_unit(s->sink, data, len);
+        st = sink->write_unit(sink, data, len);
     return st == PIN_OK ? 0 : -1;
 }
 
@@ -1054,9 +1093,12 @@ static void open_sink_for_scene(pin_session_t *s)
         s->sink = NULL;
         return;
     }
-    s->writer = to_stdout ? pin_writer_start_ex(PIN_WRITER_PIPE_CAPACITY, writer_consume, s,
-                                                PIN_WRITER_OVERFLOW_FATAL)
-                          : pin_writer_start(0, writer_consume, s);
+    /* A full queue ends the capture (PIPE_SLOW / DISK_SLOW, capture_guard()):
+     * the file then stops before the first lost unit instead of going on
+     * with a hole that the sinks, counting frames, would not show. */
+    size_t cap = to_stdout ? PIN_WRITER_PIPE_CAPACITY
+               : s->stream_kind == PIN_KIND_ANALOG ? PIN_WRITER_ANALOG_CAPACITY : 0;
+    s->writer = pin_writer_start_ex(cap, writer_consume, s->sink, PIN_WRITER_OVERFLOW_FATAL);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
     pin_split_new_file(&s->split);
     /* the clip counters restart with every file (frames still held back by a
@@ -1518,6 +1560,9 @@ static double captured_seconds(const pin_session_t *s)
  * Caller holds the lock. */
 static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const char *detail)
 {
+    /* The end is reported once every file is closed (PIN_EVT_FILE_CLOSED
+     * first, the counts below complete, capture_end_seq means "on disk"). */
+    closer_drain(s);
     s->stop_reason = why;
     s->stop_captured_s = captured_seconds(s);
     /* no unit reached any file (they are closed by now): there is nothing to keep */
@@ -1560,18 +1605,14 @@ int pin_session_capture_busy(pin_session_t *s)
     return busy;
 }
 
-/* Finishes the open file (pending units first) and reports it closed. */
+/* Finishes the open file (pending units first): hands it to the closer,
+ * which reports it closed (PIN_EVT_FILE_CLOSED). */
 static void finish_file(pin_session_t *s)
 {
     if (!s->sink)
         return;
     dv_flush_pending(s);
-    if (s->writer) { pin_writer_stop(s->writer); s->writer = NULL; }
-    pin_status_t st = close_sink_counted(s);
-    s->sink = NULL;
-    /* a file that never received a unit was never created: nothing to report */
-    if (s->last_close_units > 0 || st != PIN_OK)
-        pin_session_push_event(s, PIN_EVT_FILE_CLOSED, (int32_t)st, s->current_file);
+    hand_over_file(s);
 }
 
 /* Ends the running capture (or the wait for one to start): finishes the
@@ -1627,6 +1668,12 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         set_state(s, PIN_STATE_READY);
         return 1;
     }
+    if (wst.overflowed && !wst.failed) {
+        /* The queue is drained into the file as it closes. */
+        capture_end(s, PIN_STOP_DISK_SLOW, NULL, deck_node);
+        set_state(s, PIN_STATE_READY);
+        return 1;
+    }
     double now = pin_session_now();
     if (!wst.failed && now - s->disk_check_s < 1.0)
         return 0;
@@ -1638,8 +1685,10 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
     int known = fat32_and_free(dir, &free_bytes, &fat32) == 0;
     /* HDV to MOV / MKV remuxes the whole temp .ts when the file is closed */
     int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
+    /* plus the files the closer is still finishing (an earlier scene's remux) */
     uint64_t reserve = pin_stop_disk_reserve(0, wst.backlog_bytes,
-                                             remux ? s->bytes_written : 0);
+                                             remux ? s->bytes_written : 0) +
+                       pin_closer_pending_bytes(s->closer);
     char detail[PIN_TEXT_MAX];
     pin_stop_reason_t why;
     if (known && free_bytes < reserve) {
@@ -1790,7 +1839,6 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         s->stop_reason = PIN_STOP_NONE;
         s->stop_no_video = 0;
         s->units_total = 0;
-        s->last_close_units = 0;
         s->stop_captured_s = 0;
         s->stop_text[0] = 0;
         s->capture_began = 0;
@@ -2905,14 +2953,25 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->progress_pct = -1;
     s->preview = pin_previewer_create();
     s->hdv_audio = pin_hdv_audio_create(pin_session_feed_monitor_audio, s);
+    s->closer = pin_closer_create(file_closed, s);
     s->mon_cap_frames = 48000 * 2; /* 2 s at 48 kHz */
     s->mon_buf = calloc(s->mon_cap_frames * 2, sizeof(int16_t));
     pinnacle_analog_config_defaults(&s->analog.cfg);
     pinnacle_picture_defaults(&s->want_picture);
 
+    if (!s->closer) {
+        pin_previewer_destroy(s->preview);
+        pin_hdv_audio_destroy(s->hdv_audio);
+        free(s->mon_buf);
+        pthread_mutex_destroy(&s->mtx);
+        free(s);
+        return PIN_ERR_NOMEM;
+    }
+
     if (!s->is_replay) {
         pinnacle_status_t pst = pinnacle_lock_acquire(resolved, &s->lock);
         if (pst != PINNACLE_OK) {
+            pin_closer_destroy(s->closer);
             pin_previewer_destroy(s->preview);
             pin_hdv_audio_destroy(s->hdv_audio);
             free(s->mon_buf);
@@ -2925,6 +2984,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->state = PIN_STATE_CLOSED;
     if (pthread_create(&s->worker_thread, NULL, worker_main, s) != 0) {
         pinnacle_lock_release(s->lock);
+        pin_closer_destroy(s->closer);
         pin_previewer_destroy(s->preview);
         pin_hdv_audio_destroy(s->hdv_audio);
         free(s->mon_buf);
@@ -2953,7 +3013,8 @@ void pin_session_close(pin_session_t *s)
     if (s->worker_started)
         pthread_join(s->worker_thread, NULL);
 
-    if (s->sink) { if (s->writer) pin_writer_stop(s->writer); close_sink_counted(s); }
+    hand_over_file(s);
+    pin_closer_destroy(s->closer); /* before the event queue it reports to goes */
     scene_fifo_clear(s);
     pin_split_free(&s->split);
     pinnacle_lock_release(s->lock);

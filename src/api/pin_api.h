@@ -443,6 +443,8 @@ typedef enum {
     PIN_STOP_PIPE_SLOW,         /* output to stdout ("-"): the program reading it could not keep up
                                    and the queue in front of the pipe filled. Appended. */
     PIN_STOP_PIPE_CLOSED,       /* output to stdout ("-"): the reading program exited. Appended. */
+    PIN_STOP_DISK_SLOW,         /* the output drive could not keep up and the queue in front of
+                                   it filled: the file ends before the first lost unit. Appended. */
 } pin_stop_reason_t;
 
 typedef struct {

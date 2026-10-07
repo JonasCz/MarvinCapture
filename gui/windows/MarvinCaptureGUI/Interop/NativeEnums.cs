@@ -180,6 +180,7 @@ public enum PinStopReason : int
     Error,
     PipeSlow,       // output to stdout: the reading program could not keep up
     PipeClosed,     // output to stdout: the reading program exited
+    DiskSlow,       // the output drive could not keep up; the file ends before the first lost unit
 }
 
 public enum PinMatrix : int

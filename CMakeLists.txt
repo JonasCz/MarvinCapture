@@ -95,6 +95,7 @@ add_subdirectory(src/sinks)
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     add_library(pinnacle_engine STATIC
         src/engine/pin_session.c
+        src/engine/pin_closer.c
         src/engine/pin_deck.c
         src/engine/pin_preview.c
         src/engine/pin_hdv_audio.c
@@ -122,6 +123,10 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     add_executable(test_pin_event_queue tests/engine/test_pin_event_queue.c src/api/pin_api.c)
     target_link_libraries(test_pin_event_queue PRIVATE pinnacle_engine)
     add_test(NAME test_pin_event_queue COMMAND test_pin_event_queue)
+
+    add_executable(test_pin_closer tests/engine/test_pin_closer.c src/api/pin_api.c)
+    target_link_libraries(test_pin_closer PRIVATE pinnacle_engine pinnacle_sinks)
+    add_test(NAME test_pin_closer COMMAND test_pin_closer)
 
     add_executable(test_pin_deck tests/engine/test_pin_deck.c src/api/pin_api.c)
     target_link_libraries(test_pin_deck PRIVATE pinnacle_engine)

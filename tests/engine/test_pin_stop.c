@@ -56,7 +56,8 @@ int main(void)
     CHECK(pin_stop_abnormal(PIN_STOP_DEVICE_LOST) && pin_stop_abnormal(PIN_STOP_CAMERA_LOST) &&
               pin_stop_abnormal(PIN_STOP_DISK_FULL) && pin_stop_abnormal(PIN_STOP_WRITE_ERROR) &&
               pin_stop_abnormal(PIN_STOP_ERROR) && pin_stop_abnormal(PIN_STOP_PIPE_SLOW) &&
-              pin_stop_abnormal(PIN_STOP_PIPE_CLOSED), "abnormal ends");
+              pin_stop_abnormal(PIN_STOP_PIPE_CLOSED) && pin_stop_abnormal(PIN_STOP_DISK_SLOW),
+          "abnormal ends");
     pin_stop_message(PIN_STOP_PIPE_SLOW, 30, NULL, b, sizeof(b));
     CHECK(strcmp(b, "Capture stopped after capturing 30s, because the program reading the output "
                     "can't keep up.") == 0, "pipe slow wording");

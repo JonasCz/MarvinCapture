@@ -254,6 +254,7 @@ capture starts (not for the user's own stop).
 | `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
 | `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second |
 | `WRITE_ERROR` | writing a file failed, or the next file (split, pass) could not be created |
+| `DISK_SLOW` | the output drive could not keep up and the disk writer's queue filled (64 MB for DV / HDV, ~18 s; 512 MB for analog, ~25 s). The file ends cleanly before the first unit that did not fit, rather than going on with a hole: the sinks count frames, so a lost analog frame would shift the audio against the video for the rest of the file |
 
 A capture that drives the deck (`start_deck`) stops the tape when it ends for
 any reason except a lost device or camera.
@@ -292,7 +293,17 @@ transfers held only ~36 ms.
 
 The fix is 256 queued transfers (~290 ms) and a 64 MB ring buffer drained by a
 second thread that runs the reassembler and writes the file (`pin_writer`). If
-the queue ever overflows the writer drops units and the core logs a warning.
+the queue ever overflows, the capture stops (`DISK_SLOW`, above).
+
+Closing a file is the other long wait on the disk: it drains the writer queue
+and finalises the container, and HDV to MOV / MKV remuxes the whole temp `.ts`
+(minutes for a long scene). A file is therefore handed to a closer thread
+(`src/engine/pin_closer.c`) and the capture goes straight on into the next
+scene or pass; the files close one at a time, in order, each with its
+`PIN_EVT_FILE_CLOSED` (now also for a scene split). The end of a capture
+(`PIN_EVT_CAPTURE_ENDED`, `capture_end_seq`) is still reported only once every
+file is closed. The free-space check adds the remux room of the files still
+being closed.
 
 The reassembler concatenates type-9 payloads in arrival order and ignores their
 ring addresses. That is right while addresses advance contiguously; if an

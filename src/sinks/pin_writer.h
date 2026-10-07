@@ -53,6 +53,8 @@ typedef enum {
 
 #define PIN_WRITER_DEFAULT_CAPACITY (64u << 20)
 #define PIN_WRITER_PIPE_CAPACITY (256u << 20)   /* queue in front of a pipe (stdout) */
+#define PIN_WRITER_ANALOG_CAPACITY (512u << 20) /* analog: raw frames at ~21 MB/s, so ~25 s;
+                                                   64 MiB would ride out only ~3 s of disk stall */
 #define PIN_WRITER_MAX_QUEUED_UNITS 4096
 
 typedef struct pin_writer pin_writer_t;
@@ -76,10 +78,12 @@ typedef struct {
 } pin_writer_stats_t;
 
 /* pin_writer_start_ex() flags. */
-#define PIN_WRITER_OVERFLOW_FATAL 1u   /* a full queue is an error, not a counted drop: for a
-                                          pipe, where the reader cannot be waited for and a gap
-                                          would corrupt the stream. The units queued before the
-                                          overflow are still delivered; later pushes are refused. */
+#define PIN_WRITER_OVERFLOW_FATAL 1u   /* a full queue is an error, not a counted drop: a gap
+                                          would corrupt a pipe's stream, and in a file it would
+                                          shift the audio against the video for the rest of it
+                                          (the sinks count frames, not time). The units queued
+                                          before the overflow are still delivered; later pushes
+                                          are refused. */
 
 /* capacity_bytes == 0 means PIN_WRITER_DEFAULT_CAPACITY. Starts the consumer
  * thread; returns NULL on allocation/thread-creation failure. */
