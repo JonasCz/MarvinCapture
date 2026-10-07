@@ -60,7 +60,7 @@ More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the 
 
 ## Installation & Usage
 
-Installers are on the [Releases page](https://github.com/JonasCz/MarvinCapture/releases). They are not code-signed (I don't want to pay for this), so each OS warns about them first, follow these steps to install anyway.
+**Installers are on the [Releases page](https://github.com/JonasCz/MarvinCapture/releases).** They are not code-signed (I don't want to pay for this), so each OS warns about them first, follow these steps to install anyway.
 
 ### macOS
 
