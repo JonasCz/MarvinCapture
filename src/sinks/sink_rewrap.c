@@ -205,6 +205,7 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
     int rc = avformat_open_input(&in, NULL, dv_fmt, NULL);
     if (rc < 0) {
         pin_logf(PIN_LOG_WARN, "sink_rewrap: per-frame dv demux failed (%d), frame has no audio\n", rc);
+        av_freep(&avio->buffer);
         avio_context_free(&avio);
         return PIN_OK;   /* video still written; treat as an audio-less frame */
     }
@@ -379,6 +380,10 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
         av_packet_free(&bufpkt[i]);
 
     avformat_close_input(&in);
+    /* A caller-supplied pb is the caller's to free (AVFMT_FLAG_CUSTOM_IO),
+     * buffer included: leaking it cost ~4 KB per frame, ~400 MB an hour. */
+    av_freep(&avio->buffer);
+    avio_context_free(&avio);
     return result;
 }
 

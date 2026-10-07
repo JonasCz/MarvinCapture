@@ -3,7 +3,7 @@
 **Using it**
 
 - [usage.md](usage.md): running captures, telling device faults from a quiet
-  camera, proving nothing was dropped, diagnostics.
+  camera, proving nothing was dropped, limits of long captures, diagnostics.
 - [windows-driver.md](windows-driver.md): binding the device to WinUSB (Zadig).
 - [../gui/windows/README.md](../gui/windows/README.md): the GUI and its command line.
 - [building.md](building.md): building, output layout, tests, repo layout.

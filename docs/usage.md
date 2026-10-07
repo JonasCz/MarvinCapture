@@ -299,6 +299,31 @@ ring addresses. That is right while addresses advance contiguously; if an
 overrun ever shows up again (a message whose address goes backwards), honour
 the addresses instead.
 
+## Long captures
+
+Captures up to 8 hours must work. The limits below only bite after that and
+are accepted as they are:
+
+| limit | where | reached after |
+|---|---|---|
+| Analog AVI: 1024 OpenDML segments of 1000 MiB (~1 TB) | `SUPER_ENTRIES` in `src/core/avi_writer.c` | ~14.2 h (PAL/NTSC at ~21 MB/s); then the write fails (`WRITE_ERROR`) |
+| AVI audio `strh dwLength` is 32-bit samples | `avi_close` | 24.8 h at 48 kHz: players show the wrong audio length; the data is intact |
+| Windows GUI analog elapsed time is formatted `hh:mm:ss` | `MainViewModel.StatusTimeText` | 24 h: the display wraps to 00:00:00 |
+| Windows GUI "Stop after" / "Stop no signal" | `Maximum="600"` | 10 h |
+| `MarvinCaptureCLI` durations are `HH:MM:SS` | `pin_dur_parse` | 99:59:59 |
+| `MarvinCaptureCLI` waits at most 30 min for a file to close | `close_capture` in `src/engine/pin_script_run.c` | a 10 h+ HDV capture to MOV / MKV on a slow disk (the remux of the temp `.ts` happens at close) |
+| MPEG-TS PTS/PCR are 33-bit at 90 kHz | FFmpeg (HDV remux, preview) | 26.5 h; FFmpeg handles the wrap |
+
+Not a time limit, but the same in practice: FAT32 stops any capture at 4 GiB
+(~20 min DV/HDV, ~3.5 min analog AVI); the output check only warns.
+
+**Counters.** The device's video and audio packet counters are 16-bit and wrap
+every 65536 frames (43.7 min PAL, 36.4 min NTSC). Compare them only with the
+previous value, never with the value at the start: the half-range test
+`(uint16_t)(seq - first) >= 0x8000` turns true 32768 frames in (21m50s PAL)
+and, until it was fixed, dropped all analog audio for the next 21m50s. `long`
+is 32-bit on Windows, so it must not hold bytes, samples or device ticks.
+
 ## Diagnostics
 
 `MarvinCaptureCLI --debug` (and `MarvinCaptureGUI --debug` on Windows, or the
