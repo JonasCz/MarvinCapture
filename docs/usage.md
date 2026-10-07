@@ -302,7 +302,10 @@ and finalises the container, and HDV to MOV / MKV remuxes the whole temp `.ts`
 scene or pass; the files close one at a time, in order, each with its
 `PIN_EVT_FILE_CLOSED` (now also for a scene split). The end of a capture
 (`PIN_EVT_CAPTURE_ENDED`, `capture_end_seq`) is still reported only once every
-file is closed. The free-space check adds the remux room of the files still
+file is closed; until then the session is in `PIN_STATE_STOPPING` with the
+session lock released, so status calls answer at once and the GUIs show
+"Finishing NAME…" (the Stop buttons read "Finishing the file…", disabled).
+Commands posted meanwhile stay pending and run after it. The free-space check adds the remux room of the files still
 being closed.
 
 The reassembler concatenates type-9 payloads in arrival order and ignores their

@@ -543,6 +543,8 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
         snprintf(out, cap, "Error: %s", st->error_text);
     } else if (st->state == PIN_STATE_PREPARING && st->detail[0]) {
         snprintf(out, cap, "Preparing: %s", st->detail);
+    } else if (st->state == PIN_STATE_STOPPING) {
+        pin_format_state(st, out, cap);   /* the signal no longer matters */
     } else {
         snprintf(out, cap, "%s%s%s%s", state_name(st->state), deck, tc,
                  st->signal ? "" : "  (no signal)");
@@ -652,7 +654,7 @@ void pin_format_state(const pin_status_snapshot_t *st, char *out, size_t cap)
     case PIN_STATE_PREPARING: snprintf(out, cap, "Preparing" ELLIPSIS); break;
     case PIN_STATE_READY: snprintf(out, cap, "Ready"); break;
     case PIN_STATE_CAPTURING: snprintf(out, cap, "Capturing"); break;
-    case PIN_STATE_STOPPING: snprintf(out, cap, "Finalizing" ELLIPSIS); break;
+    case PIN_STATE_STOPPING: snprintf(out, cap, "Finishing the file" ELLIPSIS); break;
     case PIN_STATE_REWINDING: snprintf(out, cap, "Rewinding (pass %d/%d)", st->pass, st->passes); break;
     case PIN_STATE_ERROR: snprintf(out, cap, "Error"); break;
     default: snprintf(out, cap, "?"); break;
@@ -683,6 +685,9 @@ int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub, cha
     } else if (st->state == PIN_STATE_READY && st->stop_text[0] && stopped_unasked(st)) {
         /* why the last capture stopped (not after the user's own stop), until the next one */
         snprintf(out, cap, "%s", st->stop_text);
+    } else if (st->state == PIN_STATE_STOPPING && file[0]) {
+        /* the capture ended; the last file is being written out / remuxed */
+        snprintf(out, cap, "Finishing %s" ELLIPSIS, file);
     } else if (!file[0] || st->state != PIN_STATE_CAPTURING) {
         if (st->state == PIN_STATE_READY && behind_hub) {
             snprintf(out, cap, "%s", PIN_HUB_READY_TEXT);

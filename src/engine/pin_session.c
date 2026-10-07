@@ -729,6 +729,22 @@ static void closer_drain(pin_session_t *s)
     closer_collect(s);
 }
 
+/* Waits for the closer with the lock released, in PIN_STATE_STOPPING
+ * ("Finalizing..."): an HDV remux can take minutes, and status calls (the
+ * GUI) must not wait that long. Only where nothing is half done under the
+ * lock (capture_end(), from a tick, a command or a loop exit); a command
+ * posted meanwhile stays pending for the next tick. The caller sets the next
+ * state. */
+static void closer_drain_unlocked(pin_session_t *s)
+{
+    if (!pin_closer_busy(s->closer))
+        return;
+    set_state(s, PIN_STATE_STOPPING);
+    pin_session_unlock(s);
+    pin_closer_wait(s->closer);
+    pin_session_lock(s);
+}
+
 /* The closer thread, after each file: it is announced once it has a unit
  * (a file shorter than one status tick was not yet), and reported closed
  * unless it was never created. */
@@ -1628,8 +1644,10 @@ static void capture_end(pin_session_t *s, pin_stop_reason_t why, const char *det
     finish_file(s);
     if (deck_node)
         deck_send(s, deck_node, PIN_DECK_CMD_STOP);
-    if (active)
+    if (active) {
+        closer_drain_unlocked(s);
         capture_report_end(s, why, detail);
+    }
 }
 
 /* The deck a capture that ends on its own stops: the camera, if the capture
@@ -1826,9 +1844,16 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         pthread_mutex_unlock(&s->mtx);
         return 1; /* caller must break out of the streaming loop */
     }
+    /* Taken before it runs: ending a capture releases the lock while the
+     * files finish (closer_drain_unlocked()), and a command posted then
+     * must stay pending, not be cleared with this one. */
+    pin_cmd_t cmd = s->cmd;
+    s->cmd.pending = 0;
+    s->cmd.kind = PIN_CMD_NONE;
+    pthread_cond_broadcast(&s->cmd_idle);
 
     if (kind == PIN_CMD_CAPTURE_START) {
-        s->capture_opts = s->cmd.capture;
+        s->capture_opts = cmd.capture;
         if (pin_path_is_stdout(s->capture_opts.path)) {
             /* a stream has no files to split, keep or number, and one pass */
             s->capture_opts.scene_split = 0;
@@ -1850,8 +1875,8 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         maybe_begin_capture(s, camera_node);
     } else if (kind == PIN_CMD_CAPTURE_STOP) {
         /* AS_STARTED: only a capture that drives the deck stops it. */
-        int stop_deck = s->cmd.stop_deck == PIN_STOP_DECK_YES ||
-                        (s->cmd.stop_deck == PIN_STOP_DECK_AS_STARTED && s->capture_opts.start_deck);
+        int stop_deck = cmd.stop_deck == PIN_STOP_DECK_YES ||
+                        (cmd.stop_deck == PIN_STOP_DECK_AS_STARTED && s->capture_opts.start_deck);
         capture_end(s, PIN_STOP_USER, NULL, stop_deck ? camera_node : 0);
         if (s->state != PIN_STATE_ERROR)
             set_state(s, PIN_STATE_READY);
@@ -1859,19 +1884,16 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         uint16_t node = camera_node;
         if (!node) {
             set_error(s, PIN_ERR_NO_CAMERA, "no camera on the 1394 bus");
-        } else if (s->state == PIN_STATE_CAPTURING && s->cmd.deck_cmd != PIN_DECK_CMD_STOP) {
+        } else if (s->state == PIN_STATE_CAPTURING && cmd.deck_cmd != PIN_DECK_CMD_STOP) {
             /* "while CAPTURING, only STOP accepted" */
-        } else if (s->cmd.deck_cmd == PIN_DECK_CMD_STOP && s->state == PIN_STATE_CAPTURING) {
+        } else if (cmd.deck_cmd == PIN_DECK_CMD_STOP && s->state == PIN_STATE_CAPTURING) {
             /* STOP while capturing: finish the capture first, then the deck */
             capture_end(s, PIN_STOP_USER, NULL, node);
             set_state(s, PIN_STATE_READY);
         } else {
-            deck_send(s, node, s->cmd.deck_cmd);
+            deck_send(s, node, cmd.deck_cmd);
         }
     }
-    s->cmd.pending = 0;
-    s->cmd.kind = PIN_CMD_NONE;
-    pthread_cond_broadcast(&s->cmd_idle);
     pthread_mutex_unlock(&s->mtx);
     return 0;
 }

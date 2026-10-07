@@ -70,6 +70,9 @@ void pin_closer_submit(pin_closer_t *c, pin_writer_t *writer, pin_sink_t *sink, 
 /* Returns once every file handed over is closed. */
 void pin_closer_wait(pin_closer_t *c);
 
+/* A file handed over is not closed yet. */
+int pin_closer_busy(pin_closer_t *c);
+
 /* Bytes and video units the closed files had beyond what submit() was told,
  * since the last call (then zeroed). */
 void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units);

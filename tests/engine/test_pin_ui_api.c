@@ -66,7 +66,7 @@ static void test_state_and_short(void)
     CHECK_STR(b, "Preparing\xe2\x80\xa6", "preparing");
     st.state = PIN_STATE_STOPPING;
     pin_format_state(&st, b, sizeof(b));
-    CHECK_STR(b, "Finalizing\xe2\x80\xa6", "stopping");
+    CHECK_STR(b, "Finishing the file\xe2\x80\xa6", "stopping");
     st.state = PIN_STATE_CLOSED;
     pin_format_state(&st, b, sizeof(b));
     CHECK_STR(b, "Closed", "closed");
@@ -111,7 +111,12 @@ static void test_state_and_short(void)
     CHECK_STR(b, "tape-0001.dv  \xc2\xb7  pass 2/3", "file name and pass");
     st.state = PIN_STATE_STOPPING;
     pin_format_status_short(&st, 0, b, sizeof(b));
-    CHECK_STR(b, "Finalizing\xe2\x80\xa6", "stopping shows the state");
+    CHECK_STR(b, "Finishing tape-0001.dv\xe2\x80\xa6", "stopping names the file being finished");
+    st.current_file[0] = 0;
+    pin_format_status_short(&st, 0, b, sizeof(b));
+    CHECK_STR(b, "Finishing the file\xe2\x80\xa6", "stopping without a file shows the state");
+    pin_format_status_line(&st, b, sizeof(b));
+    CHECK_STR(b, "Finishing the file\xe2\x80\xa6", "status line while finishing, no \"(no signal)\"");
 
     st = snap(PIN_STATE_READY);
     snprintf(st.stop_text, sizeof(st.stop_text), "Capture stopped after capturing 5s, because ...");

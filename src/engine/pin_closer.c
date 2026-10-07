@@ -173,6 +173,16 @@ void pin_closer_wait(pin_closer_t *c)
     pthread_mutex_unlock(&c->lock);
 }
 
+int pin_closer_busy(pin_closer_t *c)
+{
+    if (!c)
+        return 0;
+    pthread_mutex_lock(&c->lock);
+    int busy = c->head || c->busy;
+    pthread_mutex_unlock(&c->lock);
+    return busy;
+}
+
 void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units)
 {
     *bytes = *units = 0;

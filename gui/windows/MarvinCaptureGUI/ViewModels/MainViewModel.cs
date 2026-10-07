@@ -124,7 +124,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>True when the running capture was started by "Automatic rewind &amp; capture" (the core stops the deck when it ends).</summary>
     private bool _captureWithDeck;
 
-    public string ManualCaptureTitle => IsCapturing ? "Stop capture & continue tape" + StopCountdownSuffix : "Manual capture";
+    /// <summary>The capture has ended and its last file is being finished (an HDV remux can take minutes): the Stop buttons say so (the core's state text) instead of "Stop capture".</summary>
+    private bool IsFinishing => SessionState == PinState.Stopping;
+
+    public string ManualCaptureTitle => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture & continue tape" + StopCountdownSuffix : "Manual capture";
     public string ManualCaptureHelp => IsCapturing
         ? "Stops the capture and leaves the tape as it is"
         : "Records whatever the camera or deck is already sending, without controlling it";
@@ -147,11 +150,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (started that way) it stops the capture and the tape.</summary>
     public bool DvAutoCaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.StopTape : PinCaptureAction.StartAuto);
 
-    public string PrimaryDvTitle => IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
+    public string PrimaryDvTitle => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
     public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and captures it";
     public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE896"; // Stop / Download
 
-    public string CaptureButtonText => IsCapturing ? "Stop capture" + StopCountdownSuffix : "Capture";
+    public string CaptureButtonText => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture" + StopCountdownSuffix : "Capture";
 
     partial void OnIsCapturingChanged(bool value)
     {
@@ -160,7 +163,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
     public string CaptureButtonGlyph => IsCapturing ? "" : ""; // Stop / Download
 
-    [ObservableProperty] private string _sessionStateText = "No device open";
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ManualCaptureTitle), nameof(PrimaryDvTitle), nameof(CaptureButtonText))]
+    private string _sessionStateText = "No device open";
 
     // ================================================================== input
 

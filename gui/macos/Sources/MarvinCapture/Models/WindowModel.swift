@@ -192,8 +192,15 @@ final class WindowModel {
     var deckStopEnabled: Bool { deckAllowed(PIN_DECK_CMD_STOP) }
     var deckFfEnabled: Bool { deckAllowed(PIN_DECK_CMD_FF) }
 
-    var captureButtonText: String { isCapturing ? "Stop capture" + stopCountdownSuffix : "Capture" }
-    var manualCaptureTitle: String { isCapturing ? "Stop capture & continue tape" + stopCountdownSuffix : "Manual capture" }
+    /// The capture has ended and its last file is being finished (an HDV remux can take minutes): the Stop
+    /// buttons say so (the core's state text) instead of "Stop capture".
+    var isFinishing: Bool { sessionState == PIN_STATE_STOPPING }
+    var captureButtonText: String {
+        isFinishing ? sessionStateText : isCapturing ? "Stop capture" + stopCountdownSuffix : "Capture"
+    }
+    var manualCaptureTitle: String {
+        isFinishing ? sessionStateText : isCapturing ? "Stop capture & continue tape" + stopCountdownSuffix : "Manual capture"
+    }
     var manualCaptureHelp: String {
         if isCapturing { return "Stops the capture and leaves the tape as it is" }
         if !playAndCaptureEnabled {
@@ -202,7 +209,9 @@ final class WindowModel {
         }
         return "Records whatever the camera or deck is already sending, without controlling it"
     }
-    var primaryDvTitle: String { isCapturing ? "Stop capture & stop tape" + stopCountdownSuffix : "Automatic rewind & capture" }
+    var primaryDvTitle: String {
+        isFinishing ? sessionStateText : isCapturing ? "Stop capture & stop tape" + stopCountdownSuffix : "Automatic rewind & capture"
+    }
     var primaryDvHelp: String {
         isCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and captures it"
     }
