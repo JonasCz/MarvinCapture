@@ -19,7 +19,7 @@ Pinnacle's driver internally calls these "Marvin", hence the naming.
 
 Modern, native GUIs for Windows and Mac, plus a flexible command-line application for Windows, Mac, and Linux, allowing video capture to various file formats, with options mostly focused on high quality archival and preservation.
 
-[screenshot windows and mac]
+![screenshot MacOS](docs/images/screenshot-mac.jpg)
 
 * Native applications for Mac/Windows
 * Command-line interface for Mac/Windows/Linux, exposing all features that the GUI has and designed for use in automated piplelines, exposing deck controls/capture actions, and timeouts. The GUI can also be launched via command line and given configuration and actions to execute.
@@ -58,13 +58,13 @@ Pinnacle also made some devices which are not supported:
 
 More details in [docs/hardware.md](docs/hardware.md). (of interesting note: the device implements a standard OHCI-1394 host controller on an FPGA, it can likely work with any Firewire-100 device and likely isn't limited to DV, although this project focuses on DV video)
 
-## Installation
+## Installation & Usage
 
-Installers are on the [Releases page](https://github.com/JonasCz/MarvinCapture/releases). They are not code-signed (yet), so each OS warns about them first; the steps below get past that.
+Installers are on the [Releases page](https://github.com/JonasCz/MarvinCapture/releases). They are not code-signed (I don't want to pay for this), so each OS warns about them first, follow these steps to install anyway.
 
 ### macOS
 
-Needs an Apple Silicon Mac and macOS 15 or later.
+Needs an Apple Silicon Mac and macOS 15 or later. No installers are available for intel, although it should work if you build it yourself.
 
 1. Download `MarvinCapture-<version>-macos-arm64.pkg`.
 2. Double-click it. macOS refuses with "Apple could not verify ... is free of malware", because the installer isn't signed or notarised. Click **Done**, then open **System Settings > Privacy & Security**, scroll down to Security, click **Open Anyway** next to the installer's name and enter your password. (Since macOS 15, right-click > Open no longer gets past this.)
@@ -76,9 +76,9 @@ This installs:
 * `/Applications/MarvinCapture.app`
 * `/usr/local/lib/marvincapture/` (`MarvinCaptureCLI`, its libraries, firmware) and the link `/usr/local/bin/MarvinCaptureCLI`, so `MarvinCaptureCLI` works in a new Terminal window.
 
-No driver or extra permission is needed. If macOS says the app "is damaged and can't be opened" or offers to move it to the Trash, run `xattr -cr /Applications/MarvinCapture.app` and open it again.
+If macOS says the app "is damaged and can't be opened" or offers to move it to the Trash, run `xattr -cr /Applications/MarvinCapture.app` and open it again. No driver or further device access permission is needed.
 
-To uninstall: if you only installed the app, drag it to the Trash. Otherwise run `sudo /Applications/MarvinCapture.app/Contents/Resources/uninstall.sh` (or `sudo /usr/local/lib/marvincapture/uninstall.sh`), which removes both parts and the installer's records. Recordings and settings are kept.
+To uninstall: if you only installed the app, drag it to the Trash. Otherwise run `sudo /Applications/MarvinCapture.app/Contents/Resources/uninstall.sh` (or `sudo /usr/local/lib/marvincapture/uninstall.sh`), which removes the app and CLI, and the installer's records. Recordings and settings are kept.
 
 ### Windows
 
@@ -86,12 +86,12 @@ Needs 64-bit Windows 10 or later (Intel/AMD).
 
 1. Download `MarvinCapture-<version>-windows-x86_64-setup.exe`. The browser may say it "isn't commonly downloaded": choose **Keep** (Edge: **...** > **Keep** > **Keep anyway**).
 2. Run it. If SmartScreen says "Windows protected your PC", click **More info**, then **Run anyway**.
-3. The UAC prompt shows "Unknown publisher": click **Yes**. Admin rights are needed for the driver.
+3. The prompt shows "Unknown publisher": click **Yes**. Admin rights are needed for the driver (Libusb, signed by Microsoft)
 4. If Windows 11 **Smart App Control** is on, it may block the installer with no way to continue. It can only be turned off (Windows Security > App & browser control > Smart App Control), and not back on without resetting Windows; building from source is the alternative.
 
 The installer puts the GUI, `MarvinCaptureCLI.exe` and the firmware in `C:\Program Files\MarvinCapture`, adds Start menu entries, and optionally a desktop shortcut and a PATH entry for the CLI.
 
-It also installs the **WinUSB driver** for all five devices (500-USB, 510-USB, 700-USB, 710-USB, MovieBox Deluxe), using [libwdi](https://github.com/pbatard/libwdi) as [Zadig](https://zadig.akeo.ie/) does. Plug the device in before installing if you can; otherwise it picks up the driver when you plug it in (replug it if it doesn't). The driver is generated on your PC and signed with a throw-away certificate that the installer adds to the trusted stores; no test mode or Secure Boot change is needed. It takes over from Pinnacle's own driver (`MarvinAVS64`), which stays installed. Untick "USB driver" to skip this, e.g. if you set up WinUSB with Zadig yourself ([docs/windows-driver.md](docs/windows-driver.md)).
+It also installs the **WinUSB driver** for all five devices (500-USB, 510-USB, 700-USB, 710-USB, MovieBox Deluxe), using [libwdi](https://github.com/pbatard/libwdi) as [Zadig](https://zadig.akeo.ie/) does. Plug the device in before installing if you can; otherwise it should pick up the driver when you plug it in (replug it if it doesn't). The driver is generated on your PC and signed with a throw-away certificate that the installer adds to the trusted stores; no test mode or Secure Boot change is needed. It takes over from Pinnacle's own driver (`MarvinAVS64`), which stays installed. Untick "USB driver" to skip this, e.g. if you set up WinUSB with Zadig yourself ([docs/windows-driver.md](docs/windows-driver.md)).
 
 To uninstall: Settings > Apps > Installed apps > MarvinCapture (or the Start menu entry). This also removes the WinUSB driver packages and certificates it added (untick "Remove the USB driver" to keep them); the device then goes back to Pinnacle's driver if that is installed, after a replug.
 
@@ -99,7 +99,7 @@ To go back to Pinnacle's driver without uninstalling: Device Manager > the devic
 
 ### Linux
 
-A `.deb` for Ubuntu 22.04+ / Debian 12+ (amd64, arm64); CLI only, there is no Linux GUI yet. Install it with apt, which also pulls in libusb (`dpkg -i` doesn't):
+A `.deb` for Ubuntu 22.04+ / Debian 12+ (amd64, arm64); CLI only, there is no Linux GUI. Install it with apt, which also pulls in libusb (`dpkg -i` doesn't):
 
 ```
 sudo apt install ./marvincapture_<version>_amd64.deb
@@ -119,7 +119,11 @@ Connect the device directly to a USB root port, not via a hub, to ensure it does
 
 ### Linux:
 
-Requires a udev rule allowing the application to disable the CPU C3 deep sleep / idle states. The .deb package installs it; when building from source, add it yourself:
+Requires a udev rule giving non-root users access to the USB device. The .deb package installs it; when building from source, add it yourself, then unplug and replug the device:
+
+* `echo 'SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2304", ATTR{idProduct}=="0213|0223|0212|0224|0206", MODE="0666", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/60-marvincapture.rules && sudo udevadm control --reload && sudo udevadm trigger`
+
+Also requires a udev rule allowing the application to disable the CPU C3 deep sleep / idle states. The .deb package installs it; when building from source, add it yourself:
 
 * `echo 'KERNEL=="cpu_dma_latency", MODE="0666"' | sudo tee /etc/udev/rules.d/99-cpu-dma-latency.rules`
 * `sudo udevadm control --reload && sudo udevadm trigger /dev/cpu_dma_latency`

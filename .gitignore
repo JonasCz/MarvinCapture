@@ -43,3 +43,6 @@ __pycache__/
 
 # --- Release builds copied here for upload ---------------------------------
 releases/
+
+# --- Packaging -------------------------------------------------------------
+packaging/
