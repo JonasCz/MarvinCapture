@@ -1,0 +1,13 @@
+#!/bin/sh
+# MarvinCapture: drop the removed rules from udev's loaded set.
+set -e
+
+case "$1" in
+    remove|purge)
+        if [ -d /run/udev ] && command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules || true
+        fi
+        ;;
+esac
+
+exit 0

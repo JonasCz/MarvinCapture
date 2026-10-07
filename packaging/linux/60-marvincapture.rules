@@ -1,0 +1,8 @@
+# MarvinCapture: let every user open the Pinnacle "Marvin" capture boxes.
+#
+# Only the five Marvin PIDs are matched (500-USB 0213, 510-USB 0223, 700-USB
+# 0212, 710-USB 0224, MovieBox Deluxe 0206), not the whole vendor: VID 2304
+# also covers unrelated Pinnacle devices. MODE 0666 (rather than only uaccess)
+# also works over SSH and on headless machines; uaccess is added for seat-based
+# desktop sessions.
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2304", ATTR{idProduct}=="0213|0223|0212|0224|0206", MODE="0666", TAG+="uaccess"

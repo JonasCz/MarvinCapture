@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>MarvinCapture @VERSION@</title>
+    <organization>jonascz</organization>
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="arm64"/>
+    <allowed-os-versions>
+        <os-version min="15.0"/>
+    </allowed-os-versions>
+
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="license.txt" mime-type="text/plain"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+
+    <choices-outline>
+        <line choice="app"/>
+        <line choice="cli"/>
+    </choices-outline>
+
+    <choice id="app" title="MarvinCapture (app)"
+            description="The capture app, installed to /Applications.">
+        <pkg-ref id="jonascz.MarvinCapture.app"/>
+    </choice>
+    <choice id="cli" title="Command-line tool"
+            description="MarvinCaptureCLI, linked into /usr/local/bin so it is on your PATH. The files are in /usr/local/lib/marvincapture.">
+        <pkg-ref id="jonascz.MarvinCapture.cli"/>
+    </choice>
+
+    <pkg-ref id="jonascz.MarvinCapture.app" version="@VERSION@" onConclusion="none">MarvinCapture-app.pkg</pkg-ref>
+    <pkg-ref id="jonascz.MarvinCapture.cli" version="@VERSION@" onConclusion="none">MarvinCapture-cli.pkg</pkg-ref>
+</installer-gui-script>

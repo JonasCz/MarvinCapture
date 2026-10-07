@@ -140,6 +140,20 @@ e.g. `libusb-1.0-0`).
 6. **Check**: fails if an expected file is missing from `dist/`, else prints
    `Done: <dist>`.
 
+## Installers
+
+Each builds the platform first (pass `--skip-build` / `-SkipBuild` to reuse
+`dist/`) and writes to `build/<os>-<arch>/installer/`. The version comes from the
+top-level `VERSION` file. All are unsigned for now (see the README's Installation
+section for what users see).
+
+| Script | Output | Notes |
+|---|---|---|
+| `scripts/package-macos.sh` | `MarvinCapture-<version>-macos-arm64.pkg` | `pkgbuild` + `productbuild`, choices "app" (`/Applications`) and "cli" (`/usr/local/lib/marvincapture`, link in `/usr/local/bin`); resources and `uninstall.sh` in `packaging/macos/` |
+| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-x86_64-setup.exe` | NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once (needs MSYS2 `autotools`, downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
+| `scripts/package-linux.sh` | `marvincapture_<version>_<debarch>.deb` | Linux only, needs `dpkg-deb`; udev rules and maintainer scripts in `packaging/linux/` |
+| `scripts/package-linux-docker.sh` | same `.deb` | runs `package-linux.sh` in `ubuntu:22.04` (`--arch amd64\|arm64\|all`), so the package's `libc6` dependency is 22.04's glibc; works from macOS with Docker/OrbStack |
+
 ## Tests
 
 `tests/` has three kinds:
@@ -171,7 +185,9 @@ gui/macos/     SwiftUI/AppKit app (SwiftPM)
 tests/         unit and replay tests; tests/data/ = local fixtures
 firmware/      FPGA bitstreams (see firmware/README.md)
 scripts/       build.ps1 (Windows), build.sh (macOS/Linux), build-ffmpeg.sh,
-               extract-bitstreams.py, driver-status.ps1
+               package-*.sh/.ps1 (installers), extract-bitstreams.py,
+               driver-status.ps1
+packaging/     installer resources (macos/, windows/, linux/)
 third_party/   vendored FFmpeg, built from source
 docs/          documentation
 build/         all build output, one directory per platform (git-ignored)

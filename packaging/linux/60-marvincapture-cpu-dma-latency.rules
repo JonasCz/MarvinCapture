@@ -1,0 +1,8 @@
+# MarvinCapture: let unprivileged users open /dev/cpu_dma_latency.
+#
+# While capturing, MarvinCaptureCLI writes 0 to /dev/cpu_dma_latency (the PM QoS
+# interface) and keeps the file open, which stops the CPU from entering deep
+# idle states. Long wakeup latencies from deep C-states make the host miss USB
+# service deadlines and lose capture data. The request lasts only as long as
+# the file is open; without access the CLI still runs but warns about it.
+KERNEL=="cpu_dma_latency", MODE="0666"

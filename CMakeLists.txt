@@ -148,7 +148,11 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
     else()
         if(NOT APPLE)
             # Apple clang has no libgcc and rejects the flag.
-            target_link_options(marvin-core PRIVATE -static-libgcc)
+            # -Bsymbolic: the static FFmpeg's x86 assembly references its own
+            # tables (ff_pw_32 ...) PC-relative, which ld refuses in a shared
+            # object while those symbols are preemptible; FFmpeg links its own
+            # shared libraries the same way.
+            target_link_options(marvin-core PRIVATE -static-libgcc -Wl,-Bsymbolic)
         endif()
         set_target_properties(marvin-core PROPERTIES C_VISIBILITY_PRESET hidden)
     endif()

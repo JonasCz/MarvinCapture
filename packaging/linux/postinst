@@ -1,0 +1,16 @@
+#!/bin/sh
+# MarvinCapture: reload udev so the new rules apply without a reboot.
+set -e
+
+case "$1" in
+    configure)
+        # Skipped in containers/chroots without a running udev; never fatal.
+        if [ -d /run/udev ] && command -v udevadm >/dev/null 2>&1; then
+            udevadm control --reload-rules || true
+            udevadm trigger --subsystem-match=usb --attr-match=idVendor=2304 || true
+            udevadm trigger --name-match=cpu_dma_latency || true
+        fi
+        ;;
+esac
+
+exit 0
