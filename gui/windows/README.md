@@ -196,13 +196,19 @@ MarvinCaptureGUI/
   that state (Stop when stopped, Play when playing, ...; none with no tape).
 - "Automatic rewind & capture" sets `rewind_first = 1` and `start_deck = 1`, so
   the core rewinds to the start of the tape, sends PLAY, then starts the
-  writer. While recording it becomes "Stop capture & stop tape" (the core stops
-  the deck when the capture ends). "Manual capture" records without touching
-  the deck and becomes "Stop capture & continue tape" while recording. Both stop
-  buttons are active during any DV/HDV capture: the GUI calls
-  `pin_capture_stop_ex` with `PIN_STOP_DECK_NO` ("continue tape") or
-  `PIN_STOP_DECK_YES` ("stop tape"), so the choice does not depend on how the
-  capture was started.
+  writer. While recording it becomes the red "Stop capture & stop tape" (the
+  core stops the deck when the capture ends), enabled for any DV/HDV capture
+  with a camera (a manual one too). "Manual capture" is enabled when READY with an incoming
+  video signal (`pin_manual_capture_allowed`, tooltip "No incoming video signal"
+  otherwise), records without touching the deck (never a deck command, also not
+  at the no-signal timeout or time limit, and a single pass) and becomes
+  "Stop capture" while recording, enabled for any DV/HDV capture
+  (`pin_capture_stop_ex` with `PIN_STOP_DECK_NO`; the Auto stop button uses
+  `PIN_STOP_DECK_YES`). While recording, the button the capture was started
+  with shows a second line: "Stopping in 4m12s" (", no signal" while the
+  no-signal timeout counts), for an automatic capture "Stopping capture and tape
+  in ..." or "Next pass in ... (pass 1 of 2)"; the analog "Stop capture" shows
+  "Stopping in ...". Idle, the analog button says "Capture S-Video input to file".
 - "Capture passes" is disabled and shown as 1 (tooltip: multi-pass needs a way
   to detect the end of a pass) while both "Stop no signal" and "Stop after" are
   0. The rule is the core's (`pin_capture_passes_allowed`, called through

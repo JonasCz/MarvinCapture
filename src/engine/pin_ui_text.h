@@ -53,8 +53,9 @@ int pin_ui_deck_cmd_allowed(pin_state_t state, int deck_available, pin_deck_stat
 int pin_ui_capture_action_allowed(pin_state_t state, int deck_available,
                                   pin_capture_action_t action);
 /* DV/HDV "Manual capture" (see pin_manual_capture_allowed()). */
-const char *pin_ui_manual_capture_block(int deck_available, pin_deck_state_t deck);
-int pin_ui_manual_capture_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck);
+const char *pin_ui_manual_capture_block(int deck_available, pin_deck_state_t deck, int signal);
+int pin_ui_manual_capture_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck,
+                                  int signal);
 
 #ifdef __cplusplus
 }

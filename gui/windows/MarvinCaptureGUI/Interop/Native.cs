@@ -408,18 +408,18 @@ public static unsafe partial class Native
         pin_capture_action_allowed(state, deckAvailable ? 1 : 0, action) != 0;
 
     [LibraryImport(Lib)]
-    private static partial int pin_manual_capture_allowed(PinState state, int deckAvailable, PinDeckState deck);
+    private static partial int pin_manual_capture_allowed(PinState state, int deckAvailable, PinDeckState deck, int signal);
 
-    /// <summary>DV/HDV "Manual capture" start is enabled (core rule: READY, a camera, deck playing).</summary>
-    public static bool ManualCaptureAllowed(PinState state, bool deckAvailable, PinDeckState deck) =>
-        pin_manual_capture_allowed(state, deckAvailable ? 1 : 0, deck) != 0;
+    /// <summary>DV/HDV "Manual capture" start is enabled (core rule: READY, and video already arriving or a camera with the deck playing).</summary>
+    public static bool ManualCaptureAllowed(PinState state, bool deckAvailable, PinDeckState deck, bool signal) =>
+        pin_manual_capture_allowed(state, deckAvailable ? 1 : 0, deck, signal ? 1 : 0) != 0;
 
     [LibraryImport(Lib)]
-    private static partial nint pin_manual_capture_block_text(int deckAvailable, PinDeckState deck);
+    private static partial nint pin_manual_capture_block_text(int deckAvailable, PinDeckState deck, int signal);
 
-    /// <summary>Why the deck blocks Manual capture ("Start playback on the tape first"), "" when it does not.</summary>
-    public static string ManualCaptureBlockText(bool deckAvailable, PinDeckState deck) =>
-        PtrToUtf8(pin_manual_capture_block_text(deckAvailable ? 1 : 0, deck));
+    /// <summary>Why the deck blocks Manual capture ("Start playback on the tape first"), "" when it does not (or video is already arriving).</summary>
+    public static string ManualCaptureBlockText(bool deckAvailable, PinDeckState deck, bool signal) =>
+        PtrToUtf8(pin_manual_capture_block_text(deckAvailable ? 1 : 0, deck, signal ? 1 : 0));
 
     [LibraryImport(Lib)]
     private static partial int pin_state_is_capturing(PinState state);

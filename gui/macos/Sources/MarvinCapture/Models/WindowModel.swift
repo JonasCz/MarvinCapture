@@ -180,12 +180,15 @@ final class WindowModel {
     var canStop: Bool { captureAllowed(PIN_CAPTURE_STOP) }
     /// The Capture / Stop button (analog) and the Manual capture / Stop button (DV/HDV).
     var captureEnabled: Bool { captureAllowed(isCapturing ? PIN_CAPTURE_STOP : PIN_CAPTURE_START_MANUAL) }
-    /// DV/HDV Manual capture: only while the deck plays (core rule); while capturing it is the Stop button.
+    /// DV/HDV Manual capture: only while video is arriving (core rule); while capturing it is the Stop
+    /// button (no deck command), however the capture was started.
     var playAndCaptureEnabled: Bool {
         isCapturing ? captureAllowed(PIN_CAPTURE_STOP)
-                    : Pin.manualCaptureAllowed(state: sessionState, deckAvailable: deckAvailable, deck: deckState)
+                    : Pin.manualCaptureAllowed(state: sessionState, deckAvailable: deckAvailable, deck: deckState,
+                                               signal: signalLocked)
     }
-    /// "Automatic rewind & capture" drives the deck, so it needs a camera. While capturing it stops capture and tape.
+    /// "Automatic rewind & capture" drives the deck, so it needs a camera. While capturing it stops capture and
+    /// tape, however the capture was started.
     var dvAutoCaptureEnabled: Bool { captureAllowed(isCapturing ? PIN_CAPTURE_STOP_TAPE : PIN_CAPTURE_START_AUTO) }
     var deckRewEnabled: Bool { deckAllowed(PIN_DECK_CMD_REW) }
     var deckPlayEnabled: Bool { deckAllowed(PIN_DECK_CMD_PLAY) }
@@ -196,26 +199,36 @@ final class WindowModel {
     /// buttons say so (the core's state text) instead of "Stop capture".
     var isFinishing: Bool { sessionState == PIN_STATE_STOPPING }
     var captureButtonText: String {
-        isFinishing ? sessionStateText : isCapturing ? "Stop capture" + stopCountdownSuffix : "Capture"
+        isFinishing ? sessionStateText : isCapturing ? "Stop capture" : "Capture"
     }
     var manualCaptureTitle: String {
-        isFinishing ? sessionStateText : isCapturing ? "Stop capture & continue tape" + stopCountdownSuffix : "Manual capture"
+        isFinishing ? sessionStateText : isCapturing ? "Stop capture" : "Manual capture"
     }
     var manualCaptureHelp: String {
-        if isCapturing { return "Stops the capture and leaves the tape as it is" }
+        if isCapturing { return "Stops capture without issuing a command to the deck" }
         if !playAndCaptureEnabled {
-            let why = Pin.manualCaptureBlockText(deckAvailable: deckAvailable, deck: deckState)
+            let why = Pin.manualCaptureBlockText(deckAvailable: deckAvailable, deck: deckState, signal: signalLocked)
             if !why.isEmpty { return why }
         }
-        return "Records whatever the camera or deck is already sending, without controlling it"
+        return "Captures whatever the camera or deck is sending, without issuing deck control commands. Always one pass: a new pass would need a deck rewind."
     }
+    /// The countdown line goes under the button the capture was started with only.
+    var manualCaptureCaption: String? { isCapturing && !captureWithDeck && !captureSubtitle.isEmpty ? captureSubtitle : nil }
     var primaryDvTitle: String {
-        isFinishing ? sessionStateText : isCapturing ? "Stop capture & stop tape" + stopCountdownSuffix : "Automatic rewind & capture"
+        isFinishing ? sessionStateText : isCapturing ? "Stop capture & stop tape" : "Automatic rewind & capture"
     }
     var primaryDvHelp: String {
-        isCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and captures it"
+        if !isCapturing { return "Rewind tape, play, start capture, and stop tape at end of capture" }
+        return "Stop capture and issue a stop tape playback command to the deck"
     }
-    var analogCaptureHint: String { isCapturing ? "Finishes the file safely" : "Records the analog input to the file" }
+    var primaryDvCaption: String? { isCapturing && captureWithDeck && !captureSubtitle.isEmpty ? captureSubtitle : nil }
+    /// Analog: the selected input while idle, the countdown (if any) while capturing.
+    var analogCaptureCaption: String? {
+        if isFinishing { return nil }
+        if isCapturing { return captureSubtitle.isEmpty ? nil : captureSubtitle }
+        return "Capture \(inputIndex == Int(PIN_INPUT_SVIDEO.rawValue) ? "S-Video" : "composite") input to file"
+    }
+    var analogCaptureHelp: String { isCapturing ? "Stops the capture" : "Records the analog input to the file" }
 
     /// Taskbar-style "Start capture" (analog Capture, DV/HDV Manual capture), same enable rule as that button.
     var dockStartEnabled: Bool { !isCapturing && (isDvInput ? playAndCaptureEnabled : captureEnabled) }
@@ -358,7 +371,10 @@ final class WindowModel {
     private(set) var noSignalCountdownVisible = false
     private(set) var noSignalCountdownText = ""
     private(set) var noSignalCountdownFraction = 0.0   // 1 = full timeout left, 0 = stopping
-    private(set) var stopCountdownSuffix = ""
+    /// The running capture was started with "Automatic rewind & capture" (the core drives the deck).
+    private(set) var captureWithDeck = false
+    /// Second line of the button the running capture was started with: "Stopping in 4m12s", or "".
+    private(set) var captureSubtitle = ""
     @ObservationIgnored private var activeIdleStopS = 0.0
     @ObservationIgnored private var activeDurationS = 0.0
 
@@ -513,7 +529,6 @@ final class WindowModel {
     @ObservationIgnored private var meterTimer: Timer?
     @ObservationIgnored private let watchStop = StopFlag()
     @ObservationIgnored private var deviceWatch: Thread?
-    @ObservationIgnored private var captureWithDeck = false
     /// When pin_capture_start was accepted (the core starts asynchronously: the state stays READY for a
     /// moment). Stops a quick second click from planning and starting another capture.
     @ObservationIgnored private var startRequestedAt: Double?
@@ -1018,6 +1033,23 @@ final class WindowModel {
         for o in tickObservers { o() }
     }
 
+    /// The line under the stop button the capture was started with (see `captureSubtitle`): the no-signal
+    /// countdown if it is running, else the time limit, else none; none while rewinding between passes.
+    private func captureSubtitleText(_ st: pin_status_snapshot_t) -> String {
+        guard st.state == PIN_STATE_CAPTURING else { return "" }
+        let t: String
+        if st.signal == 0, st.idle_stop_remaining_s >= 0 {
+            t = Pin.formatRemaining(st.idle_stop_remaining_s) + ", no signal"
+        } else if st.duration_remaining_s >= 0 {
+            t = Pin.formatRemaining(st.duration_remaining_s)
+        } else {
+            return ""
+        }
+        if !isDvInput || !captureWithDeck { return "Stopping in \(t)" }
+        if st.pass >= st.passes { return "Stopping capture and tape in \(t)" }
+        return "Next pass in \(t) (pass \(st.pass) of \(st.passes))"
+    }
+
     private func applyStatus(_ st: pin_status_snapshot_t) {
         set(\.sessionState, st.state)
         set(\.sessionStateText, Pin.formatState(st))
@@ -1088,10 +1120,8 @@ final class WindowModel {
             let left = Pin.formatRemaining(st.idle_stop_remaining_s)
             set(\.noSignalCountdownText, "Stopping capture in \(left)")
             set(\.noSignalCountdownFraction, activeIdleStopS > 0 ? Swift.min(Swift.max(st.idle_stop_remaining_s / activeIdleStopS, 0), 1) : 0)
-            set(\.stopCountdownSuffix, " (\(left))")
-        } else {
-            set(\.stopCountdownSuffix, "")
         }
+        set(\.captureSubtitle, captureSubtitleText(st))
         set(\.noSignalCountdownVisible, counting)
         set(\.progressVisible, st.state == PIN_STATE_PREPARING)
         set(\.progressIndeterminate, st.progress_percent < 0)

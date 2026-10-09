@@ -155,7 +155,7 @@ final class MenuController: NSObject, NSMenuDelegate, NSMenuItemValidation {
             captureMenu.addItem(own("Manual Capture", #selector(manualCapture(_:))))
             captureMenu.addItem(own("Automatic Rewind & Capture", #selector(automaticCapture(_:))))
             captureMenu.addItem(.separator())
-            captureMenu.addItem(own("Stop Capture & Continue Tape", #selector(stopContinueTape(_:))))
+            captureMenu.addItem(own("Stop Capture", #selector(stopContinueTape(_:))))
             captureMenu.addItem(own("Stop Capture & Stop Tape", #selector(stopStopTape(_:))))
         } else {
             captureMenu.addItem(own(m.isCapturing ? "Stop Capture" : "Capture", #selector(analogCapture(_:))))

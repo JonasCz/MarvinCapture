@@ -176,13 +176,14 @@ enum Pin {
                                      action: pin_capture_action_t) -> Bool {
         pin_capture_action_allowed(state, deckAvailable ? 1 : 0, action) != 0
     }
-    /// DV/HDV Manual capture start: READY, a camera and the deck playing (core rule).
-    static func manualCaptureAllowed(state: pin_state_t, deckAvailable: Bool, deck: pin_deck_state_t) -> Bool {
-        pin_manual_capture_allowed(state, deckAvailable ? 1 : 0, deck) != 0
+    /// DV/HDV Manual capture start: READY and video arriving (core rule).
+    static func manualCaptureAllowed(state: pin_state_t, deckAvailable: Bool, deck: pin_deck_state_t,
+                                     signal: Bool) -> Bool {
+        pin_manual_capture_allowed(state, deckAvailable ? 1 : 0, deck, signal ? 1 : 0) != 0
     }
-    /// Why the deck blocks Manual capture ("Start playback on the tape first"), "" when it does not.
-    static func manualCaptureBlockText(deckAvailable: Bool, deck: pin_deck_state_t) -> String {
-        String(cString: pin_manual_capture_block_text(deckAvailable ? 1 : 0, deck))
+    /// Why Manual capture is disabled ("No incoming video signal"), "" when it is not.
+    static func manualCaptureBlockText(deckAvailable: Bool, deck: pin_deck_state_t, signal: Bool) -> String {
+        String(cString: pin_manual_capture_block_text(deckAvailable ? 1 : 0, deck, signal ? 1 : 0))
     }
     static func stateIsCapturing(_ s: pin_state_t) -> Bool { pin_state_is_capturing(s) != 0 }
     static func stopReasonAbnormal(_ r: pin_stop_reason_t) -> Bool { pin_stop_reason_abnormal(r) != 0 }

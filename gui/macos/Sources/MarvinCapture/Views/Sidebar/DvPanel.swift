@@ -67,14 +67,14 @@ struct DvPanel: View {
             DeckRow(model: model)
             // Secondary: record whatever arrives, without deck control.
             CaptureButton(
-                title: model.manualCaptureTitle,
+                title: model.manualCaptureTitle, caption: model.manualCaptureCaption,
                 symbol: model.isCapturing ? "stop.circle.fill" : "arrow.down.circle",
-                destructive: model.isCapturing, help: model.manualCaptureHelp,
+                help: model.manualCaptureHelp,
                 action: { CaptureFlow.captureClicked(model) })
                 .disabled(!model.playAndCaptureEnabled)
-            // Primary, last: rewind, play, record. Turns into "Stop capture & stop tape" in place.
+            // Primary, last: rewind, play, record. Turns into "Stop capture & stop tape" (red) in place.
             CaptureButton(
-                title: model.primaryDvTitle,
+                title: model.primaryDvTitle, caption: model.primaryDvCaption,
                 symbol: model.isCapturing ? "stop.circle.fill" : "arrow.down.circle.fill",
                 prominent: true, destructive: model.isCapturing, help: model.primaryDvHelp,
                 action: { CaptureFlow.playAndCaptureClicked(model) })

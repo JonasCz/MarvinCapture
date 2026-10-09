@@ -394,7 +394,8 @@
                                             </Grid>
                                             <StackPanel Grid.Column="1" VerticalAlignment="Center">
                                                 <TextBlock Text="{x:Bind VM.CaptureButtonText, Mode=OneWay}" Style="{StaticResource BodyStrongTextBlockStyle}" />
-                                                <TextBlock Text="{x:Bind local:MainWindow.AnalogCaptureHint(VM.IsCapturing), Mode=OneWay}"
+                                                <TextBlock Text="{x:Bind VM.AnalogSubtitle, Mode=OneWay}"
+                                                           Visibility="{x:Bind local:MainWindow.HasText(VM.AnalogSubtitle), Mode=OneWay}"
                                                            Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.8" />
                                             </StackPanel>
                                         </Grid>
@@ -490,41 +491,83 @@
                                     </Grid>
 
                                     <!-- secondary: record whatever arrives, without deck control -->
-                                    <!-- A disabled button shows no tooltip, so it sits in a Grid that does (tip only while disabled). -->
-                                    <Grid Background="Transparent" ToolTipService.ToolTip="{x:Bind VM.ManualCaptureDisabledTip, Mode=OneWay}">
+                                    <!-- A disabled button shows no tooltip, so each sits in a Grid that does. The second line
+                                         (stop countdown) shows only on the button the running capture was started with. -->
+                                    <Grid Background="Transparent" ToolTipService.ToolTip="{x:Bind VM.ManualCaptureTip, Mode=OneWay}">
                                     <Button HorizontalAlignment="Stretch" HorizontalContentAlignment="Left" Padding="16,8"
                                             Click="Capture_Click"
                                             IsEnabled="{x:Bind VM.PlayAndCaptureEnabled, Mode=OneWay}"
                                             AutomationProperties.Name="{x:Bind VM.ManualCaptureTitle, Mode=OneWay}"
-                                            AutomationProperties.HelpText="{x:Bind VM.ManualCaptureHelp, Mode=OneWay}">
+                                            AutomationProperties.HelpText="{x:Bind VM.ManualCaptureTip, Mode=OneWay}">
                                         <Grid ColumnSpacing="14">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="44" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <FontIcon Glyph="{x:Bind VM.ManualCaptureGlyph, Mode=OneWay}" FontSize="16" HorizontalAlignment="Center" />
-                                            <TextBlock Grid.Column="1" Text="{x:Bind VM.ManualCaptureTitle, Mode=OneWay}" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock Text="{x:Bind VM.ManualCaptureTitle, Mode=OneWay}" />
+                                                <TextBlock Text="{x:Bind VM.ManualSubtitle, Mode=OneWay}"
+                                                           Visibility="{x:Bind local:MainWindow.HasText(VM.ManualSubtitle), Mode=OneWay}"
+                                                           Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.8" />
+                                            </StackPanel>
                                         </Grid>
                                     </Button>
                                     </Grid>
 
-                                    <!-- primary action (last): rewind, play, record. Same size as Manual capture,
-                                         accent coloured. Turns into "Stop capture & stop tape" in place. -->
+                                    <!-- primary action (last): rewind, play, record. Same size as Manual capture, accent
+                                         coloured. While an automatic capture runs it is the red "Stop capture & stop tape":
+                                         a second button (the accent template reverts custom colours on hover, so the red one
+                                         carries its own resources) swapped in by visibility. -->
+                                    <Grid Background="Transparent" ToolTipService.ToolTip="{x:Bind VM.DvAutoCaptureTip, Mode=OneWay}">
                                     <Button x:Name="PlayAndCaptureButton" Style="{StaticResource AccentButtonStyle}"
                                             HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
                                             Padding="16,8" Click="PlayAndCapture_Click"
+                                            Visibility="{x:Bind VM.DvAutoIdle, Mode=OneWay}"
                                             IsEnabled="{x:Bind VM.DvAutoCaptureEnabled, Mode=OneWay}"
                                             AutomationProperties.Name="{x:Bind VM.PrimaryDvTitle, Mode=OneWay}"
-                                            AutomationProperties.HelpText="{x:Bind VM.PrimaryDvHelp, Mode=OneWay}">
+                                            AutomationProperties.HelpText="{x:Bind VM.DvAutoCaptureTip, Mode=OneWay}">
                                         <Grid ColumnSpacing="14">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="44" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
                                             <FontIcon Glyph="{x:Bind VM.PrimaryDvGlyph, Mode=OneWay}" FontSize="16" HorizontalAlignment="Center" />
-                                            <TextBlock Grid.Column="1" Text="{x:Bind VM.PrimaryDvTitle, Mode=OneWay}" VerticalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock Text="{x:Bind VM.PrimaryDvTitle, Mode=OneWay}" />
+                                            </StackPanel>
                                         </Grid>
                                     </Button>
+                                    <Button x:Name="StopTapeButton" Style="{StaticResource AccentButtonStyle}"
+                                            HorizontalAlignment="Stretch" HorizontalContentAlignment="Left"
+                                            Padding="16,8" Click="PlayAndCapture_Click"
+                                            Visibility="{x:Bind VM.DvAutoStopRed, Mode=OneWay}"
+                                            IsEnabled="{x:Bind VM.DvAutoCaptureEnabled, Mode=OneWay}"
+                                            AutomationProperties.Name="{x:Bind VM.PrimaryDvTitle, Mode=OneWay}"
+                                            AutomationProperties.HelpText="{x:Bind VM.DvAutoCaptureTip, Mode=OneWay}">
+                                        <Button.Resources>
+                                            <SolidColorBrush x:Key="AccentButtonBackground" Color="#C42B1C" />
+                                            <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#B02515" />
+                                            <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#9C2013" />
+                                            <SolidColorBrush x:Key="AccentButtonForeground" Color="White" />
+                                            <SolidColorBrush x:Key="AccentButtonForegroundPointerOver" Color="White" />
+                                            <SolidColorBrush x:Key="AccentButtonForegroundPressed" Color="#E6FFFFFF" />
+                                        </Button.Resources>
+                                        <Grid ColumnSpacing="14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="44" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <FontIcon Glyph="{x:Bind VM.PrimaryDvGlyph, Mode=OneWay}" FontSize="16" HorizontalAlignment="Center" />
+                                            <StackPanel Grid.Column="1" VerticalAlignment="Center">
+                                                <TextBlock Text="{x:Bind VM.PrimaryDvTitle, Mode=OneWay}" />
+                                                <TextBlock Text="{x:Bind VM.AutoSubtitle, Mode=OneWay}"
+                                                           Visibility="{x:Bind local:MainWindow.HasText(VM.AutoSubtitle), Mode=OneWay}"
+                                                           Style="{StaticResource CaptionTextBlockStyle}" Opacity="0.8" />
+                                            </StackPanel>
+                                        </Grid>
+                                    </Button>
+                                    </Grid>
                                 </StackPanel>
                             </Border>
                         </StackPanel>

@@ -630,14 +630,15 @@ int pin_capture_action_allowed(pin_state_t state, int deck_available, pin_captur
     return pin_ui_capture_action_allowed(state, deck_available, action);
 }
 
-int pin_manual_capture_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck)
+int pin_manual_capture_allowed(pin_state_t state, int deck_available, pin_deck_state_t deck,
+                               int signal)
 {
-    return pin_ui_manual_capture_allowed(state, deck_available, deck);
+    return pin_ui_manual_capture_allowed(state, deck_available, deck, signal);
 }
 
-const char *pin_manual_capture_block_text(int deck_available, pin_deck_state_t deck)
+const char *pin_manual_capture_block_text(int deck_available, pin_deck_state_t deck, int signal)
 {
-    return pin_ui_manual_capture_block(deck_available, deck);
+    return pin_ui_manual_capture_block(deck_available, deck, signal);
 }
 
 int pin_state_is_capturing(pin_state_t state)

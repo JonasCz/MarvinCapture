@@ -154,13 +154,33 @@ notification (capture finished, stopped abnormally, no video received). The
 authorisation is requested at the first capture start from the window, not at
 launch. Notifications need the `.app` bundle; a bare binary has none.
 
+## Capture buttons
+
+DV/HDV has two buttons. **Manual capture** records what the camera or deck is sending
+without any deck command; it is enabled when the core is READY and a video signal is
+arriving (otherwise its tooltip says why). **Automatic rewind & capture** rewinds, plays,
+captures and stops the tape at the end; it needs a camera. While a capture runs:
+
+| Button | Title | Enabled | Does |
+|---|---|---|---|
+| Manual | Stop capture | while a stop is allowed, however the capture was started | stops without a deck command |
+| Auto | Stop capture & stop tape (red) | any capture, with a camera (a manual one too) | stops the capture and the tape |
+
+While the core finalises the file both show its state text and are disabled. Only the
+button the capture was started with has a second line: "Stopping in 4m12s" (manual),
+"Stopping capture and tape in 4m12s" (automatic, last pass) or "Next pass in 4m12s (pass 1 of 2)",
+each with ", no signal" while the no-signal timeout is the running countdown, else the time
+limit; none while rewinding between passes or with no limit. The analog button reads
+"Capture" with "Capture S-Video input to file" (or composite) and becomes "Stop capture"
+with the same countdown line.
+
 ## Menus
 
 The menu bar (`App/MainMenu.swift`) has MarvinCapture, File (New Window, Choose
 Output Folder, Close), Capture (rebuilt for the current input each time it opens),
 Deck, Input, View (mute, full screen), Window and Help (command-line help, project
 website). Enable rules are the model's, i.e. the core's, the same as for the
-buttons. About is in the MarvinCapture menu; New Window and Command-Line Help are in File and Help (there is no "…" button in the window).
+buttons. The DV/HDV Capture menu has Manual Capture, Automatic Rewind & Capture, then Stop Capture (no deck command) and Stop Capture & Stop Tape (any capture, with a camera). About is in the MarvinCapture menu; New Window and Command-Line Help are in File and Help (there is no "…" button in the window).
 
 There are only the standard macOS shortcuts (New Window, Close, Quit, Hide, Hide
 Others, Minimize, full screen, Help), on purpose: a stray key must never start or

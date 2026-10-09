@@ -82,8 +82,8 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     public int EffectivePasses => PassesAllowed ? (int)Math.Max(1, double.IsNaN(Passes) ? 1 : Passes) : 1;
 
     public string PassesToolTip => PassesAllowed
-        ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again."
-        : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass.";
+        ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass."
+        : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass.";
 
     /// <summary>Aspect override for this kind (PinAspect order: Auto, 4:3, 16:9).</summary>
     [ObservableProperty] private int _aspectIndex;

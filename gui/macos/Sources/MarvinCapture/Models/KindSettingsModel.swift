@@ -71,8 +71,8 @@ final class KindSettingsModel: Identifiable {
 
     var passesToolTip: String {
         passesAllowed
-            ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again."
-            : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass."
+            ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass."
+            : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass."
     }
 
     /// "dv" / "hdv": the settings key suffix.

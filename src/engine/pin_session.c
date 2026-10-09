@@ -3318,8 +3318,13 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_START, .capture = *o, .overwrite = overwrite };
     /* A real tape needs a no-signal or time limit to notice the end of a pass;
      * a replay's end of file is the end of the pass. */
-    if (!s->is_replay)
+    if (!s->is_replay) {
         pin_capture_opts_normalize(&c.capture);
+        /* A pass change rewinds the deck: without start_deck (manual capture) there is
+         * one pass, and the no-signal / time limit just ends the capture. */
+        if (!c.capture.start_deck)
+            c.capture.passes = 1;
+    }
     post_cmd(s, &c);
     return PIN_OK;
 }

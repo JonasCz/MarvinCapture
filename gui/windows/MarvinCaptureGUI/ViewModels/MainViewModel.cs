@@ -80,15 +80,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsIdle), nameof(CaptureButtonText), nameof(CaptureButtonGlyph),
                               nameof(PlayAndCaptureEnabled), nameof(CaptureEnabled),
-                              nameof(PrimaryDvTitle), nameof(PrimaryDvHelp), nameof(PrimaryDvGlyph), nameof(DeviceSelectEnabled),
-                              nameof(ManualCaptureTitle), nameof(ManualCaptureHelp), nameof(ManualCaptureGlyph), nameof(ManualCaptureDisabledTip),
+                              nameof(PrimaryDvTitle), nameof(PrimaryDvGlyph), nameof(DeviceSelectEnabled),
+                              nameof(ManualCaptureTitle), nameof(ManualCaptureGlyph), nameof(ManualCaptureTip), nameof(DvAutoCaptureTip), nameof(DvAutoStopRed), nameof(DvAutoIdle),
+                              nameof(AnalogSubtitle),
                               nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private bool _isCapturing;
 
     public bool IsIdle => !IsCapturing;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(ManualCaptureDisabledTip), nameof(CaptureEnabled), nameof(CanStop),
+    [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(ManualCaptureTip), nameof(CaptureEnabled), nameof(CanStop),
                               nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled))]
     private PinState _sessionState = PinState.Closed;
 
@@ -105,19 +106,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Idle: start a capture without touching the tape. Capturing: stop it and leave the tape alone (always available, however the capture was started).</summary>
     public bool PlayAndCaptureEnabled => IsCapturing
         ? CaptureAllowed(PinCaptureAction.Stop)
-        : Native.ManualCaptureAllowed(SessionState, DeckAvailable, DeckState);
+        : Native.ManualCaptureAllowed(SessionState, DeckAvailable, DeckState, SignalLocked);
 
-    /// <summary>Tooltip of the Manual capture button while it is disabled for want of a camera or playback; null otherwise.</summary>
-    public string? ManualCaptureDisabledTip
+    /// <summary>Tooltip of the Manual capture button (always set; a Grid around the button shows it while the button is disabled). Idle and disabled for want of signal: the core's reason.</summary>
+    public string ManualCaptureTip
     {
         get
         {
-            if (IsCapturing || PlayAndCaptureEnabled)
+            if (IsCapturing)
             {
-                return null; // null: no tooltip at all (an empty one would show an empty bubble)
+                return "Stops capture without issuing a command to the deck";
             }
-            string t = Native.ManualCaptureBlockText(DeckAvailable, DeckState);
-            return t.Length > 0 ? t : null;
+            if (!PlayAndCaptureEnabled)
+            {
+                string t = Native.ManualCaptureBlockText(DeckAvailable, DeckState, SignalLocked);
+                if (t.Length > 0)
+                {
+                    return t;
+                }
+            }
+            return "Captures whatever the camera or deck is sending, without issuing deck control commands. Always one pass: a new pass would need a deck rewind.";
         }
     }
 
@@ -127,16 +135,13 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>The capture has ended and its last file is being finished (an HDV remux can take minutes): the Stop buttons say so (the core's state text) instead of "Stop capture".</summary>
     private bool IsFinishing => SessionState == PinState.Stopping;
 
-    public string ManualCaptureTitle => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture & continue tape" + StopCountdownSuffix : "Manual capture";
-    public string ManualCaptureHelp => IsCapturing
-        ? "Stops the capture and leaves the tape as it is"
-        : "Records whatever the camera or deck is already sending, without controlling it";
+    public string ManualCaptureTitle => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture" : "Manual capture";
     public string ManualCaptureGlyph => IsCapturing ? "" : ""; // Stop / Download
 
     /// <summary>False only when the core knows for sure that no camera is on the FireWire bus.</summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled), nameof(DvAutoCaptureEnabled),
-                              nameof(PlayAndCaptureEnabled), nameof(ManualCaptureDisabledTip))]
+                              nameof(PlayAndCaptureEnabled), nameof(ManualCaptureTip))]
     private bool _deckAvailable = true;
 
     /// <summary>The core's rule for a deck button (pin_deck_cmd_allowed): idle and READY with a camera and a tape, and not already doing what the button asks.</summary>
@@ -147,24 +152,35 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool DeckStopEnabled => DeckCmdAllowed(PinDeckCmd.Stop);
     public bool DeckFfEnabled => DeckCmdAllowed(PinDeckCmd.Ff);
 
-    /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (started that way) it stops the capture and the tape.</summary>
+    /// <summary>"Automatic rewind &amp; capture" drives the deck, so it needs a camera. While capturing (however it was started) it stops the capture and the tape.</summary>
     public bool DvAutoCaptureEnabled => CaptureAllowed(IsCapturing ? PinCaptureAction.StopTape : PinCaptureAction.StartAuto);
 
-    public string PrimaryDvTitle => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture & stop tape" + StopCountdownSuffix : "Automatic rewind & capture";
-    public string PrimaryDvHelp => IsCapturing ? "Finishes the file, then stops the tape" : "Rewinds to the start of the tape, plays and captures it";
+    /// <summary>The Auto button is "Stop capture &amp; stop tape" (red) while a capture runs; idle it is the accent Start button.</summary>
+    public bool DvAutoStopRed => IsCapturing;
+    public bool DvAutoIdle => !DvAutoStopRed;
+
+    public string DvAutoCaptureTip => !IsCapturing
+        ? "Rewind tape, play, start capture, and stop tape at end of capture"
+        : "Stop capture and issue a stop tape playback command to the deck";
+
+    public string PrimaryDvTitle => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture & stop tape" : "Automatic rewind & capture";
     public string PrimaryDvGlyph => IsCapturing ? "\uE71A" : "\uE896"; // Stop / Download
 
-    public string CaptureButtonText => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture" + StopCountdownSuffix : "Capture";
+    public string CaptureButtonText => IsFinishing ? SessionStateText : IsCapturing ? "Stop capture" : "Capture";
 
     partial void OnIsCapturingChanged(bool value)
     {
         // The open device's badge reads "Capturing" while this window records.
         RefreshDevices();
     }
+    /// <summary>Analog button's second line: what Capture records, or while capturing the stop countdown (none otherwise).</summary>
+    public string AnalogSubtitle => IsFinishing ? "" : IsCapturing ? _analogStopLine
+        : $"Capture {(SelectedInput == PinInput.SVideo ? "S-Video" : "composite")} input to file";
+
     public string CaptureButtonGlyph => IsCapturing ? "" : ""; // Stop / Download
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ManualCaptureTitle), nameof(PrimaryDvTitle), nameof(CaptureButtonText))]
+    [NotifyPropertyChangedFor(nameof(ManualCaptureTitle), nameof(PrimaryDvTitle), nameof(CaptureButtonText), nameof(AnalogSubtitle))]
     private string _sessionStateText = "No device open";
 
     // ================================================================== input
@@ -172,7 +188,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public PinSessionHandle? Session { get; private set; }
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ActivePanelIndex), nameof(IsDvInput))]
+    [NotifyPropertyChangedFor(nameof(ActivePanelIndex), nameof(IsDvInput), nameof(AnalogSubtitle))]
     private int _inputIndex; // PinInput order: DV, S-Video, Composite
 
     public PinInput SelectedInput => (PinInput)InputIndex;
@@ -308,7 +324,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(DeckRewEnabled), nameof(DeckPlayEnabled), nameof(DeckStopEnabled), nameof(DeckFfEnabled),
-                              nameof(PlayAndCaptureEnabled), nameof(ManualCaptureDisabledTip))]
+                              nameof(PlayAndCaptureEnabled), nameof(ManualCaptureTip))]
     private PinDeckState _deckState = PinDeckState.Unknown;
     [ObservableProperty] private bool _isRewChecked;
     [ObservableProperty] private bool _isPlayChecked;
@@ -335,14 +351,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// No-signal timeout running during a capture: shown under "No camera or deck signal" as text and a
-    /// bar that shrinks to 0, and appended to the stop button's text. The seconds come from the core.
+    /// bar that shrinks to 0 (the stop buttons' second line has its own text). The seconds come from the core.
     /// </summary>
     [ObservableProperty] private bool _noSignalCountdownVisible;
     [ObservableProperty] private string _noSignalCountdownText = "";
     [ObservableProperty] private double _noSignalCountdownFraction;   // 1 = full timeout left, 0 = stopping
-    [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(CaptureButtonText), nameof(ManualCaptureTitle), nameof(PrimaryDvTitle))]
-    private string _stopCountdownSuffix = "";
+    private string _analogStopLine = "";
     private double _activeIdleStopS;   // the timeout of the running capture, for the bar
     private double _activeDurationS;   // its per-pass time limit, for the taskbar
 
@@ -431,7 +445,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _deckStateText = "Deck: —";
     /// <summary>Tooltip / automation name of the deck status, from the core ("Deck: Playing — waiting for the deck to respond" while busy).</summary>
     [ObservableProperty] private string _deckTip = "Deck: —";
-    [ObservableProperty] private bool _signalLocked;
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(PlayAndCaptureEnabled), nameof(ManualCaptureTip))]
+    private bool _signalLocked;
     [ObservableProperty] private string _signalLockText = "No signal";
     [ObservableProperty] private string _signalTypeText = "";
     // Frame counters, all from the core: total = since capture start (since app start while idle), clip = current file.
@@ -818,6 +834,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             }
             OnPropertyChanged(nameof(PlayAndCaptureEnabled));
             OnPropertyChanged(nameof(DvAutoCaptureEnabled));
+            OnPropertyChanged(nameof(DvAutoCaptureTip));
+            OnPropertyChanged(nameof(DvAutoStopRed));
+            OnPropertyChanged(nameof(DvAutoIdle));
         }
         Report(st, "Start capture");
         return st;
@@ -998,12 +1017,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             var left = Native.FormatRemaining(st.IdleStopRemainingS);
             NoSignalCountdownText = $"Stopping capture in {left}";
             NoSignalCountdownFraction = _activeIdleStopS > 0 ? Math.Clamp(st.IdleStopRemainingS / _activeIdleStopS, 0, 1) : 0;
-            StopCountdownSuffix = $" ({left})";
         }
-        else
-        {
-            StopCountdownSuffix = "";
-        }
+        UpdateStopSubtitles(in st);
         NoSignalCountdownVisible = counting;
         ProgressVisible = st.State == PinState.Preparing;
         ProgressIndeterminate = st.ProgressPercent < 0;
@@ -1016,6 +1031,57 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
         WindowTitle = Native.FormatWindowTitle(in st, SelectedDevice?.DisplayName ?? DefaultDeviceName);
     }
+
+    /// <summary>
+    /// Second line of the stop buttons: only on the button the running capture was started with.
+    /// The time is the no-signal countdown (", no signal") while no signal arrives and that timeout
+    /// counts, else the capture time limit; no line when neither runs or while rewinding between passes.
+    /// </summary>
+    private void UpdateStopSubtitles(in PinStatusSnapshot st)
+    {
+        string manual = "", auto = "", analog = "";
+        if (st.State == PinState.Capturing)
+        {
+            string? t = null;
+            if (st.Signal == 0 && st.IdleStopRemainingS >= 0)
+            {
+                t = Native.FormatRemaining(st.IdleStopRemainingS) + ", no signal";
+            }
+            else if (st.DurationRemainingS >= 0)
+            {
+                t = Native.FormatRemaining(st.DurationRemainingS);
+            }
+            if (t is not null)
+            {
+                if (!IsDvInput)
+                {
+                    analog = $"Stopping in {t}";
+                }
+                else if (!_captureWithDeck)
+                {
+                    manual = $"Stopping in {t}";
+                }
+                else if (st.Pass < st.Passes)
+                {
+                    auto = $"Next pass in {t} (pass {st.Pass} of {st.Passes})";
+                }
+                else
+                {
+                    auto = $"Stopping capture and tape in {t}";
+                }
+            }
+        }
+        ManualSubtitle = manual;
+        AutoSubtitle = auto;
+        if (_analogStopLine != analog)
+        {
+            _analogStopLine = analog;
+            OnPropertyChanged(nameof(AnalogSubtitle));
+        }
+    }
+
+    [ObservableProperty] private string _manualSubtitle = "";
+    [ObservableProperty] private string _autoSubtitle = "";
 
     private static string FormatDb(float db) => db <= -143 ? "silent" : $"{db:0.0} dBFS";
 

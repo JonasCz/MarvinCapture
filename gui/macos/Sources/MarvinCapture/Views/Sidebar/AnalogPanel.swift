@@ -96,9 +96,9 @@ struct AnalogPanel: View {
 
             // The primary action, last: Capture, which turns into Stop capture in place.
             CaptureButton(
-                title: model.captureButtonText, caption: model.analogCaptureHint,
+                title: model.captureButtonText, caption: model.analogCaptureCaption,
                 symbol: model.isCapturing ? "stop.circle.fill" : "arrow.down.circle.fill",
-                prominent: true, destructive: model.isCapturing, help: model.analogCaptureHint,
+                prominent: true, destructive: model.isCapturing, help: model.analogCaptureHelp,
                 action: { CaptureFlow.captureClicked(model) })
                 .disabled(!model.captureEnabled)
         }
