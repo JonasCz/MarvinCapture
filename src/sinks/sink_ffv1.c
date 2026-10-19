@@ -18,7 +18,7 @@
 
 /*
  * PIN_FMT_ANALOG_FFV1_MKV: analog capture losslessly to FFV1 level 3 (slice
- * threaded, slice CRC) + FLAC (compression level 12), muxed as Matroska, via
+ * threaded, slice CRC) + FLAC (compression level 8), muxed as Matroska, via
  * libavformat / libavcodec.
  *
  * The pin_writer consumer thread (see pin_writer.h) calls write_video()
@@ -75,7 +75,7 @@
 
 #define QUEUE_DEPTH 8
 #define FFV1_SLICES 16
-#define FLAC_LEVEL 12            /* highest; max LPC order 32 (non-subset) */
+#define FLAC_LEVEL 8             /* highest within the FLAC subset (LPC order <= 12) */
 #define AUDIO_RING_SECONDS 4
 
 typedef struct {

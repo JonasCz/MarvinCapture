@@ -350,7 +350,7 @@ static void gen_signal(int16_t *pcm, size_t frames)
 }
 
 /* Deliberately awkward write_audio() sizes: 1 frame, primes, one FLAC block
- * (4608 at level 12) +/- 1, several blocks, and (below) once more than the
+ * (4608 at level 8) +/- 1, several blocks, and (below) once more than the
  * whole 4 s ring. */
 static const size_t chunk_sizes[] = { 1, 7, 333, 1920, 4999, 2, 5000, 641, 4608, 4609,
                                       9300, 128, 1023, 17, 4607, 3 };

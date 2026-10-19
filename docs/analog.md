@@ -505,11 +505,11 @@ e.g. `ffmpeg -i in.avi -vf setfield=tff,bwdif ...` or
 
 FFV1 + FLAC in Matroska (`src/sinks/sink_ffv1.c`): FFV1 level 3 (16
 slices, slice CRCs, every frame a keyframe, field order TFF recorded) and
-FLAC at compression level 12, both lossless. Each codec runs on its own
+FLAC at compression level 8, both lossless. Each codec runs on its own
 thread, fed through a bounded queue from the writer thread, so the FLAC
-encoder never holds up the video. Level 12 uses LPC orders up to 32, which
-is outside the FLAC "subset" for 48 kHz; FFmpeg and libFLAC decode it, a
-few hardware players may not. The final STREAMINFO (total samples, MD5 of
+encoder never holds up the video. Level 8 is the highest that stays within
+the FLAC "subset" (levels above it use LPC orders up to 32, which some
+hardware players reject). The final STREAMINFO (total samples, MD5 of
 the audio) is written into the file when the capture ends.
 
 ## Not done yet
