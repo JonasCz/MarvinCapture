@@ -3,7 +3,7 @@
 Status as of **2026-09-28**: PAL (composite and S-video) and NTSC
 (composite) capture work, from a cold device or switched over from DV
 without a replug. Output is an AVI with uncompressed YUY2 video and 48 kHz
-stereo PCM, or FFV1 in MKV from the GUI. NTSC S-video and the other colour
+stereo PCM, or FFV1 + FLAC in MKV from the GUI. NTSC S-video and the other colour
 standards are implemented from the vendor driver's tables but have not been
 tested against a real source yet.
 
@@ -502,6 +502,15 @@ the 4:3 frame aspect (ffprobe shows SAR 16:15). AVI cannot record field
 order: the video is interlaced, **top field first**, so tell the encoder,
 e.g. `ffmpeg -i in.avi -vf setfield=tff,bwdif ...` or
 `-field_order tt` for an interlaced encode.
+
+FFV1 + FLAC in Matroska (`src/sinks/sink_ffv1.c`): FFV1 level 3 (16
+slices, slice CRCs, every frame a keyframe, field order TFF recorded) and
+FLAC at compression level 12, both lossless. Each codec runs on its own
+thread, fed through a bounded queue from the writer thread, so the FLAC
+encoder never holds up the video. Level 12 uses LPC orders up to 32, which
+is outside the FLAC "subset" for 48 kHz; FFmpeg and libFLAC decode it, a
+few hardware players may not. The final STREAMINFO (total samples, MD5 of
+the audio) is written into the file when the capture ends.
 
 ## Not done yet
 

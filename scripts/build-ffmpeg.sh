@@ -145,11 +145,11 @@ mkdir -p "${BUILD_DIR}"
 cd "${WORK_BUILD_DIR}"
 
 # Components actually used by marvin-core:
-#   encode:  FFV1 (analog capture) + PCM s16le
-#   decode:  FFV1, DV (dvvideo), MPEG-2 video (HDV), PCM s16le/s16be, MP2 (HDV audio)
-#   mux:     Matroska (FFV1+PCM sink), MOV, AVI, DV, MPEG-TS, NUT (analog to stdout)
+#   encode:  FFV1 + FLAC (analog capture), PCM s16le
+#   decode:  FFV1, FLAC, DV (dvvideo), MPEG-2 video (HDV), PCM s16le/s16be, MP2 (HDV audio)
+#   mux:     Matroska (FFV1+FLAC sink), MOV, AVI, DV, MPEG-TS, NUT (analog to stdout)
 #   demux:   DV, MPEG-TS, Matroska, MOV, AVI, NUT (rewrap sources / smoke test readback)
-#   parse:   mpegvideo (MPEG-2), mpegaudio (MP2)
+#   parse:   mpegvideo (MPEG-2), mpegaudio (MP2), flac (FLAC-in-Matroska readback)
 #   proto:   file
 CONFIGURE_ARGS=(
     --prefix="${WORK_PREFIX_DIR}"
@@ -181,9 +181,11 @@ CONFIGURE_ARGS=(
     "${THREAD_FLAG}"
 
     --enable-encoder=ffv1
+    --enable-encoder=flac
     --enable-encoder=pcm_s16le
 
     --enable-decoder=ffv1
+    --enable-decoder=flac
     --enable-decoder=dvvideo
     --enable-decoder=mpeg2video
     --enable-decoder=pcm_s16le
@@ -207,6 +209,7 @@ CONFIGURE_ARGS=(
 
     --enable-parser=mpegvideo
     --enable-parser=mpegaudio
+    --enable-parser=flac
 
     --enable-protocol=file
 

@@ -940,7 +940,7 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
         .label = "Uncompressed AVI (YUY2)", .extension = "avi",
         .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 1 },
     [PIN_FMT_ANALOG_FFV1_MKV] = { .format = PIN_FMT_ANALOG_FFV1_MKV, .kind = PIN_KIND_ANALOG,
-        .label = "FFV1 lossless (MKV)", .extension = "mkv",
+        .label = "FFV1 + FLAC lossless (MKV)", .extension = "mkv",
         .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
     [PIN_FMT_DV_RAW] = { .format = PIN_FMT_DV_RAW, .kind = PIN_KIND_DV,
         .label = "Raw DV stream", .extension = "dv",

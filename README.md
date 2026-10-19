@@ -27,7 +27,7 @@ Modern, native GUIs for Windows and Mac, plus a flexible command-line applicatio
 * Support for multiple instances at a time, each instance can connect to a different device.
 * DV capture, (dv/avi/mov)
 * HDV capture, including devices which Pinnacle didn't market as supporting it. (ts/m2t/mov/mkv)
-* Composite / S-video capture, to uncompressed AVI or FFV1 in MKV. YUY2 video (4:2:2, 8-bit) and 48 kHz stereo PCM, 16-bit.
+* Composite / S-video capture, to uncompressed AVI or FFV1 + FLAC in MKV. YUY2 video (4:2:2, 8-bit) and 48 kHz stereo PCM, 16-bit.
 * Scene-splitting by timecode (DV/HDV)
 * Auto-stop (timeout) on no input signal signal (DV/HDV/analog)
 * Auto-stop after total time captured (DV/HDV/analog)

@@ -14,12 +14,12 @@ the GUI, not in the core).
   compiled in, so the resulting static libraries can be linked into the
   AGPL-3.0 `marvin-core` without a license conflict.
 - **Components enabled** (everything else is `--disable-everything`):
-  - Encoders: `ffv1`, `pcm_s16le`
-  - Decoders: `ffv1`, `dvvideo`, `mpeg2video`, `pcm_s16le`, `pcm_s16be`,
+  - Encoders: `ffv1`, `flac`, `pcm_s16le`
+  - Decoders: `ffv1`, `flac`, `dvvideo`, `mpeg2video`, `pcm_s16le`, `pcm_s16be`,
     `mp2`, `mp2float`
   - Muxers: `matroska`, `mov`, `avi`, `dv`, `mpegts`
   - Demuxers: `dv`, `mpegts`, `matroska`, `mov`, `avi`
-  - Parsers: `mpegvideo`, `mpegaudio`
+  - Parsers: `mpegvideo`, `mpegaudio`, `flac`
   - Protocol: `file`
   - No network, no autodetected external libraries, no programs/doc/bsfs.
 - **Threading:** w32threads on Windows (avoids a winpthread DLL dependency

@@ -285,7 +285,7 @@ PIN_API pin_status_t pin_deck(pin_session_t *s, pin_deck_cmd_t cmd);
 
 typedef enum {
     PIN_FMT_ANALOG_AVI = 0,     /* uncompressed YUY2 + PCM, OpenDML */
-    PIN_FMT_ANALOG_FFV1_MKV,    /* FFV1 level 3 + PCM in Matroska */
+    PIN_FMT_ANALOG_FFV1_MKV,    /* FFV1 level 3 + FLAC in Matroska */
     PIN_FMT_DV_RAW,             /* .dv */
     PIN_FMT_DV_AVI,             /* DV type-2 AVI */
     PIN_FMT_DV_MOV,             /* DV in QuickTime */
