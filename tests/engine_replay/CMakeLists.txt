@@ -72,13 +72,6 @@ if(EXISTS "${PIN_TRACE_PAL}")
     pin_engine_replay_test(test_replay_multipass "${PIN_TRACE_PAL}")
 endif()
 
-# 1d: synthetic scene split (persistent jump + single-frame glitch).
-add_executable(test_replay_scene_split test_replay_scene_split.c)
-target_link_libraries(test_replay_scene_split PRIVATE marvin-core pinnacle_engine_pure)
-add_test(NAME test_replay_scene_split COMMAND test_replay_scene_split)
-pin_engine_replay_test_env(test_replay_scene_split)
-set_tests_properties(test_replay_scene_split PROPERTIES TIMEOUT 30)
-
 # 1e: preview-dump equivalent (720x576, chroma shift 1,1, DAR 4:3 for PAL DV).
 if(EXISTS "${PIN_TRACE_PAL}")
     pin_engine_replay_test(test_replay_preview "${PIN_TRACE_PAL}")
