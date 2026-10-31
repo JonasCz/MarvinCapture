@@ -39,7 +39,9 @@ No device is needed to build or to run the tests.
 
 ### macOS
 
-Apple Silicon (arm64) only for now; `scripts/build.sh` stops on an Intel Mac.
+Apple Silicon (arm64) or Intel (x86_64); the build is native (no cross-compiling), so it
+produces `macos-arm64` on an Apple Silicon Mac and `macos-x86_64` on an Intel Mac.
+Intel builds come from CI and have not been tried against the device.
 
 - The **Xcode Command Line Tools** (`xcode-select --install`): clang, make, and
   the Swift 6.x toolchain and `iconutil` for the GUI. Xcode itself is not needed.

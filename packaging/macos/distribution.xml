@@ -3,7 +3,7 @@
     <title>MarvinCapture @VERSION@</title>
     <organization>jonascz</organization>
     <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
-    <options customize="allow" require-scripts="false" hostArchitectures="arm64"/>
+    <options customize="allow" require-scripts="false" hostArchitectures="@HOST_ARCH@"/>
     <allowed-os-versions>
         <os-version min="15.0"/>
     </allowed-os-versions>

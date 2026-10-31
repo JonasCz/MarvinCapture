@@ -7,7 +7,7 @@ settings all come from the core through `src/api/pin_api.h`. The app holds
 widgets, the Metal preview, the audio monitor, the file dialogs, the menus, the
 Dock integration and the window lifecycle.
 
-- macOS 15 or later, Apple Silicon (arm64) only
+- macOS 15 or later, Apple Silicon (arm64) or Intel (x86_64; built by CI, not tested on hardware)
 - Swift 6.x (Swift 5 language mode), SwiftPM, AppKit for the app shell and
   SwiftUI inside the window
 - Metal for the preview, AVAudioEngine for the audio monitor
@@ -20,7 +20,7 @@ bash scripts/build.sh
 ```
 
 builds the core, runs the tests, builds the GUI with SwiftPM (intermediates in
-`build/macos-arm64/gui`) and assembles `build/macos-arm64/dist/MarvinCapture.app`
+`build/macos-<arch>/gui`) and assembles `build/macos-<arch>/dist/MarvinCapture.app`
 (bundle id `jonascz.MarvinCapture`, ad-hoc signed). `--skip-gui` leaves the app
 out. The bundle holds the app binary, `libmarvin-core.dylib` and
 `libusb-1.0.0.dylib` in `Contents/Frameworks`, `firmware/` in

@@ -16,9 +16,10 @@
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 # scripts/package-macos.sh
 #
-# Builds an unsigned macOS installer, build/macos-arm64/installer/
-# MarvinCapture-<version>-macos-arm64.pkg, from build/macos-arm64/dist
-# (version from the top-level VERSION file). Apple Silicon, macOS 15+.
+# Builds an unsigned macOS installer, build/macos-<arch>/installer/
+# MarvinCapture-<version>-macos-<arch>.pkg, from build/macos-<arch>/dist
+# (version from the top-level VERSION file). <arch> is the Mac's own: arm64
+# (Apple Silicon) or x86_64 (Intel); macOS 15+.
 #
 # The .pkg has two choices, both on by default:
 #
@@ -31,12 +32,12 @@
 # The package is neither signed nor notarised, so Gatekeeper blocks it when it
 # was downloaded (see README). Static inputs are in packaging/macos/. Uses
 # pkgbuild and productbuild (Command Line Tools). Staging is in
-# build/macos-arm64/installer/stage.
+# build/macos-<arch>/installer/stage.
 #
 # Usage:
 #   scripts/package-macos.sh [--skip-build] [--config Release|Debug]
 #
-#   --skip-build            use the existing build/macos-arm64/dist instead of
+#   --skip-build            use the existing build/macos-<arch>/dist instead of
 #                           running scripts/build.sh first
 #   --config Release|Debug  passed to scripts/build.sh (default Release)
 
@@ -64,12 +65,16 @@ step() { printf '\n\033[36m== %s\033[0m\n' "$*"; }
 die()  { echo "package-macos.sh: $*" >&2; exit 1; }
 
 [[ "$(uname -s)" == Darwin ]] || die "macOS only"
-[[ "$(uname -m)" == arm64 ]] || die "macOS builds are arm64 (Apple Silicon) only for now"
+case "$(uname -m)" in
+    arm64)  ARCH="arm64" ;;
+    x86_64) ARCH="x86_64" ;;
+    *) die "unsupported architecture '$(uname -m)'" ;;
+esac
 for tool in pkgbuild productbuild codesign ditto; do
     command -v "${tool}" >/dev/null 2>&1 || die "'${tool}' not found (needs the Command Line Tools)"
 done
 
-PLATFORM="macos-arm64"
+PLATFORM="macos-${ARCH}"
 BUILD="${ROOT}/build/${PLATFORM}"
 DIST="${BUILD}/dist"
 OUT="${BUILD}/installer"
@@ -136,7 +141,7 @@ pkgbuild --root "${STAGE}/cli" \
 step "productbuild"
 cp "${RES}/resources/"*.html "${OUT}/resources/"
 cp "${ROOT}/LICENSE" "${OUT}/resources/license.txt"
-sed "s/@VERSION@/${VERSION}/g" "${RES}/distribution.xml" > "${OUT}/distribution.xml"
+sed -e "s/@VERSION@/${VERSION}/g" -e "s/@HOST_ARCH@/${ARCH}/g" "${RES}/distribution.xml" > "${OUT}/distribution.xml"
 PKG="${OUT}/MarvinCapture-${VERSION}-${PLATFORM}.pkg"
 productbuild --distribution "${OUT}/distribution.xml" --resources "${OUT}/resources" \
     --package-path "${OUT}/pkgs" "${PKG}"

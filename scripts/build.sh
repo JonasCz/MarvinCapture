@@ -18,7 +18,7 @@
 # scripts/build.sh
 #
 # Builds everything and assembles a runnable output in build/<os>-<arch>/dist,
-# on macOS (Apple Silicon only, for now) and Linux. The Windows counterpart is
+# on macOS (Apple Silicon or Intel) and Linux. The Windows counterpart is
 # scripts/build.ps1; both use the same layout.
 #
 #   1. (first time only) builds the minimal static FFmpeg into third_party/.
@@ -36,7 +36,7 @@
 #                                   (Contents/Frameworks, Contents/Resources/firmware)
 #
 #   4. macOS only: builds the Swift GUI with SwiftPM (intermediates in
-#      build/macos-arm64/gui) and assembles dist/MarvinCapture.app. Needs only the
+#      build/macos-<arch>/gui) and assembles dist/MarvinCapture.app. Needs only the
 #      Command Line Tools (no Xcode): the app icon is the committed
 #      gui/macos/Resources/AppIcon.iconset packed with iconutil. There is no Linux GUI yet.
 #
@@ -101,10 +101,6 @@ case "${ARCH}" in
     x86_64|amd64)  ARCH="x86_64" ;;
     aarch64|arm64) ARCH="arm64" ;;
 esac
-if [[ "${OS}" == macos && "${ARCH}" != arm64 ]]; then
-    # Only Apple Silicon is built and tested on macOS for now.
-    die "macOS builds are arm64 (Apple Silicon) only for now; this Mac is ${ARCH}"
-fi
 
 PLATFORM="${OS}-${ARCH}"
 BUILD="${ROOT}/build/${PLATFORM}"
