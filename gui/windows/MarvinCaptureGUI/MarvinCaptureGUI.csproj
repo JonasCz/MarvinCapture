@@ -15,22 +15,25 @@
          not NativeAOT, and all bindings are compiled {x:Bind}. -->
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
 
-    <!-- Unpackaged, self-contained, x64 only, no MSIX. -->
+    <!-- Unpackaged, self-contained, no MSIX. x64 (default) or ARM64 (-p:Platform=ARM64). -->
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <SelfContained>true</SelfContained>
-    <Platforms>x64</Platforms>
-    <PlatformTarget>x64</PlatformTarget>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
-    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <Platforms>x64;ARM64</Platforms>
+    <PlatformTarget Condition="'$(Platform)' == 'ARM64'">ARM64</PlatformTarget>
+    <PlatformTarget Condition="'$(Platform)' != 'ARM64'">x64</PlatformTarget>
+    <RuntimeIdentifier Condition="'$(Platform)' == 'ARM64'">win-arm64</RuntimeIdentifier>
+    <RuntimeIdentifier Condition="'$(Platform)' != 'ARM64'">win-x64</RuntimeIdentifier>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
 
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\AppIcon.ico</ApplicationIcon>
 
     <!-- Where marvin-core.dll (built by the top-level CMake build) lives.
          Override with: dotnet build -p:PinnacleCoreDir=C:\path\to\dir -->
-    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\build\windows-x86_64\core</PinnacleCoreDir>
+    <PinnacleCoreDir Condition="'$(PinnacleCoreDir)' == ''">..\..\..\build\$(PinnacleGuiPlatformDir)\core</PinnacleCoreDir>
     <!-- The MinGW-built core needs libwinpthread-1.dll at runtime; copied from here if present. -->
+    <PinnacleRuntimeDllDir Condition="'$(PinnacleRuntimeDllDir)' == '' And '$(Platform)' == 'ARM64'">C:\msys64\clangarm64\bin</PinnacleRuntimeDllDir>
     <PinnacleRuntimeDllDir Condition="'$(PinnacleRuntimeDllDir)' == ''">C:\msys64\ucrt64\bin</PinnacleRuntimeDllDir>
 
     <EnableMsixTooling>false</EnableMsixTooling>

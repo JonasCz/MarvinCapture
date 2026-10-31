@@ -1,11 +1,12 @@
 <#
 .SYNOPSIS
-  Builds the Windows installer: build\windows-x86_64\installer\MarvinCapture-<version>-windows-x86_64-setup.exe
+  Builds the Windows installer: build\windows-<arch>\installer\MarvinCapture-<version>-windows-<arch>-setup.exe
+  (<arch> = x86_64 or arm64).
 
 .DESCRIPTION
-  1. Runs scripts\build.ps1 (skip with -SkipBuild to reuse build\windows-x86_64\dist).
+  1. Runs scripts\build.ps1 (skip with -SkipBuild to reuse build\windows-<arch>\dist).
   2. Builds libwdi's wdi-simple.exe (the command-line WinUSB driver installer behind Zadig)
-     with MSYS2, once, into build\windows-x86_64\libwdi\. Pinned and verified:
+     with MSYS2, once, into build\windows-x86_64\libwdi\ (x64 only, see -Arch). Pinned and verified:
 
        libwdi v1.5.1 source tarball   downloaded from GitHub, SHA256 checked
        WDK 8.0 redistributable MSI    downloaded from download.microsoft.com, SHA256 checked
@@ -33,11 +34,15 @@
   Needs network access the first time (the two downloads are cached in the libwdi work dir).
 
 .PARAMETER Config       Release (default) or Debug; passed to build.ps1.
-.PARAMETER SkipBuild    Don't run build.ps1; package the existing build\windows-x86_64\dist.
+.PARAMETER SkipBuild    Don't run build.ps1; package the existing build\windows-<arch>\dist.
 .PARAMETER SkipTests    Passed to build.ps1.
 .PARAMETER RebuildWdi   Rebuild wdi-simple.exe even if a cached one exists.
 .PARAMETER Msys2        MSYS2 root (default C:\msys64).
 .PARAMETER Makensis     Path of makensis.exe (default: search PATH, NSIS and MSYS2 locations).
+.PARAMETER Arch         x64 or arm64 (default: this machine's); passed to build.ps1. The arm64
+                        installer has no driver section: libwdi's MinGW/autotools build has no
+                        ARM64 target (only its MSVC solution has), so on Windows on Arm the
+                        WinUSB driver is installed with Zadig (docs\windows-driver.md).
 #>
 [CmdletBinding()]
 param(
@@ -46,12 +51,15 @@ param(
     [switch]$SkipTests,
     [switch]$RebuildWdi,
     [string]$Msys2 = 'C:\msys64',
-    [string]$Makensis
+    [string]$Makensis,
+    [ValidateSet('x64', 'arm64')] [string]$Arch = $(if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' })
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-$build = Join-Path $root 'build\windows-x86_64'
+$platform = if ($Arch -eq 'arm64') { 'windows-arm64' } else { 'windows-x86_64' }
+$withDriver = $Arch -eq 'x64'
+$build = Join-Path $root "build\$platform"
 $dist = Join-Path $build 'dist'
 $outDir = Join-Path $build 'installer'
 $wdiOut = Join-Path $build 'libwdi'
@@ -95,7 +103,7 @@ $version = [string](Get-Content (Join-Path $root 'VERSION') -Raw | ConvertFrom-J
 if ($version -notmatch '^\d+(\.\d+){0,3}$') { throw "VERSION's ""version"" must look like 1.2 or 1.2.3 (got '$version')" }
 # four-part for the file version resource
 $versionNum = (@($version.Split('.')) + @('0', '0', '0'))[0..3] -join '.'
-$exeName = "MarvinCapture-$version-windows-x86_64-setup.exe"
+$exeName = "MarvinCapture-$version-$platform-setup.exe"
 Write-Host "MarvinCapture $version"
 
 # --- makensis --------------------------------------------------------------------
@@ -109,6 +117,8 @@ if ($Makensis) {
     $cands += (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe')
     $cands += (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')
     $cands += (Join-Path $Msys2 'ucrt64\bin\makensis.exe')
+    $cands += (Join-Path $Msys2 'clangarm64\bin\makensis.exe')
+    $cands += (Join-Path $Msys2 'mingw32\bin\makensis.exe')
     $nsis = $cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 if (-not $nsis -or -not (Test-Path $nsis)) {
@@ -127,7 +137,7 @@ if ($nsisVer -match 'v(\d+)\.' -and [int]$Matches[1] -lt 3) { throw "NSIS 3.x is
 # --- 1. application build ----------------------------------------------------------
 if (-not $SkipBuild) {
     Step 'Building the application (scripts\build.ps1)'
-    $a = @{ Config = $Config; Msys2 = $Msys2 }
+    $a = @{ Config = $Config; Msys2 = $Msys2; Arch = $Arch }
     if ($SkipTests) { $a.SkipTests = $true }
     & (Join-Path $PSScriptRoot 'build.ps1') @a
     if (-not $?) { throw 'build.ps1 failed' }
@@ -142,7 +152,7 @@ $wdiExe = Join-Path $wdiOut 'wdi-simple.exe'
 $wdiStamp = Join-Path $wdiOut 'build.stamp'
 $stampText = "libwdi $wdiVersion $wdiSha wdk $wdkSha"
 $wdiFresh = (Test-Path $wdiExe) -and (Test-Path $wdiStamp) -and ((Get-Content $wdiStamp -Raw).Trim() -eq $stampText)
-if ($RebuildWdi -or -not $wdiFresh) {
+if ($withDriver -and ($RebuildWdi -or -not $wdiFresh)) {
     Step "Building libwdi $wdiVersion (wdi-simple.exe)"
     $bash = Join-Path $Msys2 'usr\bin\bash.exe'
     foreach ($t in @($bash, (Join-Path $Msys2 'usr\bin\autoreconf'), (Join-Path $Msys2 'usr\bin\make.exe'),
@@ -220,9 +230,13 @@ It embeds the WinUSB co-installers from the Microsoft WDK 8.0 redistributable pa
 }
 # files installed next to wdi-simple.exe
 $wdiDocs = Join-Path $wdiOut 'docs'
-New-Item -ItemType Directory -Force $wdiDocs | Out-Null
-foreach ($f in 'libwdi-COPYING-LGPL.txt', 'libwdi-COPYING.txt', 'libwdi-SOURCE.txt') {
-    Copy-Item (Join-Path $wdiOut $f) $wdiDocs -Force
+if ($withDriver) {
+    New-Item -ItemType Directory -Force $wdiDocs | Out-Null
+    foreach ($f in 'libwdi-COPYING-LGPL.txt', 'libwdi-COPYING.txt', 'libwdi-SOURCE.txt') {
+        Copy-Item (Join-Path $wdiOut $f) $wdiDocs -Force
+    }
+} else {
+    Write-Host "(${Arch}: no driver section, see -Arch)"
 }
 
 # --- 3. installer ----------------------------------------------------------------------
@@ -239,14 +253,14 @@ $nsisArgs = @(
     '/V2',
     "/DVERSION=$version",
     "/DVERSION_NUM=$versionNum",
+    "/DARCH=$Arch",
     "/DDIST=$dist",
     "/DROOT=$root",
-    "/DWDI_SIMPLE=$wdiExe",
-    "/DWDI_DOCS=$wdiDocs",
     "/DLICENSE_FILE=$lic",
-    "/DOUTFILE=$out",
-    (Join-Path $src 'MarvinCapture.nsi')
+    "/DOUTFILE=$out"
 )
+if ($withDriver) { $nsisArgs += @("/DWDI_SIMPLE=$wdiExe", "/DWDI_DOCS=$wdiDocs") }
+$nsisArgs += (Join-Path $src 'MarvinCapture.nsi')
 Run $nsis $nsisArgs
 
 if (-not (Test-Path $out)) { throw "installer not produced: $out" }

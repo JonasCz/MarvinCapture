@@ -1,9 +1,12 @@
 <Project>
-  <!-- Keep all dotnet intermediates and output under the repo's build\windows-x86_64\gui\ dir
+  <!-- Keep all dotnet intermediates and output under the repo's build\windows-<arch>\gui\ dir
        (gitignored) instead of obj\ and bin\ next to the project. Set here, before
        the SDK props are imported, so it also applies to restore and IDE builds. -->
   <PropertyGroup>
-    <PinnacleGuiBuildRoot>$(MSBuildThisFileDirectory)..\..\build\windows-x86_64\gui\</PinnacleGuiBuildRoot>
+    <!-- windows-arm64 for -p:Platform=ARM64 (scripts\build.ps1 -Arch arm64), else windows-x86_64 -->
+    <PinnacleGuiPlatformDir>windows-x86_64</PinnacleGuiPlatformDir>
+    <PinnacleGuiPlatformDir Condition="'$(Platform)' == 'ARM64'">windows-arm64</PinnacleGuiPlatformDir>
+    <PinnacleGuiBuildRoot>$(MSBuildThisFileDirectory)..\..\build\$(PinnacleGuiPlatformDir)\gui\</PinnacleGuiBuildRoot>
     <BaseIntermediateOutputPath>$(PinnacleGuiBuildRoot)obj\</BaseIntermediateOutputPath>
     <BaseOutputPath>$(PinnacleGuiBuildRoot)bin\</BaseOutputPath>
   </PropertyGroup>

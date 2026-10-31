@@ -35,6 +35,11 @@ No device is needed to build or to run the tests.
 - **MSYS2** with the UCRT64 toolchain (default location `C:\msys64`; use
   `-Msys2 <root>` otherwise):
   `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,libusb,pkgconf,nasm,make,diffutils}`
+- Windows on Arm (`-Arch arm64`, the default on an ARM64 machine; output in
+  `build\windows-arm64\`): the CLANGARM64 toolchain instead, as MSYS2 has no gcc there:
+  `pacman -S mingw-w64-clang-aarch64-{clang,cmake,ninja,libusb,pkgconf,make,diffutils}`.
+  Built by CI, not tested on hardware. Its installer has no driver section (libwdi's
+  MinGW build has no ARM64 target), so the WinUSB driver is installed with Zadig.
 - The **.NET 10 SDK** (only for the GUI). NuGet packages come from nuget.org.
 
 ### macOS

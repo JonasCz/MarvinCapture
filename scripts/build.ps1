@@ -1,16 +1,18 @@
 <#
 .SYNOPSIS
-  Builds everything and assembles a runnable output in build\windows-x86_64\dist.
+  Builds everything and assembles a runnable output in build\windows-<arch>\dist
+  (windows-x86_64 or windows-arm64).
 
 .DESCRIPTION
   1. (first time only) builds the minimal static FFmpeg into third_party\.
   2. Configures and builds the native core (marvin-core.dll, MarvinCaptureCLI)
-     with MSYS2 UCRT64 gcc into build\windows-x86_64\core, and runs the ctest suite.
+     with MSYS2 (x64: UCRT64 gcc, arm64: CLANGARM64 clang) into
+     build\windows-<arch>\core, and runs the ctest suite.
   3. Builds the WinUI 3 app against that core (intermediates in
-     build\windows-x86_64\gui). Release uses dotnet publish (trimmed, ReadyToRun,
+     build\windows-<arch>\gui). Release uses dotnet publish (trimmed, ReadyToRun,
      without the debugger DLLs and WinUI's non-English resources; see
      docs\windows-size.md), Debug a plain dotnet build.
-  4. Assembles build\windows-x86_64\dist (emptied first):
+  4. Assembles build\windows-<arch>\dist (emptied first):
 
        MarvinCaptureGUI.exe       the GUI
        MarvinCaptureCLI.exe       the command-line program
@@ -21,13 +23,15 @@
   Build output is per platform (build\<os>-<arch>\), so a macOS or Linux build
   (scripts/build.sh) can live in the same tree.
 
-  Requires MSYS2 (UCRT64: gcc, cmake, ninja, libusb, pkgconf, nasm, make,
-  diffutils) and the .NET 10 SDK. See docs\building.md.
+  Requires MSYS2 (x64: UCRT64 gcc, cmake, ninja, libusb, pkgconf, nasm, make,
+  diffutils; arm64: the same from CLANGARM64 with clang instead of gcc and no nasm)
+  and the .NET 10 SDK. See docs\building.md.
 
 .PARAMETER Config     Release (default) or Debug.
 .PARAMETER SkipTests  Don't run ctest.
 .PARAMETER SkipGui    Build the native core and CLI only.
-.PARAMETER Clean      Delete build\windows-x86_64\ first (other platforms' output is kept).
+.PARAMETER Clean      Delete build\windows-<arch>\ first (other platforms' output is kept).
+.PARAMETER Arch       x64 or arm64 (default: this machine's).
 .PARAMETER Msys2      MSYS2 root (default C:\msys64).
 #>
 [CmdletBinding()]
@@ -36,13 +40,20 @@ param(
     [switch]$SkipTests,
     [switch]$SkipGui,
     [switch]$Clean,
-    [string]$Msys2 = 'C:\msys64'
+    [string]$Msys2 = 'C:\msys64',
+    [ValidateSet('x64', 'arm64')] [string]$Arch = $(if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' })
 )
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+# x64: MSYS2 UCRT64 (gcc); arm64: CLANGARM64 (clang, MSYS2 has no gcc for Windows on Arm)
+if ($Arch -eq 'arm64') {
+    $platform = 'windows-arm64'; $msysEnv = 'clangarm64'; $msystem = 'CLANGARM64'; $cc = 'clang'; $dotnetPlatform = 'ARM64'
+} else {
+    $platform = 'windows-x86_64'; $msysEnv = 'ucrt64'; $msystem = 'UCRT64'; $cc = 'gcc'; $dotnetPlatform = 'x64'
+}
 # per-platform output dir, named like third_party\ffmpeg-windows-x86_64
-$build = Join-Path $root 'build\windows-x86_64'
+$build = Join-Path $root "build\$platform"
 $core = Join-Path $build 'core'
 $dist = Join-Path $build 'dist'
 
@@ -54,34 +65,39 @@ function Run {
     if ($LASTEXITCODE -ne 0) { throw "$Exe failed with exit code $LASTEXITCODE" }
 }
 
-$ucrt = Join-Path $Msys2 'ucrt64\bin'
-if (-not (Test-Path (Join-Path $ucrt 'gcc.exe'))) {
-    throw "MSYS2 UCRT64 gcc not found in $ucrt (use -Msys2 <root>; see docs\building.md)"
+$ucrt = Join-Path $Msys2 "$msysEnv\bin"
+if (-not (Test-Path (Join-Path $ucrt "$cc.exe"))) {
+    throw "MSYS2 $msystem $cc not found in $ucrt (use -Msys2 <root>; see docs\building.md)"
 }
 $env:PATH = "$ucrt;$env:PATH"
+$env:CC = $cc
 
 if ($Clean -and (Test-Path $build)) {
-    Step 'Cleaning build\windows-x86_64\'
+    Step "Cleaning build\$platform\"
     Remove-Item -Recurse -Force $build
 }
 
 # --- 1. FFmpeg ---------------------------------------------------------------
-$ffmpeg = Join-Path $root 'third_party\ffmpeg-windows-x86_64\lib\pkgconfig'
+$ffPrefix = Join-Path $root "third_party\ffmpeg-$platform"
+$ffmpeg = Join-Path $ffPrefix 'lib\pkgconfig'
 # rebuilt when scripts\build-ffmpeg.sh changed since the installed build (a component was added)
-$ffStamp = Join-Path $root 'third_party\ffmpeg-windows-x86_64\build-script.sha256'
+$ffStamp = Join-Path $ffPrefix 'build-script.sha256'
 $ffHash = (Get-FileHash (Join-Path $root 'scripts\build-ffmpeg.sh') -Algorithm SHA256).Hash.ToLower()
 $ffStale = (Test-Path $ffmpeg) -and -not ((Test-Path $ffStamp) -and ((Get-Content $ffStamp -Raw).Trim() -eq $ffHash))
 if ($ffStale -or -not (Test-Path $ffmpeg)) {
     Step 'Building the minimal static FFmpeg (first time, or build-ffmpeg.sh changed)'
     $sh = Join-Path $Msys2 'usr\bin\bash.exe'
-    $env:MSYSTEM = 'UCRT64'
+    $env:MSYSTEM = $msystem
     $env:CHERE_INVOKING = '1'
     Run $sh @('-lc', 'scripts/build-ffmpeg.sh')
 }
 
 # --- 2. Native core, CLIs, tests -----------------------------------------------
 Step "Configuring the native core ($Config)"
-Run cmake @('-G', 'Ninja', '-S', $root, '-B', $core, "-DCMAKE_BUILD_TYPE=$Config")
+# PIN_FFMPEG_PREFIX: CMake's processor detection is unreliable under MSYS2 (see src\sinks\CMakeLists.txt)
+# (the compiler comes from $env:CC, set above)
+Run cmake @('-G', 'Ninja', '-S', $root, '-B', $core, "-DCMAKE_BUILD_TYPE=$Config",
+            "-DPIN_FFMPEG_PREFIX=$($ffPrefix -replace '\\', '/')")
 Step 'Building the native core'
 Run cmake @('--build', $core)
 
@@ -90,8 +106,8 @@ if (-not $SkipTests) {
     Run ctest @('--test-dir', $core, '--output-on-failure')
 }
 
-# --- 3. Assemble build\windows-x86_64\dist ------------------------------------
-Step 'Assembling build\windows-x86_64\dist'
+# --- 3. Assemble build\windows-<arch>\dist -------------------------------------
+Step "Assembling build\$platform\dist"
 # MarvinCaptureCLI.exe goes next to the GUI: they share marvin-core.dll and firmware\
 # (the GUI build below copies the same files again).
 # Start from an empty dist\: the installer packs everything in it, so files from an older
@@ -117,23 +133,23 @@ if (-not $SkipGui) {
         # publish, not build: trimming, ReadyToRun and the pruning of debug DLLs and WinUI
         # languages only happen on publish (see the csproj and docs\windows-size.md)
         Step 'Publishing the GUI (trimmed, ReadyToRun)'
-        Run dotnet @('publish', $proj, '-c', $Config, '-p:Platform=x64',
-                     "-p:PinnacleCoreDir=$core", '-o', "$dist\")
+        Run dotnet @('publish', $proj, '-c', $Config, "-p:Platform=$dotnetPlatform",
+                     "-p:PinnacleCoreDir=$core", "-p:PinnacleRuntimeDllDir=$ucrt", '-o', "$dist\")
     } else {
         Step 'Building the GUI'
-        Run dotnet @('build', $proj, '-c', $Config, '-p:Platform=x64',
-                     "-p:PinnacleCoreDir=$core", "-p:OutDir=$dist\")
+        Run dotnet @('build', $proj, '-c', $Config, "-p:Platform=$dotnetPlatform",
+                     "-p:PinnacleCoreDir=$core", "-p:PinnacleRuntimeDllDir=$ucrt", "-p:OutDir=$dist\")
     }
 }
 
 # --- Check ---------------------------------------------------------------------
-Step 'Checking build\windows-x86_64\dist'
+Step "Checking build\$platform\dist"
 $expect = @('MarvinCaptureCLI.exe', 'marvin-core.dll', 'libusb-1.0.dll', 'libwinpthread-1.dll',
             'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin', 'firmware\fx2-marvin.bin')
 if (-not $SkipGui) {
     $expect += 'MarvinCaptureGUI.exe'
 }
 $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dist $_)) }
-if ($missing) { throw "missing from build\windows-x86_64\dist: $($missing -join ', ')" }
+if ($missing) { throw "missing from build\$platform\dist: $($missing -join ', ')" }
 
 Write-Host "`nDone: $dist" -ForegroundColor Green

@@ -6,7 +6,8 @@ naming, status text and settings all come from the core through
 `src/api/pin_api.h`. The app holds widgets, the Direct3D 11 preview, the file
 dialogs and the window lifecycle.
 
-- .NET 10, Windows App SDK (unpackaged, self-contained; WinUI components only), x64 only
+- .NET 10, Windows App SDK (unpackaged, self-contained; WinUI components only), x64 or ARM64
+  (`-p:Platform=ARM64`, output under `build\windows-arm64\`; built by CI, not tested on hardware)
 - CommunityToolkit.Mvvm for view models
 - Vortice.Direct3D11 / DXGI / D3DCompiler for the preview renderer
 - No Visual Studio needed: everything builds with `dotnet build`

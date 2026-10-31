@@ -2,9 +2,12 @@
 ; Built by scripts\package-windows.ps1, which passes these defines:
 ;   VERSION       e.g. 0.1.0
 ;   VERSION_NUM   four-part, e.g. 0.1.0.0
-;   DIST          build\windows-x86_64\dist (GUI, CLI, dlls, firmware\)
+;   ARCH          x64 or arm64 (the Windows the installer accepts)
+;   DIST          build\windows-<arch>\dist (GUI, CLI, dlls, firmware\)
 ;   ROOT          repository root
-;   WDI_SIMPLE    path of the libwdi wdi-simple.exe (x64) to install the WinUSB driver
+;   WDI_SIMPLE    path of the libwdi wdi-simple.exe (x64) to install the WinUSB driver;
+;                 not defined for arm64 (libwdi's autotools build has no ARM64 target), which
+;                 leaves the driver section out: the driver is then installed with Zadig
 ;   WDI_DOCS      directory with the libwdi licence / source notes (installed next to it)
 ;   LICENSE_FILE  LICENSE with CRLF line endings
 ;   OUTFILE       output setup .exe
@@ -20,6 +23,9 @@ SetCompressorDictSize 32
 
 !ifndef VERSION
   !error "VERSION is not defined (run scripts\package-windows.ps1)"
+!endif
+!ifndef ARCH
+  !define ARCH "x64"
 !endif
 
 !define APP_NAME      "MarvinCapture"
@@ -137,10 +143,17 @@ FunctionEnd
 ; --- init ---------------------------------------------------------------------------
 
 Function .onInit
-  ${IfNot} ${IsNativeAMD64}
-    MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} needs 64-bit Windows on an Intel/AMD processor."
+!if "${ARCH}" == "arm64"
+  ${IfNot} ${IsNativeARM64}
+    MessageBox MB_OK|MB_ICONSTOP "This is the ${APP_NAME} setup for Windows on Arm (ARM64). On an Intel/AMD PC use the x86_64 setup."
     Abort
   ${EndIf}
+!else
+  ${IfNot} ${IsNativeAMD64}
+    MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} needs 64-bit Windows on an Intel/AMD processor. On Windows on Arm use the arm64 setup."
+    Abort
+  ${EndIf}
+!endif
   ${IfNot} ${AtLeastWin10}
     MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} needs Windows 10 or later."
     Abort
@@ -157,7 +170,9 @@ Function .onInit
     ${If} $INSTDIR == "$PROGRAMFILES64\${APP_NAME}"
       StrCpy $INSTDIR $0
     ${EndIf}
+!ifdef WDI_SIMPLE
     Call UntickDriverSection
+!endif
   ${EndIf}
 FunctionEnd
 
@@ -193,8 +208,13 @@ Section "${APP_NAME} (required)" SecMain
   ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
   IntFmt $0 "0x%08X" $0
   WriteRegDWORD HKLM "${UNINST_KEY}" "EstimatedSize" "$0"
+
+!ifndef WDI_SIMPLE
+  DetailPrint "This setup does not install the USB driver: install WinUSB for the device with Zadig (see docs\windows-driver.md in the project)."
+!endif
 SectionEnd
 
+!ifdef WDI_SIMPLE
 Section "USB driver (WinUSB) for all supported devices" SecDriver
   SetOutPath "$INSTDIR\driver"
   File "${WDI_SIMPLE}"
@@ -217,6 +237,7 @@ Section "USB driver (WinUSB) for all supported devices" SecDriver
     DetailPrint "WinUSB driver installed for all 5 devices (for devices not plugged in now, Windows uses it when you plug them in)."
   ${EndIf}
 SectionEnd
+!endif
 
 Section "Start menu shortcuts" SecStartMenu
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
@@ -240,16 +261,20 @@ Section /o "Add the command-line tool to the system PATH" SecPath
   ${EndIf}
 SectionEnd
 
+!ifdef WDI_SIMPLE
 ; Called from .onInit on an upgrade (defined here, after SecDriver exists).
 Function UntickDriverSection
   SectionGetFlags ${SecDriver} $1
   IntOp $1 $1 & ${SECTION_OFF}
   SectionSetFlags ${SecDriver} $1
 FunctionEnd
+!endif
 
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain}     "The ${APP_NAME} program (GUI and command-line tool), its libraries and the FPGA firmware files."
+!ifdef WDI_SIMPLE
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDriver}    "Install the WinUSB driver for MovieBox 500 / 510 / 700 / 710 / Deluxe. Not needed if you're installing an update."
+!endif
   !insertmacro MUI_DESCRIPTION_TEXT ${SecStartMenu} "Start menu entries for ${APP_NAME} and its uninstaller."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop}   "A shortcut to ${APP_NAME} on the desktop."
   !insertmacro MUI_DESCRIPTION_TEXT ${SecPath}      "Adds the install folder to the system PATH so MarvinCaptureCLI can be run from any terminal."

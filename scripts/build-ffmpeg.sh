@@ -41,7 +41,7 @@ TARBALL_PATH="${SRC_DIR}/${FFMPEG_TARBALL}"
 # ---------------------------------------------------------------------------
 UNAME_S="$(uname -s)"
 case "${UNAME_S}" in
-    MINGW*|MSYS*|CYGWIN*)
+    MINGW*|MSYS*|CYGWIN*|UCRT*|CLANG*)
         OS_NAME="windows"
         THREAD_FLAG="--enable-w32threads"
         ;;
@@ -60,6 +60,12 @@ case "${UNAME_S}" in
 esac
 
 ARCH_NAME="$(uname -m)"
+# MSYS2's own runtime is x86_64 even on Windows on Arm (it runs emulated there), so
+# uname -m says x86_64 in the CLANGARM64 shell too; the target is the environment's
+# (MSYSTEM_CARCH: x86_64 for UCRT64, aarch64 for CLANGARM64).
+if [[ "${OS_NAME}" == windows && -n "${MSYSTEM_CARCH:-}" ]]; then
+    ARCH_NAME="${MSYSTEM_CARCH}"
+fi
 case "${ARCH_NAME}" in
     x86_64|amd64) ARCH_NAME="x86_64" ;;
     aarch64|arm64) ARCH_NAME="arm64" ;;
@@ -215,6 +221,14 @@ CONFIGURE_ARGS=(
 
     --disable-bsfs
 )
+
+# Windows: name the target explicitly, configure would take it from uname (MSYS2's
+# own, see above). The CLANGARM64 environment has clang, not gcc.
+if [[ "${OS_NAME}" == windows ]]; then
+    CONFIGURE_ARGS+=(--target-os=mingw32)
+    [[ "${ARCH_NAME}" == arm64 ]] && CONFIGURE_ARGS+=(--arch=aarch64)
+    command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
+fi
 
 # x86 assembly needs nasm. Without it FFmpeg's configure stops; a build
 # without asm is slower but fine for what we use (FFV1 is mostly C), so
