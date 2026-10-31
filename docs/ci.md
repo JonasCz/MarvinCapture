@@ -3,6 +3,16 @@
 `.github/workflows/build.yml` builds the installers. It only runs when started by
 hand: **Actions > Build > Run workflow** (on `main` or any branch).
 
+The workflow runs the same scripts as a local build, so a local run does the same
+thing; the YAML only picks the runners, restores and saves the caches, and passes the
+installers on:
+
+| Step | macOS / Linux | Windows |
+|---|---|---|
+| Dependencies | `scripts/install-deps.sh` | `scripts\install-deps.ps1 -Arch <x64\|arm64> -Msys2 <root> -Refresh` (after `setup-msys2` installed a bare MSYS2, and `setup-dotnet`) |
+| Build + installer | `scripts/package-macos.sh` / `scripts/package-linux.sh` `[--skip-tests]` | `scripts\package-windows.ps1 -Arch <x64\|arm64> -Msys2 <root> [-SkipTests]` |
+| Release | `scripts/publish-release.sh [--draft] [--title T] [--notes N] <dir>` (and `--check` before building) | |
+
 ## Options
 
 | Input | Default | |
@@ -16,9 +26,9 @@ hand: **Actions > Build > Run workflow** (on `main` or any branch).
 **Artifacts only**: each platform's installer is an artifact of the run (run page,
 bottom; kept 30 days), one zip per platform.
 
-**Draft release** / **release**: after all selected platforms built, a release
-`v<version>` (`"version"` from `VERSION`) is created on the run's commit with the
-installers and a `SHA256SUMS.txt`. A draft is only visible to maintainers until it
+**Draft release** / **release**: after all selected platforms built,
+`scripts/publish-release.sh` creates the release `v<version>` (`"version"` from
+`VERSION`) on the run's commit with the installers and a `SHA256SUMS.txt`. A draft is only visible to maintainers until it
 is published on the Releases page, which is also the place for longer notes than the
 one-line input (the notes are Markdown). The run stops before building if a release
 for that version already exists (drafts included) or the tag is on another commit:
@@ -59,7 +69,7 @@ with MSYS2. On Windows on Arm, install WinUSB for the device with Zadig
 |---|---|---|
 | FFmpeg static build, `third_party/ffmpeg-<platform>` | platform + hash of `scripts/build-ffmpeg.sh` | the FFmpeg build (the slowest step; several minutes on Windows) |
 | FFmpeg source tarball | FFmpeg version, shared by all platforms | the download, only needed when a platform's build cache misses |
-| MSYS2 packages | by `msys2/setup-msys2` | the pacman downloads |
+| MSYS2 packages (pacman's download cache) | platform + hash of `scripts/install-deps.ps1` | the pacman downloads |
 | NuGet packages | hash of the csproj/props/nuget.config + architecture; falls back to the other Windows architecture's | the package restore (the Windows App SDK packages hold both architectures) |
 | libwdi `wdi-simple.exe` (Windows x64) | hash of `scripts/package-windows.ps1` | the libwdi autotools build and the WDK download |
 

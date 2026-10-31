@@ -30,14 +30,21 @@ several platforms can share one checkout.
 
 No device is needed to build or to run the tests.
 
+`scripts/install-deps.sh` (Debian/Ubuntu with apt, macOS with Homebrew) and
+`scripts\install-deps.ps1` (Windows, into an existing MSYS2; `-Arch x64|arm64`) install
+everything listed below except MSYS2 itself, the .NET SDK and the Xcode Command Line
+Tools, skipping what is already there. CI uses the same scripts.
+
 ### Windows
 
 - **MSYS2** with the UCRT64 toolchain (default location `C:\msys64`; use
   `-Msys2 <root>` otherwise):
-  `pacman -S mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,libusb,pkgconf,nasm,make,diffutils}`
+  `pacman -S make diffutils mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,libusb,pkgconf,nasm}`;
+  for the installer also `autotools mingw-w64-ucrt-x86_64-nsis`
 - Windows on Arm (`-Arch arm64`, the default on an ARM64 machine; output in
   `build\windows-arm64\`): the CLANGARM64 toolchain instead, as MSYS2 has no gcc there:
-  `pacman -S mingw-w64-clang-aarch64-{clang,cmake,ninja,libusb,pkgconf,make,diffutils}`.
+  `pacman -S make diffutils mingw-w64-clang-aarch64-{clang,cmake,ninja,libusb,pkgconf}`
+  (and `mingw-w64-ucrt-x86_64-nsis` for the installer).
   Built by CI, not tested on hardware. Its installer has no driver section (libwdi's
   MinGW build has no ARM64 target), so the WinUSB driver is installed with Zadig.
 - The **.NET 10 SDK** (only for the GUI). NuGet packages come from nuget.org.
@@ -58,7 +65,8 @@ Intel builds come from CI and have not been tried against the device.
 
 gcc (or clang), make, cmake, ninja, pkg-config and the libusb-1.0 development
 package (and nasm on x86_64), e.g. on Debian/Ubuntu:
-`sudo apt install build-essential cmake ninja-build pkg-config libusb-1.0-0-dev nasm`.
+`sudo apt install build-essential cmake ninja-build pkg-config libusb-1.0-0-dev nasm`
+(and `dpkg-dev` for the `.deb`).
 
 ## Output
 
@@ -169,13 +177,15 @@ only recommends it); Windows uses WinHTTP.
 
 | Script | Output | Notes |
 |---|---|---|
-| `scripts/package-macos.sh` | `MarvinCapture-<version>-macos-arm64.pkg` | `pkgbuild` + `productbuild`, choices "app" (`/Applications`) and "cli" (`/usr/local/lib/marvincapture`, link in `/usr/local/bin`); resources and `uninstall.sh` in `packaging/macos/` |
-| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-x86_64-setup.exe` | NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once (needs MSYS2 `autotools`, downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
+| `scripts/package-macos.sh` | `MarvinCapture-<version>-macos-<arch>.pkg` | `pkgbuild` + `productbuild`, choices "app" (`/Applications`) and "cli" (`/usr/local/lib/marvincapture`, link in `/usr/local/bin`); resources and `uninstall.sh` in `packaging/macos/` |
+| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-<arch>-setup.exe` | `-Arch x64\|arm64` (arm64: no driver section); NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once (needs MSYS2 `autotools`, downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
 | `scripts/package-linux.sh` | `marvincapture_<version>_<debarch>.deb` | Linux only, needs `dpkg-deb`; udev rules and maintainer scripts in `packaging/linux/` |
 | `scripts/package-linux-docker.sh` | same `.deb` | runs `package-linux.sh` in `ubuntu:22.04` (`--arch amd64\|arm64\|all`), so the package's `libc6` dependency is 22.04's glibc; works from macOS with Docker/OrbStack |
 
-The GitHub Actions workflow `.github/workflows/build.yml` runs these scripts for all six
-platforms and can publish the result as a (draft) release; see [ci.md](ci.md).
+`scripts/publish-release.sh [--draft] [--title T] [--notes N] <dir>` creates the GitHub
+release `v<version>` from the installers in `<dir>` (with the `gh` CLI). The GitHub Actions
+workflow `.github/workflows/build.yml` runs these scripts for all six platforms and can
+publish the result as a (draft) release; see [ci.md](ci.md).
 
 ## Tests
 

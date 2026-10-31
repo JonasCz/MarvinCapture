@@ -35,10 +35,11 @@
 # build/macos-<arch>/installer/stage.
 #
 # Usage:
-#   scripts/package-macos.sh [--skip-build] [--config Release|Debug]
+#   scripts/package-macos.sh [--skip-build] [--skip-tests] [--config Release|Debug]
 #
 #   --skip-build            use the existing build/macos-<arch>/dist instead of
 #                           running scripts/build.sh first
+#   --skip-tests            passed to scripts/build.sh: don't run ctest
 #   --config Release|Debug  passed to scripts/build.sh (default Release)
 
 set -euo pipefail
@@ -47,9 +48,11 @@ usage() { sed -n '/^# Usage:/,/^$/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//';
 
 SKIP_BUILD=0
 CONFIG="Release"
+BUILD_ARGS=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --skip-build) SKIP_BUILD=1; shift ;;
+        --skip-tests) BUILD_ARGS+=(--skip-tests); shift ;;
         --config)
             [[ $# -ge 2 ]] || { echo "package-macos.sh: --config needs Release or Debug" >&2; exit 2; }
             CONFIG="$2"; shift 2 ;;
@@ -87,8 +90,8 @@ VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "${
 
 # --- 1. Build -----------------------------------------------------------------------
 if [[ "${SKIP_BUILD}" -eq 0 ]]; then
-    step "Building (scripts/build.sh --config ${CONFIG})"
-    "${ROOT}/scripts/build.sh" --config "${CONFIG}"
+    step "Building (scripts/build.sh --config ${CONFIG} ${BUILD_ARGS[*]:-})"
+    "${ROOT}/scripts/build.sh" --config "${CONFIG}" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 fi
 for f in MarvinCapture.app MarvinCaptureCLI libmarvin-core.dylib libusb-1.0.0.dylib firmware; do
     [[ -e "${DIST}/${f}" ]] || die "${DIST}/${f} is missing; run scripts/build.sh (or leave out --skip-build)"
