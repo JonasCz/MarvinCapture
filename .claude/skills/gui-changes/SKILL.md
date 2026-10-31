@@ -116,9 +116,13 @@ computed in C#. Low-disk uses two copies of the storage elements toggled by
   `build\windows-x86_64\gui\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\`
   and needs `marvin-core.dll` copied from `build\windows-x86_64\core` (done by the csproj).
 - Hardware/replay testing of capture behaviour: see test-with-hardware-device.
-- Packages: WindowsAppSDK 2.5.1, CommunityToolkit.Mvvm 8.4.2, Vortice D3D11.
-  App is unpackaged, self-contained, x64, JIT (field-style `[ObservableProperty]`
-  is fine).
+- Packages: Windows App SDK 2.5.1 as components (Foundation, InteractiveExperiences,
+  WinUI, DWrite; not the metapackage, which adds ~58 MB of AI/ML/Search/Widgets),
+  CommunityToolkit.Mvvm 8.4.2, Vortice D3D11. App is unpackaged, self-contained, x64.
+  Release is `dotnet publish`: trimmed (`TrimMode=partial`) + ReadyToRun, not NativeAOT
+  (field-style `[ObservableProperty]` is fine; keep bindings `{x:Bind}`, avoid
+  reflection; classic `[ComImport]` needs `BuiltInComInteropSupport=true`, which the
+  csproj sets). See docs/windows-size.md.
 
 ## Gotchas
 

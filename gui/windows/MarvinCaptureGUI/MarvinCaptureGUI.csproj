@@ -11,7 +11,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>latest</LangVersion>
-    <!-- Field-style [ObservableProperty] is fine: the app is JIT, not trimmed/AOT. -->
+    <!-- Field-style [ObservableProperty] is fine: the app is trimmed (partial) + ReadyToRun but
+         not NativeAOT, and all bindings are compiled {x:Bind}. -->
     <NoWarn>$(NoWarn);MVVMTK0045</NoWarn>
 
     <!-- Unpackaged, self-contained, x64 only, no MSIX. -->
@@ -36,8 +37,36 @@
     <GenerateAppInstallerFile>false</GenerateAppInstallerFile>
   </PropertyGroup>
 
+  <!--
+    Size of the release (dotnet publish, which scripts\build.ps1 uses for Release; a plain
+    dotnet build / IDE F5 is unaffected). See docs\windows-size.md.
+      * PublishTrimmed, TrimMode=partial: ILLink trims only assemblies that declare
+        themselves trimmable (the .NET framework, the Windows SDK projection), not the app,
+        WinUI or CommunityToolkit.
+      * BuiltInComInteropSupport: PublishTrimmed turns it off by default, but the app uses
+        classic [ComImport] COM (WASAPI audio monitor, ITaskbarList3, ISwapChainPanelNative).
+      * PublishReadyToRun: precompiles the (trimmed) IL for faster startup; ILLink output is
+        IL only, so without it the trimmed framework would be JIT-compiled at every start.
+        Turn off with -p:PublishReadyToRun=false.
+      * SatelliteResourceLanguages: the UI is English only.
+  -->
+  <PropertyGroup>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>partial</TrimMode>
+    <BuiltInComInteropSupport>true</BuiltInComInteropSupport>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+  </PropertyGroup>
+
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+    <!-- The Windows App SDK components the app uses, instead of the Microsoft.WindowsAppSDK 2.5.1
+         metapackage: that one also pulls in AI, ML (onnxruntime, DirectML), Search and Widgets,
+         about 58 MB of DLLs in a self-contained build. Versions are the ones the 2.5.1
+         metapackage pins; keep them in step when updating (see its .nuspec on nuget.org). -->
+    <PackageReference Include="Microsoft.WindowsAppSDK.Foundation" Version="2.3.12" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.InteractiveExperiences" Version="2.1.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.WinUI" Version="2.3.9" />
+    <PackageReference Include="Microsoft.WindowsAppSDK.DWrite" Version="2.1.0" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.28000.2705" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="Vortice.Direct3D11" Version="3.8.3" />
@@ -57,24 +86,49 @@
   </ItemGroup>
 
   <!--
-    Copy marvin-core.dll next to the built exe if it exists at build time.
-    This does not fail the build when the DLL is missing (the core has not been
-    built yet); the Condition="Exists(...)" just makes the target a no-op.
-    scripts/build.ps1 builds the core first.
+    Copy marvin-core.dll (+ libusb, libwinpthread, firmware\) next to the built exe (OutDir)
+    and the published one (PublishDir) if it exists. This does not fail the build when the
+    DLL is missing (the core has not been built yet); the Exists(...) conditions just make
+    the copy a no-op. scripts/build.ps1 builds the core first.
   -->
-  <Target Name="CopyPinnacleCore" AfterTargets="Build;Publish">
-    <ItemGroup>
-      <PinnacleCoreFiles Include="$(PinnacleCoreDir)\marvin-core.dll" Condition="Exists('$(PinnacleCoreDir)\marvin-core.dll')" />
-      <PinnacleCoreFiles Include="$(PinnacleCoreDir)\libusb-1.0.dll" Condition="Exists('$(PinnacleCoreDir)\libusb-1.0.dll')" />
-      <PinnacleCoreFiles Include="$(PinnacleRuntimeDllDir)\libwinpthread-1.dll" Condition="Exists('$(PinnacleCoreDir)\marvin-core.dll') And Exists('$(PinnacleRuntimeDllDir)\libwinpthread-1.dll')" />
-    </ItemGroup>
+  <ItemGroup>
+    <PinnacleCoreFiles Include="$(PinnacleCoreDir)\marvin-core.dll" Condition="Exists('$(PinnacleCoreDir)\marvin-core.dll')" />
+    <PinnacleCoreFiles Include="$(PinnacleCoreDir)\libusb-1.0.dll" Condition="Exists('$(PinnacleCoreDir)\libusb-1.0.dll')" />
+    <PinnacleCoreFiles Include="$(PinnacleRuntimeDllDir)\libwinpthread-1.dll" Condition="Exists('$(PinnacleCoreDir)\marvin-core.dll') And Exists('$(PinnacleRuntimeDllDir)\libwinpthread-1.dll')" />
+    <!-- The FPGA bitstreams: the core build puts them in firmware\ next to the DLL; the core
+         looks for firmware\ next to itself. -->
+    <PinnacleFirmwareFiles Include="$(PinnacleCoreDir)\firmware\*.*" />
+  </ItemGroup>
+
+  <Target Name="CopyPinnacleCore" AfterTargets="Build">
     <Copy SourceFiles="@(PinnacleCoreFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" Condition="'@(PinnacleCoreFiles)' != ''" />
-    <!-- The FPGA bitstreams: the core build puts them in firmware/ next to the
-         DLL; the core looks for firmware/ next to itself. -->
-    <ItemGroup>
-      <PinnacleFirmwareFiles Include="$(PinnacleCoreDir)\firmware\*.*" />
-    </ItemGroup>
     <Copy SourceFiles="@(PinnacleFirmwareFiles)" DestinationFolder="$(OutDir)firmware" SkipUnchangedFiles="true" Condition="'@(PinnacleFirmwareFiles)' != ''" />
+  </Target>
+
+  <Target Name="CopyPinnacleCorePublish" AfterTargets="Publish">
+    <Copy SourceFiles="@(PinnacleCoreFiles)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" Condition="'@(PinnacleCoreFiles)' != ''" />
+    <Copy SourceFiles="@(PinnacleFirmwareFiles)" DestinationFolder="$(PublishDir)firmware" SkipUnchangedFiles="true" Condition="'@(PinnacleFirmwareFiles)' != ''" />
+  </Target>
+
+  <!--
+    After publish: drop what a self-contained app does not need at run time.
+      * the .NET debugger / crash-dump support of the runtime pack (mscordaccore*, mscordbi,
+        DiaSymReader, createdump.exe; only a debugger attaching to the installed app or
+        DOTNET_DbgEnableMiniDump use them)
+      * WinUI's .mui string resources for ~85 languages: the app is English only, en-us is kept
+        (other languages fall back to it).
+    Disable with -p:PinnaclePrunePublish=false.
+  -->
+  <Target Name="PinnaclePrunePublish" AfterTargets="Publish" Condition="'$(PinnaclePrunePublish)' != 'false'">
+    <ItemGroup>
+      <_PinnaclePrune Include="$(PublishDir)mscordaccore*.dll;$(PublishDir)mscordbi.dll;$(PublishDir)Microsoft.DiaSymReader.Native.*.dll;$(PublishDir)createdump.exe" />
+      <_PinnacleMui Include="$(PublishDir)*\Microsoft.ui.xaml.dll.mui;$(PublishDir)*\Microsoft.UI.Xaml.Phone.dll.mui" Exclude="$(PublishDir)en-us\*.mui" />
+      <_PinnacleMuiDirs Include="@(_PinnacleMui->'%(RootDir)%(Directory)'->Distinct())" />
+    </ItemGroup>
+    <Delete Files="@(_PinnaclePrune);@(_PinnacleMui)" />
+    <!-- the language folders hold only these two .mui files (SatelliteResourceLanguages=en
+         keeps .NET satellite assemblies out of them) -->
+    <RemoveDir Directories="@(_PinnacleMuiDirs)" />
   </Target>
 
 </Project>

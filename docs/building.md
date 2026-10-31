@@ -127,8 +127,10 @@ e.g. `libusb-1.0-0`).
    macOS `libusb-1.0.0.dylib`; Windows also
    `libwinpthread-1.dll`) and `firmware/` into `dist/`.
 5. **GUI**:
-   - Windows: `dotnet build gui\windows\MarvinCaptureGUI -c Release
-     -p:Platform=x64 ...` against `build\windows-x86_64\core`, output into `dist\`.
+   - Windows: `dotnet publish gui\windows\MarvinCaptureGUI -c Release
+     -p:Platform=x64 ...` against `build\windows-x86_64\core`, output into `dist\`
+     (trimmed, ReadyToRun; see [windows-size.md](windows-size.md)). With
+     `-Config Debug` a plain `dotnet build` instead. `dist\` is emptied first.
      Details in [../gui/windows/README.md](../gui/windows/README.md).
    - macOS: `swift build` (SwiftPM, `gui/macos`, intermediates in
      `build/macos-arm64/gui`, linked against `build/macos-arm64/core` with

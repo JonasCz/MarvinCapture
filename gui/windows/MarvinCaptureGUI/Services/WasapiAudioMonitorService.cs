@@ -16,12 +16,12 @@ namespace PinnacleCapture.Services;
 /// underrun, and device-invalidation / default-device-change recovery.
 ///
 /// Deliberately raw COM interop ([ComImport]) rather than
-/// [GeneratedComInterface]: the project has ordinary (non-trimmed,
-/// non-AOT, JIT) WindowsAppSDK output (SelfContained/WindowsAppSDKSelfContained
-/// are about the app's own deployment, not IL trimming/NativeAOT -- there is
-/// no PublishAot/PublishTrimmed here), so classic COM interop (RCW/CCW) is
-/// available and is far less boilerplate than hand-rolling a ComWrappers
-/// implementation for five WASAPI interfaces plus a notification sink.
+/// [GeneratedComInterface]: the release is trimmed (PublishTrimmed,
+/// TrimMode=partial) but not NativeAOT, and the csproj keeps
+/// BuiltInComInteropSupport=true (PublishTrimmed would turn it off), so classic
+/// COM interop (RCW/CCW) is available and is far less boilerplate than
+/// hand-rolling a ComWrappers implementation for five WASAPI interfaces plus a
+/// notification sink. NativeAOT would need [GeneratedComInterface] here.
 /// </summary>
 public sealed class WasapiAudioMonitorService : IAudioMonitorService
 {

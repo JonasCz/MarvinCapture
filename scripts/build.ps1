@@ -7,8 +7,10 @@
   2. Configures and builds the native core (marvin-core.dll, MarvinCaptureCLI)
      with MSYS2 UCRT64 gcc into build\windows-x86_64\core, and runs the ctest suite.
   3. Builds the WinUI 3 app against that core (intermediates in
-     build\windows-x86_64\gui).
-  4. Assembles build\windows-x86_64\dist:
+     build\windows-x86_64\gui). Release uses dotnet publish (trimmed, ReadyToRun,
+     without the debugger DLLs and WinUI's non-English resources; see
+     docs\windows-size.md), Debug a plain dotnet build.
+  4. Assembles build\windows-x86_64\dist (emptied first):
 
        MarvinCaptureGUI.exe       the GUI
        MarvinCaptureCLI.exe       the command-line program
@@ -92,6 +94,9 @@ if (-not $SkipTests) {
 Step 'Assembling build\windows-x86_64\dist'
 # MarvinCaptureCLI.exe goes next to the GUI: they share marvin-core.dll and firmware\
 # (the GUI build below copies the same files again).
+# Start from an empty dist\: the installer packs everything in it, so files from an older
+# build (e.g. DLLs that are no longer published) must not survive.
+if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $core 'MarvinCaptureCLI.exe') $dist -Force
 # The help text lives in src\engine\pin_script.c; docs\cli.md is generated from docs\cli.md.template.
@@ -103,15 +108,22 @@ if (-not (Test-Path $helpDoc) -or [IO.File]::ReadAllText($helpDoc) -ne $new) { [
 Copy-Item (Join-Path $core 'marvin-core.dll') $dist -Force
 Copy-Item (Join-Path $core 'libusb-1.0.dll') $dist -Force
 Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $dist -Force
-Remove-Item -Recurse -Force (Join-Path $dist 'firmware'), (Join-Path $dist 'cli') -ErrorAction SilentlyContinue   # cli\: the old low-level tools
 Copy-Item (Join-Path $root 'firmware') (Join-Path $dist 'firmware') -Recurse
 
 # --- 4. GUI --------------------------------------------------------------------
 if (-not $SkipGui) {
-    Step 'Building the GUI'
     $proj = Join-Path $root 'gui\windows\MarvinCaptureGUI\MarvinCaptureGUI.csproj'
-    Run dotnet @('build', $proj, '-c', $Config, '-p:Platform=x64',
-                 "-p:PinnacleCoreDir=$core", "-p:OutDir=$dist\")
+    if ($Config -eq 'Release') {
+        # publish, not build: trimming, ReadyToRun and the pruning of debug DLLs and WinUI
+        # languages only happen on publish (see the csproj and docs\windows-size.md)
+        Step 'Publishing the GUI (trimmed, ReadyToRun)'
+        Run dotnet @('publish', $proj, '-c', $Config, '-p:Platform=x64',
+                     "-p:PinnacleCoreDir=$core", '-o', "$dist\")
+    } else {
+        Step 'Building the GUI'
+        Run dotnet @('build', $proj, '-c', $Config, '-p:Platform=x64',
+                     "-p:PinnacleCoreDir=$core", "-p:OutDir=$dist\")
+    }
 }
 
 # --- Check ---------------------------------------------------------------------

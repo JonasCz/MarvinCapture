@@ -6,7 +6,7 @@ naming, status text and settings all come from the core through
 `src/api/pin_api.h`. The app holds widgets, the Direct3D 11 preview, the file
 dialogs and the window lifecycle.
 
-- .NET 10, Windows App SDK (unpackaged, self-contained), x64 only
+- .NET 10, Windows App SDK (unpackaged, self-contained; WinUI components only), x64 only
 - CommunityToolkit.Mvvm for view models
 - Vortice.Direct3D11 / DXGI / D3DCompiler for the preview renderer
 - No Visual Studio needed: everything builds with `dotnet build`
@@ -24,8 +24,19 @@ dotnet build -c Debug -p:Platform=x64
 `gui/windows/Directory.Build.props` moves `obj\` and `bin\` out of the project
 into the repo's `build\windows-x86_64\gui\`, so the output lands in
 `build\windows-x86_64\gui\bin\x64\Debug\net10.0-windows10.0.19041.0\win-x64\`.
-(`scripts\build.ps1` instead sets `OutDir` to `build\windows-x86_64\dist\`.)
-For a release build, use `-c Release`.
+(`scripts\build.ps1 -Config Debug` instead sets `OutDir` to `build\windows-x86_64\dist\`.)
+
+The release (`scripts\build.ps1`, Release) is a `dotnet publish` into `dist\`, which
+trims the framework (`PublishTrimmed`, `TrimMode=partial`), precompiles it
+(`PublishReadyToRun`) and drops the .NET debugger DLLs and WinUI's non-English `.mui`
+resources. By hand:
+
+```powershell
+dotnet publish -c Release -p:Platform=x64 -o C:\path\to\out
+```
+
+Plain `dotnet build` (and the IDE) is not trimmed. See
+[../../docs/windows-size.md](../../docs/windows-size.md).
 
 ### Where the core DLL comes from (`PinnacleCoreDir`)
 
