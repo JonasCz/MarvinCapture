@@ -1,0 +1,313 @@
+# Builds the installers for the selected platforms, on demand only (Actions tab >
+# "Build" > "Run workflow"). Each platform is built natively on its own GitHub-hosted
+# runner, all in parallel; see docs/ci.md for the caches and the release options.
+
+name: Build
+
+on:
+  workflow_dispatch:
+    inputs:
+      windows_x64:
+        description: Windows x86_64
+        type: boolean
+        default: true
+      windows_arm64:
+        description: Windows arm64 (no driver in the installer, see docs/ci.md)
+        type: boolean
+        default: true
+      macos_arm64:
+        description: macOS arm64 (Apple Silicon)
+        type: boolean
+        default: true
+      macos_x64:
+        description: macOS x86_64 (Intel)
+        type: boolean
+        default: true
+      linux_x64:
+        description: Linux x86_64 (.deb)
+        type: boolean
+        default: true
+      linux_arm64:
+        description: Linux arm64 (.deb)
+        type: boolean
+        default: true
+      run_tests:
+        description: Run the ctest suite
+        type: boolean
+        default: false
+      publish:
+        description: What to do with the installers
+        type: choice
+        options:
+          - artifacts only
+          - draft release
+          - release
+        default: artifacts only
+      release_title:
+        description: "Release title (empty: MarvinCapture <version>)"
+        type: string
+        default: ""
+      release_notes:
+        description: "Release notes (empty: release_notes from VERSION; edit a draft on GitHub for longer text)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    name: Plan
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: VERSION
+          sparse-checkout-cone-mode: false
+
+      - id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WINDOWS_X64: ${{ inputs.windows_x64 }}
+          WINDOWS_ARM64: ${{ inputs.windows_arm64 }}
+          MACOS_ARM64: ${{ inputs.macos_arm64 }}
+          MACOS_X64: ${{ inputs.macos_x64 }}
+          LINUX_X64: ${{ inputs.linux_x64 }}
+          LINUX_ARM64: ${{ inputs.linux_arm64 }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          m='[]'
+          add() {
+            m="$(jq -c --arg platform "$1" --arg runner "$2" --arg os "$3" --arg arch "$4" \
+              '. + [{platform: $platform, runner: $runner, os: $os, arch: $arch}]' <<<"$m")"
+          }
+          [[ "$WINDOWS_X64"   == true ]] && add windows-x86_64 windows-2025     windows x64
+          [[ "$WINDOWS_ARM64" == true ]] && add windows-arm64  windows-11-arm   windows arm64
+          [[ "$MACOS_ARM64"   == true ]] && add macos-arm64    macos-15         macos   arm64
+          [[ "$MACOS_X64"     == true ]] && add macos-x86_64   macos-15-intel   macos   x64
+          [[ "$LINUX_X64"     == true ]] && add linux-x86_64   ubuntu-22.04     linux   x64
+          [[ "$LINUX_ARM64"   == true ]] && add linux-arm64    ubuntu-22.04-arm linux   arm64
+          if [[ "$m" == '[]' ]]; then
+            echo "::error::No platform selected"
+            exit 1
+          fi
+          echo "matrix=$m" >> "$GITHUB_OUTPUT"
+
+          version="$(jq -r .version VERSION)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version, platforms: $(jq -r 'map(.platform) | join(", ")' <<<"$m")"
+
+          # Fail before building anything if the release can't be made.
+          if [[ "$PUBLISH" != "artifacts only" ]]; then
+            if gh release view "v$version" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              echo "::error::A release for v$version already exists (maybe a draft). Bump \"version\" in VERSION, or delete that release first."
+              exit 1
+            fi
+            tag_sha="$(gh api "repos/$GITHUB_REPOSITORY/commits/v$version" --jq .sha 2>/dev/null || true)"
+            if [[ -n "$tag_sha" && "$tag_sha" != "$GITHUB_SHA" ]]; then
+              echo "::error::Tag v$version already exists on another commit ($tag_sha). Bump \"version\" in VERSION."
+              exit 1
+            fi
+            if [[ "$(jq 'length' <<<"$m")" -lt 6 ]]; then
+              echo "::warning::Publishing a release with only some of the platforms."
+            fi
+          fi
+
+  build:
+    name: ${{ matrix.platform }}
+    needs: setup
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      NUGET_PACKAGES: ${{ github.workspace }}/.nuget-packages
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # the macOS app's build number is the commit count
+          fetch-depth: ${{ matrix.os == 'macos' && '0' || '1' }}
+
+      # --- FFmpeg: the static slice is cached per platform, keyed on build-ffmpeg.sh
+      # (the script's own stamp makes the build scripts skip it on a hit). On a miss
+      # the source tarball comes from a cache shared by all platforms. ---
+      - name: FFmpeg version
+        id: ffmpeg
+        shell: bash
+        run: echo "version=$(sed -n 's/^FFMPEG_VERSION="\(.*\)"$/\1/p' scripts/build-ffmpeg.sh)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache FFmpeg build
+        id: ffmpeg-cache
+        uses: actions/cache@v4
+        with:
+          path: third_party/ffmpeg-${{ matrix.platform }}
+          key: ffmpeg-${{ matrix.platform }}-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+
+      - name: Cache FFmpeg source tarball
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        uses: actions/cache@v4
+        with:
+          path: third_party/ffmpeg-src/ffmpeg-${{ steps.ffmpeg.outputs.version }}.tar.xz
+          key: ffmpeg-tarball-${{ steps.ffmpeg.outputs.version }}
+          enableCrossOsArchive: true
+
+      # --- Linux -------------------------------------------------------------------
+      - name: Install packages (Linux)
+        if: matrix.os == 'linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends ninja-build pkg-config libusb-1.0-0-dev nasm
+
+      - name: Build and package (Linux)
+        if: matrix.os == 'linux'
+        run: scripts/package-linux.sh ${{ !inputs.run_tests && '--skip-tests' || '' }}
+
+      # --- macOS -------------------------------------------------------------------
+      - name: Install packages (macOS)
+        if: matrix.os == 'macos'
+        run: |
+          for f in cmake ninja nasm libusb pkgconf; do
+            brew list --formula "$f" >/dev/null 2>&1 || brew install --formula "$f"
+          done
+          swift --version
+
+      - name: Build (macOS)
+        if: matrix.os == 'macos'
+        run: scripts/build.sh ${{ !inputs.run_tests && '--skip-tests' || '' }}
+
+      - name: Package (macOS)
+        if: matrix.os == 'macos'
+        run: scripts/package-macos.sh --skip-build
+
+      # --- Windows -----------------------------------------------------------------
+      # MSYS2's downloaded packages are cached by setup-msys2. x64 uses UCRT64 (gcc),
+      # arm64 CLANGARM64 (clang); NSIS is the x86_64 build on both (it makes x86
+      # installers anyway and runs emulated on arm64).
+      - name: Set up MSYS2 (Windows x64)
+        if: matrix.platform == 'windows-x86_64'
+        id: msys2-x64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            make diffutils autotools
+            mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-libusb mingw-w64-ucrt-x86_64-pkgconf mingw-w64-ucrt-x86_64-nasm
+            mingw-w64-ucrt-x86_64-nsis
+
+      - name: Set up MSYS2 (Windows arm64)
+        if: matrix.platform == 'windows-arm64'
+        id: msys2-arm64
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANGARM64
+          update: false
+          install: >-
+            make diffutils
+            mingw-w64-clang-aarch64-clang mingw-w64-clang-aarch64-cmake mingw-w64-clang-aarch64-ninja
+            mingw-w64-clang-aarch64-libusb mingw-w64-clang-aarch64-pkgconf
+            mingw-w64-ucrt-x86_64-nsis
+
+      - name: Set up .NET
+        if: matrix.os == 'windows'
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      # Most NuGet packages (Windows App SDK, toolkit, Vortice) are the same for both
+      # architectures, so a new key falls back to the other architecture's cache.
+      - name: Cache NuGet packages
+        if: matrix.os == 'windows'
+        uses: actions/cache@v4
+        with:
+          path: .nuget-packages
+          key: nuget-${{ hashFiles('gui/windows/**/*.csproj', 'gui/windows/Directory.Build.props', 'gui/windows/nuget.config') }}-${{ matrix.arch }}
+          restore-keys: |
+            nuget-${{ hashFiles('gui/windows/**/*.csproj', 'gui/windows/Directory.Build.props', 'gui/windows/nuget.config') }}-
+            nuget-
+
+      # libwdi's wdi-simple.exe (x64 installer only); package-windows.ps1's stamp decides
+      # whether the cached one is still current.
+      - name: Cache libwdi
+        if: matrix.platform == 'windows-x86_64'
+        uses: actions/cache@v4
+        with:
+          path: |
+            build/windows-x86_64/libwdi
+            !build/windows-x86_64/libwdi/work
+          key: libwdi-${{ hashFiles('scripts/package-windows.ps1') }}
+
+      - name: Build and package (Windows)
+        if: matrix.os == 'windows'
+        shell: pwsh
+        env:
+          MSYS2_LOCATION: ${{ steps.msys2-x64.outputs.msys2-location || steps.msys2-arm64.outputs.msys2-location }}
+          SKIP_TESTS: ${{ !inputs.run_tests }}
+        run: |
+          $a = @{ Arch = '${{ matrix.arch }}'; Msys2 = $env:MSYS2_LOCATION }
+          if ($env:SKIP_TESTS -eq 'true') { $a.SkipTests = $true }
+          & scripts/package-windows.ps1 @a
+          if (-not $?) { exit 1 }
+
+      # --- Result --------------------------------------------------------------------
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MarvinCapture-${{ needs.setup.outputs.version }}-${{ matrix.platform }}
+          path: |
+            build/${{ matrix.platform }}/installer/*.exe
+            build/${{ matrix.platform }}/installer/*.pkg
+            build/${{ matrix.platform }}/installer/*.deb
+          if-no-files-found: error
+          compression-level: 0   # installers are compressed already
+          retention-days: 30
+
+  release:
+    name: Release
+    needs: [setup, build]
+    if: inputs.publish != 'artifacts only'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: installers
+          merge-multiple: true
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.setup.outputs.tag }}
+          VERSION: ${{ needs.setup.outputs.version }}
+          PUBLISH: ${{ inputs.publish }}
+          TITLE: ${{ inputs.release_title }}
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          cd installers
+          sha256sum -- * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          [[ -n "$TITLE" ]] || TITLE="MarvinCapture $VERSION"
+          if [[ -z "$NOTES" ]]; then
+            NOTES="$(gh api "repos/$GITHUB_REPOSITORY/contents/VERSION?ref=$GITHUB_SHA" --jq .content | base64 -d | jq -r .release_notes)"
+          fi
+          args=(--repo "$GITHUB_REPOSITORY" --title "$TITLE" --notes "$NOTES" --target "$GITHUB_SHA")
+          [[ "$PUBLISH" == "draft release" ]] && args+=(--draft)
+          gh release create "$TAG" "${args[@]}" *
+          echo "### $PUBLISH: $TAG" >> "$GITHUB_STEP_SUMMARY"
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json url --jq .url >> "$GITHUB_STEP_SUMMARY"
