@@ -61,7 +61,9 @@ VIAddVersionKey "FileDescription" "${APP_NAME} setup"
 !insertmacro un.GetParameters
 !insertmacro un.GetOptions
 
+!ifdef WDI_SIMPLE
 Var DriverFailures
+!endif
 Var DriverLog
 Var Upgrading        ; uninstaller: 1 = /UPGRADE (called by a newer installer)
 Var KeepDriver       ; uninstaller: 1 = /KEEPDRIVER
