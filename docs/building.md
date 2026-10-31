@@ -174,6 +174,9 @@ only recommends it); Windows uses WinHTTP.
 | `scripts/package-linux.sh` | `marvincapture_<version>_<debarch>.deb` | Linux only, needs `dpkg-deb`; udev rules and maintainer scripts in `packaging/linux/` |
 | `scripts/package-linux-docker.sh` | same `.deb` | runs `package-linux.sh` in `ubuntu:22.04` (`--arch amd64\|arm64\|all`), so the package's `libc6` dependency is 22.04's glibc; works from macOS with Docker/OrbStack |
 
+The GitHub Actions workflow `.github/workflows/build.yml` runs these scripts for all six
+platforms and can publish the result as a (draft) release; see [ci.md](ci.md).
+
 ## Tests
 
 `tests/` has three kinds:

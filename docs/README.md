@@ -7,6 +7,7 @@
 - [windows-driver.md](windows-driver.md): binding the device to WinUSB (Zadig).
 - [../gui/windows/README.md](../gui/windows/README.md): the GUI and its command line.
 - [building.md](building.md): building, output layout, tests, repo layout.
+- [ci.md](ci.md): the GitHub Actions build (installers for all platforms, releases).
 - [windows-size.md](windows-size.md): why the Windows installer is big, the trimming/pruning setup and how to test it.
 
 **How the device works**

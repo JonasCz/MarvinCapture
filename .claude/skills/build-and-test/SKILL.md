@@ -8,6 +8,8 @@ description: Build the Pinnacle 500-USB driver (core library, MarvinCaptureCLI, 
 Full reference: `docs/building.md`. Windows is the practical, tested path; macOS and Linux are below.
 Build output is per platform, `build/<os>-<arch>/{core,dist,gui}` (os = windows,
 macos, linux; arch = x86_64, arm64), so builds from different platforms can share one tree.
+`scripts\build.ps1 -Arch arm64` builds Windows on Arm (MSYS2 CLANGARM64). All six platforms'
+installers can also be built by the manual GitHub Actions workflow (`docs/ci.md`).
 
 ## Build
 

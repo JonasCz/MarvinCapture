@@ -224,7 +224,9 @@ The installers are built with `scripts/package-macos.sh` (.pkg), `scripts\packag
 (NSIS setup with the libwdi driver installer) and `scripts/package-linux.sh` (.deb, on
 Linux) or `scripts/package-linux-docker.sh` (the .deb in an Ubuntu 22.04 container, from
 any host with Docker), into `build/<os>-<arch>/installer`; see
-[docs/building.md](docs/building.md#installers).
+[docs/building.md](docs/building.md#installers). The GitHub Actions workflow builds all of
+them (Windows, macOS and Linux, x86_64 and arm64) on demand and can publish a release; see
+[docs/ci.md](docs/ci.md).
 
 ## Software architecture
 
@@ -241,6 +243,7 @@ MarvinCaptureCLI            ──┘                   src/api/pin_api.h)
 | | |
 |---|---|
 | [docs/building.md](docs/building.md) | Build script, output layout, tests, repository layout |
+| [docs/ci.md](docs/ci.md) | GitHub Actions build: installers for all platforms, releases |
 | [docs/usage.md](docs/usage.md) | Running captures, diagnostics, proving no data was dropped |
 | [docs/hardware.md](docs/hardware.md) | USB descriptors, endpoints, initialisation, what the FPGA is |
 | [docs/protocol.md](docs/protocol.md) | Command word, OHCI access, EP 0x88 framing |
