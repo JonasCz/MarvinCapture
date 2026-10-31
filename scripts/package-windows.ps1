@@ -17,12 +17,11 @@
 
      The WDK MSI is only unpacked (msiexec /a, no install) into the source tree. libwdi's
      msvc\config.h is pointed at it, with libusb-win32/libusbK left out, and libwdi.sln is
-     built for Win32 Release, as the official Zadig is: a 32-bit wdi-simple.exe that embeds
-     the INF/catalog templates, the co-installers and the elevated helpers installer_x86.exe,
-     installer_x64.exe and installer_arm64.exe. It runs on x64 Windows and, through x86
-     emulation, on Windows on Arm (libwdi: Windows 10 1511 or later), and starts the helper
-     for the machine. Only the MSVC build has the ARM64 helper; MinGW/autotools builds of
-     libwdi are x86/x64 only.
+     built for x64 Release: wdi-simple.exe embeds the INF/catalog templates, the x64
+     co-installers and the elevated helpers installer_x64.exe and installer_arm64.exe. It runs
+     on x64 Windows and, through x64 emulation, on Windows 11 on Arm, and starts the helper for
+     the machine. Only the MSVC build has the ARM64 helper; MinGW/autotools builds of libwdi
+     are x86/x64 only. (No 32-bit Windows: the app is x64/ARM64 only.)
      At install time it generates a WinUSB INF for ONE hardware ID, a catalog, signs it with a
      throw-away self-signed certificate (put into LocalMachine Root + TrustedPublisher, private
      key destroyed) and installs it. For a device that is not plugged in it only stages the
@@ -63,7 +62,7 @@ $platform = if ($Arch -eq 'arm64') { 'windows-arm64' } else { 'windows-x86_64' }
 $build = Join-Path $root "build\$platform"
 $dist = Join-Path $build 'dist'
 $outDir = Join-Path $build 'installer'
-# wdi-simple.exe is the same for both architectures (32-bit, all helpers embedded)
+# wdi-simple.exe is the same for both architectures (x64, with the x64 and ARM64 helpers)
 $wdiOut = Join-Path $root 'build\windows-libwdi'
 $src = Join-Path $root 'packaging\windows'
 
@@ -120,7 +119,6 @@ if ($Makensis) {
     $cands += (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')
     $cands += (Join-Path $Msys2 'ucrt64\bin\makensis.exe')
     $cands += (Join-Path $Msys2 'clangarm64\bin\makensis.exe')
-    $cands += (Join-Path $Msys2 'mingw32\bin\makensis.exe')
     $nsis = $cands | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 if (-not $nsis -or -not (Test-Path $nsis)) {
@@ -152,7 +150,7 @@ if ($missing) { throw "missing from $dist (run without -SkipBuild): $($missing -
 # --- 2. libwdi: wdi-simple.exe ---------------------------------------------------------
 $wdiExe = Join-Path $wdiOut 'wdi-simple.exe'
 $wdiStamp = Join-Path $wdiOut 'build.stamp'
-$stampText = "libwdi $wdiVersion $wdiSha wdk $wdkSha msvc win32"
+$stampText = "libwdi $wdiVersion $wdiSha wdk $wdkSha msvc x64"
 $wdiFresh = (Test-Path $wdiExe) -and (Test-Path $wdiStamp) -and ((Get-Content $wdiStamp -Raw).Trim() -eq $stampText)
 if ($RebuildWdi -or -not $wdiFresh) {
     Step "Building libwdi $wdiVersion (wdi-simple.exe, MSVC)"
@@ -193,15 +191,14 @@ if ($RebuildWdi -or -not $wdiFresh) {
     $p = Start-Process msiexec.exe -ArgumentList @('/a', "`"$msi`"", '/qn', "TARGETDIR=`"$wdkDir`"") -Wait -PassThru
     if ($p.ExitCode -ne 0) { throw "msiexec /a failed with exit code $($p.ExitCode)" }
     $kit = Join-Path $wdkDir 'Windows Kits\8.0'
-    foreach ($wa in 'x86', 'x64') {
-        foreach ($f in 'WdfCoInstaller01011.dll', 'winusbcoinstaller2.dll') {
-            if (-not (Test-Path (Join-Path $kit "redist\wdf\$wa\$f"))) { throw "$f ($wa) not found under $kit\redist\wdf" }
-        }
+    foreach ($f in 'WdfCoInstaller01011.dll', 'winusbcoinstaller2.dll') {
+        if (-not (Test-Path (Join-Path $kit "redist\wdf\x64\$f"))) { throw "$f (x64) not found under $kit\redist\wdf" }
     }
 
     # msvc\config.h is libwdi's build configuration for MSVC: point it at the WDK files and
-    # leave out libusb-win32 and libusbK (only WinUSB is used). Its defaults keep x86, x64 and
-    # ARM64 (OPT_M32/OPT_M64/OPT_ARM): all three elevated helpers get embedded.
+    # leave out libusb-win32 and libusbK (only WinUSB is used). It enables x86, x64 and ARM64
+    # (OPT_M32/OPT_M64/OPT_ARM); a 64-bit build drops x86 itself (libwdi\embedder.h), so the
+    # x64 and ARM64 elevated helpers get embedded.
     $cfgPath = Join-Path $srcDir 'msvc\config.h'
     $cfg = [IO.File]::ReadAllText($cfgPath)
     $edits = [ordered]@{
@@ -213,19 +210,20 @@ if ($RebuildWdi -or -not $wdiFresh) {
         if (-not $cfg.Contains($k)) { throw "msvc\config.h: '$k' not found (libwdi changed?)" }
         $cfg = $cfg.Replace($k, $edits[$k])
     }
-    foreach ($opt in 'OPT_M32', 'OPT_M64', 'OPT_ARM') {
+    foreach ($opt in 'OPT_M64', 'OPT_ARM') {
         if ($cfg -notmatch "(?m)^#define $opt\b") { throw "msvc\config.h: $opt is not defined (libwdi changed?)" }
     }
     [IO.File]::WriteAllText($cfgPath, $cfg)
 
-    # Win32 Release, like the official Zadig: the 32-bit wdi-simple.exe runs on x64 Windows and
-    # (x86 emulation) on Windows on Arm, and starts the helper that matches the machine.
+    # x64 Release: wdi-simple.exe runs natively on x64 Windows and through Windows 11's x64
+    # emulation on Windows on Arm, where libwdi sees the native machine (IsWow64Process2) and
+    # starts the ARM64 helper. (The solution still compiles the x86 helper; it is not embedded.)
     Run $msbuild.FullName @((Join-Path $srcDir 'libwdi.sln'), '/m', '/nologo', '/v:minimal', '/t:examples\wdi-simple',
-                            '/p:Configuration=Release', '/p:Platform=Win32', "/p:PlatformToolset=$toolset")
+                            '/p:Configuration=Release', '/p:Platform=x64', "/p:PlatformToolset=$toolset")
 
-    $built = Join-Path $srcDir 'Win32\Release\examples\wdi-simple.exe'
+    $built = Join-Path $srcDir 'x64\Release\examples\wdi-simple.exe'
     if (-not (Test-Path $built)) { throw "wdi-simple.exe was not built ($built)" }
-    foreach ($h in 'Win32', 'x64', 'arm64') {
+    foreach ($h in 'x64', 'arm64') {
         if (-not (Test-Path (Join-Path $srcDir "$h\Release\helper"))) { throw "libwdi helper for $h was not built" }
     }
     Copy-Item $built $wdiExe -Force
@@ -233,7 +231,7 @@ if ($RebuildWdi -or -not $wdiFresh) {
     Copy-Item (Join-Path $srcDir 'COPYING') (Join-Path $wdiOut 'libwdi-COPYING.txt') -Force
     @"
 wdi-simple.exe in this folder is built from libwdi $wdiVersion (LGPL-3.0-or-later) with
-Visual Studio (32-bit, with the x86, x64 and ARM64 installer helpers):
+Visual Studio (x64, with the x64 and ARM64 installer helpers):
   source:  $wdiUrl
   sha256:  $wdiSha
   project: https://github.com/pbatard/libwdi

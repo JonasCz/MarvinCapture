@@ -5,7 +5,7 @@
 ;   ARCH          x64 or arm64 (the Windows the installer accepts)
 ;   DIST          build\windows-<arch>\dist (GUI, CLI, dlls, firmware\)
 ;   ROOT          repository root
-;   WDI_SIMPLE    path of libwdi's wdi-simple.exe (32-bit, with x86/x64/ARM64 helpers) to
+;   WDI_SIMPLE    path of libwdi's wdi-simple.exe (x64, with the x64 and ARM64 helpers) to
 ;                 install the WinUSB driver; the same file in the x64 and arm64 installers
 ;   WDI_DOCS      directory with the libwdi licence / source notes (installed next to it)
 ;   LICENSE_FILE  LICENSE with CRLF line endings
@@ -145,6 +145,11 @@ Function .onInit
 !if "${ARCH}" == "arm64"
   ${IfNot} ${IsNativeARM64}
     MessageBox MB_OK|MB_ICONSTOP "This is the ${APP_NAME} setup for Windows on Arm (ARM64). On an Intel/AMD PC use the x86_64 setup."
+    Abort
+  ${EndIf}
+  ; the driver tool (wdi-simple.exe) is x64 code, which Windows 10 on Arm cannot run
+  ${IfNot} ${AtLeastBuild} 22000
+    MessageBox MB_OK|MB_ICONSTOP "${APP_NAME} needs Windows 11 on Arm."
     Abort
   ${EndIf}
 !else

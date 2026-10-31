@@ -180,7 +180,7 @@ only recommends it); Windows uses WinHTTP.
 | Script | Output | Notes |
 |---|---|---|
 | `scripts/package-macos.sh` | `MarvinCapture-<version>-macos-<arch>.pkg` | `pkgbuild` + `productbuild`, choices "app" (`/Applications`) and "cli" (`/usr/local/lib/marvincapture`, link in `/usr/local/bin`); resources and `uninstall.sh` in `packaging/macos/` |
-| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-<arch>-setup.exe` | `-Arch x64\|arm64`; NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once with Visual Studio (32-bit, with x86/x64/ARM64 helpers, used by both installers; downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
+| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-<arch>-setup.exe` | `-Arch x64\|arm64`; NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once with Visual Studio (x64, with the x64 and ARM64 helpers, used by both installers; the arm64 setup needs Windows 11; downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
 | `scripts/package-linux.sh` | `marvincapture_<version>_<debarch>.deb` | Linux only, needs `dpkg-deb`; udev rules and maintainer scripts in `packaging/linux/` |
 | `scripts/package-linux-docker.sh` | same `.deb` | runs `package-linux.sh` in `ubuntu:22.04` (`--arch amd64\|arm64\|all`), so the package's `libc6` dependency is 22.04's glibc; works from macOS with Docker/OrbStack |
 

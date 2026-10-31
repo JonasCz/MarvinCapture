@@ -29,10 +29,10 @@ Output: `build\windows-<arch>\installer\MarvinCapture-<version>-windows-<arch>-s
 
 What the script downloads (once, SHA256-verified, cached under `build\windows-libwdi\work`):
 
-- libwdi v1.5.1 source tarball (GitHub) - built with MSBuild (`libwdi.sln`, Win32 Release, like
-  the official Zadig) into one 32-bit `wdi-simple.exe` that embeds libwdi's elevated helpers for
-  x86, x64 and ARM64 and starts the one for the machine; both installers use it (on Windows on
-  Arm it runs through x86 emulation, Windows 10 1511 or later). The script edits libwdi's
+- libwdi v1.5.1 source tarball (GitHub) - built with MSBuild (`libwdi.sln`, x64 Release) into one
+  `wdi-simple.exe` that embeds libwdi's elevated helpers for x64 and ARM64 and starts the one for
+  the machine; both installers use it (on Windows on Arm it runs through Windows 11's x64
+  emulation, so the arm64 setup requires Windows 11). No 32-bit x86 support. The script edits libwdi's
   `msvc\config.h` to point at the WDK files and to leave out libusb-win32 and libusbK.
 - The Microsoft WDK 8.0 redistributable `wdfcoinstaller.msi` - only unpacked (`msiexec /a`), not
   installed. libwdi needs its WinUSB co-installer DLLs to build the WinUSB INF template; they are

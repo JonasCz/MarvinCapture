@@ -59,7 +59,7 @@ cross configure flags, and could not run the tests for the other architecture.
 
 The arm64 and Intel-Mac builds are made by CI only and have not been tried against
 the device. Both Windows installers carry the same `wdi-simple.exe` (libwdi, built with
-Visual Studio, which the Windows runners have): it holds libwdi's x86, x64 and ARM64
+Visual Studio, which the Windows runners have): it holds libwdi's x64 and ARM64
 helpers, so the WinUSB driver install works on Windows on Arm too.
 
 Measured (October 2026), whole job with the caches filled: Linux 0.5 min, macOS arm64
