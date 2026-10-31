@@ -48,9 +48,15 @@ In `gui/windows/MarvinCaptureGUI/MarvinCaptureGUI.csproj` and `scripts/build.ps1
 5. The csproj copies `marvin-core.dll`, libusb, libwinpthread and `firmware\` into the
    publish folder too (before, only into `OutDir`).
 
-The changes were made on Linux and not built: only `dotnet restore` was checked (it
-resolves; the AI/ML/Search/Widgets packages are gone from the graph). Everything
-below has to be done on Windows.
+The changes were made on Linux. They have since been built by CI
+([ci.md](ci.md), `windows-2025` runner): `scripts\package-windows.ps1` builds, and the
+installer is **25.4 MB** (v1.0: 65 MB). The only trim warning in the app's own code is
+IL2072 for `Activator.CreateInstance(Type.GetTypeFromCLSID(...))` in
+`WasapiAudioMonitorService.cs` (classic COM activation of the MMDeviceEnumerator; the
+type is a runtime COM wrapper, so trimming cannot remove anything it needs, but the
+audio monitor is still on the checklist below). The rest are the expected IL2104/IL2026
+from WinRT, the Windows SDK projection, SharpGen and built-in COM. Not yet done: running
+the trimmed app (section 3).
 
 ## Next steps: build and test on Windows
 
