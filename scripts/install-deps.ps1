@@ -9,12 +9,13 @@
     x64     UCRT64 gcc, cmake, ninja, libusb, pkgconf, nasm
     arm64   CLANGARM64 clang, cmake, ninja, libusb, pkgconf (MSYS2 has no gcc there)
 
-  plus make, diffutils (FFmpeg's build), autotools (the libwdi build, x64 only) and NSIS
-  (the x86_64 package on both: NSIS makes x86 installers anyway). Packages already
-  installed are left alone.
+  plus make, diffutils (FFmpeg's build) and NSIS (the x86_64 package on both: NSIS makes
+  x86 installers anyway). Packages already installed are left alone.
 
-  The .NET 10 SDK is not installed by this script (https://dotnet.microsoft.com/download,
-  or winget install Microsoft.DotNet.SDK.10); it only warns when dotnet is missing.
+  Not installed by this script, only checked (a warning when missing):
+    * the .NET 10 SDK, for the GUI (winget install Microsoft.DotNet.SDK.10)
+    * Visual Studio 2022+ or its Build Tools with the C++ x64/x86 and ARM64 build tools, for
+      libwdi in the installer (scripts\package-windows.ps1; see packaging\windows\README.md)
 
 .PARAMETER Arch     x64 or arm64 (default: this machine's).
 .PARAMETER Msys2    MSYS2 root (default C:\msys64).
@@ -37,7 +38,6 @@ $pkgs = @('make', 'diffutils', 'mingw-w64-ucrt-x86_64-nsis')
 if ($Arch -eq 'arm64') {
     $pkgs += @('clang', 'cmake', 'ninja', 'libusb', 'pkgconf' | ForEach-Object { "mingw-w64-clang-aarch64-$_" })
 } else {
-    $pkgs += 'autotools'
     $pkgs += @('gcc', 'cmake', 'ninja', 'libusb', 'pkgconf', 'nasm' | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" })
 }
 
@@ -48,5 +48,12 @@ if ($LASTEXITCODE -ne 0) { throw "pacman failed with exit code $LASTEXITCODE" }
 
 if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     Write-Warning 'dotnet not found: the GUI needs the .NET 10 SDK (winget install Microsoft.DotNet.SDK.10)'
+}
+$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+$vs = if (Test-Path $vswhere) {
+    & $vswhere -latest -products * -requires Microsoft.Component.MSBuild Microsoft.VisualStudio.Component.VC.Tools.x86.x64 Microsoft.VisualStudio.Component.VC.Tools.ARM64 -property installationPath
+}
+if (-not $vs) {
+    Write-Warning 'No Visual Studio / Build Tools with the C++ x64/x86 and ARM64 build tools: needed by scripts\package-windows.ps1 for libwdi (see packaging\windows\README.md)'
 }
 Write-Host 'Done.'

@@ -94,7 +94,7 @@ Download and run the installer, which will install the GUI, CLI, and associate t
 
 Needs 64-bit Windows 10 or later (Intel/AMD).
 
-1. Download `MarvinCapture-<version>-windows-x86_64-setup.exe`. The browser may say it "isn't commonly downloaded": choose **Keep** (Edge: **...** > **Keep** > **Keep anyway**).
+1. Download `MarvinCapture-<version>-windows-x86_64-setup.exe` (Windows on Arm: `...-windows-arm64-setup.exe`, built but not yet tested with the device). The browser may say it "isn't commonly downloaded": choose **Keep** (Edge: **...** > **Keep** > **Keep anyway**).
 2. Run it. If SmartScreen says "Windows protected your PC", click **More info**, then **Run anyway**.
 3. The prompt shows "Unknown publisher": click **Yes**. Admin rights are needed for the driver (Libusb, signed by Microsoft)
 4. If Windows 11 **Smart App Control** is on, it may block the installer with no way to continue. It can only be turned off (Windows Security > App & browser control > Smart App Control), and not back on without resetting Windows; building from source is the alternative.

@@ -40,14 +40,16 @@ Tools, skipping what is already there. CI uses the same scripts.
 - **MSYS2** with the UCRT64 toolchain (default location `C:\msys64`; use
   `-Msys2 <root>` otherwise):
   `pacman -S make diffutils mingw-w64-ucrt-x86_64-{gcc,cmake,ninja,libusb,pkgconf,nasm}`;
-  for the installer also `autotools mingw-w64-ucrt-x86_64-nsis`
+  for the installer also `mingw-w64-ucrt-x86_64-nsis`
 - Windows on Arm (`-Arch arm64`, the default on an ARM64 machine; output in
   `build\windows-arm64\`): the CLANGARM64 toolchain instead, as MSYS2 has no gcc there:
   `pacman -S make diffutils mingw-w64-clang-aarch64-{clang,cmake,ninja,libusb,pkgconf}`
   (and `mingw-w64-ucrt-x86_64-nsis` for the installer).
-  Built by CI, not tested on hardware. Its installer has no driver section (libwdi's
-  MinGW build has no ARM64 target), so the WinUSB driver is installed with Zadig.
+  Built by CI, not tested on hardware.
 - The **.NET 10 SDK** (only for the GUI). NuGet packages come from nuget.org.
+- For the installer only: **Visual Studio 2022 or later, or its Build Tools**, with the C++
+  build tools for x64/x86 and for ARM64, to build libwdi's driver tool (see
+  [../packaging/windows/README.md](../packaging/windows/README.md)).
 
 ### macOS
 
@@ -178,7 +180,7 @@ only recommends it); Windows uses WinHTTP.
 | Script | Output | Notes |
 |---|---|---|
 | `scripts/package-macos.sh` | `MarvinCapture-<version>-macos-<arch>.pkg` | `pkgbuild` + `productbuild`, choices "app" (`/Applications`) and "cli" (`/usr/local/lib/marvincapture`, link in `/usr/local/bin`); resources and `uninstall.sh` in `packaging/macos/` |
-| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-<arch>-setup.exe` | `-Arch x64\|arm64` (arm64: no driver section); NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once (needs MSYS2 `autotools`, downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
+| `scripts\package-windows.ps1` | `MarvinCapture-<version>-windows-<arch>-setup.exe` | `-Arch x64\|arm64`; NSIS (`makensis` from NSIS or `mingw-w64-ucrt-x86_64-nsis`); builds libwdi's `wdi-simple.exe` once with Visual Studio (32-bit, with x86/x64/ARM64 helpers, used by both installers; downloads a pinned libwdi and the WDK 8.0 co-installer redistributable). See [../packaging/windows/README.md](../packaging/windows/README.md) |
 | `scripts/package-linux.sh` | `marvincapture_<version>_<debarch>.deb` | Linux only, needs `dpkg-deb`; udev rules and maintainer scripts in `packaging/linux/` |
 | `scripts/package-linux-docker.sh` | same `.deb` | runs `package-linux.sh` in `ubuntu:22.04` (`--arch amd64\|arm64\|all`), so the package's `libc6` dependency is 22.04's glibc; works from macOS with Docker/OrbStack |
 

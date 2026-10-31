@@ -16,7 +16,7 @@ on:
         type: boolean
         default: true
       windows_arm64:
-        description: Windows arm64 (no driver in the installer, see docs/ci.md)
+        description: Windows arm64
         type: boolean
         default: true
       macos_arm64:
@@ -189,16 +189,16 @@ jobs:
             nuget-${{ hashFiles('gui/windows/**/*.csproj', 'gui/windows/Directory.Build.props', 'gui/windows/nuget.config') }}-
             nuget-
 
-      # libwdi's wdi-simple.exe (x64 installer only); package-windows.ps1's stamp decides
-      # whether the cached one is still current.
+      # libwdi's wdi-simple.exe, the same file for both architectures (built with MSVC);
+      # package-windows.ps1's stamp decides whether the cached one is still current.
       - name: Cache libwdi
-        if: matrix.platform == 'windows-x86_64'
+        if: matrix.os == 'windows'
         uses: actions/cache@v5
         with:
           path: |
-            build/windows-x86_64/libwdi
-            !build/windows-x86_64/libwdi/work
-          key: libwdi-${{ hashFiles('scripts/package-windows.ps1') }}
+            build/windows-libwdi
+            !build/windows-libwdi/work
+          key: libwdi-msvc-${{ hashFiles('scripts/package-windows.ps1') }}
 
       - name: Install dependencies
         if: matrix.os == 'windows'

@@ -1,7 +1,8 @@
 # Windows installer
 
-NSIS (Modern UI 2) installer, 64-bit only, with an optional WinUSB driver install for all
-five supported devices (VID `2304`, PID `0213`, `0223`, `0212`, `0224`, `0206`).
+NSIS (Modern UI 2) installer for 64-bit Windows, x64 or ARM64 (one setup per architecture,
+`-Arch`), with an optional WinUSB driver install for all five supported devices (VID `2304`,
+PID `0213`, `0223`, `0212`, `0224`, `0206`).
 
 ## Build
 
@@ -10,27 +11,34 @@ Prerequisites (on top of those in `docs/building.md`):
 - **NSIS 3.x** (tested layout: 3.11 / 3.13). Either the official installer from
   <https://nsis.sourceforge.io/Download> (found at `C:\Program Files (x86)\NSIS`), or in MSYS2:
   `pacman -S mingw-w64-ucrt-x86_64-nsis`. Use `-Makensis <path>` for anything else.
-- **MSYS2 autotools**, only for the first build of the driver tool: `pacman -S --needed autotools`
-  (the UCRT64 gcc from `docs/building.md` is the compiler).
+- **Visual Studio 2022 or later, or the Build Tools for Visual Studio**, only for the first build
+  of the driver tool, with the workload "Desktop development with C++" plus the
+  **C++ ARM64 build tools** (components `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` and
+  `Microsoft.VisualStudio.Component.VC.Tools.ARM64`). Found with `vswhere`. Only libwdi's
+  Visual Studio solution builds its ARM64 helper; its MinGW/autotools build is x86/x64 only.
 - Windows 10+ `tar.exe` and network access on the first run.
 
 ```powershell
 .\scripts\package-windows.ps1              # builds the app (build.ps1), the driver tool, the installer
-.\scripts\package-windows.ps1 -SkipBuild   # reuse build\windows-x86_64\dist
+.\scripts\package-windows.ps1 -SkipBuild   # reuse build\windows-<arch>\dist
+.\scripts\package-windows.ps1 -Arch arm64  # Windows on Arm (default: this machine's)
 ```
 
-Output: `build\windows-x86_64\installer\MarvinCapture-<version>-windows-x86_64-setup.exe`
-(`<version>` from the top-level `VERSION` file).
+Output: `build\windows-<arch>\installer\MarvinCapture-<version>-windows-<arch>-setup.exe`
+(`<arch>` = `x86_64` or `arm64`, `<version>` from the top-level `VERSION` file).
 
-What the script downloads (once, SHA256-verified, cached under `build\windows-x86_64\libwdi\work`,
-or `C:\marvincapture-libwdi-work` if the repository path contains spaces):
+What the script downloads (once, SHA256-verified, cached under `build\windows-libwdi\work`):
 
-- libwdi v1.5.1 source tarball (GitHub) - built into `wdi-simple.exe`, static, x64 only.
+- libwdi v1.5.1 source tarball (GitHub) - built with MSBuild (`libwdi.sln`, Win32 Release, like
+  the official Zadig) into one 32-bit `wdi-simple.exe` that embeds libwdi's elevated helpers for
+  x86, x64 and ARM64 and starts the one for the machine; both installers use it (on Windows on
+  Arm it runs through x86 emulation, Windows 10 1511 or later). The script edits libwdi's
+  `msvc\config.h` to point at the WDK files and to leave out libusb-win32 and libusbK.
 - The Microsoft WDK 8.0 redistributable `wdfcoinstaller.msi` - only unpacked (`msiexec /a`), not
   installed. libwdi needs its WinUSB co-installer DLLs to build the WinUSB INF template; they are
   embedded in `wdi-simple.exe`.
 
-Delete `build\windows-x86_64\libwdi` (or pass `-RebuildWdi`) to rebuild the tool.
+Delete `build\windows-libwdi` (or pass `-RebuildWdi`) to rebuild the tool.
 
 ## What is in here
 

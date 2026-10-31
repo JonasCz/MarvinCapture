@@ -58,10 +58,9 @@ need a second libusb per platform (Homebrew's is the host's architecture only), 
 cross configure flags, and could not run the tests for the other architecture.
 
 The arm64 and Intel-Mac builds are made by CI only and have not been tried against
-the device. The Windows arm64 installer has **no driver section**: libwdi (which
-installs the WinUSB driver on x64) only builds for ARM64 with its MSVC solution, not
-with MSYS2. On Windows on Arm, install WinUSB for the device with Zadig
-([windows-driver.md](windows-driver.md)).
+the device. Both Windows installers carry the same `wdi-simple.exe` (libwdi, built with
+Visual Studio, which the Windows runners have): it holds libwdi's x86, x64 and ARM64
+helpers, so the WinUSB driver install works on Windows on Arm too.
 
 Measured (October 2026), whole job with the caches filled: Linux 0.5 min, macOS arm64
 2 min, macOS x86_64 4.5 min, Windows x86_64 4 min, Windows arm64 about 5 min. A cold
@@ -78,7 +77,7 @@ compile itself is under a minute.
 | FFmpeg source tarball | FFmpeg version, shared by all platforms | the download, only needed when a platform's build cache misses |
 | MSYS2 packages (pacman's download cache) | platform + hash of `scripts/install-deps.ps1` | the pacman downloads |
 | NuGet packages | hash of the csproj/props/nuget.config + architecture; falls back to the other Windows architecture's | the package restore (the Windows App SDK packages hold both architectures) |
-| libwdi `wdi-simple.exe` (Windows x64) | hash of `scripts/package-windows.ps1` | the libwdi autotools build and the WDK download |
+| libwdi `wdi-simple.exe` (both Windows jobs) | hash of `scripts/package-windows.ps1` | the libwdi MSBuild build and the WDK download |
 
 The build scripts check the cached FFmpeg and libwdi themselves (their stamp files), so a
 stale cache is rebuilt rather than used. Changing `scripts/build-ffmpeg.sh` rebuilds
