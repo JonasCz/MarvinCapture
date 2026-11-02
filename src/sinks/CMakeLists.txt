@@ -21,6 +21,8 @@
 
 if(WIN32)
     set(PIN_FFMPEG_OS "windows")
+elseif(ANDROID)
+    set(PIN_FFMPEG_OS "android")
 elseif(APPLE)
     set(PIN_FFMPEG_OS "macos")
 else()
@@ -105,6 +107,6 @@ if(APPLE)
 endif()
 target_link_options(pinnacle_sinks PUBLIC ${_pin_ffmpeg_ldflags})
 
-if(EXISTS ${CMAKE_SOURCE_DIR}/tests/sinks/CMakeLists.txt)
+if(PIN_BUILD_TESTS AND EXISTS ${CMAKE_SOURCE_DIR}/tests/sinks/CMakeLists.txt)
     add_subdirectory(${CMAKE_SOURCE_DIR}/tests/sinks ${CMAKE_BINARY_DIR}/tests/sinks)
 endif()

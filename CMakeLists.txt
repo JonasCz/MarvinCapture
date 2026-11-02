@@ -38,6 +38,10 @@ endif()
 
 add_compile_options(-Wall -Wextra)
 
+# The ctest suite (unit and replay tests, and the test-only executables). Off for a cross
+# build whose binaries cannot run on the build machine: scripts/build-android-native.sh.
+option(PIN_BUILD_TESTS "Build the ctest suite" ON)
+
 # The release version: "version" of the top-level VERSION file (JSON; the same file
 # is published for the update check, see src/engine/pin_update_net.c).
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/VERSION)
@@ -59,10 +63,11 @@ file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
 target_include_directories(pinnacle_core PUBLIC ${CMAKE_SOURCE_DIR}/src/core)
 target_link_libraries(pinnacle_core PUBLIC PkgConfig::LIBUSB Threads::Threads)
-if(APPLE)
+if(APPLE OR ANDROID)
     # The sources include <libusb-1.0/libusb.h>; libusb-1.0.pc only adds
     # .../include/libusb-1.0, which on Linux and MSYS2 sits under a default
-    # include dir anyway but not on macOS (Homebrew's /opt/homebrew/include).
+    # include dir anyway but not on macOS (Homebrew's /opt/homebrew/include)
+    # or for Android (third_party/libusb-android-<arch>/include).
     foreach(_dir IN LISTS LIBUSB_INCLUDE_DIRS)
         get_filename_component(_parent "${_dir}" DIRECTORY)
         target_include_directories(pinnacle_core PUBLIC "${_parent}")
@@ -74,8 +79,10 @@ if(WIN32)
 endif()
 
 # --- Hardware-free regression tests. ---
-enable_testing()
-add_subdirectory(tests)
+if(PIN_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
 
 # --- Session engine (Phase 3+): pinnacle_engine_pure (hardware-free; the
 # rest of pinnacle_engine is defined further down, after src/sinks, since it
@@ -119,29 +126,31 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     # dllimport here (PIN_API => dllexport) -- see src/api/pin_api.h.
     target_compile_definitions(pinnacle_engine PUBLIC PIN_BUILDING_LIBRARY)
 
-    # pin_api.c: the engine calls back into it (pin_strerror)
-    add_executable(test_pin_event_queue tests/engine/test_pin_event_queue.c src/api/pin_api.c)
-    target_link_libraries(test_pin_event_queue PRIVATE pinnacle_engine)
-    add_test(NAME test_pin_event_queue COMMAND test_pin_event_queue)
+    if(PIN_BUILD_TESTS)
+        # pin_api.c: the engine calls back into it (pin_strerror)
+        add_executable(test_pin_event_queue tests/engine/test_pin_event_queue.c src/api/pin_api.c)
+        target_link_libraries(test_pin_event_queue PRIVATE pinnacle_engine)
+        add_test(NAME test_pin_event_queue COMMAND test_pin_event_queue)
 
-    add_executable(test_pin_closer tests/engine/test_pin_closer.c src/api/pin_api.c)
-    target_link_libraries(test_pin_closer PRIVATE pinnacle_engine pinnacle_sinks)
-    add_test(NAME test_pin_closer COMMAND test_pin_closer)
+        add_executable(test_pin_closer tests/engine/test_pin_closer.c src/api/pin_api.c)
+        target_link_libraries(test_pin_closer PRIVATE pinnacle_engine pinnacle_sinks)
+        add_test(NAME test_pin_closer COMMAND test_pin_closer)
 
-    add_executable(test_pin_deck tests/engine/test_pin_deck.c src/api/pin_api.c)
-    target_link_libraries(test_pin_deck PRIVATE pinnacle_engine)
-    add_test(NAME test_pin_deck COMMAND test_pin_deck)
+        add_executable(test_pin_deck tests/engine/test_pin_deck.c src/api/pin_api.c)
+        target_link_libraries(test_pin_deck PRIVATE pinnacle_engine)
+        add_test(NAME test_pin_deck COMMAND test_pin_deck)
 
-    # the ready-made texts / enable rules that read a status snapshot or device info (pin_api.c)
-    add_executable(test_pin_ui_api tests/engine/test_pin_ui_api.c src/api/pin_api.c)
-    target_link_libraries(test_pin_ui_api PRIVATE pinnacle_engine)
-    add_test(NAME test_pin_ui_api COMMAND test_pin_ui_api)
+        # the ready-made texts / enable rules that read a status snapshot or device info (pin_api.c)
+        add_executable(test_pin_ui_api tests/engine/test_pin_ui_api.c src/api/pin_api.c)
+        target_link_libraries(test_pin_ui_api PRIVATE pinnacle_engine)
+        add_test(NAME test_pin_ui_api COMMAND test_pin_ui_api)
 
-    # the calls for Android: pin_usb_model, pin_open("fd:N"), pin_set_app_dirs, format list and
-    # warnings per platform, pin_set_cpu_keep_busy (pin_api.c)
-    add_executable(test_pin_platform_api tests/engine/test_pin_platform_api.c src/api/pin_api.c)
-    target_link_libraries(test_pin_platform_api PRIVATE pinnacle_engine)
-    add_test(NAME test_pin_platform_api COMMAND test_pin_platform_api)
+        # the calls for Android: pin_usb_model, pin_open("fd:N"), pin_set_app_dirs, format list and
+        # warnings per platform, pin_set_cpu_keep_busy (pin_api.c)
+        add_executable(test_pin_platform_api tests/engine/test_pin_platform_api.c src/api/pin_api.c)
+        target_link_libraries(test_pin_platform_api PRIVATE pinnacle_engine)
+        add_test(NAME test_pin_platform_api COMMAND test_pin_platform_api)
+    endif()
 endif()
 
 # --- Public API: the marvin-core shared library (pin_api.c, a thin
@@ -167,7 +176,19 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${PIN_LIBUSB_DLL} $<TARGET_FILE_DIR:marvin-core>)
         endif()
     else()
-        if(NOT APPLE)
+        if(ANDROID)
+            # -Bsymbolic as below. The NDK has no libgcc to link statically (its runtime is
+            # compiler-rt and libunwind, linked in already). --as-needed: FFmpeg's .pc lists
+            # libandroid and libmediandk for MediaCodec even when that is not built in, which
+            # would leave two unused dependencies. libusb is the static libusb-1.0.a of
+            # scripts/build-android-native.sh (no shared one is installed there), so it ends
+            # up inside libmarvin-core.so. --exclude-libs: export pin_api.h only, not the
+            # static libraries' symbols (FFmpeg, libusb, the core's internals), so nothing
+            # else in the app's process can bind to them and --gc-sections can drop what
+            # the core does not use.
+            target_link_options(marvin-core PRIVATE -Wl,-Bsymbolic -Wl,--as-needed
+                -Wl,--exclude-libs,ALL)
+        elseif(NOT APPLE)
             # Apple clang has no libgcc and rejects the flag.
             # -Bsymbolic: the static FFmpeg's x86 assembly references its own
             # tables (ff_pw_32 ...) PC-relative, which ld refuses in a shared
@@ -218,6 +239,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
 
     add_executable(MarvinCaptureCLI src/cli/marvin_capture_cli.c)
     target_link_libraries(MarvinCaptureCLI PRIVATE marvin-core)
+    if(ANDROID)
+        # 16 KB pages (Android 15+ devices may use them; Google Play requires it): the NDK
+        # links this way by default since r28, kept explicit so an older NDK cannot quietly
+        # produce 4 KB-aligned segments.
+        target_link_options(marvin-core PRIVATE -Wl,-z,max-page-size=16384)
+        target_link_options(MarvinCaptureCLI PRIVATE -Wl,-z,max-page-size=16384)
+    endif()
     if(NOT WIN32)
         # Find the core library next to the executable (build tree and
         # build/<os>-<arch>/dist alike), not via an absolute build path.
@@ -225,6 +253,14 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
             set(_pin_cli_rpath "@loader_path")
         else()
             set(_pin_cli_rpath "$ORIGIN")
+        endif()
+        if(ANDROID)
+            # CMake's Android platform switches rpaths off ("Android ignores RPATH"), but
+            # its linker honours DT_RUNPATH since API 24: the CLI in Termux finds
+            # libmarvin-core.so next to itself.
+            set(CMAKE_SHARED_LIBRARY_RUNTIME_C_FLAG "-Wl,-rpath,")
+            set(CMAKE_EXECUTABLE_RUNTIME_C_FLAG "-Wl,-rpath,")
+            target_link_options(MarvinCaptureCLI PRIVATE -Wl,--enable-new-dtags)
         endif()
         set_target_properties(MarvinCaptureCLI PROPERTIES
             BUILD_WITH_INSTALL_RPATH ON
@@ -234,7 +270,7 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
     # Hardware-free ctest coverage of the session engine, driven through
     # pin_api.h against the replay (virtual device) source -- see
     # tests/engine_replay/replay_test_util.h.
-    if(EXISTS ${CMAKE_SOURCE_DIR}/tests/engine_replay/CMakeLists.txt)
+    if(PIN_BUILD_TESTS AND EXISTS ${CMAKE_SOURCE_DIR}/tests/engine_replay/CMakeLists.txt)
         add_subdirectory(${CMAKE_SOURCE_DIR}/tests/engine_replay ${CMAKE_BINARY_DIR}/tests/engine_replay)
     endif()
 endif()
