@@ -3,9 +3,10 @@
 ## FFmpeg (vendored, built from source)
 
 `marvin-core` links a small slice of FFmpeg statically: `libavformat`,
-`libavcodec` and `libavutil` only (no `libavdevice`, `libavfilter`,
-`libswscale` or `libswresample` -- colour conversion happens on the GPU in
-the GUI, not in the core).
+`libavcodec`, `libavfilter` (for one filter) and `libavutil` only (no
+`libavdevice`, `libswscale` or `libswresample` -- colour conversion for the
+preview happens on the GPU in the GUI, and the few conversions the H.264 /
+HEVC sink needs are written out in `src/sinks/hwenc_convert.c`).
 
 - **Version:** FFmpeg 8.1.3 (pinned; source tarball sha256 verified in
   `scripts/build-ffmpeg.sh`).
@@ -14,14 +15,31 @@ the GUI, not in the core).
   compiled in, so the resulting static libraries can be linked into the
   AGPL-3.0 `marvin-core` without a license conflict.
 - **Components enabled** (everything else is `--disable-everything`):
-  - Encoders: `ffv1`, `flac`, `pcm_s16le`
+  - Encoders: `ffv1`, `flac`, `pcm_s16le`, and per platform the operating
+    system's H.264 / HEVC encoder (wrappers only; the encoder itself comes with
+    the OS):
+    - Android: `h264_mediacodec`, `hevc_mediacodec` (`--enable-jni
+      --enable-mediacodec`; FFmpeg dlopens `libmediandk.so` at run time, the
+      core uses the NDK path and needs no JVM), with the bitstream filters they
+      require: `extract_extradata`, `h264_metadata`, `hevc_metadata`
+    - macOS: `h264_videotoolbox`, `hevc_videotoolbox` (`--enable-videotoolbox`;
+      the CoreFoundation, CoreMedia, CoreVideo and VideoToolbox frameworks)
+    - Windows: `h264_mf`, `hevc_mf` (`--enable-mediafoundation`; `mfplat.dll`
+      is loaded at run time, the static libraries add `mfuuid`, `ole32` and
+      `strmiids`)
+    - Linux: none (no LGPL-safe encoder of its own)
   - Decoders: `ffv1`, `flac`, `dvvideo`, `mpeg2video`, `pcm_s16le`, `pcm_s16be`,
     `mp2`, `mp2float`
-  - Muxers: `matroska`, `mov`, `avi`, `dv`, `mpegts`
-  - Demuxers: `dv`, `mpegts`, `matroska`, `mov`, `avi`
+  - Filters: `bwdif` (the H.264 / HEVC sink's deinterlacer), plus the `buffer`
+    source and `buffersink` that configure always builds
+  - Muxers: `matroska`, `mov`, `avi`, `dv`, `mpegts`, `nut`
+  - Demuxers: `dv`, `mpegts`, `matroska`, `mov`, `avi`, `nut`
   - Parsers: `mpegvideo`, `mpegaudio`, `flac`
   - Protocol: `file`
-  - No network, no autodetected external libraries, no programs/doc/bsfs.
+  - No network, no autodetected external libraries, no programs/doc; no
+    bitstream filters except the three MediaCodec needs on Android.
+  - Still LGPL-only: none of the encoder wrappers is GPL or nonfree (x264,
+    x265, NVENC/AMF/QSV are not built).
 - **Threading:** w32threads on Windows (avoids a winpthread DLL dependency
   for the static libs), pthreads on Linux/macOS. The FFV1 encoder uses
   slice threading (`slices=16`, `thread_count` set by the caller).
@@ -69,7 +87,7 @@ third_party/ffmpeg-<os>-<arch>/          install prefix (include/, lib/*.a, lib/
 
 `marvin-core`'s build picks up the static libs via
 `PKG_CONFIG_PATH=third_party/ffmpeg-<os>-<arch>/lib/pkgconfig` and
-`pkg-config --static --cflags --libs libavformat libavcodec libavutil`.
+`pkg-config --static --cflags --libs libavfilter libavformat libavcodec libavutil`.
 
 ### Static linking
 

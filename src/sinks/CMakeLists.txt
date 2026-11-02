@@ -77,7 +77,7 @@ set(ENV{PKG_CONFIG_PATH} "${_pin_ffmpeg_pkgconfig}")
 # FindPkgConfig module shipped with the CMake used here, so PIN_FFMPEG_STATIC_*
 # is used directly below instead of an IMPORTED_TARGET (which would wire up
 # the non-static flags).
-pkg_check_modules(PIN_FFMPEG REQUIRED libavformat libavcodec libavutil)
+pkg_check_modules(PIN_FFMPEG REQUIRED libavfilter libavformat libavcodec libavutil)
 set(ENV{PKG_CONFIG_PATH} "${_pin_saved_pkg_config_path}")
 
 add_library(pinnacle_sinks STATIC

@@ -180,8 +180,13 @@ mkdir -p "${BUILD_DIR}"
 cd "${WORK_BUILD_DIR}"
 
 # Components actually used by marvin-core:
-#   encode:  FFV1 + FLAC (analog capture), PCM s16le
-#   decode:  FFV1, FLAC, DV (dvvideo), MPEG-2 video (HDV), PCM s16le/s16be, MP2 (HDV audio)
+#   encode:  FFV1 + FLAC (analog capture), PCM s16le; per platform the OS's own H.264 / HEVC
+#            encoder (the hardware-encoder sink, sink_hwenc.c; see the case below)
+#   decode:  FFV1, FLAC, DV (dvvideo: preview, and DV to H.264 / HEVC), MPEG-2 video (HDV),
+#            PCM s16le/s16be, MP2 (HDV audio)
+#   filter:  bwdif (the H.264 / HEVC sink's "deinterlace" option); configure always adds the
+#            buffer source and sink a filter graph needs. No swscale: the sink converts
+#            the few pixel formats it sees itself.
 #   mux:     Matroska (FFV1+FLAC sink), MOV, AVI, DV, MPEG-TS, NUT (analog to stdout)
 #   demux:   DV, MPEG-TS, Matroska, MOV, AVI, NUT (rewrap sources / smoke test readback)
 #   parse:   mpegvideo (MPEG-2), mpegaudio (MP2), flac (FLAC-in-Matroska readback)
@@ -204,7 +209,7 @@ CONFIGURE_ARGS=(
     --disable-network
     --disable-autodetect
     --disable-avdevice
-    --disable-avfilter
+    --enable-avfilter
     --disable-iconv
     --disable-zlib
     --disable-bzlib
@@ -248,12 +253,17 @@ CONFIGURE_ARGS=(
 
     --enable-protocol=file
 
+    --enable-filter=bwdif
+
     --disable-bsfs
 )
 
-# Per-platform additions: the target, the toolchain, and (later) platform-only
-# components -- e.g. Android's hardware encoders (--enable-jni --enable-mediacodec
-# --enable-encoder=h264_mediacodec,hevc_mediacodec) go into the android branch.
+# Per-platform additions: the target, the toolchain, and each platform's own H.264 / HEVC
+# encoder for the hardware-encoder sink (src/sinks/sink_hwenc.c). All of them are wrappers
+# around an encoder that comes with the OS, so the build stays LGPL: nothing GPL (x264,
+# x265) or nonfree goes in. --disable-autodetect (above) means each system framework has
+# to be named here. Linux gets none: it has no encoder of its own that is LGPL-safe to
+# use (VAAPI needs libva and the driver), so the core does not offer those formats there.
 case "${OS_NAME}" in
     windows)
         # Name the target explicitly, configure would take it from uname (MSYS2's
@@ -261,11 +271,27 @@ case "${OS_NAME}" in
         CONFIGURE_ARGS+=(--target-os=mingw32)
         [[ "${ARCH_NAME}" == arm64 ]] && CONFIGURE_ARGS+=(--arch=aarch64)
         command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
+        # Media Foundation: the GPU vendor's encoder MFT (hw_encoding=1) or Microsoft's
+        # software one. mfplat.dll is loaded at run time; the static libs add mfuuid,
+        # ole32 and strmiids (libavcodec.pc).
+        CONFIGURE_ARGS+=(
+            --enable-mediafoundation
+            --enable-encoder=h264_mf
+            --enable-encoder=hevc_mf
+        )
+        ;;
+    macos)
+        # VideoToolbox (CoreFoundation, CoreMedia, CoreVideo and VideoToolbox frameworks,
+        # listed in libavcodec.pc / libavutil.pc as "-framework X").
+        CONFIGURE_ARGS+=(
+            --enable-videotoolbox
+            --enable-encoder=h264_videotoolbox
+            --enable-encoder=hevc_videotoolbox
+        )
         ;;
     android)
         # NDK clang for the app's minimum API level; static libraries with PIC, linked
-        # into libmarvin-core.so. --disable-autodetect (above) keeps JNI and MediaCodec
-        # out until they are asked for.
+        # into libmarvin-core.so.
         NDK_CC="$(pin_ndk_tool "${PIN_ABI_TRIPLE}${PIN_ANDROID_API}-clang")"
         [[ -x "${NDK_CC}" ]] || { echo "build-ffmpeg.sh: ${NDK_CC} not found" >&2; exit 1; }
         CONFIGURE_ARGS+=(
@@ -279,6 +305,22 @@ case "${OS_NAME}" in
             --ranlib="$(pin_ndk_tool llvm-ranlib)"
             --strip="$(pin_ndk_tool llvm-strip)"
             --sysroot="$(dirname "$(dirname "${NDK_CC}")")/sysroot"
+        )
+        # MediaCodec through the NDK (AMediaCodec; FFmpeg dlopens libmediandk.so, so no
+        # JVM is needed: the sink sets ndk_codec=1). configure insists on --enable-jni
+        # for it. The encoders need these bitstream filters (--disable-bsfs above turns
+        # them off, and a disabled dependency would silently drop the encoder):
+        # extract_extradata for the global header Matroska wants, h264_metadata /
+        # hevc_metadata to crop the 16-aligned picture back (not needed for 720 x 576
+        # or 480, but the encoders do not build without them).
+        CONFIGURE_ARGS+=(
+            --enable-jni
+            --enable-mediacodec
+            --enable-encoder=h264_mediacodec
+            --enable-encoder=hevc_mediacodec
+            --enable-bsf=extract_extradata
+            --enable-bsf=h264_metadata
+            --enable-bsf=hevc_metadata
         )
         ;;
 esac
@@ -334,5 +376,9 @@ echo "=== Installed static libs ==="
 ls -la "${PREFIX_DIR}/lib"/*.a 2>/dev/null || true
 
 echo
-echo "=== pkg-config --static --libs libavformat ==="
-PKG_CONFIG_PATH="${PREFIX_DIR}/lib/pkgconfig" pkg-config --static --libs libavformat || true
+echo "=== pkg-config --static --libs libavfilter libavformat ==="
+PKG_CONFIG_PATH="${PREFIX_DIR}/lib/pkgconfig" pkg-config --static --libs libavfilter libavformat || true
+
+echo
+echo "=== Encoders and filters built in ==="
+grep -E '^#define CONFIG_[A-Z0-9_]+_(ENCODER|FILTER) 1' "${WORK_BUILD_DIR}/config_components.h" || true

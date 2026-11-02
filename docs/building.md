@@ -198,7 +198,8 @@ firmware/              FPGA bitstreams
 ```
 
 It then checks that `libmarvin-core.so` needs no shared libusb or FFmpeg (only
-`libc`, `libm`, `libdl`), has no text relocations, and that its LOAD segments are
+`libc`, `libm`, `libdl`, and the NDK's `libandroid` and `libmediandk` for FFmpeg's
+MediaCodec encoders, present on every device), has no text relocations, and that its LOAD segments are
 aligned to 16 KB (`-Wl,-z,max-page-size=16384`, which devices with 16 KB pages and
 Google Play require). `<arch>` is `arm64` or `x86_64` (the `third_party/` naming),
 `<abi>` Android's `arm64-v8a` or `x86_64` (x86_64 is for the emulator).
