@@ -46,9 +46,15 @@ repo or needed afterwards; `scripts/build-ffmpeg.sh` downloads it on demand:
 ### Rebuilding
 
 ```sh
-scripts/build-ffmpeg.sh          # fetch, verify sha256, configure, build, install
-scripts/build-ffmpeg.sh --clean  # wipe the build/install dirs for this OS/arch first
+scripts/build-ffmpeg.sh                     # fetch, verify sha256, configure, build, install
+scripts/build-ffmpeg.sh --clean             # wipe the build/install dirs for this OS/arch first
+scripts/build-ffmpeg.sh --android arm64-v8a # Android (or x86_64), with the NDK; prefix
+                                            # third_party/ffmpeg-android-arm64 (-x86_64)
 ```
+
+The Android build (run by `scripts/build-android-native.sh`) uses the same
+component list, cross-compiled with the NDK version and API level of
+`scripts/android-ndk.sh`.
 
 On Windows this must run inside an MSYS2 UCRT64 shell (gcc, make, nasm,
 pkgconf, diffutils on `PATH`). The script auto-detects Linux and macOS too.
@@ -73,3 +79,24 @@ shared libraries are shipped or required at runtime. Per LGPL-2.1 section 6,
 the pinned version and this document record exactly what was built and how,
 and `scripts/build-ffmpeg.sh` lets anyone reproduce or relink against a
 different FFmpeg build from the same (or a compatible) source.
+
+## libusb (Android only, built from source)
+
+On Windows, macOS and Linux the core uses the system's (or Homebrew's, or MSYS2's)
+libusb-1.0. Android has none, so `scripts/build-android-native.sh` builds it and
+links it **statically** into `libmarvin-core.so`:
+
+- **Version:** libusb 1.0.30 (it has the Android fixes for devices opened from a
+  file descriptor, `libusb_wrap_sys_device()`).
+- **License:** LGPL-2.1-or-later, like FFmpeg; the same relinking reasoning
+  applies (the version, source and build steps are recorded here and in the
+  script, so anyone can rebuild or relink against a modified libusb).
+- **Source:** <https://github.com/libusb/libusb/releases/download/v1.0.30/libusb-1.0.30.tar.bz2>,
+  sha256 `fea36f34f9156400209595e300840767ab1a385ede1dc7ee893015aea9c6dbaf`
+  (pinned in the script), unpacked to `third_party/libusb-src/`.
+- **Build:** autotools `configure --host=<triple> --disable-udev --enable-static
+  --disable-shared --with-pic` with the NDK's clang for API 30, out of tree in
+  `third_party/libusb-android-<arch>-build/`, installed to
+  `third_party/libusb-android-<arch>/` (`<arch>` is `arm64` or `x86_64`). Not
+  committed (`.gitignore`).
+

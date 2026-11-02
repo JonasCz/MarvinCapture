@@ -6,14 +6,17 @@
 # the core actually uses are enabled -- no GPL or nonfree code, no network,
 # no autodetected external libraries.
 #
-# Works on MSYS2 UCRT64 (Windows), Linux and macOS.
+# Works on MSYS2 UCRT64 (Windows), Linux and macOS, and cross-compiles for
+# Android with the NDK (scripts/android-ndk.sh says which NDK and API level).
 #
 # Usage:
-#   scripts/build-ffmpeg.sh            # download, verify, configure, build, install
-#   scripts/build-ffmpeg.sh --clean    # remove the build/install dirs for this OS/arch first
+#   scripts/build-ffmpeg.sh                     # download, verify, configure, build, install
+#   scripts/build-ffmpeg.sh --clean             # remove the build/install dirs for this OS/arch first
+#   scripts/build-ffmpeg.sh --android ABI       # Android, ABI arm64-v8a or x86_64 (with --clean too)
 #
-# Output goes to third_party/ffmpeg-<os>-<arch>/ (the install prefix), with
-# sources fetched into third_party/ffmpeg-src/. Neither is committed to git.
+# Output goes to third_party/ffmpeg-<os>-<arch>/ (the install prefix; Android:
+# third_party/ffmpeg-android-arm64 or -x86_64), with sources fetched into
+# third_party/ffmpeg-src/. Neither is committed to git.
 
 set -euo pipefail
 
@@ -37,9 +40,26 @@ SRC_DIR="${THIRD_PARTY}/ffmpeg-src"
 TARBALL_PATH="${SRC_DIR}/${FFMPEG_TARBALL}"
 
 # ---------------------------------------------------------------------------
-# OS / arch detection
+# Arguments
+# ---------------------------------------------------------------------------
+CLEAN=0
+ANDROID_ABI=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --clean) CLEAN=1; shift ;;
+        --android)
+            [[ $# -ge 2 ]] || { echo "build-ffmpeg.sh: --android needs an ABI (arm64-v8a or x86_64)" >&2; exit 2; }
+            ANDROID_ABI="$2"; shift 2 ;;
+        --android=*) ANDROID_ABI="${1#--android=}"; shift ;;
+        *) echo "build-ffmpeg.sh: unknown option '$1'" >&2; exit 2 ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# OS / arch detection (the target's: Android is cross-compiled)
 # ---------------------------------------------------------------------------
 UNAME_S="$(uname -s)"
+[[ -n "${ANDROID_ABI}" ]] && UNAME_S="Android"
 case "${UNAME_S}" in
     MINGW*|MSYS*|CYGWIN*|UCRT*|CLANG*)
         OS_NAME="windows"
@@ -52,6 +72,14 @@ case "${UNAME_S}" in
     Darwin)
         OS_NAME="macos"
         THREAD_FLAG="--enable-pthreads"
+        ;;
+    Android)
+        OS_NAME="android"
+        THREAD_FLAG="--enable-pthreads"
+        # shellcheck source=android-ndk.sh
+        source "${SCRIPT_DIR}/android-ndk.sh"
+        pin_android_abi "${ANDROID_ABI}" || exit 2
+        pin_find_ndk || exit 1
         ;;
     *)
         echo "build-ffmpeg.sh: unrecognized OS '${UNAME_S}'" >&2
@@ -70,22 +98,23 @@ case "${ARCH_NAME}" in
     x86_64|amd64) ARCH_NAME="x86_64" ;;
     aarch64|arm64) ARCH_NAME="arm64" ;;
 esac
+[[ "${OS_NAME}" == android ]] && ARCH_NAME="${PIN_ABI_DIR}"
 
 BUILD_DIR="${THIRD_PARTY}/ffmpeg-${OS_NAME}-${ARCH_NAME}-build"
 PREFIX_DIR="${THIRD_PARTY}/ffmpeg-${OS_NAME}-${ARCH_NAME}"
 
-if [[ "${1:-}" == "--clean" ]]; then
+if [[ "${CLEAN}" -eq 1 ]]; then
     echo "Removing ${BUILD_DIR} and ${PREFIX_DIR}"
     rm -rf "${BUILD_DIR}" "${PREFIX_DIR}"
-    shift || true
 fi
 
-# sha256 of a file: sha256sum (Linux, MSYS2, macOS 15+) or shasum (older macOS).
+# sha256 of a file (or, with no argument, of stdin): sha256sum (Linux, MSYS2, macOS 15+) or
+# shasum (older macOS).
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
+        sha256sum "$@" | awk '{print $1}'
     else
-        shasum -a 256 "$1" | awk '{print $1}'
+        shasum -a 256 "$@" | awk '{print $1}'
     fi
 }
 
@@ -222,13 +251,37 @@ CONFIGURE_ARGS=(
     --disable-bsfs
 )
 
-# Windows: name the target explicitly, configure would take it from uname (MSYS2's
-# own, see above). The CLANGARM64 environment has clang, not gcc.
-if [[ "${OS_NAME}" == windows ]]; then
-    CONFIGURE_ARGS+=(--target-os=mingw32)
-    [[ "${ARCH_NAME}" == arm64 ]] && CONFIGURE_ARGS+=(--arch=aarch64)
-    command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
-fi
+# Per-platform additions: the target, the toolchain, and (later) platform-only
+# components -- e.g. Android's hardware encoders (--enable-jni --enable-mediacodec
+# --enable-encoder=h264_mediacodec,hevc_mediacodec) go into the android branch.
+case "${OS_NAME}" in
+    windows)
+        # Name the target explicitly, configure would take it from uname (MSYS2's
+        # own, see above). The CLANGARM64 environment has clang, not gcc.
+        CONFIGURE_ARGS+=(--target-os=mingw32)
+        [[ "${ARCH_NAME}" == arm64 ]] && CONFIGURE_ARGS+=(--arch=aarch64)
+        command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
+        ;;
+    android)
+        # NDK clang for the app's minimum API level; static libraries with PIC, linked
+        # into libmarvin-core.so. --disable-autodetect (above) keeps JNI and MediaCodec
+        # out until they are asked for.
+        NDK_CC="$(pin_ndk_tool "${PIN_ABI_TRIPLE}${PIN_ANDROID_API}-clang")"
+        [[ -x "${NDK_CC}" ]] || { echo "build-ffmpeg.sh: ${NDK_CC} not found" >&2; exit 1; }
+        CONFIGURE_ARGS+=(
+            --target-os=android
+            --enable-cross-compile
+            --arch="${PIN_ABI_FFARCH}"
+            --cc="${NDK_CC}"
+            --cxx="${NDK_CC}++"
+            --ar="$(pin_ndk_tool llvm-ar)"
+            --nm="$(pin_ndk_tool llvm-nm)"
+            --ranlib="$(pin_ndk_tool llvm-ranlib)"
+            --strip="$(pin_ndk_tool llvm-strip)"
+            --sysroot="$(dirname "$(dirname "${NDK_CC}")")/sysroot"
+        )
+        ;;
+esac
 
 # x86 assembly needs nasm. Without it FFmpeg's configure stops; a build
 # without asm is slower but fine for what we use (FFV1 is mostly C), so
@@ -264,9 +317,14 @@ if [[ "${WORK_PREFIX_DIR}" != "${PREFIX_DIR}" ]]; then
     done
 fi
 
-# scripts/build.ps1 and scripts/build.sh rebuild FFmpeg when this stamp no
-# longer matches this script (the script holds the whole component list).
-sha256_of "${SCRIPT_DIR}/build-ffmpeg.sh" > "${PREFIX_DIR}/build-script.sha256"
+# scripts/build.ps1, scripts/build.sh and scripts/build-android-native.sh rebuild
+# FFmpeg when this stamp no longer matches this script (the script holds the whole
+# component list); for Android it also covers android-ndk.sh (NDK, API level).
+if [[ "${OS_NAME}" == android ]]; then
+    cat "${SCRIPT_DIR}/build-ffmpeg.sh" "${SCRIPT_DIR}/android-ndk.sh" | sha256_of > "${PREFIX_DIR}/build-script.sha256"
+else
+    sha256_of "${SCRIPT_DIR}/build-ffmpeg.sh" > "${PREFIX_DIR}/build-script.sha256"
+fi
 
 # ---------------------------------------------------------------------------
 # Report
@@ -277,4 +335,4 @@ ls -la "${PREFIX_DIR}/lib"/*.a 2>/dev/null || true
 
 echo
 echo "=== pkg-config --static --libs libavformat ==="
-PKG_CONFIG_PATH="${PREFIX_DIR}/lib/pkgconfig" pkg-config --static --libs libavformat
+PKG_CONFIG_PATH="${PREFIX_DIR}/lib/pkgconfig" pkg-config --static --libs libavformat || true

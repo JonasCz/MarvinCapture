@@ -6,6 +6,8 @@ One script per platform does everything and leaves a runnable tree in
 - **Windows**: `scripts\build.ps1` (core, CLI, tests and the GUI)
 - **macOS**: `scripts/build.sh` (core, CLI, tests and the GUI, `MarvinCapture.app`)
 - **Linux**: `scripts/build.sh` (core, CLI and tests; there is no Linux GUI yet)
+- **Android** (native part only, cross-built on Linux or macOS):
+  `scripts/build-android-native.sh`, see [Android](#android)
 
 ```powershell
 scripts\build.ps1                 # FFmpeg (first time), core, tests, GUI, dist
@@ -158,6 +160,56 @@ e.g. `libusb-1.0-0`).
    - Linux: none yet.
 6. **Check**: fails if an expected file is missing from `dist/`, else prints
    `Done: <dist>`.
+
+## Android
+
+The Android app (a later stage) needs only the native part from here:
+`scripts/build-android-native.sh` cross-builds it with the Android NDK, on Linux or
+macOS. The app itself is not built yet.
+
+```sh
+scripts/build-android-native.sh                   # arm64-v8a and x86_64
+scripts/build-android-native.sh --abi arm64-v8a   # one ABI (repeatable)
+scripts/build-android-native.sh --clean           # start from an empty build/android-<abi>/
+```
+
+Prerequisites: the **Android NDK 29.0.14206865** (pinned in `scripts/android-ndk.sh`;
+GitHub's ubuntu-24.04 runner has it under `$ANDROID_HOME/ndk/`; elsewhere
+`sdkmanager "ndk;29.0.14206865"`), found through `ANDROID_NDK_HOME` or
+`ANDROID_HOME`/`ANDROID_SDK_ROOT`; cmake, ninja, make, pkg-config, curl, and nasm for
+x86_64. API level 30 (Android 11, the app's minSdk).
+
+What it does, per ABI:
+
+1. FFmpeg: `scripts/build-ffmpeg.sh --android <abi>` (the same components as the
+   desktop builds; NDK clang, `--target-os=android`) into
+   `third_party/ffmpeg-android-<arch>/`, rebuilt when `build-ffmpeg.sh` or
+   `android-ndk.sh` changes. x86_64 keeps its assembly.
+2. libusb 1.0.30 from its release tarball (sha256 pinned in the script), static,
+   without udev, into `third_party/libusb-android-<arch>/`.
+3. The core with the NDK's CMake toolchain file and `-DPIN_BUILD_TESTS=OFF` (the
+   ctest suite cannot run on the build machine) into `build/android-<abi>/core`.
+4. `build/android-<abi>/dist`, stripped:
+
+```
+libmarvin-core.so      the core with FFmpeg and libusb linked in; exports pin_api.h only
+MarvinCaptureCLI       the command line, for Termux (RUNPATH $ORIGIN: the .so next to it)
+firmware/              FPGA bitstreams
+```
+
+It then checks that `libmarvin-core.so` needs no shared libusb or FFmpeg (only
+`libc`, `libm`, `libdl`), has no text relocations, and that its LOAD segments are
+aligned to 16 KB (`-Wl,-z,max-page-size=16384`, which devices with 16 KB pages and
+Google Play require). `<arch>` is `arm64` or `x86_64` (the `third_party/` naming),
+`<abi>` Android's `arm64-v8a` or `x86_64` (x86_64 is for the emulator).
+
+A Gradle project takes `build/android-<abi>/dist/libmarvin-core.so` as
+`src/main/jniLibs/<abi>/libmarvin-core.so` (or `jniLibs.srcDirs`), its JNI layer
+includes `src/api/pin_api.h` and links that library, and `firmware/` goes into the
+app's assets (copied out at first start, then `pin_set_firmware_dir()`). The device
+comes from `UsbManager` as a file descriptor (`pin_open("fd:N")`), and the app passes
+its own directories with `pin_set_app_dirs()`. For Termux, see
+[cli.md](cli.md#android-termux).
 
 ## Installers
 

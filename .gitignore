@@ -33,6 +33,10 @@ gui/macos/.swiftpm/
 # re-verifies (sha256) on demand. See third_party/README.md.
 third_party/ffmpeg-src/
 third_party/ffmpeg-*/
+# libusb for Android (scripts/build-android-native.sh): tarball + source,
+# build and install directories per ABI.
+third_party/libusb-src/
+third_party/libusb-android-*/
 
 # --- Local / editor --------------------------------------------------------
 .claude/*
