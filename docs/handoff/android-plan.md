@@ -28,11 +28,19 @@ What does not carry over as is:
 ## What the Termux report tells us
 
 The CLI working in Termux shows that the engine, sinks and FFmpeg build run on an
-Android kernel and toolchain. It does not show the USB access path an app needs:
-stock libusb cannot list devices on an unrooted phone, so that test most likely ran
-as root or with an fd handed over by `termux-usb` (see [sources](#sources) for what
-Termux's libusb does). Worth asking the tester which one it was, which phone, and
-whether analog capture was tried (it is the timing-sensitive input).
+Android kernel and toolchain. Unrooted apps cannot open `/dev/bus/usb/*` (SELinux gives
+them read/write/ioctl on an fd but no `open`), so upstream libusb lists nothing there.
+Termux gets around it: `termux-usb` has the Termux:API app open the device and passes the
+fd on (as `argv[1]`, or `TERMUX_USB_FD` with `-E`), and Termux's libusb package carries a
+patch that makes device listing return just that fd. So the test most likely ran unrooted
+through `termux-usb -E`. If so, the core's bring-up, bulk and async transfers already work on
+an fd that another app opened, which is exactly the app's situation, and the biggest unknown
+is gone. Worth asking the tester: root or `termux-usb`, which phone, and whether analog was
+tried (the timing-sensitive input).
+
+Two kernel facts that matter: usbfs caps in-flight transfer buffers at 16 MB per process
+(the DV queue is 256 x 16 KiB and the Linux analog queue 1024 x 4 KiB, 4 MiB each, so both
+fit), and a device whose usbfs file is open never autosuspends.
 
 ## Architecture
 
@@ -48,12 +56,14 @@ MainActivity (UI, preview SurfaceView)  ──bind──▶  CaptureService (for
 ```
 
 - **CaptureService**: holds the `pin_session_t`, a `PARTIAL_WAKE_LOCK` while capturing or
-  finalising, and the ongoing notification (elapsed, size, errors, a Stop action; "Finalizing…"
-  with progress after Stop). Type `connectedDevice` (allowed because the app holds USB permission
-  for the device). Started from the record button (the app is in the foreground then, so the
-  Android 12+ background-start limits don't apply). The finalise step after Stop (HDV remux,
-  FFV1 flush) runs in the same service, which is what makes "remux in a background task with a
-  notification" work without a separate job system.
+  finalising (a foreground service alone does not keep the CPU awake with the screen off), and
+  the ongoing notification (elapsed, size, errors, a Stop action; "Finalizing…" with progress
+  after Stop). Type `connectedDevice`: the system's check is that the app holds USB permission
+  for an attached device, and the type has no time limit (unlike `dataSync` and
+  `mediaProcessing`, 6 h per day). Started from the record button (the app is in the foreground
+  then, so the Android 12+ background-start limits don't apply). The finalise step after Stop
+  (HDV remux, FFV1 flush) runs in the same service, which is what makes "remux in a background
+  task with a notification" work without a separate job system.
 - **MainActivity**: binds to the service; when it is not visible the preview is turned off
   (`pin_preview_enable(0)`), and with no capture running the service is not in the foreground,
   so Android may end the process; the next start reopens the device (warm start 0.3-1.7 s).
@@ -77,39 +87,46 @@ MainActivity (UI, preview SurfaceView)  ──bind──▶  CaptureService (for
 All of these keep the desktop GUIs and the CLI working as before.
 
 1. **Open by file descriptor.** `pin_open("fd:<n>", ...)` alongside the existing id / serial /
-   path forms. `pinnacle_open_by_id()` gets a branch: a context with
-   `LIBUSB_OPTION_NO_DEVICE_DISCOVERY`, `libusb_wrap_sys_device()`, PID from the descriptor,
-   then the same set-configuration / claim as today. Hub depth is unknown there (-1, no hub
-   warning). The cross-process lock keyed by "fd:N" is meaningless but harmless: usbfs itself
-   refuses a second claim (BUSY), which is already reported as "in use".
-   The MovieBox Deluxe re-enumerates after its FX2 download and the reopen path enumerates
-   devices, so it stays unsupported on Android (it is untested anyway).
+   path forms. `pinnacle_open_by_id()` gets a branch: `libusb_init_context()` with
+   `LIBUSB_OPTION_NO_DEVICE_DISCOVERY` (libusb 1.0.27+; 1.0.30 is current and fixes an
+   Android fd issue), `libusb_wrap_sys_device()`, PID from the descriptor, then the same
+   set-configuration / claim as today. libusb does not close the fd; the app keeps its
+   `UsbDeviceConnection` open until `pin_close()` returns. Port numbers are not available on a
+   wrapped device, so hub depth is -1 (no hub warning). The cross-process lock keyed by "fd:N"
+   is meaningless but harmless: usbfs itself refuses a second claim (BUSY), which is already
+   reported as "in use". The MovieBox Deluxe re-enumerates after its FX2 download and the
+   reopen path enumerates devices, so it stays unsupported on Android (untested anyway).
 2. **Model lookup without enumeration**: `pin_usb_model(vid, pid, pin_device_info_t *out)`
    (name, supported, tested) so the app names the device from the same table. The
    `device_filter.xml` PID list is generated from, or tested against, `pinnacle_model.c`.
-3. **CLI `--device fd:N`**: the same id through the existing `-d`, so `termux-usb` can hand
-   the CLI an fd on an unrooted phone. This is phase 0's test vehicle and a small feature in its
-   own right.
+3. **CLI `--device fd:N`**: the same id through the existing `-d`, so the CLI built against
+   upstream libusb can take `termux-usb`'s fd (`argv[1]` / `TERMUX_USB_FD`). That tests the
+   app's exact open path in Termux before any app exists.
 4. **Directories**: `pin_set_app_dirs(config, runtime, temp)` (or the app sets `XDG_CONFIG_HOME`
    and `TMPDIR` before the first core call, which works today with no change). Firmware: the APK
    carries `firmware/` as assets, copied to `filesDir` on first start or version change, then
    `pin_set_firmware_dir()`.
-5. **HDV remux temp file**: `<name>.rawts.tmp` is written next to the output today. In
-   `Movies/` that name is not a video type; move it to the temp dir (configurable, default
-   unchanged on desktop).
-6. **Finalize progress**: `progress_percent` during `PIN_STATE_STOPPING` (the HDV remux knows
+5. **HDV remux temp file**: `<name>.rawts.tmp` is written next to the output today. Android's
+   media provider refuses to create it in `Movies/` (EPERM: `.tmp` is not a video type). Move it
+   to the temp dir (configurable, default unchanged on desktop), or name it `....rawts.tmp.ts`.
+6. **File numbering on shared storage**: in `Movies/` a directory listing shows only the app's
+   own files, and after a reinstall the app no longer owns its old ones; creating a name the
+   media database already has fails with EEXIST. `pin_next_file_number()` can then pick a
+   number that is taken, so opening the output has to treat EEXIST as "taken, try the next
+   number" instead of failing the capture.
+7. **Finalize progress**: `progress_percent` during `PIN_STATE_STOPPING` (the HDV remux knows
    its read position in the temp file). Feeds the notification's progress bar, and the desktop
    GUIs' "Finalizing…" could show it too.
-7. **Platform perf hints**: under `__ANDROID__`, `pin_perf_check()` must not report
-   `PIN_PERF_CPU_LATENCY` (the user cannot fix it); whether the keep-busy thread stays on is
-   decided by phase 0's measurements.
-8. **Hardware encoder sink** (phase 3), see [H.264 / HEVC](#h264--hevc-hardware-encoding).
+8. **Platform perf hints**: under `__ANDROID__`, `pin_perf_check()` must not report
+   `PIN_PERF_CPU_LATENCY` (the user cannot fix it; apps cannot open `/dev/cpu_dma_latency`);
+   whether the keep-busy thread stays on is decided by phase 0's measurements.
+9. **Hardware encoder sink** (phase 3), see [H.264 / HEVC](#h264--hevc-hardware-encoding).
 
 Build: `scripts/build-ffmpeg.sh` gains an Android mode (NDK clang, `--target-os=android`,
 `--arch=aarch64`, cross compile); libusb is built from source with the NDK (it is not on the
 system); the top-level `CMakeLists.txt` gets an option to skip the CLI/tests for the app build.
-The NDK links with 16 KB page alignment by default from r28, which Play requires. A
-`scripts/build-android.sh` + an Ubuntu CI job, following the "scripts do the work, YAML picks
+The NDK links with 16 KB page alignment by default from r28 (AGP 8.5.1+), which Play requires.
+A `scripts/build-android.sh` + an Ubuntu CI job, following the "scripts do the work, YAML picks
 runners" rule of [ci.md](../ci.md).
 
 ## Phone UI
@@ -167,6 +184,14 @@ plain paths keeps all of that.
 Recommendation: the first two in v1. SAF needs an "open output file" hook in the core (fd in,
 no directory listing, no `statvfs`), which is a larger change; later if asked for.
 
+What the media provider allows in `Movies/` without permission: files whose extension maps to
+a `video/*` type. `.dv`, `.ts`, `.m2t`, `.mkv`, `.avi`, `.mov`, `.mp4` all do; `.tmp` and
+`.nut` don't (see core changes 5 and 6). `statvfs` passes through to the real file system, so
+free space and FAT32 detection keep working. Sequential writes through the FUSE layer are
+documented as comparable to MediaStore; FUSE passthrough (Android 12+, newer kernels only)
+removes most of the overhead. Whether ~21 MB/s (uncompressed analog) is sustained on an
+Android 11 phone is for phase 0 to measure.
+
 ## Formats on the phone
 
 | Input | Offered | Notes |
@@ -181,10 +206,17 @@ FFmpeg has wrappers for each platform's encoder, so one new sink serves all GUIs
 
 | Platform | FFmpeg encoder | Comes with the OS | Build change |
 |---|---|---|---|
-| Android | `h264_mediacodec`, `hevc_mediacodec` (NDK `AMediaCodec`) | yes | `--enable-mediacodec` + encoders (JNI needs, see sources) |
-| macOS | `h264_videotoolbox`, `hevc_videotoolbox` | yes (VideoToolbox) | `--enable-videotoolbox` + encoders |
-| Windows | `h264_mf`, `hevc_mf` (Media Foundation; the GPU vendor's MFT underneath) | yes | `--enable-mediafoundation` + encoders |
+| Android | `h264_mediacodec`, `hevc_mediacodec` (FFmpeg 6.0+; NDK `AMediaCodec`, `libmediandk.so` loaded at run time) | yes | `--target-os=android --enable-jni --enable-mediacodec` + the encoders (configure insists on JNI; inside an app process that is fine) |
+| macOS | `h264_videotoolbox`, `hevc_videotoolbox` | yes (VideoToolbox) | `--enable-videotoolbox` (the build uses `--disable-autodetect`) + encoders; LGPL-clean |
+| Windows | `h264_mf`, `hevc_mf` (Media Foundation; the GPU vendor's MFT underneath) | yes | `--enable-mediafoundation` + encoders; hardware needs `hw_encoding=1` |
+| Windows, alternatives | `h264_nvenc` / `h264_amf` (MIT headers, driver loaded at run time), `h264_qsv` (libvpl) | driver | headers / one library; not needed for a first version |
 | Linux | VAAPI needs libva; no LGPL software H.264 encoder (x264 is GPL) | no | probably not offered |
+
+On Android, H.264 encoding is mandatory on every phone (CDD), and there is a software
+fallback in the platform (`c2.android.avc.encoder`, up to 12 Mbit/s, enough for SD). HEVC
+encoding is optional and the platform's software HEVC encoder stops at 512 x 512, so HEVC is
+offered only where a hardware encoder answers the probe. Encoders must accept YUV420Flexible
+but only one of planar / semi-planar is guaranteed: the probe picks `yuv420p` or `nv12`.
 
 The sink (`sink_hwenc.c`) would follow `sink_ffv1.c`: encoder thread behind a bounded queue,
 audio on its own thread, the muxer behind a lock.
@@ -193,15 +225,17 @@ audio on its own thread, the muxer behind a lock.
   colour doesn't bleed between fields). DV: decode with `dvvideo` (already built in for the
   preview) → NV12 (PAL 4:2:0 as is, NTSC 4:1:1 upsampled); audio as `sink_rewrap.c` extracts it.
   HDV: would need an MPEG-2 HD software decode first; not planned (the `.ts` is already compact).
-- **Interlacing**: phone encoders encode progressive frames (see sources). Either encode the
-  interlaced frame as is and flag the field order in the container (nothing is lost; players that
-  honour the flag deinterlace, phone gallery players usually don't and show combing), or
-  deinterlace to 50p / 59.94p first with FFmpeg's `bwdif` or `yadif` (both LGPL; brings in a
-  small part of libavfilter). Decision below.
-- **Container**: MKV survives a crash or a dead battery mid-recording; a plain MP4 written by
-  MediaMuxer does not (no `moov` until stop). With FFmpeg's muxer: MKV, or fragmented MP4
-  (`frag_keyframe`) for gallery compatibility. **Audio**: AAC (FFmpeg's native `aac` encoder,
-  LGPL) for MP4; FLAC or PCM in MKV.
+- **Interlacing**: none of the three wrappers encodes interlaced (MediaCodec has no field
+  mode at all, `h264_mf` forces progressive). Either encode the interlaced frame as is and flag
+  the field order in the container (nothing is lost; players that honour the flag
+  deinterlace, phone gallery players usually don't and show combing), or deinterlace to
+  50p / 59.94p first with FFmpeg's `bwdif` or `yadif` (both LGPL; brings in a small part of
+  libavfilter). Decision below.
+- **Container**: MKV survives a crash or a dead battery mid-recording; MediaMuxer's MP4 has no
+  fragmented mode and writes its index at stop. With FFmpeg's muxer: MKV, or fragmented MP4
+  (`frag_keyframe`) for gallery compatibility. MediaCodec gives no DTS (FFmpeg's `pts_as_dts`
+  covers it, no B-frames). **Audio**: AAC with FFmpeg's native `aac` encoder (LGPL; there is no
+  MediaCodec AAC encoder in FFmpeg) for MP4; FLAC or PCM in MKV.
 - **Availability**: the core opens the encoder once to probe it and `pin_formats()` lists the
   format only where it works, so no GUI needs platform logic.
 - Labelled as lossy ("small files"), since the rest of the project is about archival quality.
@@ -219,7 +253,10 @@ Recommendation: **minSdk 29 (Android 10)**, target the latest API. Nothing newer
 | 33 (13) | Notification permission (must ask) | handled |
 | 34 (14) | FGS type + `FOREGROUND_SERVICE_CONNECTED_DEVICE` mandatory | handled |
 | 35 (15) | `mediaProcessing` FGS type | not needed (`connectedDevice` covers finalize) |
-| 36 (16) | Progress-centric notifications / Live Updates | optional polish |
+| 36 / 36.1 (16) | `Notification.ProgressStyle` (36), Live Updates in the status bar (36.1, `POST_PROMOTED_NOTIFICATIONS`) | optional polish |
+
+The target API is not a choice for a Play build: new apps and updates must target API 36
+since 2026-08-31.
 
 Going down to API 26 costs little code (API 26-29 share the legacy storage path) but more
 testing on old phones' USB host stacks. ABIs: **arm64-v8a only** (32-bit phones would struggle
@@ -233,12 +270,12 @@ with analog anyway); x86_64 optional for the emulator (useful only with the repl
 | libusb | ~0.15 MB |
 | JNI layer | ~0.1 MB |
 | firmware | 0.16 MB |
-| app code, framework Views | ~0.2-0.4 MB |
-| app code, Jetpack Compose + Material 3 instead | +2-3 MB (see sources) |
-| hardware encoders + AAC (+ bwdif) | +0.3-0.6 MB |
+| app code, framework Views (Kotlin, R8) | ~0.1-0.3 MB (a framework-only hello world is under 0.1 MB) |
+| app code, Jetpack Compose + Material 3 instead | ~1.5-3 MB for a minimal app (anecdotal); Google's own Views vs Compose comparison of one app: 2.25 vs 2.97 MB |
+| hardware encoders + AAC (+ bwdif) | +0.3-0.6 MB (est.) |
 
-So ~4-5 MB installed with framework Views. Native libraries are stored uncompressed in the
-APK (page-aligned loading), Play's download is compressed.
+So ~4-5 MB installed with framework Views, ~6-8 MB with Compose. Native libraries are stored
+uncompressed in the APK (page-aligned loading); Play's download is compressed.
 
 ## Risks
 
@@ -254,7 +291,9 @@ APK (page-aligned loading), Play's download is compressed.
    through one with nothing else attached; the phone README likely needs a "recommended adapter"
    note.
 3. **Thermals.** Hours of screen + preview decode + FFV1 on a phone will throttle. Mitigations:
-   dim or stop the preview while recording, thermal status warning, H.264 for analog.
+   dim or stop the preview while recording, thermal status warning (API 29 listener, API 30
+   headroom), H.264 for analog. `Window.setSustainedPerformanceMode` only applies while the
+   window is visible.
 4. **Storage speed and size.** FUSE overhead on shared storage, FAT32 SD cards (the core
    already warns about 4 GiB limits), 13 GB/h for DV.
 5. **USB host quirks per phone** (OTG off by default on some, power limits, re-plug resets the
@@ -301,11 +340,12 @@ cannot be recovered.
 
 ## Phases
 
-0. **De-risk on a phone, no app.** Core `fd:` open, CLI `--device fd:N`, Android NDK build of
-   FFmpeg + libusb + core + CLI. Run it from Termux via `termux-usb` on 2-3 phones: DV, HDV,
-   analog (QR disc, 5-minute runs as in [linux-testing.md](linux-testing.md)), with and without
-   the keep-busy thread, through a PD hub, writing to `Movies/`. Measure FFV1 CPU and
-   temperature. Outcome: which inputs and formats are viable on a phone.
+0. **De-risk on a phone, no app.** The CLI already runs in Termux, so start there: DV, HDV,
+   analog (QR disc, 5-minute runs as in [linux-testing.md](linux-testing.md)) on 2-3 phones,
+   with and without the keep-busy thread, directly and through a PD hub, writing to `Movies/`;
+   measure FFV1 CPU and temperature. Then the core `fd:` open, CLI `--device fd:N` and an NDK
+   build of FFmpeg + upstream libusb + core, run the same way. Outcome: which inputs and
+   formats are viable on a phone, before any app code exists.
 1. **App MVP.** Service, activity, preview, record button, status, notification, `Movies/`
    output, the existing formats. APK on GitHub releases (CI job).
 2. **Polish.** Options panel complete, analog controls, audio monitor, finalize progress,
@@ -315,8 +355,76 @@ cannot be recovered.
 
 ## Decisions
 
-See the list in the conversation that produced this plan; recorded here once made.
+Open; recommendation first.
+
+1. **UI toolkit**: framework Views + `Theme.DeviceDefault` (smallest, uses only what the OS
+   ships, Material You colours on 12+, but no bottom sheet or Material 3 controls: those are
+   hand-made) / Jetpack Compose + Material 3 (+1.5-3 MB, modern controls, quicker to build).
+2. **Minimum Android version**: 10 (API 29) / 8.0 (API 26, same storage code, more old-phone
+   USB testing) / 11 (API 30, no legacy storage path at all).
+3. **Distribution and firmware**: GitHub APK with bundled firmware first, Play later with a
+   firmware importer / Play from the start / importer everywhere (one APK, nothing
+   proprietary shipped).
+4. **HDV MOV / MKV on Android** (full remux at Stop, minutes, twice the space): hide in v1 / keep,
+   with the finalize notification.
+5. **Uncompressed analog AVI on Android** (~75 GB/h): hide / keep.
+6. **Screen-off recording**: partial wake lock (works with the screen off; counts against Play's
+   excessive-wake-lock vitals beyond 2 h) / keep the screen on, black (no vitals issue, needs
+   the screen on).
+7. **Hardware encoder scope**: analog first, then DV / analog only / analog and DV at once.
+   Interlace: keep both fields + field-order flag / deinterlace to 50p-60p (bwdif) / offer both.
+   Container: MKV / fragmented MP4. HEVC where available: yes / later. On macOS and Windows too:
+   yes, same sink / Android only.
+8. **Storage locations in v1**: `Movies/MarvinCapture` + SD card app folder / also SAF (any
+   folder, more core work).
+9. **Language**: Kotlin (the R8-shrunk stdlib is ~0.1-0.2 MB) / Java (zero runtime overhead,
+   more verbose).
+
+Questions for the Termux tester: root or `termux-usb`, which phone, which inputs (analog?).
 
 ## Sources
 
-(filled in below)
+Checked 2026-11-02.
+
+- libusb Android flow and `NO_DEVICE_DISCOVERY`: <https://github.com/libusb/libusb/blob/master/android/README>,
+  ChangeLog <https://github.com/libusb/libusb/blob/master/ChangeLog> (1.0.30, 2026-05-17)
+- Termux USB: <https://github.com/termux/termux-api-package> (`termux-usb`),
+  <https://github.com/termux/termux-packages/tree/master/packages/libusb> (`termux-usb-support.patch`)
+- USB host on Android: <https://developer.android.com/develop/connectivity/usb/host>,
+  <https://developer.android.com/reference/android/hardware/usb/UsbManager>
+- Kernel: usbfs memory limit (`usbfs_memory_mb`, `drivers/usb/core/devio.c`), autosuspend
+  <https://docs.kernel.org/driver-api/usb/power-management.html>
+- FFmpeg encoders: `libavcodec/mediacodecenc.c`, `doc/encoders.texi`, `configure` (release/8.1);
+  licences <https://ffmpeg.org/legal.html>; `libavfilter/vf_bwdif.c`, `vf_yadif.c` (LGPL-2.1+)
+- MediaCodec requirements: Android 16 CDD 5.1 <https://source.android.com/docs/compatibility/16/android-16-cdd>;
+  AOSP `media_codecs_sw.xml`; MediaMuxer <https://developer.android.com/reference/android/media/MediaMuxer>
+- Storage: <https://developer.android.com/training/data-storage/shared/media#direct-file-paths>,
+  <https://developer.android.com/training/data-storage/use-cases>, FUSE passthrough
+  <https://source.android.com/docs/core/storage/fuse-passthrough>; MediaProvider
+  `insertFileIfNecessaryForFuse` (MIME vs directory check)
+- Foreground services: types <https://developer.android.com/develop/background-work/services/fgs/service-types>,
+  timeouts <https://developer.android.com/develop/background-work/services/fgs/timeout>,
+  staying awake <https://developer.android.com/develop/background-work/background-tasks/awake>,
+  Live Updates <https://developer.android.com/develop/ui/views/notifications/live-update>
+- UI size: <https://developer.android.com/develop/ui/compose/migrate/compare-metrics>,
+  <https://dmitrybrant.com/?p=2087>
+- Play: App access <https://support.google.com/googleplay/android-developer/answer/9859455>;
+  functionality policies <https://support.google.com/googleplay/android-developer/answer/9898783>;
+  FGS declaration <https://support.google.com/googleplay/android-developer/answer/13392821>;
+  excessive wake locks <https://developer.android.com/topic/performance/vitals/excessive-wakelock>,
+  <https://android-developers.googleblog.com/2025/11/raising-bar-on-battery-performance.html>;
+  target API <https://support.google.com/googleplay/android-developer/answer/11926878>;
+  testing requirement <https://support.google.com/googleplay/android-developer/answer/14151465>;
+  IP policy <https://support.google.com/googleplay/android-developer/answer/9888072>;
+  DDA <https://play.google/developer-distribution-agreement.html>;
+  16 KB pages <https://developer.android.com/guide/practices/page-sizes>;
+  privacy / Data safety <https://support.google.com/googleplay/android-developer/answer/10144311>,
+  <https://support.google.com/googleplay/android-developer/answer/10787469>;
+  developer verification <https://developer.android.com/developer-verification/guides/faq>,
+  <https://android-developers.googleblog.com/2026/06/android-developer-verification.html>
+- Distribution elsewhere: <https://f-droid.org/docs/Inclusion_Policy/>,
+  <https://f-droid.org/docs/Anti-Features/>, <https://izzyondroid.org/docs/general/AppInclusionPolicy/>;
+  firmware import precedent <https://codeberg.org/Freeyourgadget/Gadgetbridge/wiki/Firmware-Update>
+- Not confirmed: sustained FUSE write speed on Android 11; OTG bulk throughput / DWC3 behaviour
+  on phones; whether any phone encoder does MBAFF/PAFF; a firmware-specific Play takedown
+  precedent.

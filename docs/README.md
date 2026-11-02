@@ -28,6 +28,7 @@
 - [handoff/linux-testing.md](handoff/linux-testing.md): what to test on the Linux host, and how.
 - [handoff/macos-cpu-usage.md](handoff/macos-cpu-usage.md): macOS GUI CPU results and what remains.
 - [handoff/dv-timecode-warning.md](handoff/dv-timecode-warning.md): the DV "invalid timecode" warning.
+- [handoff/android-plan.md](handoff/android-plan.md): feasibility and plan for an Android GUI (not started).
 
 **Elsewhere**
 
