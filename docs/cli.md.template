@@ -8,6 +8,30 @@ terminal the CLI wraps it to the window width; piped, it is left unwrapped.
 
 @CLI_HELP@
 
+## Android (Termux)
+
+The CLI from the Android build (`scripts/build-android-native.sh`: `MarvinCaptureCLI` and
+`libmarvin-core.so` in `build/android-arm64-v8a/dist`, copied together into Termux's home)
+runs in [Termux](https://termux.dev). Android does not let a program list or open
+`/dev/bus/usb` itself; the Termux:API app (package `termux-api`) opens the device after you
+allow it and hands the command an open file descriptor, which `-d fd:N` takes:
+
+```sh
+termux-usb -l                              # e.g. ["/dev/bus/usb/001/002"]
+termux-usb -r /dev/bus/usb/001/002         # once per plug-in: Android asks for permission
+cat > capture.sh <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+# termux-usb runs this with the descriptor as the first argument
+cd "$HOME/marvin" && exec ./MarvinCaptureCLI -d "fd:$1" --capture /sdcard/Movies/tape01.dv --wait nosignal=00:00:30
+EOF
+chmod +x capture.sh
+termux-usb -e ./capture.sh /dev/bus/usb/001/002
+```
+
+With `-E`, termux-usb puts the descriptor into the environment variable `TERMUX_USB_FD`
+instead (`-d "fd:$TERMUX_USB_FD"`). The descriptor belongs to that one command: run the whole
+capture inside it. Writing to the shared `Movies/` folder needs `termux-setup-storage` once.
+
 ## Running the GUI from a shell
 
 `MarvinCaptureGUI.exe` is a GUI-subsystem program, so PowerShell returns to the

@@ -240,6 +240,7 @@ const char *pin_script_help_text(void)
         "\n"
         "Settings:\n"
         "  -d, --device ID          device id (usb:2-1), 16-hex serial, or a .dv/.ts file to replay (default: first device). See the device list at the end of this text. Only before the first action.\n"
+        "                           fd:N: the USB device behind open file descriptor N, for Android, where programs cannot list USB devices (Termux: termux-usb passes the descriptor; see docs/cli.md). Linux and Android only.\n"
         "  -i, --input dv|svideo|composite\n"
         "                           dv = DV and HDV over FireWire (default)\n"
         "  --std S                  analog standard: auto pal ntsc pal-m pal-n pal-60 ntsc-443 ntsc-j secam (default auto)\n"

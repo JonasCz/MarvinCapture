@@ -14,6 +14,7 @@ Transport actions (--rew --ff --play --pause --stop) return as soon as the deck 
 
 Settings:
   -d, --device ID          device id (usb:2-1), 16-hex serial, or a .dv/.ts file to replay (default: first device). See the device list at the end of this text. Only before the first action.
+                           fd:N: the USB device behind open file descriptor N, for Android, where programs cannot list USB devices (Termux: termux-usb passes the descriptor; see docs/cli.md). Linux and Android only.
   -i, --input dv|svideo|composite
                            dv = DV and HDV over FireWire (default)
   --std S                  analog standard: auto pal ntsc pal-m pal-n pal-60 ntsc-443 ntsc-j secam (default auto)
@@ -80,6 +81,30 @@ Examples:
 
 -h, --help, or no arguments at all: this text, followed by the device list.
 ```
+
+## Android (Termux)
+
+The CLI from the Android build (`scripts/build-android-native.sh`: `MarvinCaptureCLI` and
+`libmarvin-core.so` in `build/android-arm64-v8a/dist`, copied together into Termux's home)
+runs in [Termux](https://termux.dev). Android does not let a program list or open
+`/dev/bus/usb` itself; the Termux:API app (package `termux-api`) opens the device after you
+allow it and hands the command an open file descriptor, which `-d fd:N` takes:
+
+```sh
+termux-usb -l                              # e.g. ["/dev/bus/usb/001/002"]
+termux-usb -r /dev/bus/usb/001/002         # once per plug-in: Android asks for permission
+cat > capture.sh <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+# termux-usb runs this with the descriptor as the first argument
+cd "$HOME/marvin" && exec ./MarvinCaptureCLI -d "fd:$1" --capture /sdcard/Movies/tape01.dv --wait nosignal=00:00:30
+EOF
+chmod +x capture.sh
+termux-usb -e ./capture.sh /dev/bus/usb/001/002
+```
+
+With `-E`, termux-usb puts the descriptor into the environment variable `TERMUX_USB_FD`
+instead (`-d "fd:$TERMUX_USB_FD"`). The descriptor belongs to that one command: run the whole
+capture inside it. Writing to the shared `Movies/` folder needs `termux-setup-storage` once.
 
 ## Running the GUI from a shell
 
