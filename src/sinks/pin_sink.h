@@ -136,6 +136,13 @@ int pin_sink_set_temp_dir(const char *dir);
  * MPEG-TS, analog NUT (rawvideo YUY2 + pcm_s16le). NULL for an unknown kind. */
 pin_sink_t *pin_sink_create_stdout(pin_kind_t kind);
 
+/* Routes FFmpeg's own log messages into the core log (pin_log.h) instead of stderr: once per
+ * process, from whoever uses FFmpeg first (sink_avlog.c). With pin_sink_av_log_quiet(1) the
+ * calling thread's messages go to the debug level (an encoder probe whose attempts may fail);
+ * pin_sink_av_log_quiet(0) ends that. */
+void pin_sink_av_log_install(void);
+void pin_sink_av_log_quiet(int quiet);
+
 #ifdef __cplusplus
 }
 #endif
