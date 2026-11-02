@@ -111,6 +111,11 @@ pin_sink_t *pin_sink_create(pin_format_t format);
  * get_status().units_written counts the video units the real sink accepted. See sink_lazy.c. */
 pin_sink_t *pin_sink_lazy(pin_sink_t *inner);
 
+/* Where the HDV MOV / MKV sink writes its "<name>.rawts.tmp" (the raw stream it remuxes at
+ * close): NULL or "" = next to the output file (the default), else this directory. Process-wide
+ * (pin_set_app_dirs()), for sinks opened afterwards. -1 if dir is too long. */
+int pin_sink_set_temp_dir(const char *dir);
+
 /* The sink for `--capture -` (open() it with the path "-"): DV raw DIF, HDV
  * MPEG-TS, analog NUT (rawvideo YUY2 + pcm_s16le). NULL for an unknown kind. */
 pin_sink_t *pin_sink_create_stdout(pin_kind_t kind);

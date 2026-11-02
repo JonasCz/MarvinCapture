@@ -294,6 +294,21 @@ static int exe_dir(char *out, size_t cap)
 #endif
 }
 
+pin_status_t pin_session_set_app_dirs(const char *config_dir, const char *runtime_dir,
+                                      const char *temp_dir)
+{
+    /* Each module keeps its own directory (settings, lock files, sinks). All or nothing:
+     * 511 bytes fit every one of the three. */
+    const char *dirs[3] = { config_dir, runtime_dir, temp_dir };
+    for (int i = 0; i < 3; i++)
+        if (dirs[i] && strlen(dirs[i]) > 511)
+            return PIN_ERR_ARG;
+    pin_settings_set_dir(config_dir);
+    pinnacle_lock_set_dir(runtime_dir);
+    pin_sink_set_temp_dir(temp_dir);
+    return PIN_OK;
+}
+
 pin_status_t pin_session_set_firmware_dir(const char *utf8_dir)
 {
     pthread_mutex_lock(&g_fw_mtx);
@@ -506,10 +521,14 @@ static void set_init_error(pin_session_t *s, pinnacle_status_t pst, const char *
     else if (pst == PINNACLE_ERR_NOT_READY)
         snprintf(msg, sizeof(msg), "The device did not accept the FPGA bitstream %s: %s", fw,
                  pinnacle_strerror(pst));
+    else if (pst == PINNACLE_ERR_FD_REENUMERATE)
+        snprintf(msg, sizeof(msg), "%s: %s", s->dev.model ? s->dev.model->name : "This model",
+                 pinnacle_strerror(pst));
     else
         snprintf(msg, sizeof(msg), "Device initialisation failed: %s", pinnacle_strerror(pst));
-    set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY
-                     ? PIN_ERR_FIRMWARE : PIN_ERR_USB, msg);
+    /* FD_REENUMERATE: not a USB fault; the model cannot be driven from "fd:N" (yet) */
+    set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY ? PIN_ERR_FIRMWARE
+                 : pst == PINNACLE_ERR_FD_REENUMERATE ? PIN_ERR_ARG : PIN_ERR_USB, msg);
 }
 
 /* ========================================================================
@@ -573,6 +592,12 @@ static int looks_like_serial(const char *s)
 
 static int resolve_device_id(const char *want, char *out, size_t out_size)
 {
+    if (pinnacle_parse_fd_id(want, NULL) > 0) {
+        /* "fd:N": a descriptor the caller opened (pin_session_open() checked it); never a
+         * file name, an enumerated id or a serial */
+        snprintf(out, out_size, "%s", want);
+        return 0;
+    }
     if (want && strncmp(want, "replay:", 7) == 0) {
         /* pin_enumerate() lists the replay device as "replay:<file name>"
          * because pin_device_info_t.id is short; map that back to the full
@@ -962,11 +987,40 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
         .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
 };
 
+/* Formats this platform does not offer: pin_formats() leaves them out, pin_format_info() and
+ * a capture still take them. Android: HDV to MOV / MKV remuxes the whole recording when it
+ * stops (minutes, and twice the space), so only the raw transport stream there. */
+static int format_offered(pin_format_t f)
+{
+#if defined(__ANDROID__)
+    return f != PIN_FMT_HDV_MOV && f != PIN_FMT_HDV_MKV;
+#else
+    (void)f;
+    return 1;
+#endif
+}
+
+void pin_session_format_warning(pin_format_t f, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+#if defined(__ANDROID__)
+    /* the rates of pin_estimate.c: YUY2 720x576 at 25 fps + PCM is 20.9 MB/s, 75 GB/h */
+    if (f == PIN_FMT_ANALOG_AVI)
+        snprintf(out, cap, "Uncompressed video takes about 75 GB per hour (21 MB/s). Phone storage "
+                 "may be too slow to keep up with that, or fill up quickly; FFV1 (lossless, about "
+                 "30 GB per hour) is the safer choice.");
+#else
+    (void)f;
+#endif
+}
+
 int pin_session_formats(pin_kind_t kind, pin_format_info_t *out, int max)
 {
     int n = 0;
     for (int i = 0; i < PIN_FMT_COUNT; i++) {
-        if (g_formats[i].kind != kind)
+        if (g_formats[i].kind != kind || !format_offered((pin_format_t)i))
             continue;
         if (out && n < max) {
             out[n] = g_formats[i];
@@ -2889,7 +2943,9 @@ static void *worker_main(void *arg)
                     pin_session_lock(s);
                     char omsg[PIN_TEXT_MAX];
                     snprintf(omsg, sizeof(omsg), "Cannot open the device: %s", pinnacle_strerror(pst));
-                    set_error(s, pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY : PIN_ERR_USB, omsg);
+                    set_error(s, pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY
+                                 : pst == PINNACLE_ERR_BAD_FD ? PIN_ERR_NOT_FOUND
+                                 : pst == PINNACLE_ERR_FD_UNSUPPORTED ? PIN_ERR_ARG : PIN_ERR_USB, omsg);
                     pin_session_unlock(s);
                     continue;
                 }
@@ -2954,6 +3010,16 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
 {
     if (!out)
         return PIN_ERR_ARG;
+    /* "fd:N" is checked now (malformed, closed, or a platform that cannot use it), not at
+     * the first pin_set_input(), where the device is actually opened. */
+    pinnacle_status_t fdst = pinnacle_check_fd_id(device_id);
+    if (fdst != PINNACLE_OK) {
+        pin_logf(PIN_LOG_ERROR, "pin_open: \"%s\": %s\n", device_id,
+                 fdst == PINNACLE_ERR_BAD_FD
+                     ? "expected fd:N, N being an open file descriptor of the USB device"
+                     : pinnacle_strerror(fdst));
+        return PIN_ERR_ARG;
+    }
     char resolved[PIN_PATH_MAX];
     if (resolve_device_id(device_id, resolved, sizeof(resolved)) != 0)
         return PIN_ERR_NOT_FOUND;

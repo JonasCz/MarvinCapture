@@ -36,6 +36,7 @@
 #include "../engine/pin_update.h"
 #include "../engine/pin_usb_topology.h"
 #include "../core/pin_host_perf.h"
+#include "../core/pin_thread_boost.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pin_log.h"
@@ -100,6 +101,11 @@ const char *pin_strerror(pin_status_t s)
 pin_status_t pin_set_firmware_dir(const char *utf8_dir)
 {
     return pin_session_set_firmware_dir(utf8_dir);
+}
+
+pin_status_t pin_set_app_dirs(const char *config_dir, const char *runtime_dir, const char *temp_dir)
+{
+    return pin_session_set_app_dirs(config_dir, runtime_dir, temp_dir);
 }
 
 /* ========================================================================
@@ -185,6 +191,31 @@ const char *pin_usb_hub_hint(void) { return pin_usb_hub_hint_text(); }
 int pin_perf_check(void) { return pin_host_perf_check(); }
 const char *pin_perf_text(int kind) { return pin_host_perf_text(kind); }
 const char *pin_perf_fix(int kind) { return pin_host_perf_fix(kind); }
+
+void pin_set_cpu_keep_busy(int mode)
+{
+    /* pin_keep_busy_t and the core's PIN_THREAD_KEEP_BUSY_* are the same numbers */
+    pin_thread_set_keep_busy(mode);
+}
+
+pin_status_t pin_usb_model(uint16_t vid, uint16_t pid, pin_device_info_t *out)
+{
+    if (!out)
+        return PIN_ERR_ARG;
+    const pinnacle_model_t *m = vid == PINNACLE_VID ? pinnacle_model_lookup(pid) : NULL;
+    if (!m)
+        return PIN_ERR_NOT_FOUND;
+    pin_device_info_t d;
+    memset(&d, 0, sizeof(d));
+    snprintf(d.name, sizeof(d.name), "%s", m->name);
+    d.vid = vid;
+    d.pid = pid;
+    d.tested = (uint32_t)m->tested;
+    d.state = m->supported ? PIN_DEV_READY : PIN_DEV_UNSUPPORTED;
+    d.hub_depth = -1;   /* not known for a device the core did not enumerate */
+    device_info_store(out, 0, device_info_stride(out), &d);
+    return PIN_OK;
+}
 
 int pin_enumerate(pin_device_info_t *out, int max)
 {
@@ -346,6 +377,11 @@ int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max)
 pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out)
 {
     return pin_session_format_info(f, out);
+}
+
+void pin_format_warning(pin_format_t f, char *out, size_t cap)
+{
+    pin_session_format_warning(f, out, cap);
 }
 
 /* ========================================================================
@@ -846,7 +882,14 @@ void pin_device_status_text(const pin_device_info_t *d, int capturing_here, char
 /* PIN_DEV_NO_DRIVER: on Windows no WinUSB driver is bound; on macOS / Linux it is what a
  * failed open with LIBUSB_ERROR_ACCESS maps to (pinnacle_enum.h, PINNACLE_ENUM_NO_PERMISSION):
  * on Linux a missing udev rule, on macOS another driver or program that holds the interface. */
-#if defined(_WIN32)
+#if defined(__ANDROID__)
+/* Android: the app gets the device from UsbManager once the user allowed it; a refused or
+ * expired permission is the only "cannot access" case, and there is no udev to configure. */
+#define NO_DRIVER_REASON "No permission to use the USB device (allow access when Android asks, then reconnect)"
+#define NO_DRIVER_PROBLEM "This app has no permission to use the USB device. Reconnect it and allow " \
+                          "access when Android asks."
+#define NO_DEVICES_HINT "No devices found. Connect the capture box with a USB OTG adapter."
+#elif defined(_WIN32)
 #define NO_DRIVER_REASON "Needs the WinUSB driver (install it with Zadig, then reconnect)"
 #define NO_DRIVER_PROBLEM "This device needs the WinUSB driver. Install it with Zadig, then reconnect."
 #define NO_DEVICES_HINT "No devices found. Connect the Studio 500-USB and make sure it uses the WinUSB driver."
@@ -916,6 +959,22 @@ int pin_device_open_problem(const pin_device_info_t *d, char *out, size_t cap)
 }
 
 const char *pin_no_devices_hint(void) { return NO_DEVICES_HINT; }
+
+int pin_device_fd_problem(const pin_device_info_t *d, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return 0;
+    out[0] = 0;
+    if (!d || d->vid != PINNACLE_VID)
+        return 0;
+    const pinnacle_model_t *m = pinnacle_model_lookup(d->pid);
+    if (!m || !m->supported || pinnacle_model_fd_ok(m))
+        return 0;   /* fine, or not driven at all (pin_device_unavailable_reason says so) */
+    snprintf(out, cap, "The %s is not supported on Android yet: after the app loads its USB "
+             "controller firmware it reappears as a new USB device, which the app cannot follow yet.",
+             m->name);
+    return 1;
+}
 
 int pin_poll_event(pin_session_t *s, pin_event_t *out)
 {

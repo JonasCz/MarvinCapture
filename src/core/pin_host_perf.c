@@ -38,7 +38,11 @@ static const GUID PLAN_BALANCED = { 0x381b4222, 0xf694, 0x41f0, { 0x96, 0x85, 0x
 int pin_host_perf_check(void)
 {
     int mask = 0;
-#if defined(__linux__)
+#if defined(__ANDROID__)
+    /* Nothing to recommend: no app (and no Termux user without root) can open
+     * /dev/cpu_dma_latency, and there is nothing they could change about it. The read loop
+     * keeps a core busy instead (pin_thread_boost.c). */
+#elif defined(__linux__)
     if (access("/dev/cpu_dma_latency", W_OK) != 0)
         mask |= PIN_HOST_PERF_CPU_LATENCY;
 #elif defined(_WIN32)

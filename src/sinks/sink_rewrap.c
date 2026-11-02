@@ -114,10 +114,26 @@ typedef struct {
 
     pin_sink_status_t st;
 
-    /* Temp path for HDV's raw-then-remux fallback. */
+    /* Temp path for HDV's raw-then-remux fallback, and the file the remux writes. */
     char raw_path[1200];
     FILE *raw_f;
+    char final_path[1200];
 } rewrap_priv_t;
+
+/* pin_sink_set_temp_dir(): "" = next to the output file. */
+static char g_temp_dir[1024];
+
+int pin_sink_set_temp_dir(const char *dir)
+{
+    if (!dir || !dir[0]) {
+        g_temp_dir[0] = '\0';
+        return 0;
+    }
+    if (strlen(dir) >= sizeof(g_temp_dir))
+        return -1;
+    snprintf(g_temp_dir, sizeof(g_temp_dir), "%s", dir);
+    return 0;
+}
 
 static int is_valid_dv_unit_len(size_t len)
 {
@@ -520,14 +536,24 @@ static pin_status_t hdv_open(pin_sink_t *s, const char *path, const pin_sink_par
 {
     rewrap_priv_t *p = s->priv;
     p->params = *params;
-    snprintf(p->raw_path, sizeof(p->raw_path), "%s.rawts.tmp", path);
+    if (strlen(path) >= sizeof(p->final_path))
+        return PIN_ERR_ARG;
+    snprintf(p->final_path, sizeof(p->final_path), "%s", path);
+    if (g_temp_dir[0]) {
+        /* pin_set_app_dirs(): Android's media provider refuses a .tmp file in Movies/ (not
+         * a video type), so the temp file goes to the app's own directory there. */
+        const char *name = path;
+        for (const char *c = path; *c; c++)
+            if (*c == '/' || *c == '\\')
+                name = c + 1;
+        snprintf(p->raw_path, sizeof(p->raw_path), "%s/%s.rawts.tmp", g_temp_dir, name);
+    } else {
+        snprintf(p->raw_path, sizeof(p->raw_path), "%s.rawts.tmp", path);
+    }
     p->raw_f = fopen(p->raw_path, "wb");
     if (!p->raw_f)
         return PIN_ERR_IO;
     setvbuf(p->raw_f, NULL, _IOFBF, 4 << 20);
-    /* Final container path is remembered via s->priv (rewrap_priv_t doesn't
-     * currently store it separately) -- reuse raw_path's sibling by
-     * stripping the suffix at close time instead of a second buffer. */
     return PIN_OK;
 }
 
@@ -660,22 +686,15 @@ static pin_status_t hdv_close(pin_sink_t *s)
         p->raw_f = NULL;
     }
 
-    /* Recover the final path: raw_path is "<final>.rawts.tmp". */
-    char final_path[1200];
-    size_t n = strlen(p->raw_path);
-    size_t suffix = strlen(".rawts.tmp");
     pin_status_t rc = PIN_OK;
-    if (n > suffix) {
-        memcpy(final_path, p->raw_path, n - suffix);
-        final_path[n - suffix] = '\0';
-        if (p->st.units_written > 0)
-            rc = hdv_remux(p, final_path);
-        else
-            pin_logf(PIN_LOG_WARN, "sink_rewrap: no HDV pictures captured, leaving no output file\n");
-    } else {
-        rc = PIN_ERR_INTERNAL;
-    }
-    remove(p->raw_path);
+    if (!p->final_path[0])
+        rc = PIN_ERR_INTERNAL;      /* never opened */
+    else if (p->st.units_written > 0)
+        rc = hdv_remux(p, p->final_path);
+    else
+        pin_logf(PIN_LOG_WARN, "sink_rewrap: no HDV pictures captured, leaving no output file\n");
+    if (p->raw_path[0])
+        remove(p->raw_path);
     if (p->st.last_error != PIN_OK)
         rc = p->st.last_error;
     free(p);

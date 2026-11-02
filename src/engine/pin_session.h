@@ -80,6 +80,9 @@ int pin_session_monitor_available(pin_session_t *s);
 /* Global (not per-session): firmware directory override, see pin_api.h's
  * pin_set_firmware_dir(). Resolves fpga-ohci.bin / fpga-capture.bin. */
 pin_status_t pin_session_set_firmware_dir(const char *utf8_dir);
+/* pin_set_app_dirs(): settings, lock files and the HDV remux temp file. */
+pin_status_t pin_session_set_app_dirs(const char *config_dir, const char *runtime_dir,
+                                      const char *temp_dir);
 /* Finds the model's bitstream for the kind (model->dv_bitstream / analog_bitstream) in, in order: the pin_set_firmware_dir() dir,
  * the settings key Paths/firmware_dir, firmware/ next to the core library,
  * firmware/ next to the executable. PIN_OK: *out is an existing file of the
@@ -107,6 +110,8 @@ void pin_session_devices_wake(void);
  * layer, never the other way around. */
 int pin_session_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 pin_status_t pin_session_format_info(pin_format_t f, pin_format_info_t *out);
+/* pin_format_warning(): the platform's warning for choosing f, "" if none. */
+void pin_session_format_warning(pin_format_t f, char *out, size_t cap);
 
 #ifdef __cplusplus
 }

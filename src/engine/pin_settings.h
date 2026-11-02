@@ -103,9 +103,17 @@ int pin_settings_device_key(const char *serial, const char *id, const char *key,
  *   Linux:   $XDG_CONFIG_HOME/pinnacle-oss/settings.ini, or
  *            ~/.config/pinnacle-oss/settings.ini if that's unset
  *   macOS:   ~/Library/Application Support/PinnacleOSS/settings.ini
+ * or <dir>/settings.ini after pin_settings_set_dir(dir).
  * Returns 0 on success, -1 if out_size was too small or no usable home/
  * config directory could be found in the environment. */
 int pin_settings_default_path(char *out, size_t out_size);
+
+/* Puts settings.ini straight into dir (created if missing) instead of the
+ * platform directory above; NULL or "" goes back to that. For an app whose
+ * process has no usable $HOME / $XDG_CONFIG_HOME (Android: the app's files
+ * directory). Process-wide, meant to be called once at startup. -1 if dir is
+ * too long. */
+int pin_settings_set_dir(const char *dir);
 
 #ifdef __cplusplus
 }

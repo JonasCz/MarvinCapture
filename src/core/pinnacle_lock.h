@@ -110,6 +110,14 @@ void pinnacle_lock_release(pinnacle_lock_t *lock);
  * created), in which case *out reports held = 0 as the safe default. */
 pinnacle_status_t pinnacle_lock_query(const char *device_id, pinnacle_lock_info_t *out);
 
+/* POSIX: puts the lock files in dir (created 0700 if missing) instead of the
+ * default $XDG_RUNTIME_DIR/pinnacle-oss, $TMPDIR/pinnacle-oss or
+ * /tmp/pinnacle-oss-<uid>; NULL or "" goes back to the default. For an app
+ * whose process has none of those (Android: the app's own cache directory).
+ * Call before the first lock is taken. Ignored on Windows (named kernel
+ * objects, no files). -1 if dir is too long. */
+int pinnacle_lock_set_dir(const char *dir);
+
 #ifdef __cplusplus
 }
 #endif

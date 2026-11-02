@@ -109,6 +109,22 @@ PIN_API const char *pin_strerror(pin_status_t s);
  * library. */
 PIN_API pin_status_t pin_set_firmware_dir(const char *utf8_dir);
 
+/* Optional; for an app whose process has none of the usual directories (Android). Call it once,
+ * before anything else. Each NULL or "" keeps the platform default for that one (and resets an
+ * earlier call's choice):
+ *   config_dir   where settings.ini lives (default: %APPDATA%\PinnacleOSS,
+ *                ~/Library/Application Support/PinnacleOSS, $XDG_CONFIG_HOME/pinnacle-oss)
+ *   runtime_dir  where the cross-process lock files go (default: $XDG_RUNTIME_DIR/pinnacle-oss,
+ *                $TMPDIR/pinnacle-oss or /tmp/pinnacle-oss-<uid>; unused on Windows). On Android
+ *                none of these exists: pass the app's cache directory, or pin_open() fails.
+ *   temp_dir     where HDV to MOV / MKV writes the "<name>.rawts.tmp" it remuxes when the
+ *                capture stops (default: next to the output file; Android's media provider
+ *                refuses a .tmp file in Movies/)
+ * Directories are created if missing. PIN_ERR_ARG (and nothing changed) if a path is longer
+ * than 511 bytes. */
+PIN_API pin_status_t pin_set_app_dirs(const char *config_dir, const char *runtime_dir,
+                                      const char *temp_dir);
+
 /* ---- devices ---------------------------------------------------------- */
 
 typedef enum {
@@ -146,6 +162,13 @@ typedef struct {
  * PIN_REPLAY environment variable or pin_set_replay_file() names a file. */
 PIN_API int pin_enumerate(pin_device_info_t *out, int max);
 
+/* Names a USB device found some other way, without enumerating or opening it (Android:
+ * UsbManager lists the devices, the core cannot): fills name, vid, pid, tested, state
+ * (PIN_DEV_READY for a model the core drives, PIN_DEV_UNSUPPORTED for a sibling it
+ * recognises but does not drive), hub_depth -1, and an empty id, serial and owner_pid.
+ * out->size must be set. PIN_ERR_NOT_FOUND for a vid / pid that is not in the model table. */
+PIN_API pin_status_t pin_usb_model(uint16_t vid, uint16_t pid, pin_device_info_t *out);
+
 /* One short paragraph for a device with hub_depth > 0: it shares the hub's
  * bandwidth, plug it straight into the computer, and the platform's tool to
  * check (USBTreeView / lsusb -t / System Information). Static, never NULL. */
@@ -156,11 +179,28 @@ PIN_API const char *pin_usb_hub_hint(void);
  * PIN_PERF_* items that apply right now (0 = nothing to recommend); pin_perf_text() is the
  * message for one bit, and pin_perf_fix() the shell commands that fix it (one per line, "" if
  * the front end should open the OS settings instead). Static strings, never NULL. */
-#define PIN_PERF_CPU_LATENCY 0x1   /* Linux: /dev/cpu_dma_latency is not writable */
+#define PIN_PERF_CPU_LATENCY 0x1   /* Linux: /dev/cpu_dma_latency is not writable (never on Android,
+                                      where nothing can be done about it) */
 #define PIN_PERF_POWER_PLAN  0x2   /* Windows: power plan is Power saver or Balanced */
 PIN_API int pin_perf_check(void);
 PIN_API const char *pin_perf_text(int kind);
 PIN_API const char *pin_perf_fix(int kind);
+
+/* Process-wide: whether a capture keeps one CPU core busy at idle priority, so the CPUs stay
+ * out of the deep idle states whose wake-up latency makes analog captures lose frames
+ * (docs/analog.md, "Power saving and capture reliability"). It runs next to the USB read loop
+ * and costs one core's worth of power and heat. Takes effect when the next read loop starts.
+ *   AUTO  (default) Linux: only when the /dev/cpu_dma_latency request (the better remedy) is
+ *         refused; Android: always, since an app cannot make that request
+ *   ON    always (Linux, Android), even when the latency request was granted
+ *   OFF   never
+ * Windows and macOS: no effect. Other values are ignored. */
+typedef enum {
+    PIN_KEEP_BUSY_AUTO = 0,
+    PIN_KEEP_BUSY_ON,
+    PIN_KEEP_BUSY_OFF,
+} pin_keep_busy_t;
+PIN_API void pin_set_cpu_keep_busy(int mode);
 
 /* Sets (or, with NULL/"", clears) the process-wide replay source: a file
  * pin_enumerate() lists as a virtual "replay:<basename>" device and
@@ -213,7 +253,18 @@ typedef enum {
  * (pin_device_info_t.serial, 16 hex chars, matched case-insensitively) when
  * no id matches it literally; "replay:<basename>" for the configured replay
  * file; or a path to an existing file, which is equivalent to calling
- * pin_set_replay_file() with it first and then opening it by name. */
+ * pin_set_replay_file() with it first and then opening it by name.
+ *
+ * "fd:<n>" opens the device behind file descriptor n, a USB device the caller
+ * opened itself: on Android UsbDeviceConnection.getFileDescriptor() (an app
+ * cannot enumerate USB devices there), in Termux the descriptor termux-usb
+ * passes. Nothing is enumerated; the model comes from the device. The caller
+ * keeps the descriptor (and the UsbDeviceConnection) open until pin_close()
+ * returns; the core never closes it. The device has no port id (hub_depth -1).
+ * PIN_ERR_ARG for a malformed "fd:" id, a descriptor that is not open, or a
+ * platform that cannot do this (Linux / Android only); a descriptor that is no
+ * supported USB device fails at pin_set_input(). The MovieBox Deluxe cannot be
+ * opened this way yet (see pin_device_fd_problem()). */
 PIN_API pin_status_t pin_open(const char *device_id, pin_session_t **out);
 
 /* Stops any capture (finalising files), releases the device. Blocks until
@@ -313,9 +364,16 @@ typedef struct {
     int is_default;             /* the default format for its kind */
 } pin_format_info_t;
 
-/* Formats for a kind, in display order. Returns the count. */
+/* Formats for a kind, in display order. Returns the count. Only the formats this platform
+ * offers: Android leaves out PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV (they remux the whole
+ * recording when it stops). pin_format_info() answers for every format. */
 PIN_API int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 PIN_API pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out);
+
+/* A one-paragraph warning to show when the user picks format f on this platform, or "" when
+ * there is none (always "" on Windows, macOS and Linux; on Android for uncompressed analog
+ * AVI, whose data rate phone storage may not sustain). 512 bytes are enough. */
+PIN_API void pin_format_warning(pin_format_t f, char *out, size_t cap);
 
 /* ---- capture ------------------------------------------------------------ */
 
@@ -821,7 +879,7 @@ PIN_API void pin_script_free(pin_script_t *sc);   /* safe with NULL; a running s
 PIN_API const char *pin_script_help(void);
 
 PIN_API int pin_script_help_requested(const pin_script_t *sc);
-/* -d / --device value (an id, a serial, or a file to replay; pass it to
+/* -d / --device value (an id, a serial, "fd:<n>", or a file to replay; pass it to
  * pin_open()), or NULL when none was given (= the first device). */
 PIN_API const char *pin_script_device(const pin_script_t *sc);
 /* --debug was given: the front end sets the log level to 0 and prints the status
@@ -1017,6 +1075,12 @@ PIN_API int pin_device_open_problem(const pin_device_info_t *d, char *out, size_
 
 /* The hint shown while pin_enumerate() finds nothing; platform-specific. Static. */
 PIN_API const char *pin_no_devices_hint(void);
+
+/* For a device opened from a file descriptor (pin_open("fd:<n>"), Android): returns 1 and a
+ * sentence for the user when its model cannot be driven that way yet, else 0 and "". d is
+ * typically filled by pin_usb_model(). Today that is the MovieBox Deluxe, which reappears as
+ * a new USB device after the core loads its USB controller firmware. */
+PIN_API int pin_device_fd_problem(const pin_device_info_t *d, char *out, size_t cap);
 
 /* ---- update check ---------------------------------------------------------
  * The published VERSION file (JSON: "version", "release_notes", "download_url") is

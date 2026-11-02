@@ -66,6 +66,14 @@ extern const int pinnacle_model_table_count;
 /* Looks up a PID (under VID 0x2304). NULL if it is not a known Marvin model. */
 const pinnacle_model_t *pinnacle_model_lookup(uint16_t pid);
 
+/* 1 if the model can be driven through a USB file descriptor someone else
+ * opened (pin_open("fd:N"): Android's UsbManager, termux-usb), 0 if not yet.
+ * The one place that decides it, from the table: a model with an FX2 image
+ * (fx2_firmware, the MovieBox Deluxe) drops off the bus after the download and
+ * comes back as a new USB device, which needs a new descriptor from the app
+ * (see pinnacle_ensure_fx2). */
+int pinnacle_model_fd_ok(const pinnacle_model_t *model);
+
 #ifdef __cplusplus
 }
 #endif
