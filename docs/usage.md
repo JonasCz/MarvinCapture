@@ -223,12 +223,14 @@ is, in order: the **measured** rate of the running capture (average of the last
 10 minutes, from 10 s of data on), for analog FFV1 the rate **learned** from the
 previous capture, else the **nominal** one: DV and HDV 13 GB/h (about 25 Mbit/s),
 analog AVI from what the core writes (YUY2 720x576 at 25 fps or 720x480 at
-29.97 fps plus 48 kHz 16-bit stereo, about 21 MB/s), FFV1 30 GB/h.
+29.97 fps plus 48 kHz 16-bit stereo, about 21 MB/s), FFV1 30 GB/h (x 0.95 for the
+"smaller" and "smallest" compression levels), H.264 / HEVC from the quality setting
+([below](#h264--hevc-the-systems-video-encoder)).
 `est_rate_source` says which (0 / 1 / 2) and `est_bytes_per_hour` is the rate.
 An FFV1 capture saves its 10-minute average every minute and when it ends as
 `ffv1_bytes_per_hour` in the `[core]` section of the settings file
-(`core.ffv1_bytes_per_hour` for `pin_settings_get/set`); implausible values
-(< 1 GB/h, > 300 GB/h) are ignored.
+(`core.ffv1_bytes_per_hour` for `pin_settings_get/set`), as the "fast" level's
+rate; implausible values (< 1 GB/h, > 300 GB/h) are ignored.
 
 ### When a capture stops by itself
 
@@ -337,6 +339,70 @@ previous value, never with the value at the start: the half-range test
 `(uint16_t)(seq - first) >= 0x8000` turns true 32768 frames in (21m50s PAL)
 and, until it was fixed, dropped all analog audio for the next 21m50s. `long`
 is 32-bit on Windows, so it must not hold bytes, samples or device ticks.
+
+## H.264 / HEVC (the system's video encoder)
+
+Analog and DV can also be written as H.264 or HEVC with FLAC audio in Matroska
+(`PIN_FMT_ANALOG_H264_MKV`, `_HEVC_MKV`, `PIN_FMT_DV_H264_MKV`, `_HEVC_MKV`; on the command
+line `--format h264-mkv`, `hevc-mkv`, `dv-h264-mkv`, `dv-hevc-mkv`). They are lossy: small
+files (about 4 GB per hour for H.264 and 3 GB for HEVC at the default settings, against
+30 GB for FFV1 and 13 GB for DV), not an archive copy. HDV is not offered (its transport
+stream is compact already). The file is written live, like FFV1: a crash leaves a playable
+file and nothing is remuxed at the end.
+
+The encoder is the operating system's own, through FFmpeg's wrappers
+(`src/sinks/pin_hwenc.c`), so the build stays LGPL:
+
+| Platform | Encoder | Quality setting becomes |
+|---|---|---|
+| Android | `h264_mediacodec` / `hevc_mediacodec` (NDK MediaCodec, no JVM) | VBR at the bit rate below (constant quality is rare on phones and the NDK cannot ask for it) |
+| macOS | `h264_videotoolbox` / `hevc_videotoolbox`, hardware only | Apple Silicon: constant quality, VideoToolbox quality = 100 - 1.9 x value (18 -> 66); Intel: the bit rate below |
+| Windows | `h264_mf` / `hevc_mf`: the GPU's encoder (`hw_encoding=1`), else Microsoft's software one | constant QP = the value (`rate_control=quality`, `CODECAPI_AVEncVideoEncodeQP`); the bit rate below is set too for an encoder that ignores it |
+| Linux | none: the formats are not offered | |
+
+The quality setting (`pin_capture_opts_t.video_quality`, `--quality`) is on x264's CRF scale:
+0 (best, biggest) to 51, default 18, 6 steps double or halve the size. Where an encoder has
+no constant-quality mode the bit rate is
+
+    bits per pixel = 0.30 x 2^((23 - quality) / 6)   (x 0.65 for HEVC)
+    bit rate       = bits per pixel x width x height x frames per second (x 0.75 when deinterlaced)
+
+clamped to 0.25 - 20 Mbit/s (12 Mbit/s on Android, the limit of its software AVC encoder):
+5.5 Mbit/s for PAL H.264 at 18, 3.1 at 23. The same formula gives the size estimate before a
+capture has measured its own rate (`pin_estimate.h`, `pin_format_quality_hint()`).
+
+Interlacing (`deinterlace`, `--deinterlace`): none of the encoders can code fields, so either
+
+- **deinterlace** (default): FFmpeg's `bwdif` turns every field into a frame, 25i into 50p,
+  29.97i into 59.94p, with the source's field order (analog top field first, DV bottom
+  field first); about 1.5 times the size, plays smoothly everywhere; or
+- **keep fields**: each interlaced frame is encoded as one progressive picture and flagged
+  progressive. Chroma is subsampled per field (`hwenc_convert.c`), but the encoder still
+  compresses both fields as one picture, which costs quality on motion, and players show
+  combing unless they deinterlace.
+
+Every encoder gets: a keyframe each second, no B-frames, H.264 High / HEVC Main, BT.601
+limited range, the SAR of the other formats. DV is decoded with FFmpeg's `dvvideo`; its
+audio (32, 44.1 or 48 kHz, one or two stereo pairs) goes through the same per-frame demux
+and silence padding as DV to AVI / MOV. Scene split and multi-pass work as for the other DV
+formats.
+
+**Availability.** `pin_formats()` lists these formats only where the encoder opens:
+`pin_encoders_probe()` opens each one once (720 x 576, 25 fps) on a thread of its own and
+caches the result for the process, typically 50-300 ms per encoder, up to about a second on
+a phone that needs every fallback (NV12 or YUV420P input, with or without the profile);
+GUIs call it from a worker thread at start-up. A capture with a format whose encoder is
+missing is refused (`PIN_ERR_CODEC`, the reason in `pin_check_output()`'s message; exit 1
+on the command line). An encoder that fails or hangs (no picture taken for 10 s) during a
+capture ends it with an error.
+
+**Settings for GUIs.** `pin_format_options()` says which of `deinterlace`, `video_quality`
+and `ffv1_compression` apply to a format, with ranges, defaults, labels and help texts;
+`pin_format_quality_hint()` is the size line under the quality control.
+
+**Testing without an encoder.** `PIN_HWENC_ENCODER=ffv1` (tests only) makes FFV1 stand in for
+both encoders, so the whole path runs on Linux (`tests/sinks/test_hwenc_sink.c`,
+`tests/engine_replay/test_replay_hwenc.c`); the file then holds FFV1.
 
 ## Diagnostics
 

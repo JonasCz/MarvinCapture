@@ -240,6 +240,12 @@ audio on its own thread, the muxer behind a lock.
   format only where it works, so no GUI needs platform logic.
 - Labelled as lossy ("small files"), since the rest of the project is about archival quality.
 
+Status: built (core and FFmpeg; the GUIs' settings come next). What was decided is under
+[Decisions](#decisions), item 7; how it works, the quality mapping per encoder and the
+probe in [usage.md](../usage.md#h264--hevc-the-systems-video-encoder). FFmpeg 8.1's MediaCodec
+wrapper links `libmediandk.so` and `libandroid.so` (both public NDK libraries) and dlopens
+only its optional newer calls.
+
 ## Android versions and ABIs
 
 Recommendation: **minSdk 29 (Android 10)**, target the latest API. Nothing newer is required:
@@ -371,10 +377,12 @@ Open; recommendation first.
 6. **Screen-off recording**: partial wake lock (works with the screen off; counts against Play's
    excessive-wake-lock vitals beyond 2 h) / keep the screen on, black (no vitals issue, needs
    the screen on).
-7. **Hardware encoder scope**: analog first, then DV / analog only / analog and DV at once.
-   Interlace: keep both fields + field-order flag / deinterlace to 50p-60p (bwdif) / offer both.
-   Container: MKV / fragmented MP4. HEVC where available: yes / later. On macOS and Windows too:
-   yes, same sink / Android only.
+7. **Hardware encoder scope**: decided and in the core (`src/sinks/sink_hwenc.c`, see
+   [usage.md](../usage.md#h264--hevc-the-systems-video-encoder)): analog and DV at once;
+   both interlace modes (keep the fields as one progressive picture, with a quality warning,
+   or bwdif to 50p / 59.94p, the default); MKV with FLAC; H.264 and HEVC where the encoder
+   answers; the same sink on Android, macOS and Windows (none on Linux). A quality setting on
+   the CRF scale and FFV1 compression levels came with it (`pin_format_options()`).
 8. **Storage locations in v1**: `Movies/MarvinCapture` + SD card app folder / also SAF (any
    folder, more core work).
 9. **Language**: Kotlin (the R8-shrunk stdlib is ~0.1-0.2 MB) / Java (zero runtime overhead,
