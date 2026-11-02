@@ -111,6 +111,22 @@ pin_sink_t *pin_sink_create(pin_format_t format);
  * get_status().units_written counts the video units the real sink accepted. See sink_lazy.c. */
 pin_sink_t *pin_sink_lazy(pin_sink_t *inner);
 
+/* Numbered output (pin_capture_opts_t.first_number >= 1): what a lazy sink does when its file
+ * cannot be created under its name because the name is taken (Android shared storage: a file
+ * this app cannot see; see sink_lazy.c). next(ctx, k, out, cap) writes the name k numbers further
+ * on (k = 1, 2, ...) and returns 0, or -1 if there is none; at most PIN_SINK_LAZY_MAX_SKIP are
+ * tried. The sink owns ctx from here on and calls ctx_free(ctx) when it is closed (at once if s
+ * is not a lazy sink). Call before open(). */
+#define PIN_SINK_LAZY_MAX_SKIP 1000
+typedef int (*pin_sink_name_fn)(void *ctx, unsigned k, char *out, size_t cap);
+void pin_sink_lazy_set_renumber(pin_sink_t *s, pin_sink_name_fn next, void *ctx,
+                                void (*ctx_free)(void *ctx));
+
+/* How many numbers a lazy sink skipped for its file (0: it kept its name, or it is no lazy
+ * sink, or the file does not exist yet) and, if that is not 0, the name it used in out. Safe from
+ * any thread while the writer feeds the sink. */
+unsigned pin_sink_lazy_renumbered(pin_sink_t *s, char *out, size_t cap);
+
 /* Where the HDV MOV / MKV sink writes its "<name>.rawts.tmp" (the raw stream it remuxes at
  * close): NULL or "" = next to the output file (the default), else this directory. Process-wide
  * (pin_set_app_dirs()), for sinks opened afterwards. -1 if dir is too long. */

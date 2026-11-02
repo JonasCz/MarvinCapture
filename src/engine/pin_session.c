@@ -782,6 +782,8 @@ static void file_closed(void *user, const pin_closer_done_t *d)
         pin_session_push_event(s, PIN_EVT_FILE_CLOSED, (int32_t)d->status, d->path);
 }
 
+static void adopt_renumbered_file(pin_session_t *s);
+
 /* Hands the open file (writer and sink) to the closer, which drains and
  * finalises it on its own thread, so the capture can go on into the next
  * file at once. What it has written so far goes into the capture's totals
@@ -792,6 +794,7 @@ static void hand_over_file(pin_session_t *s)
 {
     if (!s->sink)
         return;
+    adopt_renumbered_file(s);
     pin_sink_status_t sst;
     memset(&sst, 0, sizeof(sst));
     if (s->sink->get_status)
@@ -1079,6 +1082,36 @@ static void count_frame(pin_session_t *s, int err, int dropped)
     if (dropped) { s->frames_dropped++; s->clip_frames_dropped++; }
 }
 
+/* Numbered output: the names after a taken one, for the lazy sink (sink_lazy.c, "Taken names":
+ * Android shared storage can hold files of this name that the app cannot see). Owned by the
+ * sink, which may use it on the writer thread after the session moved on, hence the copy. */
+typedef struct {
+    char base[PIN_PATH_MAX];
+    char ext[16];
+    pin_naming_opts_t nopts;
+} renumber_ctx_t;
+
+static int renumber_next(void *ctx, unsigned k, char *out, size_t cap)
+{
+    const renumber_ctx_t *c = ctx;
+    pin_naming_opts_t o = c->nopts;
+    o.scene_index += k;
+    return pin_naming_build(c->base, &o, c->ext, out, cap) == 0 ? 0 : -1;
+}
+
+/* Takes over the name the lazy sink moved the open file to, if it had to skip a taken number:
+ * current_file (status, events, the closer) and scene_index (the next scene counts on from
+ * it). Caller holds the lock. */
+static void adopt_renumbered_file(pin_session_t *s)
+{
+    char path[PIN_PATH_MAX];
+    unsigned k = s->sink ? pin_sink_lazy_renumbered(s->sink, path, sizeof(path)) : 0;
+    if (k == 0 || strcmp(path, s->current_file) == 0)
+        return;     /* none, or already taken over */
+    snprintf(s->current_file, sizeof(s->current_file), "%s", path);
+    s->scene_index += k;
+}
+
 static void open_sink_for_scene(pin_session_t *s)
 {
     pin_naming_opts_t nopts = {
@@ -1102,6 +1135,15 @@ static void open_sink_for_scene(pin_session_t *s)
     if (!s->sink) {
         set_error(s, PIN_ERR_ARG, "unsupported output format");
         return;
+    }
+    if (!to_stdout && s->capture_opts.first_number != 0) {
+        renumber_ctx_t *rc = calloc(1, sizeof(*rc));
+        if (rc) {
+            snprintf(rc->base, sizeof(rc->base), "%s", s->naming_base);
+            snprintf(rc->ext, sizeof(rc->ext), "%s", s->naming_ext);
+            rc->nopts = nopts;
+            pin_sink_lazy_set_renumber(s->sink, renumber_next, rc, free);
+        }
     }
 
     pin_sink_params_t params;
@@ -1190,6 +1232,7 @@ static void file_announce(pin_session_t *s)
     memset(&sst, 0, sizeof(sst));
     s->sink->get_status(s->sink, &sst);
     if (sst.units_written > 0) {
+        adopt_renumbered_file(s);
         s->file_announced = 1;
         pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, s->current_file);
     }

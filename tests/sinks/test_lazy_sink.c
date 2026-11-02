@@ -50,6 +50,31 @@ static long size_of(const char *path)
     return n;
 }
 
+#if !defined(_WIN32)
+/* numbered output: "lazy_n-NNNN.dv" from 5 on (the engine builds these with pin_naming_build) */
+static int name_after(void *ctx, unsigned k, char *out, size_t cap)
+{
+    unsigned first = *(const unsigned *)ctx;
+    snprintf(out, cap, "lazy_n-%04u.dv", first + k);
+    return 0;
+}
+
+static int g_ctx_freed;
+static void ctx_free(void *ctx)
+{
+    (void)ctx;
+    g_ctx_freed++;
+}
+
+static void write_file(const char *path, const char *text)
+{
+    FILE *f = fopen(path, "wb");
+    CHECK(f);
+    fputs(text, f);
+    fclose(f);
+}
+#endif
+
 static pin_sink_params_t params(pin_kind_t kind, int w, int h, int fn, int fd, pin_aspect_t aspect)
 {
     pin_sink_params_t p;
@@ -170,6 +195,67 @@ int main(void)
         s->close(s);
     }
     printf("OK: first unit creates the file; audio first is dropped; missing directory\n");
+
+#if !defined(_WIN32)
+    /* numbered output: a name that cannot be created (here: taken by an existing file; on
+     * Android a file of an earlier installation the app cannot see) moves the file on to the
+     * next free number, without touching the taken ones */
+    {
+        static unsigned first = 5;
+        write_file("lazy_n-0005.dv", "taken");
+        write_file("lazy_n-0006.dv", "taken too");
+        remove("lazy_n-0007.dv");
+        pin_sink_params_t p = params(PIN_KIND_DV, 720, 576, 25, 1, PIN_ASPECT_4_3);
+        pin_sink_t *s = pin_sink_lazy(pin_sink_create(PIN_FMT_DV_RAW));
+        CHECK(s);
+        g_ctx_freed = 0;
+        pin_sink_lazy_set_renumber(s, name_after, &first, ctx_free);
+        CHECK_EQ_I(s->open(s, "lazy_n-0005.dv", &p), PIN_OK);
+        char used[256] = "";
+        CHECK_EQ_I(pin_sink_lazy_renumbered(s, used, sizeof(used)), 0);   /* not yet created */
+        CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_OK);
+        CHECK_EQ_I(pin_sink_lazy_renumbered(s, used, sizeof(used)), 2);
+        CHECK(strcmp(used, "lazy_n-0007.dv") == 0);
+        CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_OK);
+        CHECK_EQ_I(s->close(s), PIN_OK);
+        CHECK_EQ_I(g_ctx_freed, 1);
+        CHECK_EQ_I(size_of("lazy_n-0005.dv"), 5);
+        CHECK_EQ_I(size_of("lazy_n-0006.dv"), 9);
+        CHECK_EQ_I(size_of("lazy_n-0007.dv"), 2 * (long)frame);
+        remove("lazy_n-0005.dv");
+        remove("lazy_n-0006.dv");
+        remove("lazy_n-0007.dv");
+    }
+    /* a free name: kept, and the probe leaves nothing behind before the first unit */
+    {
+        static unsigned first = 10;
+        remove("lazy_n-0010.dv");
+        remove("lazy_n-0011.dv");
+        pin_sink_params_t p = params(PIN_KIND_DV, 720, 576, 25, 1, PIN_ASPECT_4_3);
+        pin_sink_t *s = pin_sink_lazy(pin_sink_create(PIN_FMT_DV_RAW));
+        CHECK(s);
+        pin_sink_lazy_set_renumber(s, name_after, &first, NULL);
+        CHECK_EQ_I(s->open(s, "lazy_n-0010.dv", &p), PIN_OK);
+        CHECK(!exists("lazy_n-0010.dv"));
+        CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_OK);
+        CHECK_EQ_I(pin_sink_lazy_renumbered(s, NULL, 0), 0);
+        CHECK_EQ_I(s->close(s), PIN_OK);
+        CHECK_EQ_I(size_of("lazy_n-0010.dv"), (long)frame);
+        CHECK(!exists("lazy_n-0011.dv"));
+        remove("lazy_n-0010.dv");
+    }
+    /* not a lazy sink: the context is freed at once, nothing else happens */
+    {
+        pin_sink_t *s = pin_sink_create(PIN_FMT_DV_RAW);
+        CHECK(s);
+        g_ctx_freed = 0;
+        pin_sink_lazy_set_renumber(s, name_after, NULL, ctx_free);
+        CHECK_EQ_I(g_ctx_freed, 1);
+        CHECK_EQ_I(pin_sink_lazy_renumbered(s, NULL, 0), 0);
+        s->close(s);
+    }
+    printf("OK: numbered output skips taken names\n");
+#endif
     free(fr);
     return 0;
 }
