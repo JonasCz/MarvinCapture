@@ -43,6 +43,23 @@ double pin_est_default_rate(pin_est_kind_t kind, int width, int height, int is_6
     }
 }
 
+double pin_est_hwenc_rate(int hevc, int width, int height, int is_60hz, int deinterlace, int q)
+{
+    if (width <= 0 || height <= 0) { width = 720; height = is_60hz ? 480 : 576; }
+    double fps = is_60hz ? 30000.0 / 1001.0 : 25.0;
+    if (deinterlace)
+        fps *= 2.0;
+    double bits = pin_est_video_bitrate(hevc, width, height, fps, deinterlace != 0, q) + PIN_EST_FLAC_BPS;
+    return bits / 8.0 * 1.01;
+}
+
+double pin_est_ffv1_factor(int ffv1_compression)
+{
+    /* PIN_FFV1_SMALLER / SMALLEST: the range coder saved 2-11 % on synthetic test pictures,
+     * the large context model nothing more with 16 slices (sink_ffv1.c) */
+    return ffv1_compression == 1 || ffv1_compression == 2 ? 0.95 : 1.0;
+}
+
 double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, double learned_bph,
                     double measured_bps, int *source)
 {

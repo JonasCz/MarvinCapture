@@ -20,6 +20,7 @@
  * error, extension -> format mapping, timecodes and durations, help. */
 
 #include "pin_script.h"
+#include "pin_format_opts.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -472,6 +473,72 @@ static void test_clone_and_text_range(void)
     pin_script_destroy(c);
 }
 
+/* --format keys of the H.264 / HEVC formats, --quality, --deinterlace, --ffv1-compression */
+static void test_format_settings(void)
+{
+    pin_script_t *sc = NULL;
+    char err[256];
+    const pin_script_item_t *cap;
+
+    /* defaults when none is given */
+    CHECK(PARSE(sc, err, "--capture", "a.dv", "--wait") == PIN_OK, "defaults");
+    cap = find_step(sc, 0);
+    CHECK(cap && cap->cap.deinterlace == PIN_DEINTERLACE_DOUBLE_RATE && cap->cap.video_quality == 18 &&
+          cap->cap.ffv1_compression == PIN_FFV1_FAST, "default format settings");
+    CHECK(!sc->initial.has_deinterlace && !sc->initial.has_video_quality && !sc->initial.has_ffv1_compression,
+          "none given");
+    pin_script_destroy(sc);
+
+    /* given before the first action: in the initial settings and in the capture */
+    CHECK(PARSE(sc, err, "-i", "composite", "--format", "hevc-mkv", "--quality", "23", "--deinterlace", "no",
+                "--ffv1-compression", "Smaller", "--capture", "tape", "--wait", "nosignal") == PIN_OK, "analog HEVC");
+    cap = find_step(sc, 0);
+    CHECK(cap && cap->cap.format[PIN_KIND_ANALOG] == PIN_FMT_ANALOG_HEVC_MKV && cap->cap.video_quality == 23 &&
+          cap->cap.deinterlace == PIN_DEINTERLACE_KEEP_FIELDS && cap->cap.ffv1_compression == PIN_FFV1_SMALLER,
+          "settings reach the capture");
+    CHECK(sc->initial.has_format_analog && sc->initial.format_analog == PIN_FMT_ANALOG_HEVC_MKV &&
+          sc->initial.has_video_quality && sc->initial.video_quality == 23 && sc->initial.has_deinterlace &&
+          sc->initial.deinterlace == PIN_DEINTERLACE_KEEP_FIELDS && sc->initial.has_ffv1_compression &&
+          sc->initial.ffv1_compression == PIN_FFV1_SMALLER, "initial settings");
+    pin_script_destroy(sc);
+
+    /* the format keys, each for its own signal; later settings for a later capture */
+    CHECK(PARSE(sc, err, "--format", "dv-h264-mkv", "--capture", "a", "--wait", "--play", "--format",
+                "dv-hevc-mkv", "--format", "h264-mkv", "--deinterlace", "yes", "--quality", "0",
+                "--ffv1-compression", "smallest", "--capture", "b") == PIN_OK, "DV keys");
+    if (!sc)
+        return;
+    cap = find_step(sc, 0);
+    CHECK(cap && cap->cap.format[PIN_KIND_DV] == PIN_FMT_DV_H264_MKV &&
+          cap->cap.format[PIN_KIND_ANALOG] == PIN_FMT_ANALOG_AVI, "dv-h264-mkv is DV");
+    cap = find_step(sc, 3);
+    CHECK(cap && cap->cap.format[PIN_KIND_DV] == PIN_FMT_DV_HEVC_MKV &&
+          cap->cap.format[PIN_KIND_ANALOG] == PIN_FMT_ANALOG_H264_MKV && cap->cap.video_quality == 0 &&
+          cap->cap.deinterlace == PIN_DEINTERLACE_DOUBLE_RATE && cap->cap.ffv1_compression == PIN_FFV1_SMALLEST,
+          "second capture");
+    CHECK(sc->initial.has_format_dv && sc->initial.format_dv == PIN_FMT_DV_H264_MKV &&
+          !sc->initial.has_video_quality, "only what came before the first action is initial");
+    pin_script_destroy(sc);
+
+    /* .mkv still means FFV1 for analog: H.264 / HEVC only by --format */
+    pin_format_t f[3];
+    unsigned mask = 0;
+    CHECK(pin_script_ext_formats("mkv", f, &mask) && f[PIN_KIND_ANALOG] == PIN_FMT_ANALOG_FFV1_MKV, "mkv = FFV1");
+
+    EXPECT_ERROR("--quality: expected a whole number from 0 to 51", "--quality", "52", "--capture", "a.mkv");
+    EXPECT_ERROR("--quality: expected a whole number from 0 to 51", "--quality", "-1", "--capture", "a.mkv");
+    EXPECT_ERROR("--quality: expected a whole number", "--quality", "high", "--capture", "a.mkv");
+    EXPECT_ERROR("--deinterlace: expected yes or no", "--deinterlace", "maybe", "--capture", "a.mkv");
+    EXPECT_ERROR("--ffv1-compression: expected fast, smaller or smallest", "--ffv1-compression", "max");
+    EXPECT_ERROR("--quality needs a value", "--quality");
+    EXPECT_ERROR("hevc-mkv", "--format", "h265-mkv");
+    EXPECT_ERROR("--quality cannot change while a capture is open", "--capture", "a.mkv", "--quality", "20");
+    const char *help = pin_script_help_text();
+    CHECK(strstr(help, "--quality N") && strstr(help, "--deinterlace yes|no") &&
+          strstr(help, "--ffv1-compression fast|smaller|smallest") && strstr(help, "dv-hevc-mkv"),
+          "help text");
+}
+
 int main(void)
 {
     test_timecodes();
@@ -483,6 +550,7 @@ int main(void)
     test_help_and_empty();
     test_errors();
     test_clone_and_text_range();
+    test_format_settings();
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

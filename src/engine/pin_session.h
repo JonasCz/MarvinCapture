@@ -112,6 +112,12 @@ int pin_session_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 pin_status_t pin_session_format_info(pin_format_t f, pin_format_info_t *out);
 /* pin_format_warning(): the platform's warning for choosing f, "" if none. */
 void pin_session_format_warning(pin_format_t f, char *out, size_t cap);
+/* 1 if this machine can write format f: every format but the H.264 / HEVC ones, which need
+ * their encoder (pin_hwenc_available(), probing on the first call). */
+int pin_session_format_available(pin_format_t f);
+/* The format a capture with these options writes for input kind (DV input: the DV or HDV one,
+ * whichever the stream turns out to be; HDV only when the session knows it is HDV). */
+pin_format_t pin_session_format_for(const pin_session_t *s, const pin_capture_opts_t *o);
 
 #ifdef __cplusplus
 }

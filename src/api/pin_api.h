@@ -343,6 +343,15 @@ typedef enum {
     PIN_FMT_HDV_TS,             /* .ts (m2t) */
     PIN_FMT_HDV_MOV,
     PIN_FMT_HDV_MKV,
+    /* Appended. Lossy, with the operating system's own (normally hardware) encoder: Android
+     * MediaCodec, macOS VideoToolbox, Windows Media Foundation; video_quality and deinterlace
+     * apply (pin_format_options()). FLAC audio, Matroska, written live (a crash leaves a
+     * playable file). Listed by pin_formats() only where the encoder opens on this machine;
+     * never on Linux. DV input is decoded first (its scene split and passes work as usual). */
+    PIN_FMT_ANALOG_H264_MKV,
+    PIN_FMT_ANALOG_HEVC_MKV,
+    PIN_FMT_DV_H264_MKV,
+    PIN_FMT_DV_HEVC_MKV,
     PIN_FMT_COUNT
 } pin_format_t;
 
@@ -366,14 +375,96 @@ typedef struct {
 
 /* Formats for a kind, in display order. Returns the count. Only the formats this platform
  * offers: Android leaves out PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV (they remux the whole
- * recording when it stops). pin_format_info() answers for every format. */
+ * recording when it stops), and the H.264 / HEVC formats appear only where their encoder
+ * opened in pin_encoders_probe() (which the first call runs if nobody did: see there).
+ * pin_format_info() answers for every format. */
 PIN_API int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 PIN_API pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out);
 
+/* Finds out once per process which of the H.264 / HEVC formats this machine can write: opens
+ * each encoder with a small test configuration (720 x 576, 25 fps) and closes it again, on a
+ * thread of its own (Media Foundation must not run on a GUI's single-threaded COM apartment).
+ * Blocking: typically 50-300 ms per encoder, up to about a second on a phone that needs every
+ * fallback (pixel format, profile), and nothing at all on Linux. The result is cached, so later
+ * calls (and pin_formats()) return at once. A GUI calls it from a worker thread at start-up,
+ * before it first lists the formats; otherwise the first pin_formats() pays for it. Returns a
+ * bitmask of PIN_ENC_* for the encoders that opened. */
+#define PIN_ENC_H264 0x1
+#define PIN_ENC_HEVC 0x2
+PIN_API int pin_encoders_probe(void);
+
 /* A one-paragraph warning to show when the user picks format f on this platform, or "" when
- * there is none (always "" on Windows, macOS and Linux; on Android for uncompressed analog
- * AVI, whose data rate phone storage may not sustain). 512 bytes are enough. */
+ * there is none: the H.264 / HEVC formats (lossy; for DV input a re-encode of the DV, which is
+ * already compressed), and on Android uncompressed analog AVI, whose data rate phone storage
+ * may not sustain. "" for every other format. 512 bytes are enough. */
 PIN_API void pin_format_warning(pin_format_t f, char *out, size_t cap);
+
+/* The format settings of pin_capture_opts_t and which format each applies to. */
+typedef enum {
+    PIN_DEINTERLACE_KEEP_FIELDS = 0,    /* each interlaced frame is encoded as one progressive picture */
+    PIN_DEINTERLACE_DOUBLE_RATE = 1,    /* bwdif: every field becomes a frame, 25i -> 50p, 29.97i -> 59.94p */
+} pin_deinterlace_t;
+
+typedef enum {
+    PIN_FFV1_FAST = 0,          /* Golomb-Rice coder (FFmpeg's default): least CPU, largest files */
+    PIN_FFV1_SMALLER,           /* range coder: a few percent smaller, more CPU */
+    PIN_FFV1_SMALLEST,          /* range coder and the large context model: smallest, most CPU */
+    PIN_FFV1_LEVEL_COUNT
+} pin_ffv1_compression_t;
+
+#define PIN_OPT_HELP_MAX 512
+
+/* What pin_format_options() reports: which of the format settings apply to a format and how a
+ * GUI presents them, with ready-made labels and help texts (UTF-8, English, like the other
+ * ready-made texts). A GUI shows one control per has_* flag and nothing else. */
+typedef struct {
+    uint32_t size;
+    int has_quality;            /* video_quality applies (H.264 / HEVC) */
+    int has_deinterlace;        /* deinterlace applies (H.264 / HEVC) */
+    int has_ffv1_compression;   /* ffv1_compression applies (FFV1) */
+
+    /* video_quality: a slider or spin box from quality_min to quality_max in steps of 1,
+     * quality_default preselected. Lower is better (bigger files), like x264's CRF; the encoder
+     * gets the closest it supports (constant quality or a bit rate derived from the value). */
+    int quality_min, quality_max, quality_default;
+    int quality_lower_is_better;            /* 1 */
+    char quality_label[PIN_NAME_MAX];       /* "Quality" */
+    char quality_low_label[PIN_NAME_MAX];   /* the quality_min end of the slider: "Best" */
+    char quality_high_label[PIN_NAME_MAX];  /* the quality_max end: "Smallest" */
+    char quality_help[PIN_OPT_HELP_MAX];    /* what the number means, the default, lossy */
+
+    /* deinterlace: two choices (radio buttons or a drop-down), in pin_deinterlace_t order. */
+    int deinterlace_default;                        /* PIN_DEINTERLACE_DOUBLE_RATE */
+    char deinterlace_label[PIN_NAME_MAX];           /* "Interlaced video" */
+    char deinterlace_keep_label[PIN_NAME_MAX];      /* "Keep fields (25/30 fps)" */
+    char deinterlace_double_label[PIN_NAME_MAX];    /* "Deinterlace (50/60 fps)" */
+    char deinterlace_keep_help[PIN_OPT_HELP_MAX];   /* the warning: interlaced material loses quality */
+    char deinterlace_double_help[PIN_OPT_HELP_MAX];
+
+    /* ffv1_compression: PIN_FFV1_LEVEL_COUNT choices in pin_ffv1_compression_t order. */
+    int ffv1_default;                               /* PIN_FFV1_FAST */
+    char ffv1_label[PIN_NAME_MAX];                  /* "Compression" */
+    char ffv1_fast_label[PIN_NAME_MAX];             /* "Fast" */
+    char ffv1_smaller_label[PIN_NAME_MAX];          /* "Smaller" */
+    char ffv1_smallest_label[PIN_NAME_MAX];         /* "Smallest" */
+    char ffv1_help[PIN_OPT_HELP_MAX];               /* smaller files cost more CPU; all lossless */
+
+    char note[PIN_OPT_HELP_MAX];    /* one line for the whole settings panel of this format, or "":
+                                       H.264 / HEVC: lossy, made by the hardware encoder */
+} pin_format_options_t;
+
+/* Fills *out (out->size set by the caller) for format f. Settings that do not apply have their
+ * has_* flag 0 (the texts and ranges are filled all the same). PIN_ERR_ARG for an unknown format,
+ * PIN_ERR_ABI for a size the library does not know. Pure, cheap. */
+PIN_API pin_status_t pin_format_options(pin_format_t f, pin_format_options_t *out);
+
+/* The data rate one quality setting comes to, for a line under the quality control: "About 2.9
+ * GB per hour (6.4 Mbit/s)". f is an H.264 / HEVC format (else ""), is_60hz the video standard
+ * (0 = PAL / SECAM 25 fps, 1 = NTSC / PAL-M 29.97 fps), deinterlace a pin_deinterlace_t. An
+ * estimate from the same mapping the encoders' bit rates come from (pin_status_snapshot_t's
+ * est_bytes_per_hour before a capture has measured its own rate). 128 bytes are enough. */
+PIN_API void pin_format_quality_hint(pin_format_t f, int video_quality, int deinterlace,
+                                     int is_60hz, char *out, size_t cap);
 
 /* ---- capture ------------------------------------------------------------ */
 
@@ -417,8 +508,17 @@ typedef struct {
     char ts_extension[8];       /* extension of a raw HDV transport stream file (PIN_FMT_HDV_TS),
                                     without the dot: "" = "ts", or "m2t" to keep the name the user
                                     gave. Appended field, ABI-compatible. */
+    /* Appended fields, ABI-compatible: the format settings (pin_format_options() says which
+     * apply to which format; the others are ignored). A caller compiled before them passes the
+     * old size and gets the defaults. */
+    int deinterlace;            /* H.264 / HEVC: a pin_deinterlace_t (default DOUBLE_RATE) */
+    int video_quality;          /* H.264 / HEVC: 0 (best) .. 51 (smallest), like a CRF (default 18) */
+    int ffv1_compression;       /* PIN_FMT_ANALOG_FFV1_MKV: a pin_ffv1_compression_t (default FAST) */
 } pin_capture_opts_t;
 
+/* Fills *o with the defaults. A caller compiled against an older pin_api.h sets o->size to its
+ * sizeof() first; only that many bytes are written then. Any other size (0 included) means
+ * the full struct of this header. */
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);
 
 /* Multi-pass needs a way to notice the end of a pass: the no-signal timeout
@@ -447,7 +547,9 @@ typedef struct {
 } pin_output_check_t;
 
 /* Checks free space, file system limits and name collisions before a
- * capture. input tells it which format/data rate applies. */
+ * capture. input tells it which format/data rate applies. PIN_ERR_CODEC, with the
+ * reason in message, when the format for the current input is an H.264 / HEVC one whose
+ * encoder this machine does not have (pin_capture_start() refuses it the same way). */
 PIN_API pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
                                       pin_output_check_t *out);
 
@@ -460,7 +562,10 @@ PIN_API pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t
 PIN_API pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opts_t *o);
 
 /* Non-blocking. Refuses with PIN_ERR_EXISTS if a target file exists unless
- * overwrite is set (the GUI asks the user first). */
+ * overwrite is set (the GUI asks the user first), and with PIN_ERR_CODEC when the
+ * format for the current input needs an encoder this machine does not have (see
+ * pin_check_output() for the message). An encoder that fails later, while capturing,
+ * ends the capture like a write error (PIN_STOP_ERROR, "the video encoder failed"). */
 PIN_API pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite);
 
 /* Non-blocking. State goes STOPPING -> READY. Also stops the deck if the
@@ -913,6 +1018,11 @@ typedef struct {
     uint32_t controls_set;  /* bit (1 << pin_control_t) per control that was given */
     int32_t control_brightness, control_contrast, control_saturation;
     int32_t control_hue, control_sharpness, control_audio_gain;
+    /* Appended: --deinterlace, --quality, --ffv1-compression (pin_capture_opts_t's fields). A
+     * caller compiled before them passes the old size and gets the old layout. */
+    int has_deinterlace;    int deinterlace;
+    int has_video_quality;  int video_quality;
+    int has_ffv1_compression; int ffv1_compression;
 } pin_script_settings_t;
 
 PIN_API pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_settings_t *out);

@@ -77,6 +77,29 @@ int main(void)
     }
     double r = pin_rate_bytes_per_s(&w, 10);
     CHECK(near(r, 2e6, 6e4), "10-minute average");
+
+    /* H.264 / HEVC: the quality -> bit rate mapping (pin_estimate.h) */
+    double pal = 720.0 * 576 * 25;
+    CHECK(near(pin_est_video_bitrate(0, 720, 576, 25, 0, 23), 0.30 * pal, 1), "H.264 at 23: 0.30 bit/pixel");
+    CHECK(near(pin_est_video_bitrate(0, 720, 576, 25, 0, 17), 0.60 * pal, 1), "6 steps down double it");
+    CHECK(near(pin_est_video_bitrate(1, 720, 576, 25, 0, 23), 0.30 * 0.65 * pal, 1), "HEVC 0.65 of it");
+    CHECK(near(pin_est_video_bitrate(0, 720, 576, 50, 1, 23), 0.30 * pal * 2 * 0.75, 1),
+          "double rate: 1.5 times, not 2");
+    double q18 = pin_est_video_bitrate(0, 720, 576, 25, 0, 18);
+    CHECK(q18 > 5.4e6 && q18 < 5.6e6, "default 18: about 5.5 Mbit/s");
+    CHECK(pin_est_video_bitrate(0, 720, 576, 25, 0, 0) == PIN_EST_VIDEO_MAX_BPS, "clamped at the top");
+    CHECK(pin_est_video_bitrate(0, 720, 576, 25, 0, 51) == PIN_EST_VIDEO_MIN_BPS, "clamped at the bottom");
+    CHECK(pin_est_video_bitrate(0, 720, 576, 25, 0, -5) == pin_est_video_bitrate(0, 720, 576, 25, 0, 0) &&
+          pin_est_video_bitrate(0, 720, 576, 25, 0, 99) == pin_est_video_bitrate(0, 720, 576, 25, 0, 51),
+          "quality clamped to 0..51");
+    double fr = pin_est_hwenc_rate(0, 0, 0, 0, 0, 18);
+    CHECK(near(fr, (q18 + PIN_EST_FLAC_BPS) / 8 * 1.01, 1), "file rate: video + FLAC + 1 %");
+    CHECK(pin_est_hwenc_rate(0, 0, 0, 0, 1, 18) > fr * 1.3, "deinterlaced is bigger");
+    CHECK(pin_est_hwenc_rate(1, 0, 0, 0, 0, 18) < fr, "HEVC is smaller");
+    CHECK(near(pin_est_hwenc_rate(0, 0, 0, 1, 0, 18), pin_est_hwenc_rate(0, 720, 480, 1, 0, 18), 1e-6),
+          "NTSC geometry by default");
+    CHECK(pin_est_ffv1_factor(0) == 1.0 && pin_est_ffv1_factor(1) < 1.0 &&
+          pin_est_ffv1_factor(2) <= pin_est_ffv1_factor(1) && pin_est_ffv1_factor(7) == 1.0, "FFV1 levels");
     if (g_failures == 0) printf("test_pin_estimate: ok\n");
     return g_failures;
 }

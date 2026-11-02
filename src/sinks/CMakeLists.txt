@@ -16,8 +16,9 @@
 
 # File-output layer: pin_writer (bounded queue + writer thread) and the
 # pin_sink_t implementations (raw passthrough, analog AVI, analog FFV1/MKV,
-# DV/HDV rewrap). Links the minimal static FFmpeg built by
-# scripts/build-ffmpeg.sh (see third_party/README.md).
+# DV/HDV rewrap, analog/DV to H.264/HEVC with the OS's encoder). Links the
+# minimal static FFmpeg built by scripts/build-ffmpeg.sh (see
+# third_party/README.md).
 
 if(WIN32)
     set(PIN_FFMPEG_OS "windows")
@@ -92,6 +93,9 @@ add_library(pinnacle_sinks STATIC
     sink_rewrap.c
     sink_lazy.c
     sink_avlog.c
+    sink_hwenc.c
+    pin_hwenc.c
+    hwenc_convert.c
 )
 target_include_directories(pinnacle_sinks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     ${PIN_FFMPEG_STATIC_INCLUDE_DIRS})

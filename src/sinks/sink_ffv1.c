@@ -363,6 +363,19 @@ static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_pa
     av_opt_set_int(p->venc->priv_data, "level", 3, 0);
     av_opt_set_int(p->venc->priv_data, "slices", FFV1_SLICES, 0);
     av_opt_set_int(p->venc->priv_data, "slicecrc", 1, 0);
+    /* Compression (pin_capture_opts_t.ffv1_compression). FFmpeg's defaults, Golomb-Rice
+     * coding with the small context model, are the fastest mode: that is "fast", what this
+     * sink always wrote before the setting existed. "smaller" is the range coder with a
+     * custom state table (written into the header; it beat the default table in every test);
+     * "smallest" adds the large context model. Both cost CPU time; every level is lossless and
+     * any FFV1 decoder reads all of them. What they save depends on the material: on synthetic
+     * SD test pictures the range coder saved 2-11 %, but the large context model, whose many
+     * contexts restart in each of the 16 slices of every frame, came out 2-8 % larger than the
+     * range coder alone (it only helped with 4 slices). */
+    if (params->ffv1_compression == PIN_FFV1_SMALLER || params->ffv1_compression == PIN_FFV1_SMALLEST)
+        av_opt_set(p->venc->priv_data, "coder", "range_tab", 0);
+    if (params->ffv1_compression == PIN_FFV1_SMALLEST)
+        av_opt_set_int(p->venc->priv_data, "context", 1, 0);
     /* Slice threading runs one slice per thread, so more threads than
      * slices would only sit idle. */
     int threads = cpu_count() - 1;

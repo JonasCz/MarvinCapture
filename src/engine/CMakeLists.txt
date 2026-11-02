@@ -26,6 +26,7 @@ add_library(pinnacle_engine_pure STATIC
     dv_error.c
     hdv_error.c
     pin_estimate.c
+    pin_format_opts.c
     pin_stop.c
     pin_vidfmt.c
     pin_scene.c
@@ -75,6 +76,7 @@ if(PIN_BUILD_TESTS)
     pinnacle_engine_test(test_dv_error)
     pinnacle_engine_test(test_hdv_error)
     pinnacle_engine_test(test_pin_estimate)
+    pinnacle_engine_test(test_pin_format_opts)
     pinnacle_engine_test(test_pin_stop)
     pinnacle_engine_test(test_pin_vidfmt)
     pinnacle_engine_test(test_pin_usb_topology)

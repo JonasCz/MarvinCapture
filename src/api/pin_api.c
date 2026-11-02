@@ -29,6 +29,7 @@
 #include "../engine/pin_session.h"
 #include "../engine/pin_session_priv.h" /* pin_session_push_event(NULL, ...) and s->preview */
 #include "../engine/pin_deck.h"
+#include "../engine/pin_format_opts.h"
 #include "../engine/pin_settings.h"
 #include "../engine/pin_script.h"
 #include "../engine/pin_stop.h"
@@ -40,6 +41,7 @@
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pin_log.h"
+#include "../sinks/pin_hwenc.h"
 
 #include <math.h>
 #include <stddef.h> /* offsetof */
@@ -384,11 +386,36 @@ void pin_format_warning(pin_format_t f, char *out, size_t cap)
     pin_session_format_warning(f, out, cap);
 }
 
+int pin_encoders_probe(void)
+{
+    int m = pin_hwenc_probe();
+    return ((m >> PIN_HWENC_H264) & 1 ? PIN_ENC_H264 : 0) | ((m >> PIN_HWENC_HEVC) & 1 ? PIN_ENC_HEVC : 0);
+}
+
+pin_status_t pin_format_options(pin_format_t f, pin_format_options_t *out)
+{
+    if (!out)
+        return PIN_ERR_ARG;
+    if (out->size != sizeof(*out))
+        return PIN_ERR_ABI;
+    return pin_fmt_options(f, out);
+}
+
+void pin_format_quality_hint(pin_format_t f, int video_quality, int deinterlace, int is_60hz,
+                             char *out, size_t cap)
+{
+    pin_fmt_quality_hint(f, video_quality, deinterlace, is_60hz, out, cap);
+}
+
 /* ========================================================================
  * capture
  * ==================================================================== */
 
-void pin_capture_opts_defaults(pin_capture_opts_t *o)
+/* sizeof(pin_capture_opts_t) before the format settings were appended: what a front end
+ * compiled against that header passes (the Windows GUI sets size itself). */
+#define CAPTURE_OPTS_SIZE_V3 offsetof(pin_capture_opts_t, deinterlace)
+
+static void opts_full_defaults(pin_capture_opts_t *o)
 {
     memset(o, 0, sizeof(*o));
     o->size = sizeof(*o);
@@ -397,6 +424,42 @@ void pin_capture_opts_defaults(pin_capture_opts_t *o)
     o->format_hdv = PIN_FMT_HDV_TS;
     o->aspect = PIN_ASPECT_AUTO;
     o->passes = 1;
+    o->deinterlace = PIN_DEINTERLACE_DEFAULT;
+    o->video_quality = PIN_QUALITY_DEFAULT;
+    o->ffv1_compression = PIN_FFV1_DEFAULT;
+}
+
+/* How many bytes of the caller's struct are there: an older caller's known size, else (0 from
+ * a zero-initialised struct, or garbage from an uninitialised one) the whole struct, as before
+ * sizes were looked at. Only exact older sizes count, so stack garbage cannot shrink it. */
+static size_t opts_caller_size(const pin_capture_opts_t *o)
+{
+    return o->size == CAPTURE_OPTS_SIZE_V3 ? CAPTURE_OPTS_SIZE_V3 : sizeof(*o);
+}
+
+void pin_capture_opts_defaults(pin_capture_opts_t *o)
+{
+    if (!o)
+        return;
+    size_t n = opts_caller_size(o);
+    pin_capture_opts_t full;
+    opts_full_defaults(&full);
+    full.size = (uint32_t)n;
+    memcpy(o, &full, n);
+}
+
+/* The caller's options as this library's struct: an older caller's fields over the defaults. */
+static const pin_capture_opts_t *opts_import(const pin_capture_opts_t *o, pin_capture_opts_t *buf)
+{
+    if (!o)
+        return NULL;
+    size_t n = opts_caller_size(o);
+    if (n == sizeof(*o))
+        return o;
+    opts_full_defaults(buf);
+    memcpy(buf, o, n);
+    buf->size = sizeof(*buf);
+    return buf;
 }
 
 int pin_capture_passes_allowed(int idle_stop_minutes, int max_duration_minutes)
@@ -419,17 +482,20 @@ int pin_capture_opts_normalize(pin_capture_opts_t *o)
 pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
                                pin_output_check_t *out)
 {
-    return pin_session_check_output(s, o, out);
+    pin_capture_opts_t buf;
+    return pin_session_check_output(s, opts_import(o, &buf), out);
 }
 
 pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opts_t *o)
 {
-    return pin_session_set_output_hint(s, o);
+    pin_capture_opts_t buf;
+    return pin_session_set_output_hint(s, opts_import(o, &buf));
 }
 
 pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite)
 {
-    return pin_session_capture_start(s, o, overwrite);
+    pin_capture_opts_t buf;
+    return pin_session_capture_start(s, opts_import(o, &buf), overwrite);
 }
 
 pin_status_t pin_capture_stop(pin_session_t *s)
@@ -1207,10 +1273,13 @@ pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_settings_t *
 {
     if (!sc || !out)
         return PIN_ERR_ARG;
-    if (out->size != sizeof(*out))
+    /* a caller compiled before the format settings were appended gets the old layout */
+    size_t n = out->size == sizeof(*out) ? sizeof(*out)
+               : out->size == offsetof(pin_script_settings_t, has_deinterlace) ? out->size : 0;
+    if (n == 0)
         return PIN_ERR_ABI;
-    *out = sc->initial;
-    out->size = sizeof(*out);
+    memcpy(out, &sc->initial, n);
+    out->size = (uint32_t)n;
     return PIN_OK;
 }
 

@@ -38,6 +38,7 @@ pin_sink_t *sink_ffv1_create(void);       /* PIN_FMT_ANALOG_FFV1_MKV */
  * had already run for hours. Call between create and open. */
 void sink_ffv1_test_set_start(pin_sink_t *s, int64_t video_frame, int64_t audio_sample);
 pin_sink_t *sink_rewrap_create(pin_format_t format); /* DV_AVI, DV_MOV, HDV_MOV, HDV_MKV */
+pin_sink_t *sink_hwenc_create(pin_format_t format);  /* ANALOG_ / DV_ H264_MKV, HEVC_MKV */
 
 /* Shared by sink_ffv1.c and sink_rewrap.c: PAL/NTSC DV sample aspect ratios
  * per the FFmpeg dv profile tables (documented at their point of use). */

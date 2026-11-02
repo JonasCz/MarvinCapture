@@ -103,6 +103,16 @@ pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}")
 # stop reason DEVICE_LOST, session in ERROR, a new session opens afterwards.
 pin_engine_replay_test(test_replay_unplug "${PIN_TRACES_DIR}/dv-ntsc.dv" "${PIN_HDV_CAPTURE}")
 
+# the H.264 / HEVC formats through the engine (FFV1 standing in for a missing encoder)
+add_executable(test_replay_hwenc test_replay_hwenc.c)
+target_link_libraries(test_replay_hwenc PRIVATE marvin-core pinnacle_sinks)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_replay_hwenc PRIVATE m)
+endif()
+add_test(NAME test_replay_hwenc COMMAND test_replay_hwenc "${PIN_TRACES_DIR}/dv-pal.dv" "${PIN_TRACE_PAL}")
+pin_engine_replay_test_env(test_replay_hwenc)
+set_tests_properties(test_replay_hwenc PROPERTIES TIMEOUT 60)
+
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.
 pin_engine_replay_test(test_pin_color_matrix)
 

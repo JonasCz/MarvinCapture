@@ -19,7 +19,9 @@
 /* The calls an app on Android needs and the desktop GUIs do not: naming a USB device found
  * elsewhere (pin_usb_model, pin_device_fd_problem), opening one by file descriptor
  * (pin_open("fd:N")), the app's own directories (pin_set_app_dirs), the per-platform format
- * list and warnings, and the keep-busy mode. Hardware-free; links src/api/pin_api.c. */
+ * list and warnings (with the H.264 / HEVC formats that depend on the encoder probe), the
+ * format settings (pin_format_options, the size-versioned pin_capture_opts_t), and the
+ * keep-busy mode. Hardware-free; links src/api/pin_api.c. */
 
 #include "../../src/api/pin_api.h"
 #include "../../src/core/pin_thread_boost.h"
@@ -285,16 +287,142 @@ static void test_formats(void)
     for (int i = 0; i < PIN_FMT_COUNT; i++) {
         memset(w, 'x', sizeof(w));
         pin_format_warning((pin_format_t)i, w, sizeof(w));
+        int lossy = i == PIN_FMT_ANALOG_H264_MKV || i == PIN_FMT_ANALOG_HEVC_MKV ||
+                    i == PIN_FMT_DV_H264_MKV || i == PIN_FMT_DV_HEVC_MKV;
+        if (lossy)
+            CHECK(strstr(w, "lossy") != NULL, "every platform: H.264 / HEVC are lossy");
 #if defined(__ANDROID__)
-        if (i == PIN_FMT_ANALOG_AVI)
+        else if (i == PIN_FMT_ANALOG_AVI)
             CHECK(strstr(w, "75 GB") != NULL, "Android: uncompressed AVI warning");
         else
             CHECK(w[0] == 0, "Android: no warning");
 #else
-        CHECK(w[0] == 0, "desktop: no format warnings");
+        else
+            CHECK(w[0] == 0, "desktop: no other format warnings");
 #endif
     }
     pin_format_warning(PIN_FMT_ANALOG_AVI, NULL, 0);    /* no crash */
+}
+
+static int listed(pin_kind_t kind, pin_format_t f)
+{
+    pin_format_info_t l[PIN_FMT_COUNT];
+    for (int i = 0; i < PIN_FMT_COUNT; i++) {
+        memset(&l[i], 0, sizeof(l[i]));
+        l[i].size = sizeof(l[i]);
+    }
+    int n = pin_formats(kind, l, PIN_FMT_COUNT);
+    for (int i = 0; i < n; i++)
+        if (l[i].format == f) {
+            CHECK(!l[i].is_default, "an H.264 / HEVC format is never the default");
+            return 1;
+        }
+    return 0;
+}
+
+/* The H.264 / HEVC formats: listed only where the encoder probe found them. Linux has no
+ * encoder; PIN_HWENC_ENCODER (tests only) makes FFV1 stand in for it. */
+static void test_hwenc_formats(void)
+{
+    pin_format_info_t fi;
+    memset(&fi, 0, sizeof(fi));
+    fi.size = sizeof(fi);
+    CHECK(pin_format_info(PIN_FMT_DV_HEVC_MKV, &fi) == PIN_OK && fi.kind == PIN_KIND_DV &&
+          strcmp(fi.extension, "mkv") == 0 && fi.supports_title && fi.supports_scene_split &&
+          fi.supports_multi_pass && !fi.is_default, "DV HEVC: like the other DV formats");
+    CHECK(strstr(fi.label, "HEVC") != NULL && strstr(fi.label, "hardware encoder") != NULL, "label");
+    CHECK(pin_format_info(PIN_FMT_ANALOG_H264_MKV, &fi) == PIN_OK && fi.kind == PIN_KIND_ANALOG &&
+          strcmp(fi.extension, "mkv") == 0 && fi.supports_title && !fi.supports_scene_split &&
+          !fi.supports_multi_pass && !fi.is_default, "analog H.264");
+
+#if defined(__linux__) && !defined(__ANDROID__)
+    CHECK(pin_encoders_probe() == 0, "Linux: no H.264 / HEVC encoder");
+    CHECK(!listed(PIN_KIND_ANALOG, PIN_FMT_ANALOG_H264_MKV) && !listed(PIN_KIND_DV, PIN_FMT_DV_HEVC_MKV),
+          "Linux: not listed");
+    CHECK(listed(PIN_KIND_ANALOG, PIN_FMT_ANALOG_FFV1_MKV), "the others still are");
+    setenv("PIN_HWENC_ENCODER", "ffv1", 1);
+    CHECK(pin_encoders_probe() == (PIN_ENC_H264 | PIN_ENC_HEVC), "the stand-in opens for both");
+    CHECK(listed(PIN_KIND_ANALOG, PIN_FMT_ANALOG_H264_MKV) && listed(PIN_KIND_ANALOG, PIN_FMT_ANALOG_HEVC_MKV) &&
+          listed(PIN_KIND_DV, PIN_FMT_DV_H264_MKV) && listed(PIN_KIND_DV, PIN_FMT_DV_HEVC_MKV),
+          "listed once the probe finds an encoder");
+    CHECK(!listed(PIN_KIND_HDV, PIN_FMT_DV_H264_MKV), "not for HDV");
+    setenv("PIN_HWENC_ENCODER", "no-such-encoder", 1);
+    CHECK(pin_encoders_probe() == 0 && !listed(PIN_KIND_ANALOG, PIN_FMT_ANALOG_H264_MKV),
+          "an encoder that is not there is not listed");
+    unsetenv("PIN_HWENC_ENCODER");
+    CHECK(pin_encoders_probe() == 0, "back to none");
+#else
+    int m = pin_encoders_probe();
+    CHECK(listed(PIN_KIND_ANALOG, PIN_FMT_ANALOG_H264_MKV) == ((m & PIN_ENC_H264) != 0) &&
+          listed(PIN_KIND_DV, PIN_FMT_DV_HEVC_MKV) == ((m & PIN_ENC_HEVC) != 0), "listed as probed");
+    printf("encoders here: H.264 %s, HEVC %s\n", m & PIN_ENC_H264 ? "yes" : "no", m & PIN_ENC_HEVC ? "yes" : "no");
+#endif
+    CHECK(pin_encoders_probe() == pin_encoders_probe(), "cached");
+}
+
+/* pin_format_options() and the appended pin_capture_opts_t / pin_script_settings_t fields. */
+static void test_format_settings(void)
+{
+    pin_format_options_t o;
+    memset(&o, 0, sizeof(o));
+    o.size = sizeof(o) - 4;
+    CHECK(pin_format_options(PIN_FMT_ANALOG_H264_MKV, &o) == PIN_ERR_ABI, "a size it does not know");
+    o.size = sizeof(o);
+    CHECK(pin_format_options(PIN_FMT_ANALOG_H264_MKV, &o) == PIN_OK && o.has_quality && o.has_deinterlace &&
+          !o.has_ffv1_compression && o.quality_default == 18, "H.264 options");
+    CHECK(pin_format_options(PIN_FMT_ANALOG_FFV1_MKV, &o) == PIN_OK && !o.has_quality &&
+          o.has_ffv1_compression, "FFV1 options");
+    CHECK(pin_format_options(PIN_FMT_COUNT, &o) == PIN_ERR_ARG, "unknown format");
+    char h[128];
+    pin_format_quality_hint(PIN_FMT_DV_H264_MKV, 18, PIN_DEINTERLACE_DOUBLE_RATE, 0, h, sizeof(h));
+    CHECK(strncmp(h, "About ", 6) == 0, "quality hint");
+
+    pin_capture_opts_t d;
+    memset(&d, 0, sizeof(d));
+    pin_capture_opts_defaults(&d);
+    CHECK(d.size == sizeof(d) && d.deinterlace == PIN_DEINTERLACE_DOUBLE_RATE && d.video_quality == 18 &&
+          d.ffv1_compression == PIN_FFV1_FAST && d.format_analog == PIN_FMT_ANALOG_AVI, "defaults");
+
+    /* a caller compiled before the format settings: only its own bytes are written */
+    const size_t old = offsetof(pin_capture_opts_t, deinterlace);
+    unsigned char buf[sizeof(pin_capture_opts_t) + 16];
+    memset(buf, 0xAA, sizeof(buf));
+    pin_capture_opts_t *oldo = (pin_capture_opts_t *)buf;
+    oldo->size = (uint32_t)old;
+    pin_capture_opts_defaults(oldo);
+    CHECK(oldo->size == old && oldo->passes == 1 && oldo->format_dv == PIN_FMT_DV_RAW, "old size: filled");
+    int untouched = 1;
+    for (size_t i = old; i < sizeof(buf); i++)
+        if (buf[i] != 0xAA)
+            untouched = 0;
+    CHECK(untouched, "old size: nothing written past it");
+
+    pin_script_t *sc = NULL;
+    char err[256];
+    const char *argv[] = { "-i", "svideo", "--quality", "23", "--deinterlace", "no",
+                           "--ffv1-compression", "smallest", "--format", "hevc-mkv" };
+    CHECK(pin_script_parse(10, argv, &sc, err, sizeof(err)) == PIN_OK, "parse");
+    pin_script_settings_t ss;
+    memset(&ss, 0, sizeof(ss));
+    ss.size = sizeof(ss);
+    CHECK(pin_script_settings(sc, &ss) == PIN_OK && ss.has_video_quality && ss.video_quality == 23 &&
+          ss.has_deinterlace && ss.deinterlace == PIN_DEINTERLACE_KEEP_FIELDS && ss.has_ffv1_compression &&
+          ss.ffv1_compression == PIN_FFV1_SMALLEST && ss.has_format_analog &&
+          ss.format_analog == PIN_FMT_ANALOG_HEVC_MKV, "script settings");
+    const size_t old_ss = offsetof(pin_script_settings_t, has_deinterlace);
+    unsigned char sbuf[sizeof(pin_script_settings_t) + 16];
+    memset(sbuf, 0xAA, sizeof(sbuf));
+    pin_script_settings_t *olds = (pin_script_settings_t *)sbuf;
+    olds->size = (uint32_t)old_ss;
+    CHECK(pin_script_settings(sc, olds) == PIN_OK && olds->size == old_ss && olds->has_input, "old size accepted");
+    untouched = 1;
+    for (size_t i = old_ss; i < sizeof(sbuf); i++)
+        if (sbuf[i] != 0xAA)
+            untouched = 0;
+    CHECK(untouched, "script settings, old size: nothing written past it");
+    olds->size = 7;
+    CHECK(pin_script_settings(sc, olds) == PIN_ERR_ABI, "a size it does not know");
+    pin_script_free(sc);
 }
 
 static void test_keep_busy(void)
@@ -334,6 +462,8 @@ int main(void)
     test_open_fd();
     test_app_dirs();
     test_formats();
+    test_hwenc_formats();
+    test_format_settings();
     test_keep_busy();
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);

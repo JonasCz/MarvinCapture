@@ -54,6 +54,12 @@ typedef struct {
     int audio_rate;              /* 48000, 44100 or 32000 */
     int audio_channels;          /* 2, or 4 for the 32 kHz 12-bit DV mode (two stereo pairs) */
     char title[PIN_TEXT_MAX];    /* UTF-8, "" for none */
+    /* The format settings of pin_capture_opts_t (pin_format_options()); a sink ignores the
+     * ones that are not its own. A zeroed struct is FFV1 "fast" and keep-fields, but quality
+     * 0 = the best (largest) H.264 / HEVC: set video_quality. */
+    int deinterlace;             /* sink_hwenc: a pin_deinterlace_t */
+    int video_quality;           /* sink_hwenc: 0..51, lower = better (pin_hwenc.h) */
+    int ffv1_compression;        /* sink_ffv1: a pin_ffv1_compression_t */
 } pin_sink_params_t;
 
 typedef struct {
@@ -61,7 +67,7 @@ typedef struct {
     uint64_t units_written;
     uint64_t units_damaged;      /* e.g. a DV/HDV unit that didn't pass the sequence-count check */
     uint64_t audio_padded_samples; /* silence inserted to keep audio in sync with video */
-    int encoder_behind;          /* sink_ffv1: the encode thread's queue is backing up */
+    int encoder_behind;          /* sink_ffv1, sink_hwenc: the encode thread's queue is backing up */
     int pipe_closed;             /* stdout sinks: the reading program is gone (not a disk error) */
     pin_status_t last_error;
 } pin_sink_status_t;
