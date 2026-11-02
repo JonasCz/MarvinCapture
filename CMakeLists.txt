@@ -136,6 +136,12 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/engine/pin_session.c)
     add_executable(test_pin_ui_api tests/engine/test_pin_ui_api.c src/api/pin_api.c)
     target_link_libraries(test_pin_ui_api PRIVATE pinnacle_engine)
     add_test(NAME test_pin_ui_api COMMAND test_pin_ui_api)
+
+    # the calls for Android: pin_usb_model, pin_open("fd:N"), pin_set_app_dirs, format list and
+    # warnings per platform, pin_set_cpu_keep_busy (pin_api.c)
+    add_executable(test_pin_platform_api tests/engine/test_pin_platform_api.c src/api/pin_api.c)
+    target_link_libraries(test_pin_platform_api PRIVATE pinnacle_engine)
+    add_test(NAME test_pin_platform_api COMMAND test_pin_platform_api)
 endif()
 
 # --- Public API: the marvin-core shared library (pin_api.c, a thin
