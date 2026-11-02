@@ -263,7 +263,41 @@ APK (page-aligned loading), Play's download is compressed.
 
 ## Google Play
 
-(filled in below)
+Possible, with one real blocker (the firmware) and some friction (review without the box,
+the testing period, wake-lock vitals). Checked 2026-11-02.
+
+| Topic | What applies | Risk |
+|---|---|---|
+| Firmware blobs | Play's IP policy and the Developer Distribution Agreement (§11.2: "You represent and warrant that You have the right to distribute the third-party material") rule out bundling Pinnacle's bitstreams. Downloading them from the project at first run is the same distribution. | **high** |
+| Review without the hardware | No Play guidance for hardware companion apps. Reviewers get "App access" instructions (text, links). "Broken functionality" / "Limited functionality" are the rejection reasons to avoid. Other USB capture apps (UVC camera, EasyCap recorders) are on Play. | medium |
+| USB access | No Play policy or declaration specific to USB host. `uses-feature android.hardware.usb.host` (required) hides the app from phones without host mode. USB permission lasts until unplug; the `USB_DEVICE_ATTACHED` launch grants it. The CAMERA-permission rule for USB video-class devices does not apply: the box is vendor class 0xFF ([hardware.md](../hardware.md)). | low |
+| Foreground service | `connectedDevice` type, no time limit; Play Console declaration per type with a description and a **video showing the in-app setup and the device interaction** (so: filmed with the real box). | low (needs the video) |
+| Wake locks | Android vitals counts a session as excessive at 2+ h of non-exempt partial wake locks in 24 h, FGS time included; above 5 % of sessions over 28 days the app may lose discovery and get a battery warning on its listing (since 2026-03-01). Long screen-off captures will hit it. Keeping the screen on (black, on OLED nearly free) instead of a wake lock avoids the metric. | medium |
+| Account | US$25, ID check, verified Android device. New personal accounts: a closed test with **12 testers opted in for 14 days** before production. | medium (finding 12 testers) |
+| Technical | Target API 36 for new apps and updates (since 2026-08-31); AAB + Play App Signing; 64-bit; 16 KB pages (NDK r28+); privacy policy (in the listing and the app) and Data safety form even with no data collected. | low |
+| Licences | AGPL apps are on Play (Signal). Statically linked LGPL FFmpeg is fine when the whole app's source is published (relinking possible). | low |
+
+How to make it work:
+
+- **Firmware not in the APK.** An in-app importer: the user picks their own copy of the vendor
+  driver (`MarvinAVS64.sys`, or the `.msi`/`.cab` it comes in) and the core extracts the
+  bitstreams by offset with MD5 checks, as `scripts/extract-bitstreams.py` does today (a port to
+  C in the core, so every GUI could use it). Gadgetbridge (AGPL) handles watch firmware this
+  way. The GitHub APK can keep bundling them like the desktop installers, so there would be two
+  flavours (`github` with firmware, `play` without), or one APK that always asks. Note that the
+  firmware README already names this as the fallback if the rights holder objects.
+- **Review.** A demo mode on the replay device (`pin_set_replay_file()` with a short bundled DV
+  clip), a clear "no device" screen, and an unlisted video of the app with the box in the App
+  access instructions; the same video for the FGS declaration.
+- **No self-update notices** in the Play flavour.
+
+Outside Play: F-Droid would reject bundled blobs; with user-supplied firmware it would probably
+take the app with the NonFreeDep anti-feature. IzzyOnDroid builds from GitHub releases; whether it
+accepts the bundled blobs is unknown. And independent of Play: Android **developer verification**
+(enforced since 2026-09-30 in a few countries, globally planned for 2027) will require the
+GitHub APK's package name and signing key to be registered too (Play Console account, or the
+$25 Android Developer Console). Choose one signing key early and keep it safe; a lost key
+cannot be recovered.
 
 ## Phases
 
