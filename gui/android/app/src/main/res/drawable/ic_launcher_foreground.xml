@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher icon's foreground: docs/images/logo.svg (the still pose of docs/logo.html) as a
+  VectorDrawable, scaled 0.95 into the adaptive icon's 108 x 108 grid so the body stays inside
+  the 66 dp safe zone. Keep it in step with the SVG.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="0.95"
+        android:scaleY="0.95"
+        android:translateX="23.6"
+        android:translateY="23.6">
+        <group android:translateY="2.5">
+            <path android:fillColor="#FBF3DC" android:pathData="M8,7.5h48v24h-48z" />
+            <path android:fillColor="#DDD8C6" android:pathData="M8,26.2h7.67v5.3h-7.67z" />
+            <path android:fillColor="#DCC050" android:pathData="M15.57,26.2h6.67v5.3h-6.67z" />
+            <path android:fillColor="#62B9BF" android:pathData="M22.14,26.2h6.67v5.3h-6.67z" />
+            <path android:fillColor="#6FB57C" android:pathData="M28.71,26.2h6.67v5.3h-6.67z" />
+            <path android:fillColor="#B76FAB" android:pathData="M35.29,26.2h6.67v5.3h-6.67z" />
+            <path android:fillColor="#D2604F" android:pathData="M41.86,26.2h6.67v5.3h-6.67z" />
+            <path android:fillColor="#5069B5" android:pathData="M48.43,26.2h7.57v5.3h-7.57z" />
+            <path
+                android:fillColor="#2D3180"
+                android:fillType="evenOdd"
+                android:pathData="M12,4H52A8,8 0,0 1,60 12V36A8,8 0,0 1,52 44H12A8,8 0,0 1,4 36V12A8,8 0,0 1,12 4Z M14,8.5H50A5,5 0,0 1,55 13.5V25.5A5,5 0,0 1,50 30.5H14A5,5 0,0 1,9 25.5V13.5A5,5 0,0 1,14 8.5Z" />
+            <path
+                android:fillColor="#1A1D42"
+                android:pathData="M20.5,11.5H43.5A6.5,6.5 0,0 1,43.5 24.5H20.5A6.5,6.5 0,0 1,20.5 11.5Z" />
+            <group>
+                <clip-path android:pathData="M18.6,18a4.4,4.4 0,1 0,8.8 0a4.4,4.4 0,1 0,-8.8 0Z" />
+                <path android:fillColor="#FFFFFF" android:pathData="M18.6,18a4.4,4.4 0,1 0,8.8 0a4.4,4.4 0,1 0,-8.8 0Z" />
+                <path android:fillColor="#1A1D42" android:pathData="M20.9,19.7a2.1,2.1 0,1 0,4.2 0a2.1,2.1 0,1 0,-4.2 0Z" />
+            </group>
+            <group>
+                <clip-path android:pathData="M36.6,18a4.4,4.4 0,1 0,8.8 0a4.4,4.4 0,1 0,-8.8 0Z" />
+                <path android:fillColor="#FFFFFF" android:pathData="M36.6,18a4.4,4.4 0,1 0,8.8 0a4.4,4.4 0,1 0,-8.8 0Z" />
+                <path android:fillColor="#1A1D42" android:pathData="M38.9,19.7a2.1,2.1 0,1 0,4.2 0a2.1,2.1 0,1 0,-4.2 0Z" />
+            </group>
+            <path android:fillColor="#FF7A6E" android:pathData="M12.9,37.5a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0Z" />
+            <path android:fillColor="#FF7A6E" android:pathData="M45.9,37.5a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0Z" />
+            <path android:fillColor="#FFFFFF" android:pathData="M24.5,34H39.5Q32,49 24.5,34Z" />
+            <group>
+                <clip-path android:pathData="M24.5,34H39.5Q32,49 24.5,34Z" />
+                <path android:fillColor="#1A1D42" android:fillAlpha="0.2" android:pathData="M22,34h20v1.8h-20z" />
+            </group>
+            <group>
+                <clip-path android:pathData="M-40,34h144v86h-144z" />
+                <path
+                    android:fillColor="#FF5F5A"
+                    android:pathData="M28.9,31H35.1V45.5H39.4L32,54.5L24.6,45.5H28.9Z"
+                    android:strokeColor="#FF5F5A"
+                    android:strokeLineJoin="round"
+                    android:strokeWidth="1.4" />
+                <path
+                    android:pathData="M32,37.17V47"
+                    android:strokeAlpha="0.8"
+                    android:strokeColor="#D43A48"
+                    android:strokeLineCap="round"
+                    android:strokeWidth="1.3" />
+            </group>
+        </group>
+    </group>
+</vector>

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!-- The capture box is a USB device: only phones with USB host mode can use the app. -->
+    <uses-feature android:name="android.hardware.usb.host" android:required="true" />
+    <!-- The preview renderer (src/main/cpp/preview.c). -->
+    <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- The capture service: connectedDevice for the USB box; mediaPlayback for the replay
+         device (a recording played back), which has no USB permission to show. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- Capturing with the screen off (partial wake lock while capturing or finalising). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Output goes to Movies/MarvinCapture by file path, which needs no permission on API 30+. -->
+
+    <application
+        android:name=".MarvinApp"
+        android:allowBackup="false"
+        android:enableOnBackInvokedCallback="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="MarvinCapture"
+        android:theme="@style/Theme.Marvin">
+
+        <activity
+            android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboard|keyboardHidden|navigation|uiMode|density|fontScale|locale|layoutDirection|touchscreen|colorMode|mcc|mnc"
+            android:exported="true"
+            android:launchMode="singleTop">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!-- Plugging the box in offers to open the app ("always" remembers it) and grants
+                 the USB permission. -->
+            <intent-filter>
+                <action android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED" />
+            </intent-filter>
+            <meta-data
+                android:name="android.hardware.usb.action.USB_DEVICE_ATTACHED"
+                android:resource="@xml/device_filter" />
+        </activity>
+
+        <service
+            android:name=".CaptureService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice|mediaPlayback" />
+    </application>
+</manifest>

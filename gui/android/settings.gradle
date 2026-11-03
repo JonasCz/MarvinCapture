@@ -1,0 +1,27 @@
+// Pinnacle Studio 500-USB open driver
+// Copyright (C) 2026 Jonas Cz.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+//
+// MarvinCapture for Android: framework widgets only, no library dependencies. The native
+// libraries are prebuilt by scripts/build-android-native.sh (no CMake / NDK in Gradle);
+// scripts/build-android.sh runs both. See README.md.
+
+pluginManagement {
+    repositories {
+        google()
+        // Maven Central. Its canonical name (mavenCentral(), repo.maven.apache.org) is rate
+        // limited by some proxies; repo1.maven.org serves the same repository.
+        maven { url = 'https://repo1.maven.org/maven2/' }
+    }
+}
+
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        maven { url = 'https://repo1.maven.org/maven2/' }
+    }
+}
+
+rootProject.name = 'MarvinCapture'
+include ':app'

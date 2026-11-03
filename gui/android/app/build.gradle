@@ -1,0 +1,150 @@
+// Pinnacle Studio 500-USB open driver
+// Copyright (C) 2026 Jonas Cz.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+import groovy.json.JsonSlurper
+
+plugins {
+    id 'com.android.application'
+}
+
+// gui/android/app -> the repository root
+def repoRoot = rootProject.file('../..').canonicalFile
+
+// versionName is the "version" of the top-level VERSION file (JSON), versionCode is derived
+// from it: 1.2.3 -> 1020300 (major * 10^6 + minor * 10^4 + patch * 100).
+def appVersion = new JsonSlurper().parse(new File(repoRoot, 'VERSION')).version as String
+def appVersionCode = { String v ->
+    def p = (v.split('\\.') as List).collect { it.replaceAll('[^0-9].*', '') }.collect { it ? it as int : 0 }
+    while (p.size() < 3) p << 0
+    p[0] * 1000000 + p[1] * 10000 + p[2] * 100
+}(appVersion)
+
+// The native libraries come prebuilt from scripts/build-android-native.sh:
+// build/android-<abi>/dist/libmarvin-core.so and libmarvin-jni.so. -PmarvinAbis=arm64-v8a,x86_64
+// picks the ABIs (scripts/build-android.sh passes it); without it, every ABI that has both
+// libraries is packaged.
+def nativeLibs = ['libmarvin-core.so', 'libmarvin-jni.so']
+def abisProp = (findProperty('marvinAbis') ?: '').toString().split(',').collect { it.trim() }.findAll { it }
+def abis = abisProp ?: (new File(repoRoot, 'build').listFiles() ?: [])
+        .findAll { it.name.startsWith('android-') && nativeLibs.every { lib -> new File(it, "dist/${lib}").isFile() } }
+        .collect { it.name.substring('android-'.length()) }
+        .sort()
+// Release signing from the environment (CI secrets); without it the release APK is signed with
+// the debug key, with a warning. Names: README.md, "Signing".
+def ks = System.getenv('MARVIN_ANDROID_KEYSTORE')
+
+def jniStage = layout.buildDirectory.dir('marvin/jniLibs').get().asFile
+def assetStage = layout.buildDirectory.dir('marvin/assets').get().asFile
+
+def stageNativeLibs = tasks.register('stageNativeLibs', Sync) {
+    into jniStage
+    abis.each { abi ->
+        def dist = new File(repoRoot, "build/android-${abi}/dist")
+        inputs.files(nativeLibs.collect { new File(dist, it) })
+        from(dist) {
+            include nativeLibs
+            into abi
+        }
+    }
+    doFirst {
+        if (abis.isEmpty()) {
+            throw new GradleException('No native libraries: run scripts/build-android-native.sh ' +
+                    '(or scripts/build-android.sh) first')
+        }
+        abis.each { abi ->
+            nativeLibs.each { lib ->
+                if (!new File(repoRoot, "build/android-${abi}/dist/${lib}").isFile()) {
+                    throw new GradleException("build/android-${abi}/dist/${lib} is missing: run " +
+                            "scripts/build-android-native.sh --abi ${abi}")
+                }
+            }
+        }
+    }
+}
+
+// The FPGA bitstreams as assets (the app copies them to its files dir at first start). The FX2
+// firmware is left out: only the MovieBox Deluxe needs it, and it cannot be opened from a file
+// descriptor yet.
+def stageAssets = tasks.register('stageAssets', Sync) {
+    into assetStage
+    from(new File(repoRoot, 'firmware')) {
+        include 'fpga-ohci.bin', 'fpga-capture.bin', 'README.md'
+        into 'firmware'
+    }
+}
+
+android {
+    namespace = 'jonascz.marvincapture'
+    compileSdk = 36
+    buildToolsVersion = '36.0.0'
+
+    defaultConfig {
+        applicationId = 'jonascz.marvincapture'
+        minSdk = 30
+        targetSdk = 36
+        versionCode = appVersionCode
+        versionName = appVersion
+    }
+
+    signingConfigs {
+        if (ks) {
+            release {
+                storeFile = file(ks)
+                storePassword = System.getenv('MARVIN_ANDROID_KEYSTORE_PASSWORD')
+                keyAlias = System.getenv('MARVIN_ANDROID_KEY_ALIAS')
+                keyPassword = System.getenv('MARVIN_ANDROID_KEY_PASSWORD') ?: System.getenv('MARVIN_ANDROID_KEYSTORE_PASSWORD')
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig = ks ? signingConfigs.release : signingConfigs.debug
+        }
+    }
+
+    compileOptions {
+        // JDK 17 (CI) and 21 both build this.
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = [jniStage]
+            assets.srcDirs = [assetStage]
+        }
+    }
+
+    packaging {
+        jniLibs {
+            // Already stripped by build-android-native.sh: Gradle needs no NDK for that.
+            keepDebugSymbols += ['**/*.so']
+        }
+    }
+
+    dependenciesInfo {
+        // No Google-encrypted dependency blob in the APK (there are no dependencies anyway).
+        includeInApk = false
+        includeInBundle = false
+    }
+
+    lint {
+        // Strings are English only, like the core's ready-made texts.
+        disable 'MissingTranslation'
+    }
+}
+
+tasks.named('preBuild') {
+    dependsOn stageNativeLibs, stageAssets
+}
+
+gradle.taskGraph.whenReady { graph ->
+    if (!ks && graph.allTasks.any { it.name.contains('Release') }) {
+        logger.warn('warning: MARVIN_ANDROID_KEYSTORE is not set: the release APK is signed with the debug key')
+    }
+}

@@ -1,0 +1,765 @@
+/*
+ * Pinnacle Studio 500-USB open driver
+ * Copyright (C) 2026 Jonas Cz.
+ *
+ * This program is free software: you can redistribute it and/or modify it
+ * under the terms of the GNU Affero General Public License as published by
+ * the Free Software Foundation, either version 3 of the License, or (at your
+ * option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU Affero General Public License
+ * for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public License
+ * along with this program. If not, see <https://www.gnu.org/licenses/>.
+ */
+
+package jonascz.marvincapture;
+
+import android.Manifest;
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.ServiceConnection;
+import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.graphics.Insets;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.hardware.usb.UsbDevice;
+import android.hardware.usb.UsbManager;
+import android.os.Build;
+import android.os.Bundle;
+import android.os.IBinder;
+import android.text.method.LinkMovementMethod;
+import android.text.util.Linkify;
+import android.view.Gravity;
+import android.view.SurfaceHolder;
+import android.view.SurfaceView;
+import android.view.View;
+import android.view.WindowInsets;
+import android.view.WindowManager;
+import android.widget.FrameLayout;
+import android.widget.LinearLayout;
+import android.widget.ProgressBar;
+import android.widget.ScrollView;
+import android.widget.TextView;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Locale;
+
+/**
+ * The one screen: the preview (or, without a picture, Marvin and the core's sentence why), the
+ * core's status texts, the level meters, the record button (a manual capture; the stop button
+ * while recording), the speaker (audio monitor, muted by default) and the gear (the options
+ * panel). Binds to {@link CaptureService} for as long as it exists; finds the USB device and asks
+ * for permission. Rotation is handled in place (configChanges), so the service, the session and
+ * the preview surface survive it.
+ *
+ * Developer / demo aid: {@code adb shell am start -n jonascz.marvincapture/.MainActivity
+ * --es replay /sdcard/Android/data/jonascz.marvincapture/files/tape.dv} opens the replay device
+ * (a DV / HDV recording played back in real time) instead of USB, so the UI runs with a live
+ * picture without the hardware (and in the emulator). A relative path is taken from the app's
+ * external files directory.
+ */
+public final class MainActivity extends Activity implements CaptureService.Listener, OptionsPanel.Host {
+    private static final String ACTION_USB_PERMISSION = "jonascz.marvincapture.USB_PERMISSION";
+    private static final int PINNACLE_VID = 0x2304;
+    private static final int REQ_NOTIFICATIONS = 1;
+
+    private CaptureService svc;
+    private boolean visible;
+    private String replayPath;
+    private boolean permissionPending, permissionDenied, askedNotifications, startAfterPermission;
+
+    private MainLayout root;
+    private SurfaceView surface;
+    private LinearLayout card, recBadge, banner, controls;
+    private TextView cardText, countdownText, recText, bannerTitle, bannerText;
+    private TextView statusShort, signalLine, framesLine, storageLine, caption;
+    private ProgressBar cardProgress, countdownBar;
+    private MarvinIdleView marvin;
+    private LevelMeterView meters;
+    private Glyphs.Button speaker, gear;
+    private Glyphs.RecordButton record;
+    private OptionsPanel options;   // built on first use
+    private FrameLayout side;
+    private OnBackInvokedCallback backCallback;
+    private AlertDialog dialog;
+    private final int[] dar = new int[2];
+    private final ArrayList<Runnable> dialogQueue = new ArrayList<>();
+
+    // ---- lifecycle -------------------------------------------------------------------------------
+
+    @Override
+    protected void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        if (MarvinApp.startupError != null) {
+            TextView t = Ui.text(this, "MarvinCapture cannot start.\n\n" + MarvinApp.startupError, 16, Ui.TEXT);
+            t.setPadding(Ui.dp(this, 24), Ui.dp(this, 48), Ui.dp(this, 24), 0);
+            setContentView(t);
+            return;
+        }
+        getWindow().setDecorFitsSystemWindows(false);   // edge to edge (enforced from API 35 anyway)
+        buildViews();
+        setContentView(root);
+        replayPath = replayExtra(getIntent());
+
+        IntentFilter f = new IntentFilter(ACTION_USB_PERMISSION);
+        f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
+        registerReceiver(usbReceiver, f, Context.RECEIVER_NOT_EXPORTED);
+        bindService(new Intent(this, CaptureService.class), connection, Context.BIND_AUTO_CREATE);
+    }
+
+    @Override
+    protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        String r = replayExtra(intent);
+        if (r != null && !r.equals(replayPath) && svc != null && !svc.status().isCapturing()) {
+            replayPath = r;
+            svc.closeSession("");
+        }
+        if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
+            permissionDenied = false;
+        }
+        findDevice();
+    }
+
+    @Override
+    protected void onStart() {
+        super.onStart();
+        if (root == null) return;
+        visible = true;
+        Core.previewSetVisible(MarvinApp.renderer, true);
+        if (svc != null) {
+            svc.setListener(this, true);
+            svc.setMonitorWanted(!Settings.muted());
+            findDevice();
+        }
+    }
+
+    @Override
+    protected void onStop() {
+        if (root != null) {
+            visible = false;
+            Core.previewSetVisible(MarvinApp.renderer, false);
+            if (svc != null) {
+                svc.setListener(this, false);
+                svc.setMonitorWanted(false);
+            }
+        }
+        super.onStop();
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (root != null) {
+            if (svc != null) svc.setListener(null, false);
+            unbindService(connection);
+            unregisterReceiver(usbReceiver);
+            if (dialog != null) dialog.dismiss();
+        }
+        super.onDestroy();
+    }
+
+    private final ServiceConnection connection = new ServiceConnection() {
+        @Override
+        public void onServiceConnected(ComponentName name, IBinder b) {
+            svc = ((CaptureService.LocalBinder) b).service();
+            svc.setListener(MainActivity.this, visible);
+            svc.setMonitorWanted(visible && !Settings.muted());
+            onSessionChanged();
+            if (visible) findDevice();
+        }
+
+        @Override
+        public void onServiceDisconnected(ComponentName name) { svc = null; }
+    };
+
+    private String replayExtra(Intent i) {
+        String r = i != null ? i.getStringExtra("replay") : null;
+        if (r == null || r.isEmpty()) return null;
+        if (!r.startsWith("/")) {
+            File base = getExternalFilesDir(null);
+            if (base != null) r = new File(base, r).getPath();
+        }
+        return r;
+    }
+
+    // ---- USB -----------------------------------------------------------------------------------
+
+    private final BroadcastReceiver usbReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context c, Intent intent) {
+            if (ACTION_USB_PERMISSION.equals(intent.getAction())) {
+                permissionPending = false;
+                @SuppressWarnings("deprecation")
+                UsbDevice d = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE);
+                boolean granted = intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false);
+                if (!granted) {
+                    permissionDenied = true;
+                    String[] m = d != null ? Core.usbModel(d.getVendorId(), d.getProductId()) : null;
+                    if (svc != null && m != null) svc.setCardText(m[0] + "\n\n" + m[3]);
+                    return;
+                }
+                findDevice();
+            } else if (UsbManager.ACTION_USB_DEVICE_ATTACHED.equals(intent.getAction())) {
+                permissionDenied = false;
+                findDevice();
+            }
+        }
+    };
+
+    /** The first Pinnacle device UsbManager lists (one device only); the core's model table decides
+     *  what it is and whether it can be used (pin_usb_model, pin_device_fd_problem). */
+    private void findDevice() {
+        if (svc == null || svc.hasSession() || svc.isOpening()) return;
+        if (replayPath != null) {
+            svc.openReplay(replayPath);
+            return;
+        }
+        UsbManager um = getSystemService(UsbManager.class);
+        for (UsbDevice d : um.getDeviceList().values()) {
+            if (d.getVendorId() != PINNACLE_VID) continue;
+            String[] m = Core.usbModel(d.getVendorId(), d.getProductId());
+            if (m == null) continue;
+            if (um.hasPermission(d)) {
+                svc.openUsb(d);
+            } else if (permissionDenied) {
+                svc.setCardText(m[0] + "\n\n" + m[3]);
+            } else if (!permissionPending) {
+                permissionPending = true;
+                svc.setCardText(m[0] + "\n\nWaiting for permission to use the USB device…");
+                Intent i = new Intent(ACTION_USB_PERMISSION).setPackage(getPackageName());
+                um.requestPermission(d, PendingIntent.getBroadcast(this, 0, i, PendingIntent.FLAG_MUTABLE));
+            }
+            return;
+        }
+        svc.setCardText(Core.noDevicesHint());
+    }
+
+    // ---- views ---------------------------------------------------------------------------------
+
+    private void buildViews() {
+        root = new MainLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        root.setOnApplyWindowInsetsListener((v, insets) -> {
+            Insets in = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            v.setPadding(in.left, in.top, in.right, in.bottom);
+            return WindowInsets.CONSUMED;
+        });
+
+        // preview
+        FrameLayout preview = new FrameLayout(this);
+        surface = new SurfaceView(this);
+        surface.getHolder().addCallback(new SurfaceHolder.Callback() {
+            @Override public void surfaceCreated(SurfaceHolder h) {}
+            @Override public void surfaceChanged(SurfaceHolder h, int format, int w, int hh) {
+                Core.previewSetSurface(MarvinApp.renderer, h.getSurface());
+            }
+            @Override public void surfaceDestroyed(SurfaceHolder h) {
+                Core.previewSetSurface(MarvinApp.renderer, null);
+            }
+        });
+        preview.addView(surface, new FrameLayout.LayoutParams(-1, -1));
+
+        card = Ui.column(this);
+        card.setGravity(Gravity.CENTER);
+        card.setBackgroundColor(Ui.CARD);
+        int pad = Ui.dp(this, 20);
+        card.setPadding(pad, pad, pad, pad);
+        marvin = new MarvinIdleView(this);
+        card.addView(marvin);
+        cardText = Ui.text(this, "", 14, Ui.TEXT2);
+        cardText.setGravity(Gravity.CENTER);
+        cardText.setMaxWidth(Ui.dp(this, 420));
+        cardText.setPadding(0, Ui.dp(this, 12), 0, 0);
+        card.addView(cardText, Ui.wrap());
+        cardProgress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        cardProgress.setMax(100);
+        card.addView(cardProgress, new LinearLayout.LayoutParams(Ui.dp(this, 220), -2));
+        countdownText = Ui.text(this, "", 14, Ui.TEXT);
+        countdownText.setTypeface(Typeface.DEFAULT_BOLD);
+        countdownText.setPadding(0, Ui.dp(this, 10), 0, 0);
+        card.addView(countdownText, Ui.wrap());
+        countdownBar = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        countdownBar.setMax(1000);
+        card.addView(countdownBar, new LinearLayout.LayoutParams(Ui.dp(this, 220), -2));
+        card.setOnClickListener(v -> {
+            // a session in the error state: close it and open the device afresh
+            if (svc != null && svc.hasSession() && svc.status().state() == Core.STATE_ERROR) {
+                svc.closeSession("");
+                root.postDelayed(this::findDevice, 300);
+            }
+        });
+        preview.addView(card, new FrameLayout.LayoutParams(-1, -1));
+
+        recBadge = Ui.row(this);
+        GradientDrawable pill = new GradientDrawable();
+        pill.setColor(0x99000000);
+        pill.setCornerRadius(Ui.dp(this, 14));
+        recBadge.setBackground(pill);
+        recBadge.setPadding(Ui.dp(this, 10), Ui.dp(this, 4), Ui.dp(this, 12), Ui.dp(this, 4));
+        View dot = new View(this);
+        GradientDrawable red = new GradientDrawable();
+        red.setShape(GradientDrawable.OVAL);
+        red.setColor(0xffe5393b);
+        dot.setBackground(red);
+        recBadge.addView(dot, new LinearLayout.LayoutParams(Ui.dp(this, 10), Ui.dp(this, 10)));
+        recText = Ui.line(this, 14, Ui.TEXT);
+        recText.setTypeface(Typeface.DEFAULT_BOLD);
+        recText.setPadding(Ui.dp(this, 8), 0, 0, 0);
+        recBadge.addView(recText, Ui.wrap());
+        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
+        blp.setMargins(Ui.dp(this, 12), Ui.dp(this, 12), 0, 0);
+        recBadge.setVisibility(View.GONE);
+        preview.addView(recBadge, blp);
+        root.addView(preview);
+
+        // side panel: status + buttons, or the options
+        FrameLayout side = new FrameLayout(this);
+        side.setBackgroundColor(Ui.PANEL);
+        controls = Ui.column(this);
+        int p16 = Ui.dp(this, 16);
+        controls.setPadding(p16, Ui.dp(this, 12), p16, Ui.dp(this, 12));
+
+        ScrollView scroll = new ScrollView(this);
+        LinearLayout top = Ui.column(this);
+        banner = Ui.row(this);
+        GradientDrawable bbg = new GradientDrawable();
+        bbg.setColor(0x33ff6b61);
+        bbg.setCornerRadius(Ui.dp(this, 8));
+        banner.setBackground(bbg);
+        banner.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8));
+        LinearLayout btext = Ui.column(this);
+        bannerTitle = Ui.text(this, "", 14, Ui.TEXT);
+        bannerTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        bannerText = Ui.text(this, "", 13, Ui.TEXT2);
+        btext.addView(bannerTitle);
+        btext.addView(bannerText);
+        banner.addView(btext, Ui.weight(1));
+        Glyphs.Button bclose = new Glyphs.Button(this, Glyphs.CLOSE, 36);
+        bclose.setContentDescription("Dismiss");
+        bclose.setOnClickListener(v -> banner.setVisibility(View.GONE));
+        banner.addView(bclose);
+        banner.setVisibility(View.GONE);
+        LinearLayout.LayoutParams bl = Ui.fillWidth();
+        bl.bottomMargin = Ui.dp(this, 10);
+        top.addView(banner, bl);
+
+        statusShort = Ui.text(this, "", 17, Ui.TEXT);   // a file name, or the core's sentence about the last capture
+        statusShort.setTypeface(Typeface.DEFAULT_BOLD);
+        statusShort.setMaxLines(2);
+        statusShort.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        top.addView(statusShort, Ui.fillWidth());
+        signalLine = Ui.line(this, 14, Ui.TEXT2);
+        signalLine.setPadding(0, Ui.dp(this, 4), 0, 0);
+        top.addView(signalLine, Ui.fillWidth());
+        framesLine = Ui.line(this, 14, Ui.TEXT2);
+        framesLine.setPadding(0, Ui.dp(this, 2), 0, 0);
+        framesLine.setOnClickListener(v -> detail("Frames", svc != null ? svc.status().text(Core.SS_FRAMES_DETAIL) : ""));
+        top.addView(framesLine, Ui.fillWidth());
+        storageLine = Ui.text(this, "", 14, Ui.TEXT2);
+        storageLine.setFontFeatureSettings("tnum");
+        storageLine.setMaxLines(2);
+        storageLine.setPadding(0, Ui.dp(this, 2), 0, 0);
+        storageLine.setOnClickListener(v -> detail("Storage", svc != null ? svc.status().text(Core.SS_STORAGE_DETAIL) : ""));
+        top.addView(storageLine, Ui.fillWidth());
+        meters = new LevelMeterView(this, null);
+        LinearLayout.LayoutParams ml = Ui.fillWidth();
+        ml.topMargin = Ui.dp(this, 10);
+        top.addView(meters, ml);
+        TextView where = Ui.text(this, "Captures are saved in Movies/MarvinCapture.", 12, Ui.TEXT3);
+        where.setPadding(0, Ui.dp(this, 10), 0, 0);
+        top.addView(where, Ui.fillWidth());
+        scroll.addView(top);
+        controls.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        caption = Ui.text(this, "", 13, Ui.TEXT2);
+        caption.setGravity(Gravity.CENTER);
+        caption.setMaxLines(2);
+        controls.addView(caption, Ui.fillWidth());
+
+        LinearLayout buttons = Ui.row(this);
+        buttons.setGravity(Gravity.CENTER);
+        buttons.setPadding(0, Ui.dp(this, 8), 0, 0);
+        speaker = new Glyphs.Button(this, Glyphs.SPEAKER_OFF, 52);
+        speaker.setOnClickListener(v -> toggleMute());
+        record = new Glyphs.RecordButton(this);
+        record.setOnClickListener(v -> recordClicked());
+        gear = new Glyphs.Button(this, Glyphs.GEAR, 52);
+        gear.setContentDescription("Options");
+        gear.setOnClickListener(v -> openOptions());
+        buttons.addView(speaker, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
+        rl.leftMargin = rl.rightMargin = Ui.dp(this, 36);
+        buttons.addView(record, rl);
+        buttons.addView(gear, new LinearLayout.LayoutParams(-2, -2));
+        controls.addView(buttons, Ui.fillWidth());
+        side.addView(controls, new FrameLayout.LayoutParams(-1, -1));
+
+        this.side = side;   // the options panel joins it when first opened
+        root.addView(side);
+        updateSpeaker();
+    }
+
+    private static void set(TextView t, String s) {
+        if (!t.getText().toString().equals(s)) t.setText(s);
+    }
+
+    private static void show(View v, boolean on) {
+        int vis = on ? View.VISIBLE : View.GONE;
+        if (v.getVisibility() != vis) v.setVisibility(vis);
+    }
+
+    // ---- status ---------------------------------------------------------------------------------
+
+    @Override
+    public void onSessionChanged() {
+        if (options != null) options.refreshControls();
+        if (svc != null) onStatus(svc.status());
+    }
+
+    @Override
+    public void onStatus(Status st) {
+        if (!visible || svc == null) return;
+        boolean has = svc.hasSession();
+        int state = has ? st.state() : Core.STATE_CLOSED;
+        boolean capturing = has && (st.isCapturing() || svc.startPending());
+        boolean finishing = has && state == Core.STATE_STOPPING;
+
+        // preview and the no-video card
+        boolean video = has && Core.previewInfo(MarvinApp.renderer, dar) == 1;
+        if (video) root.setAspect(dar[0], dar[1]);
+        else if (!has) root.setAspect(4, 3);
+        show(card, !video);
+        if (!video) {
+            String why;
+            if (!has) {
+                why = svc.cardText();
+            } else if (state == Core.STATE_PREPARING) {
+                why = st.text(Core.SS_DETAIL).isEmpty() ? "Preparing device…" : st.text(Core.SS_DETAIL);
+            } else if (state == Core.STATE_ERROR) {
+                why = (st.text(Core.SS_ERROR).isEmpty() ? "Device error" : st.text(Core.SS_ERROR)) + "\n\nTap to try again.";
+            } else {
+                why = !st.text(Core.SS_DETAIL).isEmpty() ? st.text(Core.SS_DETAIL)
+                        : st.input() == Core.INPUT_DV ? "No camera or deck signal." : "No video signal.";
+            }
+            set(cardText, why);
+            boolean prep = has && state == Core.STATE_PREPARING;
+            show(cardProgress, prep);
+            if (prep) {
+                int p = st.i[Core.ST_PROGRESS];
+                cardProgress.setIndeterminate(p < 0);
+                if (p >= 0) cardProgress.setProgress(p);
+            }
+            boolean counting = has && state == Core.STATE_CAPTURING && !st.signal() && st.d[Core.SD_IDLE_LEFT] >= 0;
+            show(countdownText, counting);
+            show(countdownBar, counting);
+            if (counting) {
+                set(countdownText, "Stopping capture in " + st.text(Core.SS_IDLE_LEFT));
+                double total = Settings.idleStop(st.analog() ? Core.KIND_ANALOG : svc.streamKind()) * 60.0;
+                countdownBar.setProgress(total > 0 ? (int) (1000 * Math.min(1, st.d[Core.SD_IDLE_LEFT] / total)) : 0);
+            }
+        }
+
+        // the status texts (all the core's)
+        set(statusShort, has ? st.text(Core.SS_SHORT) : svc.isOpening() ? "Opening…" : "No device");
+        if (has) {
+            String time;
+            if (st.input() == Core.INPUT_DV) {
+                time = st.text(Core.SS_TIMECODE).isEmpty() ? "--:--:--:--" : st.text(Core.SS_TIMECODE);
+            } else {
+                time = hms(st.d[Core.SD_ELAPSED]);
+            }
+            set(signalLine, st.text(Core.SS_SIGNAL) + "  ·  " + time);
+            set(framesLine, st.text(Core.SS_FRAMES));
+            String free = st.text(Core.SS_STORAGE_FREE);
+            set(storageLine, st.text(Core.SS_SIZES) + (free.isEmpty() ? "" : " " + free));
+            storageLine.setTextColor(st.i[Core.ST_DISK_LOW] != 0 ? Ui.WARN : Ui.TEXT2);
+        } else {
+            set(signalLine, svc.deviceName());
+            set(framesLine, "");
+            set(storageLine, "");
+        }
+        show(signalLine, !signalLine.getText().toString().isEmpty());
+        meters.push(has ? st.d[Core.SD_PEAK_L] : -144, has ? st.d[Core.SD_PEAK_R] : -144);
+
+        // the record button: the core's enable rules
+        record.setMode(capturing, finishing);
+        record.setEnabled(capturing ? has && st.stopAllowed() : has && st.manualAllowed() && !svc.startPending());
+        String cap;
+        if (finishing) cap = st.text(Core.SS_STATE);
+        else if (capturing) cap = captureSubtitle(st);
+        else if (has && state == Core.STATE_READY && !st.manualAllowed()) cap = st.text(Core.SS_MANUAL_BLOCK);
+        else if (has && state == Core.STATE_READY && st.analog())
+            cap = "Capture " + (st.input() == Core.INPUT_SVIDEO ? "S-Video" : "composite") + " input to file";
+        else cap = "";
+        set(caption, cap);
+
+        show(recBadge, capturing && !finishing && state == Core.STATE_CAPTURING);
+        if (recBadge.getVisibility() == View.VISIBLE) set(recText, "REC  " + hms(st.d[Core.SD_ELAPSED]));
+        if (options != null) options.setLocked(capturing);
+        boolean keepOn = capturing && Settings.keepScreenOn();
+        if (keepOn) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    /** The line under the stop button (port of captureSubtitleText): the no-signal countdown if it
+     *  runs, else the time limit, else none. */
+    private static String captureSubtitle(Status st) {
+        if (st.state() != Core.STATE_CAPTURING) return "";
+        if (!st.signal() && st.d[Core.SD_IDLE_LEFT] >= 0) return "Stopping in " + st.text(Core.SS_IDLE_LEFT) + ", no signal";
+        if (st.d[Core.SD_DURATION_LEFT] >= 0) return "Stopping in " + st.text(Core.SS_DURATION_LEFT);
+        return "";
+    }
+
+    private static String hms(double seconds) {
+        long t = (long) Math.max(0, seconds);
+        return String.format(Locale.ROOT, "%02d:%02d:%02d", t / 3600, t / 60 % 60, t % 60);
+    }
+
+    @Override
+    public void onEvent(int kind, int a, String text) {
+        switch (kind) {
+            case Core.EVT_LOG:
+                if (a >= 3) showInfo("Error", text, true);
+                else if (a == 2) showInfo("Warning", text, false);
+                break;
+            case Core.EVT_ERROR:
+                showInfo(Core.strerror(a), text, true);
+                break;
+            case Core.EVT_FILE_CLOSED:
+                if (a != Core.OK) showInfo("File not finalised cleanly", text + ": " + Core.strerror(a), true);
+                break;
+            case Core.EVT_NO_VIDEO:
+                showInfo("No video received", text, false);
+                break;
+            case Core.EVT_INPUT_FORMAT:
+            case Core.EVT_STATE:
+                if (options != null) options.refreshControls();
+                break;
+            default:
+                break;
+        }
+    }
+
+    @Override
+    public boolean onCaptureFailed(String title, String text) {
+        if (!visible) return false;
+        ask(title, text, null, null);
+        return true;
+    }
+
+    private void showInfo(String title, String message, boolean error) {
+        if (!visible) return;
+        // pin_strerror's texts are lower case ("not allowed in the current state")
+        if (!title.isEmpty()) title = Character.toUpperCase(title.charAt(0)) + title.substring(1);
+        bannerTitle.setText(title);
+        bannerText.setText(message);
+        ((GradientDrawable) banner.getBackground()).setColor(error ? 0x40ff6b61 : 0x40ffc04d);
+        banner.setVisibility(View.VISIBLE);
+    }
+
+    private void detail(String title, String text) {
+        if (!text.isEmpty()) ask(title, text, null, null);
+    }
+
+    /** One dialog at a time; ok == null shows just "OK". */
+    private void ask(String title, String message, String ok, Runnable onOk) {
+        Runnable show = () -> {
+            AlertDialog.Builder b = new AlertDialog.Builder(this).setTitle(title).setMessage(message);
+            if (ok == null) {
+                b.setPositiveButton("OK", null);
+            } else {
+                b.setPositiveButton(ok, (d, w) -> { if (onOk != null) onOk.run(); });
+                b.setNegativeButton("Cancel", null);
+            }
+            dialog = b.create();
+            dialog.setOnDismissListener(d -> {
+                dialog = null;
+                if (!dialogQueue.isEmpty()) dialogQueue.remove(0).run();
+            });
+            dialog.show();
+        };
+        if (dialog == null) show.run();
+        else dialogQueue.add(show);
+    }
+
+    // ---- actions ---------------------------------------------------------------------------------
+
+    private void toggleMute() {
+        boolean muted = !Settings.muted();
+        Settings.setBool("gui.muted", muted);
+        if (svc != null) svc.setMonitorWanted(visible && !muted);
+        updateSpeaker();
+    }
+
+    private void updateSpeaker() {
+        boolean muted = Settings.muted();
+        speaker.setGlyph(muted ? Glyphs.SPEAKER_OFF : Glyphs.SPEAKER_ON);
+        speaker.setContentDescription(muted ? "Unmute the audio monitor" : "Mute the audio monitor");
+    }
+
+    private void recordClicked() {
+        if (svc == null || !svc.hasSession()) return;
+        if (svc.status().isCapturing()) {
+            svc.stopCapture();
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 33 && !askedNotifications
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            // the capture notification (progress, Stop) needs it; asked before the first capture
+            askedNotifications = true;
+            startAfterPermission = true;
+            requestPermissions(new String[] { Manifest.permission.POST_NOTIFICATIONS }, REQ_NOTIFICATIONS);
+            return;
+        }
+        planCapture();
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int code, String[] perms, int[] results) {
+        if (code == REQ_NOTIFICATIONS && startAfterPermission) {
+            startAfterPermission = false;
+            planCapture();   // with or without notifications
+        }
+    }
+
+    /** Port of planCapture: the core checks the output, the app asks what it reports, then starts. */
+    private void planCapture() {
+        if (svc == null || !svc.hasSession()) return;
+        File dir = CaptureService.outputDir();
+        if (!dir.isDirectory() && !dir.mkdirs()) {
+            showInfo("Can't capture to this location", "Could not create " + dir, true);
+            return;
+        }
+        CaptureService.Plan p = svc.buildPlan();
+        long[] nums = new long[5];
+        String[] strs = { "", "" };
+        int st = Core.checkOutput(svc.session(), p.path, p.title, p.opts, nums, strs);
+        String message = strs[1] != null ? strs[1] : "";
+        if (st == Core.ERR_ARG && !message.isEmpty()) {
+            showInfo("Invalid file name", message, true);
+            return;
+        }
+        if (st != Core.OK) {
+            showInfo("Can't capture to this location", (Core.strerror(st) + " " + message).trim(), true);
+            return;
+        }
+        boolean fat32 = nums[2] != 0, collision = nums[3] != 0, low = nums[4] != 0;
+        List<String[]> confirm = new ArrayList<>();
+        if (!message.isEmpty() || fat32) {
+            String msg = message.isEmpty() ? "The destination is a FAT32 drive. Files larger than 4 GB will fail." : message;
+            confirm.add(new String[] { "Check the destination", msg + "\n\nFree space: " + Core.formatBytes(nums[0])
+                    + " (about " + nums[1] + " minutes at this format).", "Capture anyway" });
+        }
+        if (low) {
+            confirm.add(new String[] { "Low disk space", "Only " + Core.formatBytes(nums[0])
+                    + " free on this device's storage. Continue?", "OK" });
+        }
+        if (collision) {
+            confirm.add(new String[] { "Replace existing file?", strs[0] + "\n\nalready exists. Do you want to overwrite it?",
+                    "Overwrite" });
+        }
+        confirmThen(confirm, 0, () -> startCapture(p, collision));
+    }
+
+    private void confirmThen(List<String[]> list, int i, Runnable then) {
+        if (i >= list.size()) {
+            then.run();
+            return;
+        }
+        String[] c = list.get(i);
+        ask(c[0], c[1], c[2], () -> confirmThen(list, i + 1, then));
+    }
+
+    private void startCapture(CaptureService.Plan p, boolean overwrite) {
+        if (svc == null || !svc.hasSession()) return;
+        int st = svc.startCapture(p, overwrite);
+        if (st != Core.OK) {
+            showInfo("Start capture", Core.strerror(st), st != Core.ERR_STATE);
+            return;
+        }
+        banner.setVisibility(View.GONE);
+        // the service goes to the foreground with the capture notification
+        startForegroundService(new Intent(this, CaptureService.class).setAction(CaptureService.ACTION_FOREGROUND));
+    }
+
+    // ---- options ---------------------------------------------------------------------------------
+
+    private void openOptions() {
+        if (options == null) {
+            options = new OptionsPanel(this, this);
+            side.addView(options, new FrameLayout.LayoutParams(-1, -1));
+            if (svc != null) options.setLocked(svc.hasSession() && svc.status().isCapturing());
+        }
+        options.refreshControls();
+        controls.setVisibility(View.GONE);
+        options.setVisibility(View.VISIBLE);
+        if (Build.VERSION.SDK_INT >= 33) {
+            backCallback = this::closeOptions;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        }
+    }
+
+    @Override
+    public void closeOptions() {
+        options.setVisibility(View.GONE);
+        controls.setVisibility(View.VISIBLE);
+        View f = getCurrentFocus();
+        if (f != null) {
+            f.clearFocus();
+            getSystemService(android.view.inputmethod.InputMethodManager.class).hideSoftInputFromWindow(f.getWindowToken(), 0);
+        }
+        if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
+            getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+            backCallback = null;
+        }
+    }
+
+    /** Back closes the options: API 30-32 only (from 33 the OnBackInvokedCallback above). */
+    @Override
+    @SuppressWarnings("deprecation")
+    @android.annotation.SuppressLint("GestureBackNavigation")
+    public void onBackPressed() {
+        if (options != null && options.getVisibility() == View.VISIBLE) closeOptions();
+        else super.onBackPressed();
+    }
+
+    @Override
+    public CaptureService service() { return svc; }
+
+    @Override
+    public void optionsChanged() {
+        if (svc != null) onStatus(svc.status());
+    }
+
+    @Override
+    public void showAbout() {
+        // links for the URLs only (WEB_URLS would take "README.md" for a domain)
+        android.text.SpannableString text = new android.text.SpannableString(About.text());
+        Linkify.addLinks(text, java.util.regex.Pattern.compile("https://[^\\s)]+"), null);
+        TextView t = Ui.text(this, "", 14, Ui.TEXT);
+        t.setText(text);
+        t.setMovementMethod(LinkMovementMethod.getInstance());
+        int p = Ui.dp(this, 22);
+        t.setPadding(p, Ui.dp(this, 8), p, 0);
+        ScrollView s = new ScrollView(this);
+        s.addView(t);
+        new AlertDialog.Builder(this).setTitle("MarvinCapture " + Core.appVersion()).setView(s)
+                .setPositiveButton("OK", null).show();
+    }
+}

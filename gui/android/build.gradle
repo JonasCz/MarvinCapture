@@ -1,0 +1,7 @@
+// Pinnacle Studio 500-USB open driver
+// Copyright (C) 2026 Jonas Cz.
+// SPDX-License-Identifier: AGPL-3.0-or-later
+
+plugins {
+    id 'com.android.application' version '8.13.2' apply false
+}

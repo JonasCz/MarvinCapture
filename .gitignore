@@ -23,6 +23,11 @@ build/
 build-*/
 gui/macos/.build/
 gui/macos/.swiftpm/
+# Android (gui/android): Gradle state, the machine's SDK path, signing keys
+gui/android/.gradle/
+gui/android/local.properties
+*.jks
+*.keystore
 *.o
 *.a
 *.exe
