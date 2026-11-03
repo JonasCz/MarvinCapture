@@ -27,6 +27,9 @@ Built (2026-11-03):
   pacing, AAudio monitor (muted by default), the options panel with the per-format
   settings and warnings, the analog controls, the performance options (keep-busy thread,
   low-latency audio keep-alive), the replay device for demos (`--es replay <file>`).
+- **CI**: an `android` job in `.github/workflows/build.yml` (ubuntu-24.04, nothing installed,
+  ~40 s warm), see [ci.md](../ci.md).
+- **Analog default on Android** is FFV1 (uncompressed AVI stays selectable, with its warning).
 - **Tested** on the x86_64 API 34 emulator (software rendering, no KVM) with the replay
   device: start-up, no-device screen, preview, portrait / landscape, options, DV captures
   into `Movies/MarvinCapture` (numbering, end of tape, user stop, finalising, the
@@ -42,8 +45,9 @@ Not done or not tested:
   no picture for 10 s"); probably the emulator's speed, to be tried on a phone.
 - Not in the app yet: SD card location, SAF, `progress_percent` during finalising
   (indeterminate bar), thermal / battery warnings, `Notification.ProgressStyle`, a
-  monochrome (themed) launcher icon, a CI job (the script is ready for one, see
-  [building.md](../building.md#android)).
+  monochrome (themed) launcher icon.
+- Release signing in CI is set up but unused until the keystore secrets exist
+  ([ci.md](../ci.md)); until then CI's APK is debug-signed and a release refuses it.
 - Only API 34 ran; Android 11-13 and 15-16 and 16 KB page devices are untested.
 
 ## Verdict
@@ -281,7 +285,9 @@ audio on its own thread, the muxer behind a lock.
   format only where it works, so no GUI needs platform logic.
 - Labelled as lossy ("small files"), since the rest of the project is about archival quality.
 
-Status: built (core and FFmpeg; the GUIs' settings come next). What was decided is under
+Status: built, with the settings in all three GUIs (a gear next to the format on desktop, the
+options panel on Android); compiled and tested by CI on Windows (Media Foundation H.264) and
+macOS (VideoToolbox), not yet tried on a phone. What was decided is under
 [Decisions](#decisions), item 7; how it works, the quality mapping per encoder and the
 probe in [usage.md](../usage.md#h264--hevc-the-systems-video-encoder). FFmpeg 8.1's MediaCodec
 wrapper links `libmediandk.so` and `libandroid.so` (both public NDK libraries) and dlopens
