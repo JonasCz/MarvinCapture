@@ -298,3 +298,9 @@ because some devices' own dark accent is too dark to see.
 Edge to edge: the preview frame reaches behind the status bar and the display cutout (the
 picture and the REC badge stay inside the insets); the panel takes the insets of the sides it
 touches as padding. Without a picture the card has the shape of the chosen aspect (16:9 is wider).
+
+## Launcher shortcuts
+
+Long-pressing the app icon offers DV / HDV, S-Video and Composite (static shortcuts,
+`res/xml/shortcuts.xml`): each starts `MainActivity` with an `input` extra (0, 1, 2),
+which `applyInputExtra` applies like a tap on the selector (ignored while capturing).

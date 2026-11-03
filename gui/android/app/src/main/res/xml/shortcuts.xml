@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  The launcher's long-press menu: open the app on one input. MainActivity.applyInputExtra reads
+  the "input" extra (0 DV / HDV, 1 S-Video, 2 Composite, as Core.INPUT_*).
+-->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="input_dv"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_dv_short"
+        android:shortcutLongLabel="@string/shortcut_dv_long">
+        <intent
+            android:action="jonascz.marvincapture.SELECT_INPUT"
+            android:targetPackage="jonascz.marvincapture"
+            android:targetClass="jonascz.marvincapture.MainActivity">
+            <extra android:name="input" android:value="0" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="input_svideo"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_svideo_short"
+        android:shortcutLongLabel="@string/shortcut_svideo_long">
+        <intent
+            android:action="jonascz.marvincapture.SELECT_INPUT"
+            android:targetPackage="jonascz.marvincapture"
+            android:targetClass="jonascz.marvincapture.MainActivity">
+            <extra android:name="input" android:value="1" />
+        </intent>
+    </shortcut>
+    <shortcut
+        android:shortcutId="input_composite"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_composite_short"
+        android:shortcutLongLabel="@string/shortcut_composite_long">
+        <intent
+            android:action="jonascz.marvincapture.SELECT_INPUT"
+            android:targetPackage="jonascz.marvincapture"
+            android:targetClass="jonascz.marvincapture.MainActivity">
+            <extra android:name="input" android:value="2" />
+        </intent>
+    </shortcut>
+</shortcuts>

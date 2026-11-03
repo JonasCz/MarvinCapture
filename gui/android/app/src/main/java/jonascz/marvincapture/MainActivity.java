@@ -118,6 +118,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         buildViews();
         setContentView(root);
         replayPath = replayExtra(getIntent());
+        applyInputExtra(getIntent());
 
         IntentFilter f = new IntentFilter(ACTION_USB_PERMISSION);
         f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
@@ -148,6 +149,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         setIntent(intent);
+        applyInputExtra(intent);
         String r = replayExtra(intent);
         if (r != null && !r.equals(replayPath) && svc != null && !svc.status().isCapturing()) {
             replayPath = r;
@@ -209,6 +211,17 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         @Override
         public void onServiceDisconnected(ComponentName name) { svc = null; }
     };
+
+    /** The launcher shortcuts (res/xml/shortcuts.xml) open the app on one input: the "input" extra.
+     *  Not while a capture runs (the selector is locked then too). */
+    private void applyInputExtra(Intent i) {
+        if (i == null || !i.hasExtra("input")) return;
+        int in = Settings.clamp(i.getIntExtra("input", Settings.input()), 0, 2);
+        i.removeExtra("input");   // once: a recreated intent must not undo a later choice
+        if (svc != null && svc.status().isCapturing()) return;
+        inputPicked(in);
+        input.setChosen(in);
+    }
 
     private String replayExtra(Intent i) {
         String r = i != null ? i.getStringExtra("replay") : null;
