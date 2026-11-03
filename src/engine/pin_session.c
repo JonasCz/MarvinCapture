@@ -2765,6 +2765,37 @@ static uint64_t replay_unplug_after(void)
     return v && v[0] ? (uint64_t)strtoull(v, NULL, 10) : 0;
 }
 
+/* The replay loops' share of what a hardware loop keeps up to date in the status (the DV and
+ * analog ticks): the capture time, the writer backlog, the bytes on disk, the file-opened event
+ * and the rate window behind the time-left estimate. At most every 100 ms (*last: the loop's
+ * own timestamp; the HDV loop runs per 188-byte packet). Status only: the replay device ends a
+ * capture at the end of its file, not by the time limits. Caller holds the lock. */
+static void replay_stats(pin_session_t *s, double *last)
+{
+    double now = pin_session_now();
+    if (now - *last < 0.1)
+        return;
+    *last = now;
+    if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
+        s->elapsed_s = now - s->capture_start_s;
+    if (!s->writer)
+        return;
+    pin_writer_stats_t wst;
+    pin_writer_get_stats(s->writer, &wst);
+    s->writer_backlog = wst.backlog_bytes;
+    s->writer_backlog_max = wst.backlog_high_water;
+    if (s->sink && s->sink->get_status) {
+        pin_sink_status_t sst;
+        memset(&sst, 0, sizeof(sst));
+        s->sink->get_status(s->sink, &sst);
+        s->bytes_written = sst.bytes_written;
+    } else {
+        s->bytes_written = wst.bytes_pushed;
+    }
+    file_announce(s);
+    rate_sample(s);
+}
+
 /* HDV .ts replay: the file is already a plain, 188-byte-aligned MPEG2-TS
  * (unlike the real EP 0x88 stream, it carries no OHCI/type-9 framing), so
  * dv_reassembler_feed() does not apply. Instead this mirrors what
@@ -2792,6 +2823,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     uint8_t pkt[HDV_TS_PACKET_SIZE];
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
+    double stats_t = 0;
 
     s->loop_stop = 0;
     while (!s->loop_stop) {
@@ -2799,6 +2831,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
 
         pin_session_lock(s);
         capture_guard(s, 0);
+        replay_stats(s, &stats_t);
         pin_deck_state_t d = s->deck;
         if (unplug_after && s->sink && s->frames >= unplug_after)
             unplugged = 1;
@@ -2904,12 +2937,14 @@ static int replay_run(pin_session_t *s)
     int chunks_idle = 0; /* raw dump: chunks in a row that ended no frame */
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
+    double stats_t = 0;
     s->loop_stop = 0;
     while (!s->loop_stop) {
         if (handle_inline_commands(s, 0)) { s->loop_stop = 1; break; }
 
         pin_session_lock(s);
         capture_guard(s, 0);
+        replay_stats(s, &stats_t);
         pin_deck_state_t d = s->deck;
         if (unplug_after && s->sink && s->frames >= unplug_after)
             unplugged = 1;

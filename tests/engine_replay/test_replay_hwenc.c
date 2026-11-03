@@ -51,13 +51,27 @@ static int listed(pin_kind_t kind, pin_format_t f)
 }
 
 /* Captures to the end of the recording; returns once the session is READY again. */
+/* Captures whose status was read while they ran: the replay device keeps the capture time and
+ * the bytes on disk up to date, like the hardware loops. */
+static int live_checks;
+
 static void capture(pin_session_t *s, const pin_capture_opts_t *o)
 {
     CHECK(pin_capture_start(s, o, 1) == PIN_OK);
     pin_status_snapshot_t snap;
     pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 5000, &snap);
     CHECK(snap.state == PIN_STATE_CAPTURING);
-    pin_test_sleep_ms(1500);
+    pin_test_sleep_ms(700);
+    memset(&snap, 0, sizeof(snap));
+    snap.size = sizeof(snap);
+    CHECK(pin_get_status(s, &snap) == PIN_OK);
+    if (snap.state == PIN_STATE_CAPTURING) {   /* not yet at the end of the recording */
+        printf("  while capturing: %.2f s, %llu bytes\n", snap.elapsed_s, (unsigned long long)snap.bytes_written);
+        CHECK(snap.elapsed_s >= 0.3 && snap.elapsed_s < 5);
+        CHECK(snap.bytes_written > 0 && snap.total_bytes_written >= snap.bytes_written);
+        live_checks++;
+    }
+    pin_test_sleep_ms(800);
     CHECK(pin_capture_stop(s) == PIN_OK);
     pin_test_wait_state(s, PIN_STATE_READY, PIN_STATE_ERROR, 10000, &snap);
     CHECK(snap.state == PIN_STATE_READY);
@@ -226,6 +240,7 @@ int main(int argc, char **argv)
     printf("  refused without an encoder: %s\n", chk.message);
 
     pin_close(s);
+    CHECK(live_checks > 0);
     pin_test_setenv("PIN_HWENC_ENCODER", standin ? standin : "");
     printf("test_replay_hwenc: ok\n");
     return 0;
