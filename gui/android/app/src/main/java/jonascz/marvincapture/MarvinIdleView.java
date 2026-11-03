@@ -65,7 +65,11 @@ public final class MarvinIdleView extends View {
 
     @Override
     protected void onMeasure(int w, int h) {
-        setMeasuredDimension(resolveSize((int) (150 * dp), w), resolveSize((int) (125 * dp), h));
+        // 150 x 125 dp, smaller where the card is short (the picture of a 16:9 phone in portrait): the
+        // animation gives way so that the sentence below it is never cut off
+        int want = (int) (125 * dp);
+        int height = MeasureSpec.getMode(h) == MeasureSpec.UNSPECIFIED ? want : Math.min(want, MeasureSpec.getSize(h));
+        setMeasuredDimension(resolveSize((int) (150 * dp), w), height);
     }
 
     private boolean animated() {

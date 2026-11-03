@@ -72,7 +72,7 @@ final class OptionsPanel extends LinearLayout {
     private final ArrayList<View> lockable = new ArrayList<>();
     private final ArrayList<BooleanSupplier> lockableCond = new ArrayList<>();
     private final ArrayList<Slider> sliders = new ArrayList<>();
-    private LinearLayout analogBlock, dvBlock, pictureRows;
+    private LinearLayout analogBlock, dvBlock, pictureRows, perfBlock;
     private TextView pictureNote;
     private Glyphs.Button closeButton;
     private Ui.Segmented inputSeg;
@@ -192,19 +192,10 @@ final class OptionsPanel extends LinearLayout {
         // DV / HDV
         dvBlock = Ui.column(c);
         dvBlock.addView(Ui.header(c, "DV and HDV"));
-        dvBlock.addView(Ui.help(c, "DV or HDV is detected from what the camera sends; each has its own settings."));
-        dvBlock.addView(toggle(c, "Use deck controls",
-                "Shows rewind, play, stop and fast-forward buttons for a camera or deck on the DV input, and the "
-                        + "capture button then rewinds the tape, plays it and captures (stopping at the end of the "
-                        + "recording). Hold the capture button to record what arrives without rewinding. Without "
-                        + "this option the capture button always records whatever arrives.",
-                "gui.deck_controls", Settings.deckControls(), on -> host.optionsChanged(), false));
-        nameField(dvBlock, false);
-        // like the desktop apps' "File options for" tab: one kind's settings at a time
+        // like the desktop apps' "File options for" tab: one kind's settings at a time. The file name and the
+        // deck controls below are shared by both.
         dvBlock.addView(Ui.label(c, "Show settings for"));
         LinearLayout dvKind = Ui.column(c), hdvKind = Ui.column(c);
-        kindBlock(dvKind, Core.KIND_DV);
-        kindBlock(hdvKind, Core.KIND_HDV);
         int tab = Settings.clamp(Settings.getInt("gui.kind_tab", 0), 0, 1);
         Ui.Segmented kindTab = new Ui.Segmented(c, new String[] { "DV", "HDV" }, tab, i -> {
             Settings.setInt("gui.kind_tab", i);
@@ -213,30 +204,44 @@ final class OptionsPanel extends LinearLayout {
         });
         kindTab.setContentDescription("Show settings for DV or HDV");
         dvBlock.addView(kindTab, Ui.fillWidth());
-        dvBlock.addView(Ui.help(c, "Which of the two is applied depends on what the camera sends, not on this tab."));
+        dvBlock.addView(Ui.help(c, "DV or HDV is detected from what the camera sends. Choose the settings for each "
+                + "here; the ones for the kind the camera sends are applied."));
+        dvBlock.addView(toggle(c, "Use deck controls",
+                "Shows rewind, play, stop and fast-forward buttons for a camera or deck on the DV input, and the "
+                        + "capture button then rewinds the tape, plays it and captures (stopping at the end of the "
+                        + "recording). Hold the capture button to record what arrives without rewinding. Without "
+                        + "this option the capture button always records whatever arrives.",
+                "gui.deck_controls", Settings.deckControls(), on -> host.optionsChanged(), false));
+        nameField(dvBlock, false);
+        kindBlock(dvKind, Core.KIND_DV);
+        kindBlock(hdvKind, Core.KIND_HDV);
         dvKind.setVisibility(tab == 0 ? VISIBLE : GONE);
         hdvKind.setVisibility(tab == 1 ? VISIBLE : GONE);
         dvBlock.addView(dvKind, Ui.fillWidth());
         dvBlock.addView(hdvKind, Ui.fillWidth());
         content.addView(dvBlock, Ui.fillWidth());
 
-        // screen and performance
-        content.addView(Ui.header(c, "Screen and performance"));
+        // screen: for every input
+        content.addView(Ui.header(c, "Screen"));
         content.addView(toggle(c, "Keep the screen on during a capture",
                 "Otherwise the screen turns off as usual; the capture carries on either way.",
                 "gui.keep_screen_on", Settings.keepScreenOn(), on -> host.optionsChanged(), false));
-        content.addView(toggle(c, "Keep a CPU core busy during analog capture",
-                "Keeps the processor out of its deep power-saving states, whose slow wake-ups make analog "
-                        + "captures lose frames. Costs battery and heat. Applies from the next capture; DV and HDV "
-                        + "don't need it.",
+        // performance: analog capture only (DV and HDV do not need them); both off by default
+        perfBlock = Ui.column(c);
+        perfBlock.addView(Ui.header(c, "Performance (analog)"));
+        perfBlock.addView(toggle(c, "Keep a CPU core busy during analog capture",
+                "Keeps the processor out of its deep power-saving states, whose slow wake-ups can make analog "
+                        + "captures lose frames. Costs battery and heat. Applies from the next capture. Try it "
+                        + "if frames are dropped.",
                 "gui.cpu_keep_busy", Settings.cpuKeepBusy(),
                 on -> Core.setCpuKeepBusy(on ? Core.KEEP_BUSY_AUTO : Core.KEEP_BUSY_OFF), true));
-        content.addView(toggle(c, "Low-latency audio keep-alive during analog capture",
+        perfBlock.addView(toggle(c, "Silent low-latency audio during analog capture",
                 "Runs the audio output in low-latency mode (silent while muted) during an analog capture. On "
                         + "some phones (Pixels among them) that makes the system keep the processor quick to respond, "
-                        + "which helps analog captures not to lose frames. Device dependent: on others it does nothing. "
-                        + "DV and HDV use the normal audio output only when unmuted.",
+                        + "which can help analog captures not to lose frames. Device dependent: on others it does "
+                        + "nothing.",
                 "gui.audio_keepalive", Settings.audioKeepAlive(), on -> {}, true));
+        content.addView(perfBlock, Ui.fillWidth());
 
         TextView aboutHeader = Ui.header(c, "About");
         aboutHeader.setPadding(0, Ui.dp(c, 40), 0, Ui.dp(c, 6));
@@ -537,6 +542,7 @@ final class OptionsPanel extends LinearLayout {
         boolean analog = Settings.input() != Core.INPUT_DV;
         if (analogBlock != null) analogBlock.setVisibility(analog ? VISIBLE : GONE);
         if (dvBlock != null) dvBlock.setVisibility(analog ? GONE : VISIBLE);
+        if (perfBlock != null) perfBlock.setVisibility(analog ? VISIBLE : GONE);
     }
 
     /** Re-reads the analog controls from the core (ranges, values, hue enabled for NTSC only). */

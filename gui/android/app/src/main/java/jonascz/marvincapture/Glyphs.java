@@ -98,14 +98,18 @@ final class Glyphs {
                 c.drawLine(6, 6, 18, 18, p);
                 c.drawLine(18, 6, 6, 18, p);
                 break;
-            case LIBRARY: {   // three books, the last one leaning
+            case LIBRARY: {   // a stack of videos: a screen with a play triangle, a second one behind it
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(2f);
+                path.moveTo(6.5f, 8); path.lineTo(6.5f, 6.5f); path.quadTo(6.5f, 4.5f, 8.5f, 4.5f);
+                path.lineTo(19.5f, 4.5f); path.quadTo(21.5f, 4.5f, 21.5f, 6.5f);
+                path.lineTo(21.5f, 14.5f); path.quadTo(21.5f, 16.5f, 19.5f, 16.5f); path.lineTo(18, 16.5f);
+                c.drawPath(path, p);
+                c.drawRoundRect(new RectF(3, 8, 18, 20), 2.2f, 2.2f, p);
                 p.setStyle(Paint.Style.FILL);
-                c.drawRoundRect(new RectF(4.5f, 5, 9, 19), 1.2f, 1.2f, p);
-                c.drawRoundRect(new RectF(10.5f, 5, 15, 19), 1.2f, 1.2f, p);
-                c.save();
-                c.rotate(-18, 19.5f, 19);
-                c.drawRoundRect(new RectF(17, 6, 21.5f, 19), 1.2f, 1.2f, p);
-                c.restore();
+                Path tri = new Path();
+                tri.moveTo(8.7f, 11.2f); tri.lineTo(13.2f, 14); tri.lineTo(8.7f, 16.8f); tri.close();
+                c.drawPath(tri, p);
                 break;
             }
             case PLAY:

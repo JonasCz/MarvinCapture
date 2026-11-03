@@ -100,7 +100,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private LinearLayout deckGroup;
     private Glyphs.Button deckRew, deckPlay, deckStop, deckFf;
     private static final int BUTTON_DP = 46;   // the small round buttons (all but the capture button)
-    private boolean autoCapture, forceManual;   // the capture button is "rewind and capture" (deck controls on, DV input)
+    private boolean autoCapture, forceManual, optionsShown, dualApplied;   // the capture button is "rewind and capture" (deck controls on, DV input)
     private Glyphs.RecordButton record;
     private OptionsPanel options;   // built on first use
     private FrameLayout optionsHolder, frame;
@@ -152,7 +152,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         boolean wasDark = Ui.dark;
         Ui.applyTheme(this);
         if (wasDark == Ui.dark) return;
-        boolean optionsOpen = options != null && options.getVisibility() == View.VISIBLE && !dual;
+        boolean optionsOpen = optionsOpen();
         if (optionsOpen) closeOptions();
         if (library != null && library.isOpen()) library.close();
         options = null;
@@ -329,6 +329,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         panelBg.setColor(Ui.PANEL);
         optionsBg.setColor(Ui.PANEL);
         revealed = false;
+        optionsShown = dualApplied = false;
         shownBg = shownInfo = shownOptionsBg = tgtBg = tgtInfo = tgtOptionsBg = 1f;
 
         // preview: the surface, the no-video card, the REC badge (MainLayout.PreviewFrame)
@@ -352,7 +353,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         int pad = Ui.dp(this, 20);
         card.setPadding(pad, pad, pad, pad);
         marvin = new MarvinIdleView(this);
-        card.addView(marvin);
+        card.addView(marvin, new LinearLayout.LayoutParams(-1, 0, 1));   // takes what the text leaves
         cardText = Ui.text(this, "", 14, Ui.TEXT2);
         cardText.setGravity(Gravity.CENTER);
         cardText.setMaxWidth(Ui.dp(this, 420));
@@ -442,7 +443,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         bl.bottomMargin = Ui.dp(this, 10);
         top.addView(banner, bl);
 
-        statusShort = Ui.text(this, "", 17, Ui.TEXT);   // a file name, or the core's sentence about the last capture
+        statusShort = Ui.text(this, "", 20, Ui.TEXT);   // the size of the options' title   // a file name, or the core's sentence about the last capture
         statusShort.setTypeface(Typeface.DEFAULT_BOLD);
         statusShort.setMaxLines(2);
         statusShort.setEllipsize(android.text.TextUtils.TruncateAt.END);
@@ -476,7 +477,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         spl.leftMargin = Ui.dp(this, 10);
         audio.addView(speaker, spl);
         LinearLayout.LayoutParams ml = Ui.fillWidth();
-        ml.topMargin = Ui.dp(this, 8);
+        ml.topMargin = Ui.dp(this, 10);   // as far below the status text as it is below the panel's top
         top.addView(audio, ml);
         scroll.addView(top);
         controls.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -642,6 +643,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             set(storageLine, "");
         }
         show(signalLine, !signalLine.getText().toString().isEmpty());
+        show(framesLine, !framesLine.getText().toString().isEmpty());   // empty lines would add gaps
+        show(storageLine, !storageLine.getText().toString().isEmpty());
         meters.push(has ? st.d[Core.SD_PEAK_L] : -144, has ? st.d[Core.SD_PEAK_R] : -144);
 
         // the record button: the core's enable rules
@@ -919,54 +922,82 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         }
     }
 
+    /** The options slide up over the controls (and down again): about a quarter of a second, scaled by
+     *  the system's animation setting. The controls go once the options cover them. */
     private void openOptions() {
         if (dual) return;   // always there
         ensureOptions();
         options.rebuild();
         options.refreshControls();
-        controls.setVisibility(View.GONE);
+        optionsShown = true;
+        optionsHolder.animate().cancel();
         optionsHolder.setVisibility(View.VISIBLE);
         options.setVisibility(View.VISIBLE);
+        int h = optionsHolder.getHeight() > 0 ? optionsHolder.getHeight() : Ui.dp(this, 400);
+        optionsHolder.setTranslationY(h * 0.4f);
+        optionsHolder.setAlpha(0f);
+        optionsHolder.animate().translationY(0).alpha(1f).setDuration(260)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator())
+                .withEndAction(() -> { if (optionsShown) controls.setVisibility(View.GONE); });
         updateBack();
         updatePanels(true);
     }
 
     @Override
     public void closeOptions() {
-        if (dual || options == null) return;
-        optionsHolder.setVisibility(View.GONE);
-        options.setVisibility(View.GONE);
+        if (dual || options == null || !optionsShown) return;
+        optionsShown = false;
         controls.setVisibility(View.VISIBLE);
         View f = getCurrentFocus();
         if (f != null) {
             f.clearFocus();
             getSystemService(android.view.inputmethod.InputMethodManager.class).hideSoftInputFromWindow(f.getWindowToken(), 0);
         }
+        FrameLayout holder = optionsHolder;
+        OptionsPanel panel = options;
+        holder.animate().cancel();
+        holder.animate().translationY(holder.getHeight() * 0.4f).alpha(0f).setDuration(200)
+                .setInterpolator(new android.view.animation.AccelerateInterpolator())
+                .withEndAction(() -> {
+                    if (optionsShown) return;   // opened again meanwhile
+                    holder.setVisibility(View.GONE);
+                    panel.setVisibility(View.GONE);
+                    holder.setTranslationY(0);
+                    holder.setAlpha(1f);
+                });
         updateBack();
         updatePanels(true);
     }
 
     private boolean optionsOpen() {
-        return !dual && options != null && optionsHolder.getVisibility() == View.VISIBLE;
+        return !dual && options != null && optionsShown;
     }
 
-    /** The screen's layout mode changed (rotation, fold, window size): docked / overlay / tablet. */
+    /** The screen's layout mode changed (rotation, fold, window size, or the picture's aspect moving the
+     *  docked / overlay boundary): docked / overlay / tablet. Open options stay open, except that they are
+     *  always shown on a tablet. */
     private void applyMode() {
         gear.setVisibility(dual ? View.INVISIBLE : View.VISIBLE);   // invisible keeps the capture button centred
         gear.setEnabled(!dual);
         if (dual) {
             ensureOptions();
+            optionsShown = false;
+            optionsHolder.animate().cancel();
+            optionsHolder.setTranslationY(0);
+            optionsHolder.setAlpha(1f);
             options.setPermanent(true);
             options.setVisibility(View.VISIBLE);
             optionsHolder.setVisibility(View.VISIBLE);
             controls.setVisibility(View.VISIBLE);
             options.rebuild();
             options.refreshControls();
-        } else if (options != null) {
+        } else if (dualApplied && options != null) {   // left the tablet layout: back to the controls
             options.setPermanent(false);
+            optionsShown = false;
             optionsHolder.setVisibility(View.GONE);
             controls.setVisibility(View.VISIBLE);
         }
+        dualApplied = dual;
         updateBack();
         if (svc != null) onStatus(svc.status());
         updatePanels(false);

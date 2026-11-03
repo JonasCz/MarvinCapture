@@ -161,7 +161,7 @@ picture. On a tablet (a persistent taskbar) it stays between the bars.
   their right: the audio monitor, muted by default (`gui.muted`).
 - **Button rows**: the deck row (when shown) and the button row below it share four equal columns, so the small
   buttons (46 dp) line up: settings under the first, capture (the big one) between the middle two, library under
-  the last. The library button (a row of books) has a count badge (the captures in the chosen place); it is disabled while capturing.
+  the last. The library button (a stack of two videos) has a count badge (the captures in the chosen place); it is disabled while capturing.
 - **Deck controls** (option "Use deck controls", `gui.deck_controls`, off by default; DV input only): a row
   above the buttons with rewind, play, stop and fast forward (`pin_deck`, enabled by `pin_deck_cmd_allowed`,
   lit with the deck's state), and the capture button becomes "rewind and capture"
@@ -198,22 +198,24 @@ of its own would need a new native decode/convert/audio path; not done.
 launcher shortcut can set it too. All segmented controls and cards share one corner radius (10 dp). Analog: TV standard, file name, format,
 aspect, stop after no signal / total time, picture and audio-gain sliders
 (`pin_get_control` / `pin_set_control`, live during a capture, hue enabled by the
-core); DV and HDV (shown for the DV input, which detects which one arrives): file name,
-then a "Show settings for" DV / HDV tab (like the desktop apps) with, per kind, format, aspect, scene split (where the format supports it), the two
+core); DV and HDV (shown for the DV input, which detects which one arrives): the "Show settings for"
+DV / HDV tab (like the desktop apps) at the top of the section, then what both share (the deck controls
+option, the file name), then the selected kind's format, aspect, scene split (where the format supports it), the two
 stops. Each format shows the core's warning (`pin_format_warning`) and its own settings
 from `pin_format_options` (H.264 / HEVC: interlace mode with the help text of the
 chosen one, the keep-fields one in amber; quality with `pin_format_quality_hint`;
 FFV1: compression). H.264 / HEVC are listed only where `pin_encoders_probe` (run once
-at start-up on a worker thread) found the encoder. Then: keep the screen on during a
-capture; keep a CPU core busy during analog capture (`pin_set_cpu_keep_busy`: on = AUTO,
-which on Android means always; off = OFF); the low-latency audio keep-alive (below);
-about and licences. Everything but the picture controls is locked while
+at start-up on a worker thread) found the encoder. Then "Screen" (keep the screen on during a
+capture, all inputs), "Performance (analog)" (analog input only, both off by default: keep a CPU core busy
+(`pin_set_cpu_keep_busy`: on = AUTO, which on Android means always; off = OFF); silent low-latency audio, below),
+about and licences. The options slide up over the controls (a quarter of a second, scaled by the system's
+animation setting) and stay open when a setting changes the picture's shape (the layout may then switch between docked and overlay). Everything but the picture controls is locked while
 `pin_state_is_capturing`.
 
 ### Performance options
 
 Android apps cannot open `/dev/cpu_dma_latency`, the remedy for analog frame drops on
-Linux. Two substitutes, both on by default:
+Linux. Two substitutes, both off by default (shown for the analog input only; try them if analog frames drop):
 
 - the core's keep-busy thread (one core busy at idle priority while the analog read
   loop runs);

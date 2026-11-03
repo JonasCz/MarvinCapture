@@ -84,8 +84,8 @@ final class Settings {
     /** Show the deck buttons (rewind, play, stop, fast forward) and make the capture button "rewind and capture". */
     static boolean deckControls() { return getBool("gui.deck_controls", false); }
     static boolean keepScreenOn() { return getBool("gui.keep_screen_on", false); }
-    static boolean cpuKeepBusy() { return getBool("gui.cpu_keep_busy", true); }
-    static boolean audioKeepAlive() { return getBool("gui.audio_keepalive", true); }
+    static boolean cpuKeepBusy() { return getBool("gui.cpu_keep_busy", false); }
+    static boolean audioKeepAlive() { return getBool("gui.audio_keepalive", false); }
 
     /** File base name; also the embedded title. DV and HDV share one. */
     static String name(boolean analog) {
