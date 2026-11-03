@@ -234,11 +234,11 @@ release APK is signed from `MARVIN_ANDROID_KEYSTORE`, `MARVIN_ANDROID_KEYSTORE_P
 (`pin_open("fd:N")`), and the app passes its own directories with `pin_set_app_dirs()`.
 For Termux, see [cli.md](cli.md#android-termux).
 
-For CI: the script is non-interactive and needs no `local.properties`. Worth caching:
-`third_party/ffmpeg-android-*` and `third_party/libusb-android-*` (keyed on
-`scripts/build-ffmpeg.sh` and `scripts/android-ndk.sh`), and `~/.gradle/caches` plus
-`~/.gradle/wrapper` (keyed on the `*.gradle` files and
-`gui/android/gradle/wrapper/gradle-wrapper.properties`).
+For CI: the script is non-interactive and needs no `local.properties`. The GitHub
+Actions workflow builds the arm64-v8a release APK on `ubuntu-24.04`, which has the JDK,
+SDK and NDK preinstalled, and caches `third_party/ffmpeg-android-*`,
+`third_party/libusb-android-*` and Gradle's downloads; see [ci.md](ci.md) (also for the
+release signing key).
 
 ## Installers
 
@@ -267,8 +267,9 @@ only recommends it); Windows uses WinHTTP.
 
 `scripts/publish-release.sh [--draft] [--title T] [--notes N] <dir>` creates the GitHub
 release `v<version>` from the installers in `<dir>` (with the `gh` CLI). The GitHub Actions
-workflow `.github/workflows/build.yml` runs these scripts for all six platforms and can
-publish the result as a (draft) release; see [ci.md](ci.md).
+workflow `.github/workflows/build.yml` runs these scripts for all six desktop platforms
+(and `build-android.sh` for the APK) and can publish the result as a (draft) release; see
+[ci.md](ci.md).
 
 ## Tests
 
