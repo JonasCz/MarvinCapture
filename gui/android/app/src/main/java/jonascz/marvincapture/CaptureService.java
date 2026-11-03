@@ -381,7 +381,10 @@ public final class CaptureService extends Service {
     }
 
     /** Capture options from the settings: a manual capture, one pass (port of buildCaptureOpts). */
-    Plan buildPlan() {
+    Plan buildPlan() { return buildPlan(false); }
+
+    /** auto = "rewind and capture": the core rewinds the tape, plays it and captures (DV / HDV only). */
+    Plan buildPlan(boolean auto) {
         Plan p = new Plan();
         boolean analog = Settings.input() != Core.INPUT_DV;
         int kind = analog ? Core.KIND_ANALOG : lastStreamKind == Core.KIND_HDV ? Core.KIND_HDV : Core.KIND_DV;
@@ -404,6 +407,8 @@ public final class CaptureService extends Service {
         o[Core.OPT_DEINTERLACE] = Settings.deinterlace(encKind);
         o[Core.OPT_VIDEO_QUALITY] = Settings.quality(encKind);
         o[Core.OPT_FFV1] = Settings.ffv1();
+        o[Core.OPT_START_DECK] = auto && !analog ? 1 : 0;
+        o[Core.OPT_REWIND_FIRST] = auto && !analog ? 1 : 0;
         return p;
     }
 
@@ -421,6 +426,11 @@ public final class CaptureService extends Service {
             // the activity calls startForegroundService(ACTION_FOREGROUND) right after
         }
         return st;
+    }
+
+    /** A deck button (Core.DECK_*); the core ignores it where it is not allowed. */
+    int deck(int cmd) {
+        return session != 0 ? Core.deck(session, cmd) : Core.ERR_STATE;
     }
 
     void stopCapture() {

@@ -56,6 +56,7 @@ final class MainLayout extends ViewGroup {
     private int darNum = 4, darDen = 3;
     private int insL, insT, insR, insB;
     private boolean land, overlay, dual;
+    private boolean bleed;   // the picture goes behind the status and navigation bars (not under a tablet's taskbar)
     private boolean reportedOverlay, reportedDual;
     private ModeListener listener;
     // rects computed by onMeasure: x, y, w, h
@@ -116,6 +117,10 @@ final class MainLayout extends ViewGroup {
         land = w > h;
         float wdp = w / dp, hdp = h / dp;
         dual = land ? wdp >= 840 && hdp >= 600 : wdp >= 600 && hdp >= 900;
+        bleed = getResources().getConfiguration().smallestScreenWidthDp < 600;
+        // the picture's own vertical insets: none when it may go behind the bars
+        int pt = bleed ? 0 : insT, pb = bleed ? 0 : insB;
+        int pih = Math.max(0, h - pt - pb);
         overlay = false;
         PreviewFrame preview = (PreviewFrame) getChildAt(0);
         View controls = getChildAt(1), options = getChildAt(2);
@@ -123,7 +128,7 @@ final class MainLayout extends ViewGroup {
 
         if (land && dual) {
             int sideW = Math.round(TABLET_SIDE_DP * dp) + insR;
-            int ctlH = Math.round(Math.max(300 * dp, Math.min(hdp * 0.45f * dp, 380 * dp)));
+            int ctlH = Math.round(Math.max(360 * dp, Math.min(hdp * 0.5f * dp, 440 * dp)));
             set(rPreview, 0, 0, w - sideW, h);
             fit(insL, insT, w - sideW - insL, ih, false, true);
             set(rControls, w - sideW, 0, sideW, insT + ctlH);
@@ -131,19 +136,19 @@ final class MainLayout extends ViewGroup {
             padControls(controls, 0, insT, insR, 0);
             options.setPadding(0, 0, insR, insB);
         } else if (land) {
-            int picW = Math.round((float) ih * darNum / darDen);
+            int picW = Math.round((float) pih * darNum / darDen);
             if (picW > iw) picW = iw;
             int free = w - insL - picW;
             int minPanel = Math.round(PANEL_MIN_DP * dp);
             if (free >= minPanel + insR) {
                 set(rPreview, 0, 0, insL + picW, h);
-                fit(insL, insT, picW, ih, false, false);
+                fit(insL, pt, picW, pih, false, false);
                 set(rControls, insL + picW, 0, w - insL - picW, h);
             } else {
                 overlay = true;
                 overlayW = minPanel + insR;
                 set(rPreview, 0, 0, w, h);
-                fit(insL, insT, iw, ih, false, true);
+                fit(insL, pt, iw, pih, false, true);
                 set(rControls, w - overlayW, 0, overlayW, h);
                 cardRight = overlayW - insR;
             }
@@ -161,9 +166,9 @@ final class MainLayout extends ViewGroup {
             options.setPadding(0, 0, insR, insB);
         } else {
             int minPanel = (int) Math.min(h * 0.55f, 330 * dp);
-            int ph = Math.min(insT + Math.round((float) iw * darDen / darNum), h - minPanel);
+            int ph = Math.min(pt + Math.round((float) iw * darDen / darNum), h - minPanel);
             set(rPreview, 0, 0, w, ph);
-            fit(insL, insT, iw, ph - insT, true, false);
+            fit(insL, pt, iw, ph - pt, true, false);
             set(rControls, 0, ph, w, h - ph);
             set(rOptions, 0, ph, w, h - ph);
             padControls(controls, insL, 0, insR, insB);
@@ -181,9 +186,9 @@ final class MainLayout extends ViewGroup {
         }
     }
 
-    /** The controls' own padding (16 dp at the sides, 12 dp above and below) plus the insets. */
+    /** The controls' own padding (16 dp at the sides, 8 dp above and below) plus the insets. */
     private void padControls(View v, int l, int t, int r, int b) {
-        int h = Math.round(16 * dp), vv = Math.round(12 * dp);
+        int h = Math.round(16 * dp), vv = Math.round(8 * dp);
         v.setPadding(l + h, t + vv, r + h, b + vv);
     }
 
@@ -211,6 +216,7 @@ final class MainLayout extends ViewGroup {
     static final class PreviewFrame extends ViewGroup {
         private int bx, by, bw, bh;
         private int l, t, r, b;
+        private int topScrim, bottomScrim;
 
         PreviewFrame(Context c) {
             super(c);
@@ -235,6 +241,15 @@ final class MainLayout extends ViewGroup {
             getChildAt(0).measure(MeasureSpec.makeMeasureSpec(bw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(bh, MeasureSpec.EXACTLY));
             getChildAt(1).measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY));
             getChildAt(2).measure(MeasureSpec.makeMeasureSpec(bw, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(bh, MeasureSpec.AT_MOST));
+            // scrims (children 3 and 4) where the picture goes behind the status / navigation bar
+            float d = getResources().getDisplayMetrics().density;
+            topScrim = by < t ? Math.round(t - by + 24 * d) : 0;
+            int under = by + bh - (h - b);
+            bottomScrim = under > 0 ? Math.round(under + 24 * d) : 0;
+            if (getChildCount() > 4) {
+                getChildAt(3).measure(MeasureSpec.makeMeasureSpec(bw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(topScrim, MeasureSpec.EXACTLY));
+                getChildAt(4).measure(MeasureSpec.makeMeasureSpec(bw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(bottomScrim, MeasureSpec.EXACTLY));
+            }
             setMeasuredDimension(w, h);
         }
 
@@ -245,7 +260,12 @@ final class MainLayout extends ViewGroup {
             getChildAt(1).layout(0, 0, w, h);
             View badge = getChildAt(2);
             int m = (int) (12 * getResources().getDisplayMetrics().density);
-            badge.layout(bx + m, by + m, bx + m + badge.getMeasuredWidth(), by + m + badge.getMeasuredHeight());
+            int top = Math.max(by, t) + m;   // never under the status bar
+            badge.layout(bx + m, top, bx + m + badge.getMeasuredWidth(), top + badge.getMeasuredHeight());
+            if (getChildCount() > 4) {
+                getChildAt(3).layout(bx, by, bx + bw, by + topScrim);
+                getChildAt(4).layout(bx, by + bh - bottomScrim, bx + bw, by + bh);
+            }
         }
     }
 }

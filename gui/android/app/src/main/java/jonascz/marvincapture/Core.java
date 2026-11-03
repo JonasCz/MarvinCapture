@@ -78,7 +78,13 @@ final class Core {
     // capture options (marvin_jni.c build_opts)
     static final int OPT_FORMAT_ANALOG = 0, OPT_FORMAT_DV = 1, OPT_FORMAT_HDV = 2, OPT_ASPECT = 3,
             OPT_SCENE_SPLIT = 4, OPT_IDLE_STOP = 5, OPT_MAX_DURATION = 6, OPT_FIRST_NUMBER = 7,
-            OPT_DEINTERLACE = 8, OPT_VIDEO_QUALITY = 9, OPT_FFV1 = 10, OPT_COUNT = 11;
+            OPT_DEINTERLACE = 8, OPT_VIDEO_QUALITY = 9, OPT_FFV1 = 10, OPT_START_DECK = 11,
+            OPT_REWIND_FIRST = 12, OPT_COUNT = 13;
+
+    // pin_deck_cmd_t, pin_deck_state_t
+    static final int DECK_PLAY = 0, DECK_PAUSE = 1, DECK_STOP = 2, DECK_FF = 3, DECK_REW = 4;
+    static final int DECK_STATE_STOPPED = 1, DECK_STATE_PLAYING = 2, DECK_STATE_FF = 4, DECK_STATE_REWINDING = 5,
+            DECK_STATE_RECORDING = 6;
 
     // getStatus(): ints
     static final int ST_STATE = 0, ST_INPUT = 1, ST_STREAM_KIND = 2, ST_SIGNAL = 3, ST_IS_60HZ = 4,
@@ -86,7 +92,8 @@ final class Core {
             ST_DISK_LOW = 10, ST_STOP_REASON = 11, ST_STOP_NO_VIDEO = 12, ST_PASS = 13, ST_PASSES = 14,
             ST_LAST_ERROR = 15, ST_IS_CAPTURING = 16, ST_MANUAL_ALLOWED = 17, ST_STOP_ALLOWED = 18,
             ST_DECK_BUSY = 19, ST_WIDTH = 20, ST_HEIGHT = 21, ST_INTERLACED = 22, ST_STOP_ABNORMAL = 23,
-            ST_HUB = 24, ST_COUNT = 25;
+            ST_HUB = 24, ST_DECK_REW_OK = 25, ST_DECK_PLAY_OK = 26, ST_DECK_STOP_OK = 27,
+            ST_DECK_FF_OK = 28, ST_AUTO_ALLOWED = 29, ST_COUNT = 30;
     // longs
     static final int SL_FRAMES = 0, SL_FRAMES_ERROR = 1, SL_FRAMES_DROPPED = 2, SL_BYTES_WRITTEN = 3,
             SL_TOTAL_BYTES = 4, SL_DISK_FREE = 5, SL_WRITE_DROPPED = 6, SL_COUNT = 7;
@@ -98,7 +105,7 @@ final class Core {
             SS_SIZES = 5, SS_STORAGE_FREE = 6, SS_STORAGE_DETAIL = 7, SS_DETAIL = 8, SS_ERROR = 9,
             SS_STOP_TEXT = 10, SS_CURRENT_FILE = 11, SS_VIDEO_LABEL = 12, SS_TIMECODE = 13,
             SS_STATUS_LINE = 14, SS_MANUAL_BLOCK = 15, SS_IDLE_LEFT = 16, SS_DURATION_LEFT = 17,
-            SS_COUNT = 18;
+            SS_DECK_STATE = 18, SS_DECK_TIP = 19, SS_COUNT = 20;
 
     // ---- process-wide ----------------------------------------------------------------------
 
@@ -148,6 +155,7 @@ final class Core {
     static native int setOutputHint(long s, String path, String title, int[] opts);
     static native int captureStart(long s, String path, String title, int[] opts, boolean overwrite);
     static native int captureStop(long s);
+    static native int deck(long s, int cmd);
     static native int pollEvent(long s, int[] a, String[] text);
     static native int getStatus(long s, int[] ints, long[] longs, double[] doubles, String[] strings);
 

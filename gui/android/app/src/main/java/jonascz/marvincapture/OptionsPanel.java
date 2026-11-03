@@ -184,6 +184,11 @@ final class OptionsPanel extends LinearLayout {
         dvBlock = Ui.column(c);
         dvBlock.addView(Ui.header(c, "DV and HDV"));
         dvBlock.addView(Ui.help(c, "DV or HDV is detected from what the camera sends; each has its own settings."));
+        dvBlock.addView(toggle(c, "Use deck controls",
+                "Shows rewind, play, stop and fast-forward buttons for a camera or deck on the DV input, and the "
+                        + "capture button then rewinds the tape, plays it and captures (stopping at the end of the "
+                        + "recording). Without it the capture button records whatever arrives.",
+                "gui.deck_controls", Settings.deckControls(), on -> host.optionsChanged(), false));
         nameField(dvBlock, false);
         // like the desktop apps' "File options for" tab: one kind's settings at a time
         dvBlock.addView(Ui.label(c, "Show settings for"));

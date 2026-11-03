@@ -23,6 +23,7 @@ import android.graphics.Canvas;
 import android.graphics.Paint;
 import android.graphics.Path;
 import android.graphics.RectF;
+import android.graphics.Typeface;
 import android.view.View;
 
 /**
@@ -34,7 +35,7 @@ final class Glyphs {
     private Glyphs() {}
 
     static final int DOWNLOAD = 0, GEAR = 1, SPEAKER_ON = 2, SPEAKER_OFF = 3, CLOSE = 4,
-            LIBRARY = 5, BACK = 6;
+            LIBRARY = 5, BACK = 6, REW = 7, PLAY = 8, STOP = 9, FF = 10;
 
     /** Draws glyph g in white-ish paint p, scaled from 24 units to size px, centred on (cx, cy). */
     static void draw(Canvas c, int g, float cx, float cy, float size, Paint p) {
@@ -105,6 +106,26 @@ final class Glyphs {
                 path.moveTo(10, 9); path.lineTo(15, 12); path.lineTo(10, 15); path.close();
                 c.drawPath(path, p);
                 break;
+            case PLAY:
+                p.setStyle(Paint.Style.FILL);
+                path.moveTo(8, 5); path.lineTo(19, 12); path.lineTo(8, 19); path.close();
+                c.drawPath(path, p);
+                break;
+            case STOP:
+                p.setStyle(Paint.Style.FILL);
+                c.drawRoundRect(new RectF(6.5f, 6.5f, 17.5f, 17.5f), 1.5f, 1.5f, p);
+                break;
+            case FF:
+            case REW: {
+                p.setStyle(Paint.Style.FILL);
+                float d = g == FF ? 1 : -1;   // two triangles pointing the same way
+                for (int k = 0; k < 2; k++) {
+                    float x = 12 + d * (k * 7 - 7);
+                    path.moveTo(x - d * 4, 6.5f); path.lineTo(x + d * 4.5f, 12); path.lineTo(x - d * 4, 17.5f); path.close();
+                }
+                c.drawPath(path, p);
+                break;
+            }
             case BACK:
                 p.setStyle(Paint.Style.STROKE);
                 p.setStrokeWidth(2.4f);
@@ -126,6 +147,9 @@ final class Glyphs {
         private int glyph;
         private final float dp;
         private final int sizeDp;
+        private boolean checked;
+        private int badge;
+        private final Paint badgePaint = new Paint(Paint.ANTI_ALIAS_FLAG);
 
         Button(Context c, int glyph, int sizeDp) {
             super(c);
@@ -141,6 +165,20 @@ final class Glyphs {
 
         void setGlyph(int g) {
             if (g != glyph) { glyph = g; invalidate(); }
+        }
+
+        /** Lit like a pressed toggle (the deck's current state). */
+        void setChecked(boolean on) {
+            if (on == checked) return;
+            checked = on;
+            invalidate();
+        }
+
+        /** A count in a small circle at the top right (0 = none). */
+        void setBadge(int n) {
+            if (n == badge) return;
+            badge = n;
+            invalidate();
         }
 
         /** Own colours (over a picture, where the theme's would vanish). */
@@ -165,8 +203,30 @@ final class Glyphs {
         @Override
         protected void onDraw(Canvas c) {
             float cx = getWidth() / 2f, cy = getHeight() / 2f, r = Math.min(cx, cy);
-            c.drawCircle(cx, cy, r, bg);
+            int fgColor = fg.getColor();
+            if (checked) {
+                int bgColor = bg.getColor();
+                bg.setColor(Ui.ACCENT);
+                c.drawCircle(cx, cy, r, bg);
+                bg.setColor(bgColor);
+                fg.setColor(Ui.ON_ACCENT);
+            } else {
+                c.drawCircle(cx, cy, r, bg);
+            }
             Glyphs.draw(c, glyph, cx, cy, r * 0.95f, fg);
+            fg.setColor(fgColor);
+            if (badge > 0) {
+                String t = badge > 99 ? "99+" : Integer.toString(badge);
+                badgePaint.setTextSize(r * 0.5f);
+                badgePaint.setTypeface(Typeface.DEFAULT_BOLD);
+                badgePaint.setTextAlign(Paint.Align.CENTER);
+                float br = Math.max(r * 0.3f, badgePaint.measureText(t) / 2 + r * 0.1f);
+                float bx = getWidth() - br - 1, by = br + 1;
+                badgePaint.setColor(Ui.ACCENT);
+                c.drawCircle(bx, by, br, badgePaint);
+                badgePaint.setColor(Ui.ON_ACCENT);
+                c.drawText(t, bx, by + badgePaint.getTextSize() * 0.35f, badgePaint);
+            }
         }
     }
 

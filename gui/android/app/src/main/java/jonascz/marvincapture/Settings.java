@@ -29,7 +29,7 @@ import java.util.HashMap;
  * Keys: gui.last_input, gui.std, gui.control_N, gui.format_KIND, gui.aspect_KIND, gui.name_analog,
  * gui.name_dv (DV and HDV share it), gui.split_dv / _hdv, gui.idle_KIND, gui.duration_KIND,
  * gui.deinterlace_analog / _dv, gui.quality_analog / _dv, gui.ffv1_compression, gui.muted,
- * gui.keep_screen_on, gui.cpu_keep_busy, gui.audio_keepalive, gui.storage (volume id), gui.kind_tab
+ * gui.keep_screen_on, gui.cpu_keep_busy, gui.audio_keepalive, gui.storage (volume id), gui.kind_tab, gui.deck_controls
  * (KIND = analog, dv, hdv).
  */
 final class Settings {
@@ -81,6 +81,8 @@ final class Settings {
     static int idleStop(int kind) { return Math.max(0, getInt("gui.idle_" + kindKey(kind), 5)); }
     static int maxDuration(int kind) { return Math.max(0, getInt("gui.duration_" + kindKey(kind), 0)); }
     static boolean muted() { return getBool("gui.muted", true); }
+    /** Show the deck buttons (rewind, play, stop, fast forward) and make the capture button "rewind and capture". */
+    static boolean deckControls() { return getBool("gui.deck_controls", false); }
     static boolean keepScreenOn() { return getBool("gui.keep_screen_on", false); }
     static boolean cpuKeepBusy() { return getBool("gui.cpu_keep_busy", true); }
     static boolean audioKeepAlive() { return getBool("gui.audio_keepalive", true); }

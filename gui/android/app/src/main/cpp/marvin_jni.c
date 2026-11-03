@@ -408,6 +408,12 @@ MJ_FN(jint, setControl)(JNIEnv *env, jclass c, jlong s, jint ctl, jint v) { (voi
 MJ_FN(void, setAspect)(JNIEnv *env, jclass c, jlong s, jint a) { (void)env; (void)c; pin_set_aspect(S(s), (pin_aspect_t)a); }
 MJ_FN(void, previewEnable)(JNIEnv *env, jclass c, jlong s, jboolean on) { (void)env; (void)c; pin_preview_enable(S(s), on ? 1 : 0); }
 MJ_FN(void, monitorEnable)(JNIEnv *env, jclass c, jlong s, jboolean on) { (void)env; (void)c; pin_monitor_enable(S(s), on ? 1 : 0); }
+/* cmd = pin_deck_cmd_t (Core.DECK_*). Non-blocking. */
+MJ_FN(jint, deck)(JNIEnv *env, jclass c, jlong s, jint cmd)
+{
+    (void)env; (void)c;
+    return (jint)pin_deck(S(s), (pin_deck_cmd_t)cmd);
+}
 MJ_FN(jint, captureStop)(JNIEnv *env, jclass c, jlong s) { (void)env; (void)c; return (jint)pin_capture_stop(S(s)); }
 
 /* {min, max, step, def, value, enabled} (Core.CT_*), or null. */
@@ -437,8 +443,8 @@ MJ_FN(jstring, controlLabel)(JNIEnv *env, jclass c, jlong s, jint ctl)
     return mj_string(env, i.label);
 }
 
-/* Capture options from Java: path, title and the Core.OPT_* ints. A manual capture: one pass,
- * no deck commands. */
+/* Capture options from Java: path, title and the Core.OPT_* ints. One pass; deck commands only when
+ * OPT_START_DECK is set ("rewind, play and capture"). */
 static int build_opts(JNIEnv *env, jstring path, jstring title, jintArray opts, pin_capture_opts_t *o)
 {
     memset(o, 0, sizeof(*o));
@@ -447,10 +453,10 @@ static int build_opts(JNIEnv *env, jstring path, jstring title, jintArray opts, 
     if (mj_utf8(env, path, o->path, sizeof(o->path)) != 0)
         return 0;
     mj_utf8(env, title, o->title, sizeof(o->title));
-    jint v[11];
-    if (!opts || (*env)->GetArrayLength(env, opts) < 11)
+    jint v[13];
+    if (!opts || (*env)->GetArrayLength(env, opts) < 13)
         return 0;
-    (*env)->GetIntArrayRegion(env, opts, 0, 11, v);
+    (*env)->GetIntArrayRegion(env, opts, 0, 13, v);
     /* a negative format or format setting keeps the core's default */
     if (v[0] >= 0) o->format_analog = (pin_format_t)v[0];
     if (v[1] >= 0) o->format_dv = (pin_format_t)v[1];
@@ -464,8 +470,8 @@ static int build_opts(JNIEnv *env, jstring path, jstring title, jintArray opts, 
     if (v[9] >= 0) o->video_quality = v[9];
     if (v[10] >= 0) o->ffv1_compression = v[10];
     o->passes = 1;
-    o->start_deck = 0;
-    o->rewind_first = 0;
+    o->start_deck = v[11] != 0;
+    o->rewind_first = v[12] != 0;
     return 1;
 }
 
@@ -535,10 +541,10 @@ MJ_FN(jint, pollEvent)(JNIEnv *env, jclass c, jlong s, jintArray a, jobjectArray
 
 /* The status snapshot plus everything derived from it by the core's text and enable rules.
  * Index order = Core.ST_* (ints), SL_* (longs), SD_* (doubles), SS_* (strings). */
-#define N_INTS 25
+#define N_INTS 30
 #define N_LONGS 7
 #define N_DOUBLES 8
-#define N_STRS 18
+#define N_STRS 20
 
 MJ_FN(jint, getStatus)(JNIEnv *env, jclass c, jlong h, jintArray ints, jlongArray longs,
                        jdoubleArray dbls, jobjectArray strs)
@@ -564,6 +570,11 @@ MJ_FN(jint, getStatus)(JNIEnv *env, jclass c, jlong h, jintArray ints, jlongArra
         pin_capture_action_allowed(st.state, deck_available, PIN_CAPTURE_STOP),
         st.deck_busy, st.width, st.height, st.video_interlaced,
         pin_stop_reason_abnormal(st.stop_reason), hub,
+        pin_deck_cmd_allowed(st.state, deck_available, st.deck, PIN_DECK_CMD_REW),
+        pin_deck_cmd_allowed(st.state, deck_available, st.deck, PIN_DECK_CMD_PLAY),
+        pin_deck_cmd_allowed(st.state, deck_available, st.deck, PIN_DECK_CMD_STOP),
+        pin_deck_cmd_allowed(st.state, deck_available, st.deck, PIN_DECK_CMD_FF),
+        pin_capture_action_allowed(st.state, deck_available, PIN_CAPTURE_START_AUTO),
     };
     jlong lv[N_LONGS] = {
         (jlong)st.frames, (jlong)st.frames_error, (jlong)st.frames_dropped, (jlong)st.bytes_written,
@@ -598,10 +609,13 @@ MJ_FN(jint, getStatus)(JNIEnv *env, jclass c, jlong h, jintArray ints, jlongArra
     if (st.duration_remaining_s >= 0)
         pin_format_remaining(st.duration_remaining_s, dur_left, sizeof(dur_left));
 
+    char deck_tip[160];
+    pin_format_deck_tip(st.deck, st.deck_busy, deck_tip, sizeof(deck_tip));
     const char *sv[N_STRS] = {
         short_text, state, signal, frames, frames_detail, sizes, free_text, storage_detail,
         st.detail, st.error_text, st.stop_text, st.current_file, st.video_label, st.timecode,
         line, pin_manual_capture_block_text(deck_available, st.deck, st.signal), idle_left, dur_left,
+        pin_deck_state_name(st.deck), deck_tip,
     };
     for (int i = 0; i < N_STRS; i++) {
         jstring js = mj_string(env, sv[i]);

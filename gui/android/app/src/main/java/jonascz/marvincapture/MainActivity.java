@@ -97,6 +97,9 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private MarvinIdleView marvin;
     private LevelMeterView meters;
     private Glyphs.Button speaker, gear;
+    private LinearLayout deckGroup;
+    private Glyphs.Button deckRew, deckPlay, deckStop, deckFf;
+    private boolean autoCapture;   // the capture button is "rewind and capture" (deck controls on, DV input)
     private Ui.Segmented input;
     private Glyphs.RecordButton record;
     private OptionsPanel options;   // built on first use
@@ -104,6 +107,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private LibraryView library;
     private Glyphs.Button libraryBtn;
     private View[] infoViews;
+    private View scrimTop, scrimBottom;
+    private boolean captionEmpty = true;
     private final ColorDrawable panelBg = new ColorDrawable(), optionsBg = new ColorDrawable();
     private final Handler handler = new Handler(Looper.getMainLooper());
     private ValueAnimator panelAnim;
@@ -180,6 +185,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         super.onStart();
         if (root == null) return;
         visible = true;
+        updateLibraryCount();
         Core.previewSetVisible(MarvinApp.renderer, true);
         if (svc != null) {
             svc.setListener(this, true);
@@ -389,6 +395,15 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         recBadge.addView(recText, Ui.wrap());
         recBadge.setVisibility(View.GONE);
         preview.addView(recBadge);
+        // fades in the theme's panel colour at the top and bottom of the picture, where it goes behind
+        // the status and navigation bars, so their icons stay legible over any picture
+        int fade = (Ui.PANEL & 0x00ffffff) | 0xb8000000;
+        scrimTop = new View(this);
+        scrimTop.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, new int[] { fade, Ui.PANEL & 0x00ffffff }));
+        scrimBottom = new View(this);
+        scrimBottom.setBackground(new GradientDrawable(GradientDrawable.Orientation.BOTTOM_TOP, new int[] { fade, Ui.PANEL & 0x00ffffff }));
+        preview.addView(scrimTop);
+        preview.addView(scrimBottom);
         // a tap on the picture shows the hidden panel for a moment while capturing (overlay mode)
         preview.setOnClickListener(v -> {
             if (overlay && capturingNow) {
@@ -430,7 +445,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         input = new Ui.Segmented(this, new String[] { "DV / HDV", "S-Video", "Composite" }, Settings.input(), this::inputPicked);
         input.setContentDescription("Input");
         LinearLayout.LayoutParams il = Ui.fillWidth();
-        il.bottomMargin = Ui.dp(this, 12);
+        il.bottomMargin = Ui.dp(this, 8);
         top.addView(input, il);
 
         statusShort = Ui.text(this, "", 17, Ui.TEXT);   // a file name, or the core's sentence about the last capture
@@ -451,10 +466,24 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         storageLine.setPadding(0, Ui.dp(this, 2), 0, 0);
         storageLine.setOnClickListener(v -> detail("Storage", svc != null ? svc.status().text(Core.SS_STORAGE_DETAIL) : ""));
         top.addView(storageLine, Ui.fillWidth());
+        // the audio card: the level meters with the monitor's speaker button at their right
+        LinearLayout audio = Ui.row(this);
+        GradientDrawable abg = new GradientDrawable();
+        abg.setColor(Ui.CARD);
+        abg.setStroke(Ui.dp(this, 1), Ui.TRACK);
+        abg.setCornerRadius(Ui.dp(this, 12));
+        audio.setBackground(abg);
+        audio.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
         meters = new LevelMeterView(this, null);
+        audio.addView(meters, Ui.weight(1));
+        speaker = new Glyphs.Button(this, Glyphs.SPEAKER_OFF, 40);
+        speaker.setOnClickListener(v -> toggleMute());
+        LinearLayout.LayoutParams spl = new LinearLayout.LayoutParams(-2, -2);
+        spl.leftMargin = Ui.dp(this, 10);
+        audio.addView(speaker, spl);
         LinearLayout.LayoutParams ml = Ui.fillWidth();
-        ml.topMargin = Ui.dp(this, 10);
-        top.addView(meters, ml);
+        ml.topMargin = Ui.dp(this, 8);
+        top.addView(audio, ml);
         scroll.addView(top);
         controls.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -463,29 +492,38 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         caption.setMaxLines(2);
         controls.addView(caption, Ui.fillWidth());
 
+        // deck controls (a setting): rewind, play, stop, fast forward, lit with the deck's state
+        deckGroup = Ui.column(this);
+        LinearLayout deckRow = Ui.row(this);   // the lit button is the deck's state; the tip has the words
+        deckRow.setGravity(Gravity.CENTER);
+        deckRow.setPadding(0, Ui.dp(this, 2), 0, 0);
+        deckRew = deckButton(deckRow, Glyphs.REW, "Rewind", Core.DECK_REW);
+        deckPlay = deckButton(deckRow, Glyphs.PLAY, "Play", Core.DECK_PLAY);
+        deckStop = deckButton(deckRow, Glyphs.STOP, "Stop", Core.DECK_STOP);
+        deckFf = deckButton(deckRow, Glyphs.FF, "Fast forward", Core.DECK_FF);
+        deckGroup.addView(deckRow, Ui.fillWidth());
+        deckGroup.setVisibility(View.GONE);
+        controls.addView(deckGroup, Ui.fillWidth());
+
+        // settings on the left, capture in the middle, playback on the right
         LinearLayout buttons = Ui.row(this);
         buttons.setGravity(Gravity.CENTER);
-        buttons.setPadding(0, Ui.dp(this, 8), 0, 0);
-        speaker = new Glyphs.Button(this, Glyphs.SPEAKER_OFF, 52);
-        speaker.setOnClickListener(v -> toggleMute());
-        record = new Glyphs.RecordButton(this);
-        record.setOnClickListener(v -> recordClicked());
+        buttons.setPadding(0, Ui.dp(this, 4), 0, 0);
         gear = new Glyphs.Button(this, Glyphs.GEAR, 52);
         gear.setContentDescription("Options");
         gear.setOnClickListener(v -> openOptions());
-        buttons.addView(speaker, new LinearLayout.LayoutParams(-2, -2));
-        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
-        rl.leftMargin = rl.rightMargin = Ui.dp(this, 14);
+        record = new Glyphs.RecordButton(this);
+        record.setOnClickListener(v -> recordClicked());
         libraryBtn = new Glyphs.Button(this, Glyphs.LIBRARY, 52);
         libraryBtn.setContentDescription("Library: play back captures");
         libraryBtn.setOnClickListener(v -> openLibrary());
-        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-2, -2);
-        ll.leftMargin = Ui.dp(this, 10);
-        buttons.addView(libraryBtn, ll);
-        buttons.addView(record, rl);
+        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
+        rl.leftMargin = rl.rightMargin = Ui.dp(this, 22);
         buttons.addView(gear, new LinearLayout.LayoutParams(-2, -2));
+        buttons.addView(record, rl);
+        buttons.addView(libraryBtn, new LinearLayout.LayoutParams(-2, -2));
         controls.addView(buttons, Ui.fillWidth());
-        infoViews = new View[] { scroll, caption };
+        infoViews = new View[] { scroll, caption, deckGroup };
         root.addView(controls);
 
         optionsHolder = new FrameLayout(this);   // the options panel joins it when first needed
@@ -493,6 +531,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         optionsHolder.setVisibility(View.GONE);
         root.addView(optionsHolder);
         updateSpeaker();
+        updateLibraryCount();
     }
 
     /** The input selector (always on the main panel): the same as the options' used to be. */
@@ -547,6 +586,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         hasVideo = video;
         updateBars(video);
         show(card, !video);
+        show(scrimTop, video);
+        show(scrimBottom, video);
         if (!video) {
             String why;
             if (!has) {
@@ -600,16 +641,38 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         meters.push(has ? st.d[Core.SD_PEAK_L] : -144, has ? st.d[Core.SD_PEAK_R] : -144);
 
         // the record button: the core's enable rules
+        autoCapture = Settings.deckControls() && st.input() == Core.INPUT_DV;
         record.setMode(capturing, finishing);
-        record.setEnabled(capturing ? has && st.stopAllowed() : has && st.manualAllowed() && !svc.startPending());
+        if (autoCapture && !capturing && !finishing) record.setContentDescription("Rewind the tape, play and capture");
+        boolean startOk = autoCapture ? st.i[Core.ST_AUTO_ALLOWED] != 0 : st.manualAllowed();
+        record.setEnabled(capturing ? has && st.stopAllowed() : has && startOk && !svc.startPending());
+        // the deck group: only with the setting and on the DV input
+        boolean deckOn = has && Settings.deckControls() && st.input() == Core.INPUT_DV;
+        show(deckGroup, deckOn);
+        if (deckOn) {
+            deckGroup.setContentDescription(st.text(Core.SS_DECK_TIP));
+            deckRew.setEnabled(st.i[Core.ST_DECK_REW_OK] != 0);
+            deckPlay.setEnabled(st.i[Core.ST_DECK_PLAY_OK] != 0);
+            deckStop.setEnabled(st.i[Core.ST_DECK_STOP_OK] != 0);
+            deckFf.setEnabled(st.i[Core.ST_DECK_FF_OK] != 0);
+            int ds = st.i[Core.ST_DECK];
+            deckRew.setChecked(ds == Core.DECK_STATE_REWINDING);
+            deckPlay.setChecked(ds == Core.DECK_STATE_PLAYING || ds == Core.DECK_STATE_RECORDING);
+            deckStop.setChecked(ds == Core.DECK_STATE_STOPPED);
+            deckFf.setChecked(ds == Core.DECK_STATE_FF);
+        }
         String cap;
         if (finishing) cap = st.text(Core.SS_STATE);
         else if (capturing) cap = captureSubtitle(st);
+        else if (has && state == Core.STATE_READY && autoCapture)
+            cap = st.i[Core.ST_AUTO_ALLOWED] != 0 ? "" : "No camera or deck found";
         else if (has && state == Core.STATE_READY && !st.manualAllowed()) cap = st.text(Core.SS_MANUAL_BLOCK);
         else if (has && state == Core.STATE_READY && st.analog())
             cap = "Capture " + (st.input() == Core.INPUT_SVIDEO ? "S-Video" : "composite") + " input to file";
         else cap = "";
         set(caption, cap);
+        captionEmpty = cap.isEmpty();
+        if (shownInfo > 0.001f) show(caption, !captionEmpty);   // an empty line would take room from the panel
 
         show(recBadge, capturing && !finishing && state == Core.STATE_CAPTURING);
         if (recBadge.getVisibility() == View.VISIBLE) set(recText, "REC  " + hms(st.d[Core.SD_ELAPSED]));
@@ -630,8 +693,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     /** Status / navigation bar icons: dark ones on the light theme, except over a black picture. */
     private void updateBars(boolean video) {
-        boolean lib = library != null && library.isOpen();
-        boolean lightBars = !Ui.dark && (lib || !(video && !root.isLandscape()));
+        boolean lightBars = !Ui.dark;   // the scrims keep the icons legible over the picture
         int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
         getWindow().getInsetsController().setSystemBarsAppearance(lightBars ? mask : 0, mask);
     }
@@ -661,6 +723,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
                 showInfo(Core.strerror(a), text, true);
                 break;
             case Core.EVT_FILE_CLOSED:
+                updateLibraryCount();
                 if (a != Core.OK) showInfo("File not finalised cleanly", text + ": " + Core.strerror(a), true);
                 break;
             case Core.EVT_NO_VIDEO:
@@ -729,6 +792,25 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         updateSpeaker();
     }
 
+    private Glyphs.Button deckButton(LinearLayout row, int glyph, String name, int cmd) {
+        Glyphs.Button b = new Glyphs.Button(this, glyph, 42);
+        b.setContentDescription(name);
+        b.setOnClickListener(v -> {
+            if (svc == null) return;
+            int st = svc.deck(cmd);
+            if (st != Core.OK) showInfo("Deck", Core.strerror(st), st != Core.ERR_STATE);
+        });
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = lp.rightMargin = Ui.dp(this, 6);
+        row.addView(b, lp);
+        return b;
+    }
+
+    /** The count on the library button: the captures in the chosen storage place. */
+    private void updateLibraryCount() {
+        if (libraryBtn != null) libraryBtn.setBadge(Storage.captures(Storage.current().dir).size());
+    }
+
     private void updateSpeaker() {
         boolean muted = Settings.muted();
         speaker.setGlyph(muted ? Glyphs.SPEAKER_OFF : Glyphs.SPEAKER_ON);
@@ -768,7 +850,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             showInfo("Can't capture to this location", "Could not create " + dir, true);
             return;
         }
-        CaptureService.Plan p = svc.buildPlan();
+        CaptureService.Plan p = svc.buildPlan(autoCapture);
         long[] nums = new long[5];
         String[] strs = { "", "" };
         int st = Core.checkOutput(svc.session(), p.path, p.title, p.opts, nums, strs);
@@ -863,7 +945,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     /** The screen's layout mode changed (rotation, fold, window size): docked / overlay / tablet. */
     private void applyMode() {
-        gear.setVisibility(dual ? View.GONE : View.VISIBLE);
+        gear.setVisibility(dual ? View.INVISIBLE : View.VISIBLE);   // invisible keeps the capture button centred
+        gear.setEnabled(!dual);
         if (dual) {
             ensureOptions();
             options.setPermanent(true);
@@ -912,7 +995,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             applyPanels(bg, info, obg);
             return;
         }
-        if (info > 0) for (View v : infoViews) v.setVisibility(View.VISIBLE);
+        if (info > 0) for (View v : infoViews) v.setVisibility(v == caption && captionEmpty ? View.GONE : View.VISIBLE);
         ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
         a.setDuration(320);
         a.setInterpolator(new android.view.animation.DecelerateInterpolator());
@@ -941,7 +1024,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         optionsBg.setAlpha(Math.round(obg * 255));
         for (View v : infoViews) {
             v.setAlpha(info);
-            int vis = info <= 0.001f ? View.INVISIBLE : View.VISIBLE;
+            int vis = info <= 0.001f ? View.INVISIBLE : v == caption && captionEmpty ? View.GONE : View.VISIBLE;
             if (v.getVisibility() != vis) v.setVisibility(vis);
         }
         controls.invalidate();
@@ -956,6 +1039,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     }
 
     private void closeLibrary() {
+        updateLibraryCount();   // files may have been deleted
         library.close();
         updateBack();
         updateBars(hasVideo);
@@ -993,6 +1077,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     @Override
     public void optionsChanged() {
+        updateLibraryCount();   // the storage place may have changed
         if (svc != null) onStatus(svc.status());
     }
 

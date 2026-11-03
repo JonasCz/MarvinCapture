@@ -137,6 +137,10 @@ system bar and cutout insets are padding.
 
 The no-video card (the animated Marvin) is centred in the space the panel leaves free, in every mode.
 
+On phones (smallest width < 600 dp) the picture goes **behind the status and navigation bars**, as the panel
+already does; a fade in the theme's panel colour at its top and bottom keeps the bar icons legible over any
+picture. On a tablet (a persistent taskbar) it stays between the bars.
+
 - **Preview**: the picture, or the card with the animated Marvin (a Canvas port of
   `docs/logo.html`; still when animations are off: "Remove animations" or an animator
   duration scale of 0) and the core's sentence why there is no picture (`detail`,
@@ -153,8 +157,15 @@ The no-video card (the animated Marvin) is centred in the space the panel leaves
   (`pin_capture_action_allowed(STOP)`), grey while the file is finalised. Before a
   capture the core checks the output (`pin_check_output`) and the app asks what it
   reports (destination problem, low space, overwrite).
-- **Speaker**: the audio monitor, muted by default (`gui.muted`).
-- **Library button**: opens the library (below); disabled while capturing.
+- **Audio card**: the L / R level meters (the theme's blue, yellow and red only when hot) with the speaker at
+  their right: the audio monitor, muted by default (`gui.muted`).
+- **Button row**: settings on the left, capture in the middle, library on the right. The library button has a
+  count badge (the captures in the chosen place); it is disabled while capturing.
+- **Deck controls** (option "Use deck controls", `gui.deck_controls`, off by default; DV input only): a row
+  above the buttons with rewind, play, stop and fast forward (`pin_deck`, enabled by `pin_deck_cmd_allowed`,
+  lit with the deck's state), and the capture button becomes "rewind and capture"
+  (`start_deck` + `rewind_first`, enabled by `pin_capture_action_allowed(START_AUTO)`); stopping it stops the
+  tape too. Without the option the button records what arrives (a manual capture).
 - **Gear**: the options, in place of the panel (the preview stays visible for the
   picture controls); Back closes them. On a tablet the options are always shown.
 

@@ -30,7 +30,7 @@ import java.util.ArrayDeque;
 
 /**
  * Two thin horizontal audio level meters, L and R (port of the macOS LevelMeterView): a bar for the
- * peak (dBFS) coloured by zone (green up to -18, yellow up to -6, red above), falling at 30 dB/s,
+ * peak (dBFS) coloured by zone (the accent blue up to -18, yellow up to -6, red above), falling at 30 dB/s,
  * and a tick for the highest peak of the last 10 s, red when that came within 1 dB of clipping.
  * The core reports the loudest peak since the previous status read; the service reads it once per
  * tick and the activity pushes it here.
@@ -56,7 +56,7 @@ public final class LevelMeterView extends View {
         super(c, a);
         dp = getResources().getDisplayMetrics().density;
         track.setColor(Ui.TRACK);
-        zones[0].setColor(0xff34c759);
+        zones[0].setColor(Ui.ACCENT);   // the theme's blue; yellow and red only when it gets hot
         zones[1].setColor(0xffffcc00);
         zones[2].setColor(0xffff3b30);
         label.setColor(Ui.TEXT2);
