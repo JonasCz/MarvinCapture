@@ -53,6 +53,21 @@ only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing cal
   line presets.
 - `ViewModels/KindSettingsViewModel.cs` + `Views/KindSettingsView.xaml`: the
   per-kind (DV, HDV) format / aspect / split / idle / passes options.
+- Format settings (deinterlace, quality, FFV1 compression): `ViewModels/FormatOptionsViewModel.cs`
+  holds `FormatChoices` (the stored values, -1 = the format's default; keys
+  `gui.deinterlace_analog` / `_dv`, `gui.quality_analog` / `_dv`, `gui.ffv1_compression`, the
+  Android app's; DV and HDV share the DV ones; saved in `MainViewModel.OnFormatChoiceChanged`)
+  and `FormatOptionsViewModel` (one per format drop-down: `MainViewModel.AnalogFormatOptions`,
+  `KindSettingsViewModel.FormatOptions`; everything from `pin_format_options()`,
+  `pin_format_warning()`, `pin_format_quality_hint()`). `Views/FormatOptionsView.xaml` is the
+  Flyout of the gear right of each format drop-down, set as `Flyout.Content` in code
+  (constructor injection, like `KindSettingsView`). The warning is an InfoBar under the drop-down.
+- Format lists: **empty until the encoder probe is done.** `MainViewModel.ProbeEncoders`
+  (called first thing in the `MainWindow` constructor) runs `pin_encoders_probe()` on a worker
+  thread, then `RefreshFormats` fills the analog, DV and HDV lists. Never call `Native.Formats`
+  on the UI thread before that: listing the analog or DV formats runs the probe (50-300 ms per
+  encoder). Saved / command-line formats go through `SelectAnalogFormat` /
+  `KindSettingsViewModel.ApplyFormat`, which remember the wanted one for the refresh.
 - `Interop/`: `Native.cs` (P/Invoke), `NativeStructs.cs`, `NativeEnums.cs`. Enum
   members are prefixed like `PinStatus.ErrArg` (not `Arg`).
 - Output path = `OutputDir` + `Name` (analog: `AnalogOutputDir`/`AnalogName`,
@@ -67,7 +82,10 @@ only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing cal
   `ref`, never `out` (`out` zero-inits and wipes `size`, giving `PIN_ERR_ABI`).
 - Fixed-size embedded UTF-8 strings in structs (`Path`, `Title`, ...) go through
   `Utf8Fixed` property wrappers in `NativeStructs.cs`. A new field in
-  `pin_capture_opts_t` must be added in the same order/size in C and C#.
+  `pin_capture_opts_t` must be added in the same order/size in C and C#. Structs whose size
+  the core checks exactly (`pin_format_options_t`: `size != sizeof` is `PIN_ERR_ABI`) must match
+  byte for byte; appended fields of `pin_capture_opts_t` / `pin_script_settings_t` are fine
+  because the core also takes the older sizes.
 - Settings: `Native.SettingsGet/Set` -> core `pin_settings_get/set`. Keys are
   `gui.*`, all best-effort (try/catch). Writes are suppressed while `_loading`.
   Add the save in the `OnXChanged` hook and the load in `LoadSettings`. Options
@@ -218,13 +236,19 @@ AppKit owns the app, the window and the menus; SwiftUI is hosted inside the wind
   `applyStatus`, `handleEvent`. `AppModel`: command line (`pin_script_parse`).
   `KindSettingsModel` (DV / HDV tab), `ControlSliderModel`, `DeviceItem`,
   `FormatItem`. All `@MainActor @Observable`; non-observed state is
-  `@ObservationIgnored`.
+  `@ObservationIgnored`. `FormatOptionsModel.swift`: `FormatChoices` (stored deinterlace /
+  quality / FFV1 values, same keys as Windows and Android), `FormatOptions`
+  (`pin_format_options_t` as Swift strings) and `FormatOptionsModel` (one per format picker:
+  `analogFormatOptions`, `KindSettingsModel.formatOptions`). The format lists are empty until
+  `probeEncoders()` (a detached task started in `WindowModel.init`) returns and
+  `refreshFormats()` fills them; never list formats on the main thread before that.
 - `Services/`: `MediaSeams.swift` (the `PreviewSink` and `AudioMonitor` protocols
   and null implementations), `AudioMonitor.swift` (`CoreAudioMonitor`),
   `DockTile`, `Notifier`, `KeepAwake`, `ConsoleOutput`.
 - `Preview/`: `PreviewRenderer` (render thread, Metal), `PreviewShaders` (MSL as a
   string), `MetalPreview` (the `PreviewSink`: view, visibility).
-- `Views/`: SwiftUI (`Sidebar/`, `StatusBar/`, `PreviewArea`, ...).
+- `Views/`: SwiftUI (`Sidebar/`, `StatusBar/`, `PreviewArea`, ...). `Sidebar/FormatOptionsView.swift`:
+  the gear right of each format picker (`FormatOptionsButton`) and its popover.
   `StatusBarLayout.swift` decides which status items fit (drop order free space,
   frames, storage, time, deck: same as `FitStatusBar` on Windows).
 
