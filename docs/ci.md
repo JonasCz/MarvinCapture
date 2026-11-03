@@ -79,7 +79,9 @@ Visual Studio, which the Windows runners have): it holds libwdi's x64 and ARM64
 helpers, so the WinUSB driver install works on Windows on Arm too.
 
 Measured (October 2026), whole job with the caches filled: Linux 0.5 min, macOS arm64
-2 min, macOS x86_64 4.5 min, Windows x86_64 4 min, Windows arm64 about 5 min. A cold
+2 min, macOS x86_64 4.5 min, Windows x86_64 4 min, Windows arm64 about 5 min; Android
+0.6 min (November 2026: about 25 s for the core, the JNI layer and Gradle; 2.3 min with
+nothing cached, of which FFmpeg is under a minute and Gradle's first downloads about one). A cold
 FFmpeg build adds about 1 min on Linux/macOS, 2.5 min on Windows x86_64 and 4 min on
 Windows arm64; on Windows nearly all of that is FFmpeg's `configure` (thousands of small
 compiler runs through the MSYS2 shell, whose bash and make run emulated on Arm), the
