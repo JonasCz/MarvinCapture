@@ -25,7 +25,6 @@ import android.os.Looper;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
-import android.view.Gravity;
 import android.view.View;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
@@ -85,7 +84,7 @@ final class OptionsPanel extends LinearLayout {
         setOrientation(VERTICAL);
 
         LinearLayout bar = Ui.row(c);
-        bar.setPadding(Ui.dp(c, 16), Ui.dp(c, 8), Ui.dp(c, 12), Ui.dp(c, 4));
+        bar.setPadding(Ui.dp(c, 16), 0, Ui.dp(c, 12), Ui.dp(c, 4));   // the 44 dp row centres the title 8 dp down: as the status text
         TextView title = Ui.text(c, "Options", 20, Ui.TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         bar.addView(title, Ui.weight(1));
@@ -441,23 +440,17 @@ final class OptionsPanel extends LinearLayout {
         int encKind = kind == Core.KIND_ANALOG ? Core.KIND_ANALOG : Core.KIND_DV;
         String ek = Settings.kindKey(encKind);
         int[] deint = { Settings.deinterlace(encKind) < 0 ? oi[Core.FO_DEINTERLACE_DEFAULT] : Settings.deinterlace(encKind) };
-        TextView[] qualityHint = new TextView[1];
-        int[] quality = { Settings.quality(encKind) < 0 ? oi[Core.FO_QUALITY_DEFAULT]
-                : Settings.clamp(Settings.quality(encKind), oi[Core.FO_QUALITY_MIN], oi[Core.FO_QUALITY_MAX]) };
-        Runnable updateHint = () -> {
-            if (qualityHint[0] != null) {
-                Status st = host.service() != null ? host.service().status() : null;
-                boolean is60 = st != null && st.i[Core.ST_IS_60HZ] != 0;
-                qualityHint[0].setText(Core.formatQualityHint(f, quality[0], deint[0], is60));
-            }
-        };
+        // the slider's range here is 0 to 35 (the core accepts up to 51: beyond 35 the picture is poor)
+        int qlo = Math.max(0, oi[Core.FO_QUALITY_MIN]), qhi = Math.min(Settings.QUALITY_MAX, oi[Core.FO_QUALITY_MAX]);
+        int[] quality = { Settings.quality(encKind) < 0 ? Settings.clamp(oi[Core.FO_QUALITY_DEFAULT], qlo, qhi)
+                : Settings.clamp(Settings.quality(encKind), qlo, qhi) };
 
         if (oi[Core.FO_HAS_DEINTERLACE] != 0) {
             block.addView(Ui.label(c, ot[Core.FT_DEINT_LABEL]));
             RadioGroup g = new RadioGroup(c);
             RadioButton keep = new RadioButton(c), dbl = new RadioButton(c);
-            keep.setText(ot[Core.FT_DEINT_KEEP]);
-            dbl.setText(ot[Core.FT_DEINT_DOUBLE]);
+            keep.setText("Encode as is");
+            dbl.setText("Deinterlace");
             keep.setId(View.generateViewId());
             dbl.setId(View.generateViewId());
             g.addView(dbl);   // the default first
@@ -468,7 +461,8 @@ final class OptionsPanel extends LinearLayout {
             TextView help = Ui.help(c, "");
             Runnable showHelp = () -> {
                 boolean k = deint[0] == Core.DEINTERLACE_KEEP_FIELDS;
-                help.setText(k ? ot[Core.FT_DEINT_KEEP_HELP] : ot[Core.FT_DEINT_DOUBLE_HELP]);
+                help.setText(k ? ot[Core.FT_DEINT_KEEP_HELP] + " OK to use if your camera is set to progressive."
+                        : ot[Core.FT_DEINT_DOUBLE_HELP]);
                 help.setTextColor(k ? Ui.WARN : Ui.TEXT2);
             };
             showHelp.run();
@@ -476,7 +470,6 @@ final class OptionsPanel extends LinearLayout {
                 deint[0] = id == keep.getId() ? Core.DEINTERLACE_KEEP_FIELDS : 1 - Core.DEINTERLACE_KEEP_FIELDS;
                 Settings.setInt("gui.deinterlace_" + ek, deint[0]);
                 showHelp.run();
-                updateHint.run();
                 pushHint();
             });
             block.addView(g, Ui.fillWidth());
@@ -484,7 +477,7 @@ final class OptionsPanel extends LinearLayout {
         }
 
         if (oi[Core.FO_HAS_QUALITY] != 0) {
-            int lo = oi[Core.FO_QUALITY_MIN], hi = oi[Core.FO_QUALITY_MAX];
+            int lo = qlo, hi = qhi;
             TextView label = Ui.label(c, ot[Core.FT_QUALITY_LABEL] + ": " + quality[0]);
             block.addView(label);
             SeekBar bar = new SeekBar(c);
@@ -493,23 +486,10 @@ final class OptionsPanel extends LinearLayout {
             bar.setContentDescription(ot[Core.FT_QUALITY_LABEL]);
             lock(bar);
             block.addView(bar, Ui.fillWidth());
-            LinearLayout ends = Ui.row(c);
-            TextView left = Ui.text(c, ot[Core.FT_QUALITY_LOW], 12, Ui.TEXT3);
-            TextView right = Ui.text(c, ot[Core.FT_QUALITY_HIGH], 12, Ui.TEXT3);
-            right.setGravity(Gravity.END);
-            ends.addView(left, Ui.weight(1));
-            ends.addView(right, Ui.weight(1));
-            block.addView(ends, Ui.fillWidth());
-            qualityHint[0] = Ui.help(c, "");
-            qualityHint[0].setTextColor(Ui.TEXT);
-            block.addView(qualityHint[0]);
-            block.addView(Ui.help(c, ot[Core.FT_QUALITY_HELP]));
-            updateHint.run();
             bar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
                 @Override public void onProgressChanged(SeekBar s, int p, boolean user) {
                     quality[0] = lo + p;
                     label.setText(ot[Core.FT_QUALITY_LABEL] + ": " + quality[0]);
-                    updateHint.run();
                 }
                 @Override public void onStartTrackingTouch(SeekBar s) {}
                 @Override public void onStopTrackingTouch(SeekBar s) {

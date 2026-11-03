@@ -104,7 +104,12 @@ final class Settings {
 
     /** H.264 / HEVC deinterlace and quality: per input kind (analog, DV); -1 = the format's default. */
     static int deinterlace(int kind) { return getInt("gui.deinterlace_" + kindKey(kind), -1); }
-    static int quality(int kind) { return getInt("gui.quality_" + kindKey(kind), -1); }
+    /** The quality slider's top (the core accepts 51; this app stops at 35, where the picture gets poor). */
+    static final int QUALITY_MAX = 35;
+    static int quality(int kind) {
+        int q = getInt("gui.quality_" + kindKey(kind), -1);
+        return q < 0 ? -1 : Math.min(q, QUALITY_MAX);
+    }
     static int ffv1() { return getInt("gui.ffv1_compression", -1); }
 
     static int clamp(int v, int lo, int hi) { return Math.max(lo, Math.min(hi, v)); }

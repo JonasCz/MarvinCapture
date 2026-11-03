@@ -56,7 +56,7 @@ final class MainLayout extends ViewGroup {
     private int darNum = 4, darDen = 3;
     private int insL, insT, insR, insB;
     private boolean land, overlay, dual;
-    private boolean bleed;   // the picture goes behind the status and navigation bars (not under a tablet's taskbar)
+    private boolean bleed;   // the picture goes behind the status and navigation bars (landscape phones; not under a tablet's taskbar)
     private boolean reportedOverlay, reportedDual;
     private ModeListener listener;
     // rects computed by onMeasure: x, y, w, h
@@ -117,7 +117,8 @@ final class MainLayout extends ViewGroup {
         land = w > h;
         float wdp = w / dp, hdp = h / dp;
         dual = land ? wdp >= 840 && hdp >= 600 : wdp >= 600 && hdp >= 900;
-        bleed = getResources().getConfiguration().smallestScreenWidthDp < 600;
+        // landscape phones only: in portrait there is room to keep the picture below the status bar and the notch
+        bleed = land && getResources().getConfiguration().smallestScreenWidthDp < 600;
         // the picture's own vertical insets: none when it may go behind the bars
         int pt = bleed ? 0 : insT, pb = bleed ? 0 : insB;
         int pih = Math.max(0, h - pt - pb);

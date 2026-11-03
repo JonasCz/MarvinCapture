@@ -136,6 +136,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         setContentView(frame);
         replayPath = replayExtra(getIntent());
         applyInputExtra(getIntent());
+        applyLibraryExtra(getIntent());
 
         IntentFilter f = new IntentFilter(ACTION_USB_PERMISSION);
         f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
@@ -169,6 +170,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         super.onNewIntent(intent);
         setIntent(intent);
         applyInputExtra(intent);
+        applyLibraryExtra(intent);
         String r = replayExtra(intent);
         if (r != null && !r.equals(replayPath) && svc != null && !svc.status().isCapturing()) {
             replayPath = r;
@@ -242,6 +244,13 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         if (svc != null && svc.status().isCapturing()) return;
         inputPicked(in);
         if (options != null) options.setInput(in);
+    }
+
+    /** The launcher shortcut "Library": opens the playback screen. */
+    private void applyLibraryExtra(Intent i) {
+        if (i == null || !i.getBooleanExtra("library", false)) return;
+        i.removeExtra("library");
+        root.post(this::openLibrary);
     }
 
     private String replayExtra(Intent i) {
@@ -696,7 +705,10 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     /** Status / navigation bar icons: dark ones on the light theme, except over a black picture. */
     private void updateBars(boolean video) {
-        boolean lightBars = !Ui.dark;   // the scrims keep the icons legible over the picture
+        // landscape: the picture is behind the bars and fades into the panel colour there, so the theme's
+        // icons do; portrait: the bar is over the preview's black, unless the card (the theme's colour) shows
+        boolean lib = library != null && library.isOpen();
+        boolean lightBars = !Ui.dark && (lib || !(video && !root.isLandscape()));
         int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
         getWindow().getInsetsController().setSystemBarsAppearance(lightBars ? mask : 0, mask);
     }

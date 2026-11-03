@@ -24,7 +24,8 @@ installers on:
 | Release notes | empty | `"release_notes"` from `VERSION` when empty |
 
 **Artifacts only**: each platform's installer is an artifact of the run (run page,
-bottom; kept 30 days), one zip per platform.
+bottom; kept 30 days), one per platform: the installer file itself, not a zip of it
+(`actions/upload-artifact` with `archive: false`, so the download is the `.exe`, `.pkg`, `.deb` or `.apk`).
 
 **Draft release** / **release**: after all selected platforms built,
 `scripts/publish-release.sh` creates the release `v<version>` (`"version"` from

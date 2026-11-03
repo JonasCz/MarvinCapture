@@ -292,17 +292,24 @@ jobs:
         run: scripts/package-windows.ps1 -Arch ${{ matrix.arch }} -Msys2 '${{ steps.msys2.outputs.msys2-location }}' -SkipTests:$($env:SKIP_TESTS -eq 'true')
 
       # --- Result ----------------------------------------------------------------------
+      # The installer itself is the artifact, not a zip of it (actions/upload-artifact v7, archive: false:
+      # one file; the artifact is named after the file). Every platform makes exactly one.
+      - name: Pick the installer
+        id: installer
+        shell: bash
+        run: |
+          shopt -s nullglob
+          files=(build/${{ matrix.platform }}/installer/*.exe build/${{ matrix.platform }}/installer/*.pkg \
+                 build/${{ matrix.platform }}/installer/*.deb build/android/*.apk)
+          [[ ${#files[@]} -eq 1 ]] || { echo "expected exactly one installer, found ${#files[@]}: ${files[*]}" >&2; exit 1; }
+          echo "file=${files[0]}" >> "$GITHUB_OUTPUT"
+
       - name: Upload installer
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
-          name: MarvinCapture-${{ needs.setup.outputs.version }}-${{ matrix.platform }}
-          path: |
-            build/${{ matrix.platform }}/installer/*.exe
-            build/${{ matrix.platform }}/installer/*.pkg
-            build/${{ matrix.platform }}/installer/*.deb
-            build/android/*.apk
+          path: ${{ steps.installer.outputs.file }}
+          archive: false
           if-no-files-found: error
-          compression-level: 0   # installers are compressed already
           retention-days: 30
 
   release:
@@ -315,10 +322,18 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         with:
           path: ${{ runner.temp }}/installers
           merge-multiple: true
+
+      # publish-release.sh looks for the installers directly in the folder; make sure none ended up in a
+      # sub-folder named after its artifact
+      - name: Flatten the downloads
+        run: |
+          find "$RUNNER_TEMP/installers" -mindepth 2 -type f \( -name '*.exe' -o -name '*.pkg' -o -name '*.deb' -o -name '*.apk' \) \
+            -exec mv -t "$RUNNER_TEMP/installers" {} +
+          ls -l "$RUNNER_TEMP/installers"
 
       - name: Create the release
         env:

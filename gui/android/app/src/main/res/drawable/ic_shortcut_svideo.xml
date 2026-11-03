@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Launcher shortcut icon: S-Video (mini-DIN) socket, for the S-Video input.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- the logo's navy as the backdrop -->
+    <path android:fillColor="#2D3080" android:pathData="M12,12m-12,0a12,12 0 1,1 24,0a12,12 0 1,1 -24,0" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="1.6" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M7.6,17.2 A6.8,6.8 0 1,1 16.4,17.2 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M9.3,10.6m-0.95,0a0.95,0.95 0 1,1 1.9,0a0.95,0.95 0 1,1 -1.9,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M14.7,10.6m-0.95,0a0.95,0.95 0 1,1 1.9,0a0.95,0.95 0 1,1 -1.9,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M10.2,13.8m-0.95,0a0.95,0.95 0 1,1 1.9,0a0.95,0.95 0 1,1 -1.9,0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M13.8,13.8m-0.95,0a0.95,0.95 0 1,1 1.9,0a0.95,0.95 0 1,1 -1.9,0" />
+</vector>

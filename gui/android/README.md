@@ -202,8 +202,9 @@ core); DV and HDV (shown for the DV input, which detects which one arrives): the
 DV / HDV tab (like the desktop apps) at the top of the section, then what both share (the deck controls
 option, the file name), then the selected kind's format, aspect, scene split (where the format supports it), the two
 stops. Each format shows the core's warning (`pin_format_warning`) and its own settings
-from `pin_format_options` (H.264 / HEVC: interlace mode with the help text of the
-chosen one, the keep-fields one in amber; quality with `pin_format_quality_hint`;
+from `pin_format_options` (H.264 / HEVC: interlaced video as "Deinterlace" or "Encode as is" (the core's
+keep-fields mode, with its help in amber and "OK to use if your camera is set to progressive");
+quality as a bare 0 to 35 slider (the core accepts 0 to 51; no estimate or scale text, CRF sizes depend on the content);
 FFV1: compression). H.264 / HEVC are listed only where `pin_encoders_probe` (run once
 at start-up on a worker thread) found the encoder. Then "Screen" (keep the screen on during a
 capture, all inputs), "Performance (analog)" (analog input only, both off by default: keep a CPU core busy
@@ -347,6 +348,8 @@ touches as padding. Without a picture the card has the shape of the chosen aspec
 
 ## Launcher shortcuts
 
-Long-pressing the app icon offers DV / HDV, S-Video and Composite (static shortcuts,
-`res/xml/shortcuts.xml`): each starts `MainActivity` with an `input` extra (0, 1, 2),
-which `applyInputExtra` applies like a tap on the selector (ignored while capturing).
+Long-pressing the app icon offers DV / HDV, S-Video, Composite and Library (static shortcuts,
+`res/xml/shortcuts.xml`, each with its own icon in `res/drawable/ic_shortcut_*.xml`: a FireWire socket, an
+S-Video mini-DIN, a yellow RCA jack and a stack of videos). The inputs start `MainActivity` with an `input`
+extra (0, 1, 2), which `applyInputExtra` applies like a tap on the selector (ignored while capturing); Library
+starts it with a `library` extra, which opens the library.
