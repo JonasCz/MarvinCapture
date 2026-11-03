@@ -50,7 +50,9 @@
  * use for both codecs instead (e.g. "ffv1", so the whole sink runs on Linux,
  * which has no H.264 encoder). Not for users: the file then holds that codec.
  * PIN_HWENC_FAIL_AFTER=<pictures> makes sink_hwenc's encoder fail after that
- * many pictures, as a hardware encoder that dies mid-capture would.
+ * many pictures, as a hardware encoder that dies mid-capture would (it still
+ * delivers those pictures, so the file holds exactly that many on every
+ * encoder, whatever its delay).
  */
 
 #ifndef PIN_HWENC_H

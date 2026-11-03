@@ -495,6 +495,9 @@ static int encode_converted(hwenc_priv_t *p, const AVFrame *src, int field_aware
     f->color_trc = p->venc->color_trc;
     f->colorspace = p->venc->colorspace;
     if (p->fail_after > 0 && p->pictures_sent >= p->fail_after) {
+        /* It still hands out the pictures it has taken (a hardware encoder holds a few), so the
+         * file keeps exactly fail_after of them on every encoder, then it "dies". */
+        encode_frame(p, NULL);
         pin_logf(PIN_LOG_ERROR, "sink_hwenc: PIN_HWENC_FAIL_AFTER: the encoder fails now\n");
         rc = AVERROR_EXTERNAL;
     } else {
