@@ -97,8 +97,7 @@ The release APK for arm64-v8a is about 2.9 MB (5.9 MB with x86_64 as well):
 
 Plugging the box in (USB-C OTG adapter) offers to open the app; ticking "always" makes
 that the default and grants the USB permission. Started from the launcher, the app
-asks for the permission itself. Captures go to `Movies/MarvinCapture/` on the shared
-storage as `<name>-0001.<ext>`, `-0002`, ... (`pin_next_file_number`); the name is set
+asks for the permission itself. Captures go to `Movies/MarvinCapture/` on the chosen storage (options: Save to) as `<name>-0001.<ext>`, `-0002`, ... (`pin_next_file_number`); the name is set
 in the options and is also written into the file as its title where the format has
 one.
 
@@ -123,12 +122,20 @@ analog input gives the core's error. Logs: `adb logcat -s MarvinCapture marvin-c
 
 ## The screen
 
-One screen, camera-app style (`MainLayout`): in portrait the preview on top, as tall
-as the picture's aspect allows at full width; in landscape the preview on the left at
-full height, the panel on the right. The panel keeps a minimum size, and the picture
-letterboxes inside its part (`pin_fit_rect`). Rotation is handled in place
-(`configChanges`), so nothing is reopened. The window is edge to edge (enforced from
-API 35); the system bar and cutout insets are padding.
+One screen, camera-app style (`MainLayout`), adapting to the window's size and shape. The picture
+is always left aligned (landscape) or top aligned (portrait) at its own aspect, and letterboxes
+inside its box (`pin_fit_rect`). Rotation, folding and window resizes are handled in place
+(`configChanges`), so nothing is reopened. The window is edge to edge (enforced from API 35); the
+system bar and cutout insets are padding.
+
+| Window | Layout |
+| --- | --- |
+| Portrait | preview on top, as tall as the aspect allows at full width; the controls below |
+| Landscape, free space right of the picture >= 300 dp (a 21:9 phone) | controls docked in the free space |
+| Landscape, less than that (a 16:9 / 16:10 phone) | the controls keep 300 dp and **overlay** the right end of the picture ("overlay" mode): translucent over a live picture; once a capture runs they fade out completely (320 ms) except the audio / library / record-stop / options buttons, which sit on round backdrops; a tap on the picture shows the panel for 5 s (also shown at once for an error). The picture does not move. |
+| Tablet / unfolded foldable: landscape >= 840 x 600 dp, portrait >= 600 x 900 dp | "dual" mode: the controls **and** the options are on screen all the time (landscape: one 380 dp column right of the picture, portrait: two columns under it); no gear |
+
+The no-video card (the animated Marvin) is centred in the space the panel leaves free, in every mode.
 
 - **Preview**: the picture, or the card with the animated Marvin (a Canvas port of
   `docs/logo.html`; still when animations are off: "Remove animations" or an animator
@@ -147,8 +154,30 @@ API 35); the system bar and cutout insets are padding.
   capture the core checks the output (`pin_check_output`) and the app asks what it
   reports (destination problem, low space, overwrite).
 - **Speaker**: the audio monitor, muted by default (`gui.muted`).
+- **Library button**: opens the library (below); disabled while capturing.
 - **Gear**: the options, in place of the panel (the preview stays visible for the
-  picture controls); Back closes them.
+  picture controls); Back closes them. On a tablet the options are always shown.
+
+## Storage and library
+
+**Save to** (first section of the options, a drop-down when there is more than one place):
+`Storage` lists the mounted volumes of `StorageManager` (the phone, an SD card, a USB drive).
+Captures go to `Movies/MarvinCapture` on the chosen volume, if the app may create files there
+(`Storage` tries to create one; it needs no permission on the phone's own storage, and on removable
+media it depends on the Android version and the card); if it may not, to the app's own folder on that
+volume (`Android/data/jonascz.marvincapture/files/Movies`, always writable, deleted with the app) and the
+options say so. A volume that is gone falls back to the phone's storage. Setting: `gui.storage` (the
+volume's id).
+
+**Library** (button next to the record button): the files in the chosen place, newest first, as a grid
+of thumbnails (`MediaMetadataRetriever`, made on two worker threads and cached) with size, length and
+date; a tap plays (`VideoView` + `MediaController`), a long press offers to delete. Only the app's own
+folder content is listed, because that is all it can see. Playback and thumbnails use **Android's**
+media stack, so they work for what the phone decodes: H.264 / HEVC in Matroska (the phone encoder
+formats). DV, HDV, FFV1 and uncompressed AVI files get a placeholder with their extension and the
+player reports that the phone cannot play them. The core's FFmpeg build does contain decoders for DV,
+MPEG-2, FFV1, PCM and MP2 (for the preview), but no H.264 / HEVC decoder and no libswscale, so a player
+of its own would need a new native decode/convert/audio path; not done.
 
 ## Options
 
@@ -157,7 +186,7 @@ panel, a segmented control at the top, locked while capturing). Analog: TV stand
 aspect, stop after no signal / total time, picture and audio-gain sliders
 (`pin_get_control` / `pin_set_control`, live during a capture, hue enabled by the
 core); DV and HDV (shown for the DV input, which detects which one arrives): file name,
-then per kind format, aspect, scene split (where the format supports it), the two
+then a "Show settings for" DV / HDV tab (like the desktop apps) with, per kind, format, aspect, scene split (where the format supports it), the two
 stops. Each format shows the core's warning (`pin_format_warning`) and its own settings
 from `pin_format_options` (H.264 / HEVC: interlace mode with the help text of the
 chosen one, the keep-fields one in amber; quality with `pin_format_quality_hint`;
@@ -192,7 +221,7 @@ directory), global (one device), cached in `Settings.java`: `gui.last_input`,
 `gui.split_dv|hdv`, `gui.idle_<kind>`, `gui.duration_<kind>` (kind = `analog`, `dv`,
 `hdv`), `gui.name_analog`, `gui.name_dv` (DV and HDV share it),
 `gui.deinterlace_analog|dv`, `gui.quality_analog|dv`, `gui.ffv1_compression`,
-`gui.muted`, `gui.keep_screen_on`, `gui.cpu_keep_busy`, `gui.audio_keepalive`. A format
+`gui.muted`, `gui.storage`, `gui.kind_tab`, `gui.keep_screen_on`, `gui.cpu_keep_busy`, `gui.audio_keepalive`. A format
 that is no longer offered (no encoder) falls back to the kind's default.
 
 ## What lives where
@@ -210,7 +239,9 @@ app/src/main/java/jonascz/marvincapture/
     CaptureService.java        the session, USB connection, capture, notification, wake lock
     MainActivity.java          the screen, USB discovery and permission, capture flow
     OptionsPanel.java          the options
-    MainLayout.java            preview + panel, portrait / landscape
+    MainLayout.java            preview, controls, options: portrait / landscape / overlay / tablet
+    Storage.java               storage volumes, the output folder
+    LibraryView.java           thumbnails + basic player
     MarvinIdleView.java        the no-video animation
     LevelMeterView.java, Glyphs.java (icons, record button), Ui.java (view helpers)
     Settings.java, Formats.java (format lists after the probe), Status.java, About.java

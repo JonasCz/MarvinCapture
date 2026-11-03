@@ -32,11 +32,15 @@ import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Insets;
 import android.graphics.Typeface;
+import android.animation.ValueAnimator;
+import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.GradientDrawable;
 import android.hardware.usb.UsbDevice;
 import android.hardware.usb.UsbManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.os.IBinder;
 import android.text.method.LinkMovementMethod;
 import android.text.util.Linkify;
@@ -96,7 +100,15 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private Ui.Segmented input;
     private Glyphs.RecordButton record;
     private OptionsPanel options;   // built on first use
-    private FrameLayout side;
+    private FrameLayout optionsHolder, frame;
+    private LibraryView library;
+    private Glyphs.Button libraryBtn;
+    private View[] infoViews;
+    private final ColorDrawable panelBg = new ColorDrawable(), optionsBg = new ColorDrawable();
+    private final Handler handler = new Handler(Looper.getMainLooper());
+    private ValueAnimator panelAnim;
+    private boolean overlay, dual, hasVideo, capturingNow, revealed;
+    private float shownBg = 1f, shownInfo = 1f, shownOptionsBg = 1f, tgtBg = 1f, tgtInfo = 1f, tgtOptionsBg = 1f;
     private OnBackInvokedCallback backCallback;
     private AlertDialog dialog;
     private final int[] dar = new int[2];
@@ -116,7 +128,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         getWindow().setDecorFitsSystemWindows(false);   // edge to edge (enforced from API 35 anyway)
         Ui.applyTheme(this);
         buildViews();
-        setContentView(root);
+        setContentView(frame);
         replayPath = replayExtra(getIntent());
         applyInputExtra(getIntent());
 
@@ -135,12 +147,14 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         boolean wasDark = Ui.dark;
         Ui.applyTheme(this);
         if (wasDark == Ui.dark) return;
-        boolean optionsOpen = options != null && options.getVisibility() == View.VISIBLE;
+        boolean optionsOpen = options != null && options.getVisibility() == View.VISIBLE && !dual;
         if (optionsOpen) closeOptions();
+        if (library != null && library.isOpen()) library.close();
         options = null;
+        updateBack();
         buildViews();
-        setContentView(root);
-        root.requestApplyInsets();
+        setContentView(frame);
+        frame.requestApplyInsets();
         if (optionsOpen) openOptions();
         if (svc != null) onStatus(svc.status());
     }
@@ -178,6 +192,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     protected void onStop() {
         if (root != null) {
             visible = false;
+            if (library != null) library.pause();
             Core.previewSetVisible(MarvinApp.renderer, false);
             if (svc != null) {
                 svc.setListener(this, false);
@@ -290,11 +305,25 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private void buildViews() {
         root = new MainLayout(this);
         root.setBackgroundColor(Ui.PANEL);
-        root.setOnApplyWindowInsetsListener((v, insets) -> {
+        frame = new FrameLayout(this);
+        frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
+        library = new LibraryView(this, this::closeLibrary);
+        frame.addView(library, new FrameLayout.LayoutParams(-1, -1));
+        frame.setOnApplyWindowInsetsListener((v, insets) -> {
             Insets in = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
             root.setInsets(in.left, in.top, in.right, in.bottom);   // the preview goes behind them
+            library.setInsets(in.left, in.top, in.right, in.bottom);
             return WindowInsets.CONSUMED;
         });
+        root.setModeListener((ov, du) -> {
+            overlay = ov;
+            dual = du;
+            applyMode();
+        });
+        panelBg.setColor(Ui.PANEL);
+        optionsBg.setColor(Ui.PANEL);
+        revealed = false;
+        shownBg = shownInfo = shownOptionsBg = tgtBg = tgtInfo = tgtOptionsBg = 1f;
 
         // preview: the surface, the no-video card, the REC badge (MainLayout.PreviewFrame)
         MainLayout.PreviewFrame preview = new MainLayout.PreviewFrame(this);
@@ -360,14 +389,19 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         recBadge.addView(recText, Ui.wrap());
         recBadge.setVisibility(View.GONE);
         preview.addView(recBadge);
+        // a tap on the picture shows the hidden panel for a moment while capturing (overlay mode)
+        preview.setOnClickListener(v -> {
+            if (overlay && capturingNow) {
+                revealed = !revealed;
+                scheduleHide();
+                updatePanels(true);
+            }
+        });
         root.addView(preview);
 
-        // side panel: status + buttons, or the options
-        FrameLayout side = new FrameLayout(this);
-        side.setBackgroundColor(Ui.PANEL);
+        // controls: status + buttons (the options replace them, or sit beside them on a tablet)
         controls = Ui.column(this);
-        int p16 = Ui.dp(this, 16);
-        controls.setPadding(p16, Ui.dp(this, 12), p16, Ui.dp(this, 12));
+        controls.setBackground(panelBg);
 
         ScrollView scroll = new ScrollView(this);
         LinearLayout top = Ui.column(this);
@@ -421,9 +455,6 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         LinearLayout.LayoutParams ml = Ui.fillWidth();
         ml.topMargin = Ui.dp(this, 10);
         top.addView(meters, ml);
-        TextView where = Ui.text(this, "Captures are saved in Movies/MarvinCapture.", 12, Ui.TEXT3);
-        where.setPadding(0, Ui.dp(this, 10), 0, 0);
-        top.addView(where, Ui.fillWidth());
         scroll.addView(top);
         controls.addView(scroll, new LinearLayout.LayoutParams(-1, 0, 1));
 
@@ -444,14 +475,23 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         gear.setOnClickListener(v -> openOptions());
         buttons.addView(speaker, new LinearLayout.LayoutParams(-2, -2));
         LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
-        rl.leftMargin = rl.rightMargin = Ui.dp(this, 22);
+        rl.leftMargin = rl.rightMargin = Ui.dp(this, 14);
+        libraryBtn = new Glyphs.Button(this, Glyphs.LIBRARY, 52);
+        libraryBtn.setContentDescription("Library: play back captures");
+        libraryBtn.setOnClickListener(v -> openLibrary());
+        LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(-2, -2);
+        ll.leftMargin = Ui.dp(this, 10);
+        buttons.addView(libraryBtn, ll);
         buttons.addView(record, rl);
         buttons.addView(gear, new LinearLayout.LayoutParams(-2, -2));
         controls.addView(buttons, Ui.fillWidth());
-        side.addView(controls, new FrameLayout.LayoutParams(-1, -1));
+        infoViews = new View[] { scroll, caption };
+        root.addView(controls);
 
-        this.side = side;   // the options panel joins it when first opened
-        root.addView(side);
+        optionsHolder = new FrameLayout(this);   // the options panel joins it when first needed
+        optionsHolder.setBackground(optionsBg);
+        optionsHolder.setVisibility(View.GONE);
+        root.addView(optionsHolder);
         updateSpeaker();
     }
 
@@ -504,6 +544,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             if (a == 2) root.setAspect(16, 9);
             else if (a == 1 || !has) root.setAspect(4, 3);
         }
+        hasVideo = video;
         updateBars(video);
         show(card, !video);
         if (!video) {
@@ -574,6 +615,10 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         if (recBadge.getVisibility() == View.VISIBLE) set(recText, "REC  " + hms(st.d[Core.SD_ELAPSED]));
         if (options != null) options.setLocked(capturing);
         input.setEnabled(!capturing && !finishing);
+        libraryBtn.setEnabled(!capturing && !finishing);
+        capturingNow = capturing;
+        if (!capturing) revealed = false;
+        updatePanels(true);
         if (input.getTag() == null || (int) input.getTag() != Settings.input()) {
             input.setTag(Settings.input());
             input.setChosen(Settings.input());
@@ -585,7 +630,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     /** Status / navigation bar icons: dark ones on the light theme, except over a black picture. */
     private void updateBars(boolean video) {
-        boolean lightBars = !Ui.dark && !(video && !root.isLandscape());
+        boolean lib = library != null && library.isOpen();
+        boolean lightBars = !Ui.dark && (lib || !(video && !root.isLandscape()));
         int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
         getWindow().getInsetsController().setSystemBarsAppearance(lightBars ? mask : 0, mask);
     }
@@ -644,6 +690,9 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         bannerText.setText(message);
         ((GradientDrawable) banner.getBackground()).setColor(error ? 0x40ff6b61 : 0x40ffc04d);
         banner.setVisibility(View.VISIBLE);
+        revealed = true;   // an overlay panel that is hidden while capturing must show it
+        scheduleHide();
+        updatePanels(true);
     }
 
     private void detail(String title, String text) {
@@ -773,23 +822,30 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     // ---- options ---------------------------------------------------------------------------------
 
-    private void openOptions() {
+    private void ensureOptions() {
         if (options == null) {
             options = new OptionsPanel(this, this);
-            side.addView(options, new FrameLayout.LayoutParams(-1, -1));
+            optionsHolder.addView(options, new FrameLayout.LayoutParams(-1, -1));
             if (svc != null) options.setLocked(svc.hasSession() && svc.status().isCapturing());
         }
+    }
+
+    private void openOptions() {
+        if (dual) return;   // always there
+        ensureOptions();
+        options.rebuild();
         options.refreshControls();
         controls.setVisibility(View.GONE);
+        optionsHolder.setVisibility(View.VISIBLE);
         options.setVisibility(View.VISIBLE);
-        if (Build.VERSION.SDK_INT >= 33) {
-            backCallback = this::closeOptions;
-            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
-        }
+        updateBack();
+        updatePanels(true);
     }
 
     @Override
     public void closeOptions() {
+        if (dual || options == null) return;
+        optionsHolder.setVisibility(View.GONE);
         options.setVisibility(View.GONE);
         controls.setVisibility(View.VISIBLE);
         View f = getCurrentFocus();
@@ -797,18 +853,138 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             f.clearFocus();
             getSystemService(android.view.inputmethod.InputMethodManager.class).hideSoftInputFromWindow(f.getWindowToken(), 0);
         }
-        if (Build.VERSION.SDK_INT >= 33 && backCallback != null) {
+        updateBack();
+        updatePanels(true);
+    }
+
+    private boolean optionsOpen() {
+        return !dual && options != null && optionsHolder.getVisibility() == View.VISIBLE;
+    }
+
+    /** The screen's layout mode changed (rotation, fold, window size): docked / overlay / tablet. */
+    private void applyMode() {
+        gear.setVisibility(dual ? View.GONE : View.VISIBLE);
+        if (dual) {
+            ensureOptions();
+            options.setPermanent(true);
+            options.setVisibility(View.VISIBLE);
+            optionsHolder.setVisibility(View.VISIBLE);
+            controls.setVisibility(View.VISIBLE);
+            options.rebuild();
+            options.refreshControls();
+        } else if (options != null) {
+            options.setPermanent(false);
+            optionsHolder.setVisibility(View.GONE);
+            controls.setVisibility(View.VISIBLE);
+        }
+        updateBack();
+        if (svc != null) onStatus(svc.status());
+        updatePanels(false);
+    }
+
+    private void scheduleHide() {
+        handler.removeCallbacks(hideAgain);
+        if (revealed) handler.postDelayed(hideAgain, 5000);
+    }
+
+    private final Runnable hideAgain = () -> {
+        revealed = false;
+        updatePanels(true);
+    };
+
+    /**
+     * Panel transparency (overlay mode only; docked and tablet panels stay solid): over a live picture
+     * the controls are translucent; once a capture runs they fade out completely, except the audio /
+     * stop / library / options buttons, until a tap on the picture shows them again. The options
+     * panel over the picture is translucent too, so the picture stays visible while it is adjusted.
+     */
+    private void updatePanels(boolean animate) {
+        if (panelBg == null || infoViews == null) return;
+        boolean hidden = overlay && capturingNow && !optionsOpen() && !revealed;
+        float bg = !overlay ? 1f : hidden ? 0f : hasVideo ? 0.72f : 1f;
+        float info = hidden ? 0f : 1f;
+        float obg = overlay && hasVideo ? 0.88f : 1f;
+        if (bg == tgtBg && info == tgtInfo && obg == tgtOptionsBg) return;
+        tgtBg = bg; tgtInfo = info; tgtOptionsBg = obg;
+        if (panelAnim != null) panelAnim.cancel();
+        float bg0 = shownBg, info0 = shownInfo, obg0 = shownOptionsBg;
+        if (!animate || !visible) {
+            applyPanels(bg, info, obg);
+            return;
+        }
+        if (info > 0) for (View v : infoViews) v.setVisibility(View.VISIBLE);
+        ValueAnimator a = ValueAnimator.ofFloat(0f, 1f);
+        a.setDuration(320);
+        a.setInterpolator(new android.view.animation.DecelerateInterpolator());
+        a.addUpdateListener(an -> {
+            float t = (float) an.getAnimatedValue();
+            applyPanels(bg0 + (bg - bg0) * t, info0 + (info - info0) * t, obg0 + (obg - obg0) * t);
+        });
+        a.addListener(new android.animation.AnimatorListenerAdapter() {
+            @Override public void onAnimationEnd(android.animation.Animator an) {
+                if (panelAnim == a) panelAnim = null;
+                applyPanels(bg, info, obg);
+            }
+            @Override public void onAnimationCancel(android.animation.Animator an) {
+                if (panelAnim == a) panelAnim = null;
+            }
+        });
+        panelAnim = a;
+        a.start();
+    }
+
+    private void applyPanels(float bg, float info, float obg) {
+        shownBg = bg;
+        shownInfo = info;
+        shownOptionsBg = obg;
+        panelBg.setAlpha(Math.round(bg * 255));
+        optionsBg.setAlpha(Math.round(obg * 255));
+        for (View v : infoViews) {
+            v.setAlpha(info);
+            int vis = info <= 0.001f ? View.INVISIBLE : View.VISIBLE;
+            if (v.getVisibility() != vis) v.setVisibility(vis);
+        }
+        controls.invalidate();
+    }
+
+    // ---- library ---------------------------------------------------------------------------------
+
+    private void openLibrary() {
+        library.open();
+        updateBack();
+        updateBars(hasVideo);
+    }
+
+    private void closeLibrary() {
+        library.close();
+        updateBack();
+        updateBars(hasVideo);
+    }
+
+    /** Back closes the library or the options (not the tablet's permanent ones). */
+    private void updateBack() {
+        if (Build.VERSION.SDK_INT < 33) return;
+        boolean need = (library != null && library.isOpen()) || optionsOpen();
+        if (need && backCallback == null) {
+            backCallback = this::handleBack;
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
+        } else if (!need && backCallback != null) {
             getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
             backCallback = null;
         }
     }
 
-    /** Back closes the options: API 30-32 only (from 33 the OnBackInvokedCallback above). */
+    private void handleBack() {
+        if (library != null && library.isOpen()) library.back();
+        else if (optionsOpen()) closeOptions();
+    }
+
+    /** Back on API 30-32 only (from 33 the OnBackInvokedCallback above). */
     @Override
     @SuppressWarnings("deprecation")
     @android.annotation.SuppressLint("GestureBackNavigation")
     public void onBackPressed() {
-        if (options != null && options.getVisibility() == View.VISIBLE) closeOptions();
+        if ((library != null && library.isOpen()) || optionsOpen()) handleBack();
         else super.onBackPressed();
     }
 

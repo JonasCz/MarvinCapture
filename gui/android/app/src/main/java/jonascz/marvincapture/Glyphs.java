@@ -33,7 +33,8 @@ import android.view.View;
 final class Glyphs {
     private Glyphs() {}
 
-    static final int DOWNLOAD = 0, GEAR = 1, SPEAKER_ON = 2, SPEAKER_OFF = 3, CLOSE = 4;
+    static final int DOWNLOAD = 0, GEAR = 1, SPEAKER_ON = 2, SPEAKER_OFF = 3, CLOSE = 4,
+            LIBRARY = 5, BACK = 6;
 
     /** Draws glyph g in white-ish paint p, scaled from 24 units to size px, centred on (cx, cy). */
     static void draw(Canvas c, int g, float cx, float cy, float size, Paint p) {
@@ -96,6 +97,21 @@ final class Glyphs {
                 c.drawLine(6, 6, 18, 18, p);
                 c.drawLine(18, 6, 6, 18, p);
                 break;
+            case LIBRARY:   // a screen with a play triangle
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(2.2f);
+                c.drawRoundRect(new RectF(3.5f, 5, 20.5f, 19), 2.5f, 2.5f, p);
+                p.setStyle(Paint.Style.FILL);
+                path.moveTo(10, 9); path.lineTo(15, 12); path.lineTo(10, 15); path.close();
+                c.drawPath(path, p);
+                break;
+            case BACK:
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(2.4f);
+                path.moveTo(19, 12); path.lineTo(5, 12);
+                path.moveTo(11, 6); path.lineTo(5, 12); path.lineTo(11, 18);
+                c.drawPath(path, p);
+                break;
             default:
                 break;
         }
@@ -127,6 +143,13 @@ final class Glyphs {
             if (g != glyph) { glyph = g; invalidate(); }
         }
 
+        /** Own colours (over a picture, where the theme's would vanish). */
+        void setColors(int background, int foreground) {
+            bg.setColor(background);
+            fg.setColor(foreground);
+            invalidate();
+        }
+
         @Override
         protected void onMeasure(int w, int h) {
             int s = (int) (sizeDp * dp);
@@ -151,7 +174,8 @@ final class Glyphs {
      *  recording a red stop square; finalising, a grey square. Disabled = dimmed. */
     static final class RecordButton extends View {
         private final Paint ring = new Paint(Paint.ANTI_ALIAS_FLAG), fill = new Paint(Paint.ANTI_ALIAS_FLAG),
-                glyph = new Paint(Paint.ANTI_ALIAS_FLAG);
+                glyph = new Paint(Paint.ANTI_ALIAS_FLAG),
+                scrim = new Paint(Paint.ANTI_ALIAS_FLAG);
         private final float dp;
         private boolean recording, finishing;
         private final RectF r = new RectF();
@@ -192,6 +216,9 @@ final class Glyphs {
         protected void onDraw(Canvas c) {
             float cx = getWidth() / 2f, cy = getHeight() / 2f, rad = Math.min(cx, cy);
             boolean on = isEnabled();
+            scrim.setColor(Ui.PANEL);
+            scrim.setAlpha(0xCC);   // legible over the picture when the panel around it is invisible
+            c.drawCircle(cx, cy, rad, scrim);
             float stroke = 3.5f * dp;
             ring.setStrokeWidth(stroke);
             ring.setAlpha(on ? 255 : 110);

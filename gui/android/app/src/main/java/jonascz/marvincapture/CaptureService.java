@@ -33,7 +33,6 @@ import android.hardware.usb.UsbDeviceConnection;
 import android.hardware.usb.UsbManager;
 import android.os.Binder;
 import android.os.Build;
-import android.os.Environment;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -378,9 +377,7 @@ public final class CaptureService extends Service {
     }
 
     static File outputDir() {
-        @SuppressWarnings("deprecation")
-        File movies = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES);
-        return new File(movies, "MarvinCapture");
+        return Storage.current().dir;
     }
 
     /** Capture options from the settings: a manual capture, one pass (port of buildCaptureOpts). */

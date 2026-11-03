@@ -23,26 +23,52 @@ import android.view.View;
 import android.view.ViewGroup;
 
 /**
- * The screen's two parts, camera-app style: the preview (child 0, a {@link PreviewFrame}) and the
- * side panel (child 1: status, meters, buttons, or the options). Landscape (wider than tall): the
- * preview on the left, as wide as the picture's aspect allows at full height, the panel on the
- * right. Portrait: the preview on top, as tall as the aspect allows at full width, the panel below.
- * The panel keeps at least a minimum size; the preview then letterboxes inside its part (the
- * renderer's pin_fit_rect).
+ * The screen's parts, camera-app style: the preview (child 0, a {@link PreviewFrame}), the controls
+ * (child 1: input, status, meters, buttons) and the options holder (child 2, the options panel when
+ * it is open, or always on a tablet). The picture is always left aligned (landscape) or top aligned
+ * (portrait), at its own aspect.
  *
- * Edge to edge: both parts reach the screen's edges. The preview frame extends behind the status
- * bar and the display cutout (its background shows there; the picture stays inside the insets),
- * the panel takes the insets of the sides it touches as padding.
+ * <ul>
+ * <li>Portrait: the preview on top, as tall as the aspect allows at full width, the controls below.</li>
+ * <li>Landscape phone: the controls dock in the free space right of the picture while that is at least
+ * {@link #PANEL_MIN_DP} wide. On a wider phone they would get too narrow: then they keep that width
+ * and overlay the right end of the picture ("overlay" mode; the activity makes the panel
+ * translucent, and invisible but for the buttons while capturing). The no-video card is centred in
+ * what the panel leaves free.</li>
+ * <li>Tablet (landscape 840 dp wide and 600 dp tall, or portrait 600 x 900 dp): the controls and the
+ * options are both on screen all the time ("dual" mode): in landscape one column right of the
+ * picture, in portrait two columns under it.</li>
+ * </ul>
+ *
+ * Edge to edge: all parts reach the screen's edges; the insets of the system bars and the cutout are
+ * padding of the parts they touch, and the picture and the card's content stay inside them.
  */
 final class MainLayout extends ViewGroup {
-    private final float dp;
+    /** The narrowest the controls get before they overlay the picture instead of docking. */
+    static final int PANEL_MIN_DP = 300;
+    private static final int TABLET_SIDE_DP = 380;
+
+    interface ModeListener {
+        void onModeChanged(boolean overlay, boolean dual);
+    }
+
+    private float dp;   // read again on every measure: the density can change (display size setting)
     private int darNum = 4, darDen = 3;
     private int insL, insT, insR, insB;
-    private boolean land;
+    private boolean land, overlay, dual;
+    private boolean reportedOverlay, reportedDual;
+    private ModeListener listener;
+    // rects computed by onMeasure: x, y, w, h
+    private final int[] rPreview = new int[4], rControls = new int[4], rOptions = new int[4], rBox = new int[4];
+    private int overlayW;
 
     MainLayout(Context c) {
         super(c);
         dp = getResources().getDisplayMetrics().density;
+    }
+
+    void setModeListener(ModeListener l) {
+        listener = l;
     }
 
     /** The display aspect of the picture (4:3 until a frame says otherwise). */
@@ -61,68 +87,142 @@ final class MainLayout extends ViewGroup {
         requestLayout();
     }
 
-    boolean isLandscape() {
-        return land;
+    boolean isLandscape() { return land; }
+    /** The controls float over the picture (wide phone in landscape). */
+    boolean isOverlay() { return overlay; }
+    /** Tablet: controls and options both stay on screen. */
+    boolean isDual() { return dual; }
+
+    /** Fits the picture's aspect into the area (aw x ah at ax, ay) and stores it in rBox. */
+    private void fit(int ax, int ay, int aw, int ah, boolean centerX, boolean centerY) {
+        int bw = aw, bh = ah;
+        if ((long) aw * darDen > (long) ah * darNum) bw = Math.round((float) ah * darNum / darDen);
+        else bh = Math.round((float) aw * darDen / darNum);
+        rBox[0] = ax + (centerX ? (aw - bw) / 2 : 0);
+        rBox[1] = ay + (centerY ? (ah - bh) / 2 : 0);
+        rBox[2] = bw;
+        rBox[3] = bh;
+    }
+
+    private static void set(int[] r, int x, int y, int w, int h) {
+        r[0] = x; r[1] = y; r[2] = Math.max(0, w); r[3] = Math.max(0, h);
     }
 
     @Override
     protected void onMeasure(int wSpec, int hSpec) {
+        dp = getResources().getDisplayMetrics().density;
         int w = MeasureSpec.getSize(wSpec), h = MeasureSpec.getSize(hSpec);
-        int iw = Math.max(0, w - insL - insR);
-        int ih = Math.max(0, h - insT - insB);
+        int iw = Math.max(0, w - insL - insR), ih = Math.max(0, h - insT - insB);
         land = w > h;
+        float wdp = w / dp, hdp = h / dp;
+        dual = land ? wdp >= 840 && hdp >= 600 : wdp >= 600 && hdp >= 900;
+        overlay = false;
         PreviewFrame preview = (PreviewFrame) getChildAt(0);
-        View panel = getChildAt(1);
-        int pw, ph, sw, sh;
-        if (land) {
-            int minPanel = (int) Math.min(w * 0.45f, 260 * dp);
-            pw = Math.min(insL + Math.round((float) ih * darNum / darDen), w - minPanel);
-            ph = h;
-            sw = w - pw;
-            sh = h;
-            preview.setInsets(insL, insT, 0, insB);
-            panel.setPadding(0, insT, insR, insB);
+        View controls = getChildAt(1), options = getChildAt(2);
+        int cardRight = 0;   // the part of the preview frame the panel covers (card content avoids it)
+
+        if (land && dual) {
+            int sideW = Math.round(TABLET_SIDE_DP * dp) + insR;
+            int ctlH = Math.round(Math.max(300 * dp, Math.min(hdp * 0.45f * dp, 380 * dp)));
+            set(rPreview, 0, 0, w - sideW, h);
+            fit(insL, insT, w - sideW - insL, ih, false, true);
+            set(rControls, w - sideW, 0, sideW, insT + ctlH);
+            set(rOptions, w - sideW, insT + ctlH, sideW, h - insT - ctlH);
+            padControls(controls, 0, insT, insR, 0);
+            options.setPadding(0, 0, insR, insB);
+        } else if (land) {
+            int picW = Math.round((float) ih * darNum / darDen);
+            if (picW > iw) picW = iw;
+            int free = w - insL - picW;
+            int minPanel = Math.round(PANEL_MIN_DP * dp);
+            if (free >= minPanel + insR) {
+                set(rPreview, 0, 0, insL + picW, h);
+                fit(insL, insT, picW, ih, false, false);
+                set(rControls, insL + picW, 0, w - insL - picW, h);
+            } else {
+                overlay = true;
+                overlayW = minPanel + insR;
+                set(rPreview, 0, 0, w, h);
+                fit(insL, insT, iw, ih, false, true);
+                set(rControls, w - overlayW, 0, overlayW, h);
+                cardRight = overlayW - insR;
+            }
+            set(rOptions, rControls[0], 0, rControls[2], h);
+            padControls(controls, 0, insT, insR, insB);
+            options.setPadding(0, insT, insR, insB);
+        } else if (dual) {
+            int ph = Math.min(insT + Math.round((float) iw * darDen / darNum), Math.round(h * 0.55f));
+            set(rPreview, 0, 0, w, ph);
+            fit(insL, insT, iw, ph - insT, true, false);
+            int colW = Math.min(Math.round(w * 0.45f), Math.round(440 * dp));
+            set(rControls, 0, ph, colW, h - ph);
+            set(rOptions, colW, ph, w - colW, h - ph);
+            padControls(controls, insL, 0, 0, insB);
+            options.setPadding(0, 0, insR, insB);
         } else {
             int minPanel = (int) Math.min(h * 0.55f, 330 * dp);
-            pw = w;
-            ph = Math.min(insT + Math.round((float) iw * darDen / darNum), h - minPanel);
-            sw = w;
-            sh = h - ph;
-            preview.setInsets(insL, insT, insR, 0);
-            panel.setPadding(insL, 0, insR, insB);
+            int ph = Math.min(insT + Math.round((float) iw * darDen / darNum), h - minPanel);
+            set(rPreview, 0, 0, w, ph);
+            fit(insL, insT, iw, ph - insT, true, false);
+            set(rControls, 0, ph, w, h - ph);
+            set(rOptions, 0, ph, w, h - ph);
+            padControls(controls, insL, 0, insR, insB);
+            options.setPadding(insL, 0, insR, insB);
         }
-        preview.measure(MeasureSpec.makeMeasureSpec(pw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ph, MeasureSpec.EXACTLY));
-        panel.measure(MeasureSpec.makeMeasureSpec(sw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(sh, MeasureSpec.EXACTLY));
+        preview.setGeometry(rBox[0], rBox[1], rBox[2], rBox[3], insL, insT, insR + cardRight, insB);
+        measureExact(preview, rPreview);
+        measureExact(controls, rControls);
+        measureExact(options, rOptions);
         setMeasuredDimension(w, h);
+        if (listener != null && (overlay != reportedOverlay || dual != reportedDual)) {
+            reportedOverlay = overlay;
+            reportedDual = dual;
+            post(() -> listener.onModeChanged(reportedOverlay, reportedDual));
+        }
+    }
+
+    /** The controls' own padding (16 dp at the sides, 12 dp above and below) plus the insets. */
+    private void padControls(View v, int l, int t, int r, int b) {
+        int h = Math.round(16 * dp), vv = Math.round(12 * dp);
+        v.setPadding(l + h, t + vv, r + h, b + vv);
+    }
+
+    private static void measureExact(View v, int[] r) {
+        v.measure(MeasureSpec.makeMeasureSpec(r[2], MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(r[3], MeasureSpec.EXACTLY));
     }
 
     @Override
     protected void onLayout(boolean changed, int l, int t, int r, int b) {
-        View preview = getChildAt(0), panel = getChildAt(1);
-        int pw = preview.getMeasuredWidth(), ph = preview.getMeasuredHeight();
-        preview.layout(0, 0, pw, ph);
-        if (land) panel.layout(pw, 0, pw + panel.getMeasuredWidth(), panel.getMeasuredHeight());
-        else panel.layout(0, ph, panel.getMeasuredWidth(), ph + panel.getMeasuredHeight());
+        place(getChildAt(0), rPreview);
+        place(getChildAt(1), rControls);
+        place(getChildAt(2), rOptions);
+    }
+
+    private static void place(View v, int[] r) {
+        v.layout(r[0], r[1], r[0] + r[2], r[1] + r[3]);
     }
 
     /**
-     * The preview part: children are the picture surface (child 0), the no-video card (child 1)
-     * and a badge (child 2, top left). The card fills the whole frame, under the bars and the
-     * cutout, with its content kept inside the insets; the surface and the badge stay inside the
-     * insets, so the picture is never covered by the notch.
+     * The preview part: children are the picture surface (child 0), the no-video card (child 1) and a
+     * badge (child 2, top left of the picture). The surface sits in the box MainLayout computed; the
+     * card fills the whole frame, under the bars and the cutout (and the overlay panel), with its
+     * content kept inside the insets and out of the panel's way.
      */
     static final class PreviewFrame extends ViewGroup {
+        private int bx, by, bw, bh;
         private int l, t, r, b;
 
         PreviewFrame(Context c) {
             super(c);
         }
 
-        void setInsets(int l, int t, int r, int b) {
-            if (l == this.l && t == this.t && r == this.r && b == this.b) return;
+        void setGeometry(int bx, int by, int bw, int bh, int l, int t, int r, int b) {
+            if (bx == this.bx && by == this.by && bw == this.bw && bh == this.bh
+                    && l == this.l && t == this.t && r == this.r && b == this.b) return;
+            this.bx = bx; this.by = by; this.bw = bw; this.bh = bh;
             this.l = l; this.t = t; this.r = r; this.b = b;
             View card = getChildAt(1);
-            if (card != null) {   // the card's content stays inside the insets
+            if (card != null) {   // the card's content stays inside the insets, clear of the panel
                 int pad = (int) (20 * getResources().getDisplayMetrics().density);
                 card.setPadding(l + pad, t + pad, r + pad, b + pad);
             }
@@ -132,21 +232,20 @@ final class MainLayout extends ViewGroup {
         @Override
         protected void onMeasure(int wSpec, int hSpec) {
             int w = MeasureSpec.getSize(wSpec), h = MeasureSpec.getSize(hSpec);
-            int iw = Math.max(0, w - l - r), ih = Math.max(0, h - t - b);
-            getChildAt(0).measure(MeasureSpec.makeMeasureSpec(iw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(ih, MeasureSpec.EXACTLY));
+            getChildAt(0).measure(MeasureSpec.makeMeasureSpec(bw, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(bh, MeasureSpec.EXACTLY));
             getChildAt(1).measure(MeasureSpec.makeMeasureSpec(w, MeasureSpec.EXACTLY), MeasureSpec.makeMeasureSpec(h, MeasureSpec.EXACTLY));
-            getChildAt(2).measure(MeasureSpec.makeMeasureSpec(iw, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(ih, MeasureSpec.AT_MOST));
+            getChildAt(2).measure(MeasureSpec.makeMeasureSpec(bw, MeasureSpec.AT_MOST), MeasureSpec.makeMeasureSpec(bh, MeasureSpec.AT_MOST));
             setMeasuredDimension(w, h);
         }
 
         @Override
         protected void onLayout(boolean changed, int x0, int y0, int x1, int y1) {
             int w = x1 - x0, h = y1 - y0;
-            getChildAt(0).layout(l, t, w - r, h - b);
+            getChildAt(0).layout(bx, by, bx + bw, by + bh);
             getChildAt(1).layout(0, 0, w, h);
             View badge = getChildAt(2);
             int m = (int) (12 * getResources().getDisplayMetrics().density);
-            badge.layout(l + m, t + m, l + m + badge.getMeasuredWidth(), t + m + badge.getMeasuredHeight());
+            badge.layout(bx + m, by + m, bx + m + badge.getMeasuredWidth(), by + m + badge.getMeasuredHeight());
         }
     }
 }

@@ -46,10 +46,12 @@ public final class MarvinApp extends Application {
     static String startupError;
     static long renderer;
     static long monitor;
+    static MarvinApp app;
 
     @Override
     public void onCreate() {
         super.onCreate();
+        app = this;
         try {
             System.loadLibrary("marvin-core");
             System.loadLibrary("marvin-jni");

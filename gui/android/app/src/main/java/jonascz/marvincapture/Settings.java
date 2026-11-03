@@ -29,7 +29,8 @@ import java.util.HashMap;
  * Keys: gui.last_input, gui.std, gui.control_N, gui.format_KIND, gui.aspect_KIND, gui.name_analog,
  * gui.name_dv (DV and HDV share it), gui.split_dv / _hdv, gui.idle_KIND, gui.duration_KIND,
  * gui.deinterlace_analog / _dv, gui.quality_analog / _dv, gui.ffv1_compression, gui.muted,
- * gui.keep_screen_on, gui.cpu_keep_busy, gui.audio_keepalive (KIND = analog, dv, hdv).
+ * gui.keep_screen_on, gui.cpu_keep_busy, gui.audio_keepalive, gui.storage (volume id), gui.kind_tab
+ * (KIND = analog, dv, hdv).
  */
 final class Settings {
     private Settings() {}

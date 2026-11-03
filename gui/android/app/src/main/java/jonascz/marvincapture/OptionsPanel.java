@@ -73,6 +73,7 @@ final class OptionsPanel extends LinearLayout {
     private final ArrayList<Slider> sliders = new ArrayList<>();
     private LinearLayout analogBlock, dvBlock, pictureRows;
     private TextView pictureNote;
+    private Glyphs.Button closeButton;
     private boolean locked;
     private int builtFormatsReady = -1;
 
@@ -80,17 +81,16 @@ final class OptionsPanel extends LinearLayout {
         super(c);
         this.host = host;
         setOrientation(VERTICAL);
-        setBackgroundColor(Ui.PANEL);
 
         LinearLayout bar = Ui.row(c);
         bar.setPadding(Ui.dp(c, 16), Ui.dp(c, 8), Ui.dp(c, 12), Ui.dp(c, 4));
         TextView title = Ui.text(c, "Options", 20, Ui.TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         bar.addView(title, Ui.weight(1));
-        Glyphs.Button close = new Glyphs.Button(c, Glyphs.CLOSE, 44);
-        close.setContentDescription("Close the options");
-        close.setOnClickListener(v -> host.closeOptions());
-        bar.addView(close);
+        closeButton = new Glyphs.Button(c, Glyphs.CLOSE, 44);
+        closeButton.setContentDescription("Close the options");
+        closeButton.setOnClickListener(v -> host.closeOptions());
+        bar.addView(closeButton);
         addView(bar, Ui.fillWidth());
 
         lockedNote = Ui.help(c, "A capture is running: the options are locked until it ends. The picture "
@@ -135,6 +135,12 @@ final class OptionsPanel extends LinearLayout {
 
     // ---- building ---------------------------------------------------------------------------------
 
+    /** Builds the lists again (storage volumes may have come and gone). */
+    void rebuild() {
+        builtFormatsReady = -1;
+        build();
+    }
+
     private void build() {
         int ready = Formats.isReady() ? 1 : 0;
         if (ready == builtFormatsReady) return;
@@ -144,6 +150,8 @@ final class OptionsPanel extends LinearLayout {
         lockable.clear();
         lockableCond.clear();
         sliders.clear();
+
+        storageSection();
 
         // analog
         analogBlock = Ui.column(c);
@@ -177,16 +185,24 @@ final class OptionsPanel extends LinearLayout {
         dvBlock.addView(Ui.header(c, "DV and HDV"));
         dvBlock.addView(Ui.help(c, "DV or HDV is detected from what the camera sends; each has its own settings."));
         nameField(dvBlock, false);
-        TextView dv = Ui.label(c, "DV");
-        dv.setTypeface(Typeface.DEFAULT_BOLD);
-        dv.setPadding(0, Ui.dp(c, 16), 0, 0);
-        dvBlock.addView(dv);
-        kindBlock(dvBlock, Core.KIND_DV);
-        TextView hdv = Ui.label(c, "HDV");
-        hdv.setTypeface(Typeface.DEFAULT_BOLD);
-        hdv.setPadding(0, Ui.dp(c, 20), 0, 0);
-        dvBlock.addView(hdv);
-        kindBlock(dvBlock, Core.KIND_HDV);
+        // like the desktop apps' "File options for" tab: one kind's settings at a time
+        dvBlock.addView(Ui.label(c, "Show settings for"));
+        LinearLayout dvKind = Ui.column(c), hdvKind = Ui.column(c);
+        kindBlock(dvKind, Core.KIND_DV);
+        kindBlock(hdvKind, Core.KIND_HDV);
+        int tab = Settings.clamp(Settings.getInt("gui.kind_tab", 0), 0, 1);
+        Ui.Segmented kindTab = new Ui.Segmented(c, new String[] { "DV", "HDV" }, tab, i -> {
+            Settings.setInt("gui.kind_tab", i);
+            dvKind.setVisibility(i == 0 ? VISIBLE : GONE);
+            hdvKind.setVisibility(i == 1 ? VISIBLE : GONE);
+        });
+        kindTab.setContentDescription("Show settings for DV or HDV");
+        dvBlock.addView(kindTab, Ui.fillWidth());
+        dvBlock.addView(Ui.help(c, "Which of the two is applied depends on what the camera sends, not on this tab."));
+        dvKind.setVisibility(tab == 0 ? VISIBLE : GONE);
+        hdvKind.setVisibility(tab == 1 ? VISIBLE : GONE);
+        dvBlock.addView(dvKind, Ui.fillWidth());
+        dvBlock.addView(hdvKind, Ui.fillWidth());
         content.addView(dvBlock, Ui.fillWidth());
 
         // screen and performance
@@ -222,6 +238,42 @@ final class OptionsPanel extends LinearLayout {
         updateInputVisibility();
         refreshControls();
         applyEnables();
+    }
+
+    /** "Save to": the phone's storage, an SD card, a USB drive (Storage). */
+    private void storageSection() {
+        Context c = getContext();
+        List<Storage.Volume> vols = Storage.volumes();
+        Storage.Volume cur = Storage.current();
+        content.addView(Ui.header(c, "Save to"));
+        List<String> labels = new ArrayList<>();
+        int sel = 0;
+        for (int i = 0; i < vols.size(); i++) {
+            labels.add(vols.get(i).label);
+            if (vols.get(i).id.equals(cur.id)) sel = i;
+        }
+        TextView where = Ui.help(c, "");
+        Runnable show = () -> {
+            Storage.Volume v = Storage.current();
+            where.setText("Captures are saved in " + v.where() + (v.shared ? "" : " (the app's own folder: Android "
+                    + "does not let the app create files in Movies here; it is removed with the app)")
+                    + ". The library shows the files of this place.");
+        };
+        show.run();
+        if (vols.size() > 1) {
+            content.addView(lock(Ui.spinner(c, labels, sel, i -> {
+                Settings.set("gui.storage", vols.get(i).id);
+                show.run();
+                pushHint();
+                host.optionsChanged();
+            })), Ui.fillWidth());
+        }
+        content.addView(where);
+    }
+
+    /** The options stay on screen (a tablet): no close button. */
+    void setPermanent(boolean on) {
+        closeButton.setVisibility(on ? GONE : VISIBLE);
     }
 
     private interface BoolSink { void set(boolean on); }
@@ -267,8 +319,8 @@ final class OptionsPanel extends LinearLayout {
             }
         });
         parent.addView(lock(e), Ui.fillWidth());
-        parent.addView(Ui.help(c, "Saved in Movies/MarvinCapture as name-0001, name-0002, …, and written into "
-                + "the file as its title where the format has one."));
+        parent.addView(Ui.help(c, "Saved as name-0001, name-0002, …, and written into the file as its title "
+                + "where the format has one."));
     }
 
     /** Format (+ its settings), aspect, scene split (DV / HDV), the two automatic stops. */
