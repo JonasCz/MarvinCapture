@@ -185,7 +185,11 @@ static void test_app_dirs(void)
     snprintf(cfg, sizeof(cfg), "%s/config/sub", base);   /* created by the core */
     snprintf(run, sizeof(run), "%s/run", base);
     snprintf(tdir, sizeof(tdir), "%s/tmp", base);
+#if defined(_WIN32)
+    snprintf(ini, sizeof(ini), "%s\\settings.ini", cfg);  /* joined with the native separator */
+#else
     snprintf(ini, sizeof(ini), "%s/settings.ini", cfg);
+#endif
 
     char before[1024] = "";
     pin_settings_default_path(before, sizeof(before));
