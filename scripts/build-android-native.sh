@@ -26,15 +26,19 @@
 #      static, no udev -> third_party/libusb-android-<arch>
 #   3. marvin-core and MarvinCaptureCLI with CMake and the NDK's toolchain file,
 #      without the ctest suite (PIN_BUILD_TESTS=OFF) -> build/android-<abi>/core
-#   4. build/android-<abi>/dist, stripped:
+#   4. the app's JNI layer (gui/android/app/src/main/cpp: pin_api.h wrappers, preview
+#      renderer, audio monitor), linked against that core -> build/android-<abi>/jni
+#   5. build/android-<abi>/dist, stripped:
 #
-#        libmarvin-core.so    the core, FFmpeg and libusb linked in: the app's one
-#                             native library besides its JNI layer
+#        libmarvin-core.so    the core, FFmpeg and libusb linked in
+#        libmarvin-jni.so     the app's JNI layer (needs libmarvin-core.so)
 #        MarvinCaptureCLI     the command line, for Termux (finds the .so next to it)
 #        firmware/            FPGA bitstreams (the app copies them out of its assets)
 #
-#   and checks that the .so needs no libusb / FFmpeg shared library and that its LOAD
-#   segments are 16 KB aligned (Android 15+ devices with 16 KB pages; Google Play).
+#   and checks that the libraries need no libusb / FFmpeg shared library, have no text
+#   relocations and that their LOAD segments are 16 KB aligned (Android 15+ devices with
+#   16 KB pages; Google Play). The Gradle project (gui/android) packages the two .so files
+#   from dist; scripts/build-android.sh runs this script and then Gradle.
 #
 # <arch> is arm64 or x86_64 (the layout of the other third_party/ builds); <abi> is
 # Android's name: arm64-v8a or x86_64 (the emulator).
@@ -200,32 +204,45 @@ for abi in "${ABIS[@]}"; do
     step "Building marvin-core for ${abi}"
     PKG_CONFIG_LIBDIR="${USB_PREFIX}/lib/pkgconfig" PKG_CONFIG_PATH="" cmake --build "${CORE}"
 
-    # 4. dist
+    # 4. the app's JNI layer, against the core just built
+    JNI="${BUILD}/jni"
+    step "Building the JNI layer (libmarvin-jni.so) for ${abi}"
+    cmake -G Ninja -S "${ROOT}/gui/android/app/src/main/cpp" -B "${JNI}" \
+        -DCMAKE_TOOLCHAIN_FILE="${TOOLCHAIN_FILE}" \
+        -DANDROID_ABI="${abi}" \
+        -DANDROID_PLATFORM="android-${PIN_ANDROID_API}" \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DPIN_SOURCE_DIR="${ROOT}" \
+        -DPIN_CORE_LIBRARY="${CORE}/libmarvin-core.so"
+    cmake --build "${JNI}"
+
+    # 5. dist
     step "Assembling build/android-${abi}/dist"
     rm -rf "${DIST}"
     mkdir -p "${DIST}/firmware"
-    cp -f "${CORE}/libmarvin-core.so" "${CORE}/MarvinCaptureCLI" "${DIST}/"
-    "${STRIP}" --strip-unneeded "${DIST}/libmarvin-core.so"
+    cp -f "${CORE}/libmarvin-core.so" "${CORE}/MarvinCaptureCLI" "${JNI}/libmarvin-jni.so" "${DIST}/"
+    "${STRIP}" --strip-unneeded "${DIST}/libmarvin-core.so" "${DIST}/libmarvin-jni.so"
     "${STRIP}" "${DIST}/MarvinCaptureCLI"
     cp -f "${ROOT}/firmware/fpga-ohci.bin" "${ROOT}/firmware/fpga-capture.bin" \
           "${ROOT}/firmware/fx2-marvin.bin" "${ROOT}/firmware/README.md" "${DIST}/firmware/"
 
     # checks
-    SO="${DIST}/libmarvin-core.so"
-    needed="$("${READELF}" -d "${SO}" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | tr '\n' ' ')"
-    if grep -Eq 'libusb|libav|libsw' <<< "${needed}"; then
-        die "${SO} needs a shared libusb / FFmpeg library: ${needed}"
-    fi
-    if "${READELF}" -d "${SO}" | grep -q TEXTREL; then
-        die "${SO} has text relocations (Android refuses to load those)"
-    fi
-    bad_align="$("${READELF}" -lW "${SO}" | awk '$1 == "LOAD" && $NF != "0x4000" { print $NF }')"
-    [[ -z "${bad_align}" ]] || die "${SO}: LOAD segments not 16 KB aligned (${bad_align})"
-    [[ -n "$("${READELF}" -lW "${SO}" | awk '$1 == "LOAD"')" ]] || die "${SO}: no LOAD segments?"
+    for SO in "${DIST}/libmarvin-core.so" "${DIST}/libmarvin-jni.so"; do
+        needed="$("${READELF}" -d "${SO}" | sed -n 's/.*(NEEDED).*\[\(.*\)\]/\1/p' | tr '\n' ' ')"
+        if grep -Eq 'libusb|libav|libsw' <<< "${needed}"; then
+            die "${SO} needs a shared libusb / FFmpeg library: ${needed}"
+        fi
+        if "${READELF}" -d "${SO}" | grep -q TEXTREL; then
+            die "${SO} has text relocations (Android refuses to load those)"
+        fi
+        bad_align="$("${READELF}" -lW "${SO}" | awk '$1 == "LOAD" && $NF != "0x4000" { print $NF }')"
+        [[ -z "${bad_align}" ]] || die "${SO}: LOAD segments not 16 KB aligned (${bad_align})"
+        [[ -n "$("${READELF}" -lW "${SO}" | awk '$1 == "LOAD"')" ]] || die "${SO}: no LOAD segments?"
+        size="$(wc -c < "${SO}" | tr -d '[:space:]')"
+        SUMMARY+=("${abi}: $(basename "${SO}") ${size} bytes, needs: ${needed}")
+    done
     runpath="$("${READELF}" -d "${DIST}/MarvinCaptureCLI" | sed -n 's/.*(RUNPATH).*\[\(.*\)\]/\1/p')"
     [[ "${runpath}" == '$ORIGIN' ]] || die "MarvinCaptureCLI: RUNPATH is '${runpath}', not \$ORIGIN"
-    size="$(wc -c < "${SO}" | tr -d '[:space:]')"
-    SUMMARY+=("${abi}: libmarvin-core.so ${size} bytes, needs: ${needed}")
 done
 
 printf '\n\033[32mDone.\033[0m\n'
