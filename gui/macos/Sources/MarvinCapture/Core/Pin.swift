@@ -200,6 +200,27 @@ enum Pin {
         return Array(list.prefix(max(0, min(n, list.count))))
     }
 
+    /// Opens each H.264 / HEVC encoder once (blocking, typically 50-300 ms each; cached) and returns the
+    /// PIN_ENC_* mask of those that opened. Call it off the main thread at startup: the first `formats`
+    /// call of the analog or DV kind otherwise runs it on its caller's thread.
+    @discardableResult
+    static func encodersProbe() -> Int { Int(pin_encoders_probe()) }
+
+    /// Which format settings apply to `f`, with the core's labels, ranges and help texts; nil on error.
+    static func formatOptions(_ f: pin_format_t) -> pin_format_options_t? {
+        var o = pin_format_options_t()
+        o.size = UInt32(MemoryLayout<pin_format_options_t>.size)
+        return pin_format_options(f, &o) == PIN_OK ? o : nil
+    }
+
+    /// The paragraph to show when format `f` is picked (the H.264 / HEVC formats are lossy), or "".
+    static func formatWarning(_ f: pin_format_t) -> String { format { pin_format_warning(f, $0, $1) } }
+
+    /// "About 2.9 GB per hour (6.4 Mbit/s)" for one quality setting of an H.264 / HEVC format, else "".
+    static func formatQualityHint(_ f: pin_format_t, quality: Int, deinterlace: Int, is60Hz: Bool) -> String {
+        format { pin_format_quality_hint(f, Int32(clamping: quality), Int32(clamping: deinterlace), is60Hz ? 1 : 0, $0, $1) }
+    }
+
     static func captureOptsDefaults() -> pin_capture_opts_t {
         var o = pin_capture_opts_t()
         pin_capture_opts_defaults(&o)

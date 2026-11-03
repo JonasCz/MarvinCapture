@@ -33,7 +33,7 @@ struct InfoBanner: View {
 
 struct InfoBannerContent: View {
     let severity: InfoSeverity
-    let title: String
+    let title: String   // "" = the message alone
     let message: String
     var actionTitle: String?
     var onAction: (() -> Void)?
@@ -66,20 +66,24 @@ struct InfoBannerContent: View {
         }
     }
 
+    private var accessibilityText: String {
+        title.isEmpty ? "\(severityName): \(message)" : "\(severityName): \(title). \(message)"
+    }
+
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: symbol).foregroundStyle(tint).font(.system(size: 15))
                 .padding(.top, 1)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(title).fontWeight(.semibold)
+                if !title.isEmpty { Text(title).fontWeight(.semibold) }
                 Text(message).font(.callout).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             .textSelection(.enabled)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("\(severityName): \(title). \(message)")
+            .accessibilityLabel(accessibilityText)
             if let actionTitle, let onAction {
                 Button(actionTitle, action: onAction)
                     .controlSize(.small)

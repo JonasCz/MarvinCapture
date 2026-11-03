@@ -18,21 +18,32 @@ import Foundation
 import Observation
 import CMarvinCore
 
-/// The per-kind (DV, HDV) file options: format, scene split, no-signal timeout,
-/// time limit, pass count, aspect. Port of KindSettingsViewModel.
+/// The per-kind (DV, HDV) file options: format (its settings behind the gear: `formatOptions`), scene
+/// split, no-signal timeout, time limit, pass count, aspect. Port of KindSettingsViewModel.
 @MainActor @Observable
 final class KindSettingsModel: Identifiable {
     enum Field { case format, split, idle, duration, passes, aspect }
 
     let kind: pin_kind_t
     let tabHeader: String
-    let formats: [FormatItem]
+    /// Empty until the encoder probe is done (`refreshFormats`): pin_formats() would run it on the main thread.
+    private(set) var formats: [FormatItem] = []
+    /// The selected format's settings (deinterlace, quality, ...), behind the gear next to the picker.
+    let formatOptions: FormatOptionsModel
+    /// A saved or command-line format the list may not have yet: the H.264 / HEVC entries only appear
+    /// once the encoder probe is done.
+    @ObservationIgnored private var wantedFormat: pin_format_t?
     nonisolated var id: UInt32 { kind.rawValue }
 
     /// Called after any option changed (the window model saves it and updates the preview / hint).
     @ObservationIgnored var onChanged: ((KindSettingsModel, Field) -> Void)?
 
-    var selectedFormat: FormatItem? { didSet { onChanged?(self, .format) } }
+    var selectedFormat: FormatItem? = nil {
+        didSet {
+            formatOptions.format = selectedFormat?.format
+            onChanged?(self, .format)
+        }
+    }
     var splitIntoScenes = false { didSet { onChanged?(self, .split) } }
     /// Stop after this long without signal (minutes); 0 = never.
     var idleStopMinutes = 5 { didSet { onChanged?(self, .idle) } }
@@ -43,13 +54,18 @@ final class KindSettingsModel: Identifiable {
     /// Aspect override (pin_aspect_t order: Auto, 4:3, 16:9).
     var aspectIndex = 0 { didSet { onChanged?(self, .aspect) } }
 
-    init(kind: pin_kind_t, tabHeader: String) {
+    init(kind: pin_kind_t, tabHeader: String, choices: FormatChoices) {
         self.kind = kind
         self.tabHeader = tabHeader
+        formatOptions = FormatOptionsModel(choices: choices, analog: false)   // DV and HDV share the DV choices
+    }
+
+    /// (Re)fills the format list (after the encoder probe), keeping the selection or the wanted format if
+    /// the list has it, else the kind's default.
+    func refreshFormats() {
+        let keep = selectedFormat?.format ?? wantedFormat
         formats = FormatItem.formats(for: kind)
-        // Set without the hook (init does not call observers anyway): the default must not be saved
-        // over the stored choice before it is loaded.
-        selectedFormat = formats.first(where: \.isDefault) ?? formats.first
+        selectedFormat = formats.first { $0.format == keep } ?? formats.first(where: \.isDefault) ?? formats.first
     }
 
     var titleEnabled: Bool { selectedFormat?.supportsTitle ?? false }
@@ -79,6 +95,7 @@ final class KindSettingsModel: Identifiable {
     var settingsPrefix: String { kind == PIN_KIND_DV ? "dv" : "hdv" }
 
     func applyFormat(_ format: pin_format_t) {
+        wantedFormat = format
         if let f = formats.first(where: { $0.format == format }) { selectedFormat = f }
     }
 }

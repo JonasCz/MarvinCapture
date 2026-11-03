@@ -48,16 +48,24 @@ struct AnalogPanel: View {
                     onChooseFolder: { model.chooseOutputFolder() })
                 HStack(alignment: .top, spacing: 8) {
                     Field("Format") {
-                        Picker("Format", selection: $m.analogFormat) {
-                            ForEach(model.analogFormats) { Text($0.label).tag(Optional($0)) }
+                        HStack(spacing: 4) {
+                            Picker("Format", selection: $m.analogFormat) {
+                                ForEach(model.analogFormats) { Text($0.label).tag(Optional($0)) }
+                            }
+                            .labelsHidden().accessibilityLabel("Analog format")
+                            // the selected format's settings (deinterlace, quality, FFV1 compression), if it has any
+                            FormatOptionsButton(options: model.analogFormatOptions, accessibilityName: "Analog format settings")
                         }
-                        .labelsHidden().accessibilityLabel("Analog format")
                     }
                     Field("Aspect") {
                         AspectPicker(selection: $m.analogAspectIndex, label: "Analog aspect ratio",
                                      help: "4:3, or 16:9 for anamorphic widescreen tapes. Affects the preview and the file.")
                     }
                     .frame(width: 104)
+                }
+                // the core's warning for the selected format (H.264 / HEVC: lossy)
+                if !model.analogFormatOptions.warning.isEmpty {
+                    InfoBannerContent(severity: .warning, title: "", message: model.analogFormatOptions.warning)
                 }
                 HStack(alignment: .top, spacing: 12) {
                     NumberField(title: "Stop no signal (min)", value: $m.analogIdleStopMinutes,
