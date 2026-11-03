@@ -84,7 +84,7 @@ final class OptionsPanel extends LinearLayout {
         setOrientation(VERTICAL);
 
         LinearLayout bar = Ui.row(c);
-        bar.setPadding(Ui.dp(c, 16), 0, Ui.dp(c, 12), Ui.dp(c, 4));   // the 44 dp row centres the title 8 dp down: as the status text
+        bar.setPadding(Ui.dp(c, 16), Ui.dp(c, 8), Ui.dp(c, 12), Ui.dp(c, 4));   // 8 dp above the close button; the status text on the controls is 16 dp down to match the title
         TextView title = Ui.text(c, "Options", 20, Ui.TEXT);
         title.setTypeface(Typeface.DEFAULT_BOLD);
         bar.addView(title, Ui.weight(1));

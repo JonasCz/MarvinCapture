@@ -187,10 +187,11 @@ final class MainLayout extends ViewGroup {
         }
     }
 
-    /** The controls' own padding (16 dp at the sides, 8 dp above and below) plus the insets. */
+    /** The controls' own padding (16 dp at the sides, 16 dp above, 8 dp below) plus the insets. The 16 dp
+     *  above put the status text where the options' title is (8 dp of padding and the 44 dp close button). */
     private void padControls(View v, int l, int t, int r, int b) {
-        int h = Math.round(16 * dp), vv = Math.round(8 * dp);
-        v.setPadding(l + h, t + vv, r + h, b + vv);
+        int h = Math.round(16 * dp);
+        v.setPadding(l + h, t + Math.round(16 * dp), r + h, b + Math.round(8 * dp));
     }
 
     private static void measureExact(View v, int[] r) {
