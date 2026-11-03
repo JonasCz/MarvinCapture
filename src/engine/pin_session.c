@@ -967,13 +967,23 @@ static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *d
 
 /* ---- format table (pin_api.h's pin_formats()/pin_format_info()) --------- */
 
+/* The analog default: uncompressed AVI everywhere but Android, where 75 GB per hour is more
+ * than phone storage keeps up with or holds for long (pin_session_format_warning() says so if
+ * the user picks it anyway), so lossless FFV1 is the default there. pin_capture_opts_defaults()
+ * (pin_api.c) follows the same rule. */
+#if defined(__ANDROID__)
+#define ANALOG_DEFAULT_IS_AVI 0
+#else
+#define ANALOG_DEFAULT_IS_AVI 1
+#endif
+
 static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_ANALOG_AVI] = { .format = PIN_FMT_ANALOG_AVI, .kind = PIN_KIND_ANALOG,
         .label = "Uncompressed AVI (YUY2)", .extension = "avi",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 1 },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = ANALOG_DEFAULT_IS_AVI },
     [PIN_FMT_ANALOG_FFV1_MKV] = { .format = PIN_FMT_ANALOG_FFV1_MKV, .kind = PIN_KIND_ANALOG,
         .label = "FFV1 + FLAC lossless (MKV)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = !ANALOG_DEFAULT_IS_AVI },
     [PIN_FMT_DV_RAW] = { .format = PIN_FMT_DV_RAW, .kind = PIN_KIND_DV,
         .label = "Raw DV stream", .extension = "dv",
         .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1 },

@@ -419,7 +419,11 @@ static void opts_full_defaults(pin_capture_opts_t *o)
 {
     memset(o, 0, sizeof(*o));
     o->size = sizeof(*o);
+#if defined(__ANDROID__)
+    o->format_analog = PIN_FMT_ANALOG_FFV1_MKV;   /* the Android default, see the format table */
+#else
     o->format_analog = PIN_FMT_ANALOG_AVI;
+#endif
     o->format_dv = PIN_FMT_DV_RAW;
     o->format_hdv = PIN_FMT_HDV_TS;
     o->aspect = PIN_ASPECT_AUTO;
