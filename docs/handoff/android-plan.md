@@ -1,9 +1,50 @@
 # Android GUI: feasibility and plan
 
-Status: plan only, nothing implemented. Written 2026-11-02 from the code at `1ce9d79`.
+Written 2026-11-02 from the code at `1ce9d79` as a plan; updated 2026-11-03: the core
+changes and the app (phase 1 and most of phase 2) are built, tested on the emulator with
+the replay device only, **not yet on a phone with the box**. See [Status](#status).
 Facts about Android, FFmpeg, libusb and Google Play were checked against their
-documentation on that date (sources at the end); anything not confirmed is marked
+documentation on 2026-11-02 (sources at the end); anything not confirmed is marked
 "unverified".
+
+## Status
+
+Built (2026-11-03):
+
+- **Core**: open by file descriptor (`pin_open("fd:N")`), `pin_usb_model()`,
+  `pin_device_fd_problem()`, `pin_set_app_dirs()`, the HDV remux temp file in the temp
+  dir, `--device fd:N` in the CLI, Android texts, the H.264 / HEVC sink with
+  `pin_encoders_probe()` / `pin_format_options()`; HDV MOV / MKV hidden on Android; the
+  replay device reports capture time and bytes like the hardware loops.
+- **Native build**: `scripts/build-android-native.sh` (FFmpeg, libusb 1.0.30, core, CLI,
+  and the app's JNI layer), arm64-v8a and x86_64.
+- **App** (`gui/android`, [README](../../gui/android/README.md)): Java, framework widgets,
+  no dependencies, minSdk 30, target 36; `scripts/build-android.sh` makes the APK
+  (2.9 MB for arm64-v8a). Everything under [Architecture](#architecture) and
+  [Phone UI](#phone-ui): capture service (foreground `connectedDevice`, wake lock,
+  notification with Stop, result notification / dialog), USB discovery and permission
+  (vendor 0x2304 only, the model table decides), GLES 3 preview with AChoreographer
+  pacing, AAudio monitor (muted by default), the options panel with the per-format
+  settings and warnings, the analog controls, the performance options (keep-busy thread,
+  low-latency audio keep-alive), the replay device for demos (`--es replay <file>`).
+- **Tested** on the x86_64 API 34 emulator (software rendering, no KVM) with the replay
+  device: start-up, no-device screen, preview, portrait / landscape, options, DV captures
+  into `Movies/MarvinCapture` (numbering, end of tape, user stop, finalising, the
+  notifications, the abnormal-end dialog), error state and recovery.
+
+Not done or not tested:
+
+- **Nothing has run against the real box on a phone**: USB permission / attach intent,
+  `fd:` open and firmware upload from the app, DV / HDV / analog captures, unplugging
+  during a capture, the analog controls, thermal behaviour. Phase 0 (measuring analog on
+  phones, with and without the keep-busy thread and the audio keep-alive) is still open.
+- H.264 from DV on the emulator's software encoder stopped after 18 s ("the encoder took
+  no picture for 10 s"); probably the emulator's speed, to be tried on a phone.
+- Not in the app yet: SD card location, SAF, `progress_percent` during finalising
+  (indeterminate bar), thermal / battery warnings, `Notification.ProgressStyle`, a
+  monochrome (themed) launcher icon, a CI job (the script is ready for one, see
+  [building.md](../building.md#android)).
+- Only API 34 ran; Android 11-13 and 15-16 and 16 KB page devices are untested.
 
 ## Verdict
 
@@ -361,7 +402,12 @@ cannot be recovered.
 
 ## Decisions
 
-Open; recommendation first.
+Decided by the owner (2026-11-03): 1 framework Views + `Theme.DeviceDefault`; 2 minimum
+Android 11 (API 30); 3 GitHub APK with the bitstreams bundled, no Play build for now;
+4 HDV MOV / MKV hidden; 5 uncompressed analog AVI kept, with the core's warning; 6 partial
+wake lock (screen off allowed; "keep the screen on during a capture" is an option);
+7 as below; 8 `Movies/MarvinCapture` only for now; 9 Java. The original options and
+recommendations follow.
 
 1. **UI toolkit**: framework Views + `Theme.DeviceDefault` (smallest, uses only what the OS
    ships, Material You colours on 12+, but no bottom sheet or Material 3 controls: those are
