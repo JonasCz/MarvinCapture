@@ -182,7 +182,7 @@ volume (`Android/data/jonascz.marvincapture/files/Movies`, always writable, dele
 options say so. A volume that is gone falls back to the phone's storage. Setting: `gui.storage` (the
 volume's id).
 
-**Library** (button next to the record button): the files in the chosen place, newest first, as a grid
+**Library** (button next to the record button; slides up like the options): the files in the chosen place, newest first, as a grid
 of thumbnails (`MediaMetadataRetriever`, made on two worker threads and cached) with size, length and
 date; a tap plays (`VideoView` + `MediaController`), a long press offers to delete. Only the app's own
 folder content is listed, because that is all it can see. Playback and thumbnails use **Android's**

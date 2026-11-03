@@ -77,6 +77,7 @@ final class LibraryView extends FrameLayout {
     private final TextView playerTitle, playerError;
     private final MediaController controller;
     private final LinearLayout playerBar;
+    private boolean shown;
     private int insL, insT, insR, insB;
     private final float dp;
 
@@ -179,21 +180,39 @@ final class LibraryView extends FrameLayout {
         video.setPadding(0, 0, 0, 0);
     }
 
+    /** Slides up over the screen (and down again), like the options: the system's animation scale applies. */
     void open() {
         reload();
+        shown = true;
+        animate().cancel();
         setVisibility(VISIBLE);
+        setTranslationY((getHeight() > 0 ? getHeight() : Ui.dp(getContext(), 600)) * 0.4f);
+        setAlpha(0f);
+        animate().translationY(0).alpha(1f).setDuration(260)
+                .setInterpolator(new android.view.animation.DecelerateInterpolator());
     }
 
     void close() {
         stopPlayer();
-        setVisibility(GONE);
+        if (!shown) return;
+        shown = false;
+        animate().cancel();
+        animate().translationY(getHeight() * 0.4f).alpha(0f).setDuration(200)
+                .setInterpolator(new android.view.animation.AccelerateInterpolator())
+                .withEndAction(() -> {
+                    if (shown) return;   // opened again meanwhile
+                    setVisibility(GONE);
+                    setTranslationY(0);
+                    setAlpha(1f);
+                });
     }
 
     void pause() {
         if (player.getVisibility() == VISIBLE) video.pause();
     }
 
-    boolean isOpen() { return getVisibility() == VISIBLE; }
+    /** Open or opening (not while it slides away). */
+    boolean isOpen() { return shown; }
 
     /** Back: ends the player first, then the library. */
     void back() {
