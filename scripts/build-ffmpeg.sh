@@ -273,9 +273,13 @@ case "${OS_NAME}" in
         command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
         # Media Foundation: the GPU vendor's encoder MFT (hw_encoding=1) or Microsoft's
         # software one. mfplat.dll is loaded at run time; the static libs add mfuuid,
-        # ole32 and strmiids (libavcodec.pc).
+        # ole32 and strmiids (libavcodec.pc). FFmpeg 8.1's mfenc.c uses the D3D11 types
+        # unconditionally (it compiles only with d3d11va), so that is on as well: only
+        # libavutil's D3D11 device context, d3d11.dll and dxgi.dll loaded at run time (no
+        # import libraries), no hardware decoding (no hwaccels are enabled).
         CONFIGURE_ARGS+=(
             --enable-mediafoundation
+            --enable-d3d11va
             --enable-encoder=h264_mf
             --enable-encoder=hevc_mf
         )
