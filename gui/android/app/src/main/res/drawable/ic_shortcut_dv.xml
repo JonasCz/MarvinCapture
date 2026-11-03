@@ -14,7 +14,7 @@
     <!-- the logo's navy as the backdrop -->
     <path android:fillColor="#2D3080" android:pathData="M12,12m-12,0a12,12 0 1,1 24,0a12,12 0 1,1 -24,0" />
     <path android:strokeColor="#FFFFFF" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M7,6.6 H19.6 Q21,6.6 21,8 V16 Q21,17.4 19.6,17.4 H6.6 L3,14.2 V9.8 Z" />
-    <path android:strokeColor="#FFFFFF" android:strokeWidth="0.9" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M7.2,10.2 H16.4 V13.8 H7.2 Z" />
-    <path android:strokeColor="#FFFFFF" android:strokeWidth="0.8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M7.2,12 H16.4" />
-    <path android:strokeColor="#FFFFFF" android:strokeWidth="0.8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M9.5,10.2 V11.4 M11.8,10.2 V11.4 M14.1,10.2 V11.4 M9.5,12.6 V13.8 M11.8,12.6 V13.8 M14.1,12.6 V13.8" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="0.9" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M9.4,10.2 H18.6 V13.8 H9.4 Z" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="0.8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M9.4,12 H18.6" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="0.8" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M11.7,10.2 V11.4 M14,10.2 V11.4 M16.3,10.2 V11.4 M11.7,12.6 V13.8 M14,12.6 V13.8 M16.3,12.6 V13.8" />
 </vector>
