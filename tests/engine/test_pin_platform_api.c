@@ -55,11 +55,13 @@ static int exists(const char *path)
     return stat(path, &st) == 0;
 }
 
+#if defined(__linux__)   /* only the Linux / Android fd test waits */
 static void sleep_ms(int ms)
 {
     struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000L };
     nanosleep(&ts, NULL);
 }
+#endif
 
 static pin_device_info_t info(void)
 {
