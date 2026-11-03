@@ -17,9 +17,9 @@
  */
 
 /*
- * Audio with AAudio (NDK):
+ * Audio with AAudio (NDK): one output stream, with two reasons to run it.
  *
- * 1. The live monitor: an output stream whose data callback pumps the core's PCM ring
+ * 1. The live monitor (audible): the stream's data callback pumps the core's PCM ring
  *    (pin_monitor_read, 48 kHz s16 interleaved stereo) straight into the stream's buffer. Port
  *    of the macOS CoreAudioMonitor: the core bounds the latency, so this is a dumb pump plus the
  *    anti-crackle prebuffer (30 ms) and a restart when the output device changes (headphones).
@@ -27,11 +27,15 @@
  *    (silence for that buffer if the main thread holds it) and keeps it for the whole buffer;
  *    audioDetach() takes the lock, so when it returns the callback is out of the core.
  *
- * 2. The keep-alive: a silent low-latency output stream while an analog capture runs. On
- *    several phones an active low-latency stream makes the power HAL hold a CPU wake-up
- *    latency request (Pixel: the AUDIO_STREAMING_LOW_LATENCY power hint, which writes
- *    /dev/cpu_dma_latency), the remedy analog capture needs and an app cannot request itself.
- *    Device dependent; it costs little where it does nothing.
+ * 2. The keep-alive: while an analog capture runs the same stream is opened in low-latency
+ *    performance mode and plays silence whenever the monitor is muted. On several phones an
+ *    active low-latency stream makes the power HAL hold a CPU wake-up latency request (Pixel:
+ *    the AUDIO_STREAMING_LOW_LATENCY power hint, which writes /dev/cpu_dma_latency), the remedy
+ *    analog capture needs and an app cannot request itself. Device dependent; it costs little
+ *    where it does nothing. DV and HDV captures don't ask for it: their stream, when unmuted,
+ *    is the normal-latency one.
+ *
+ * The stream exists while either reason holds; a change of the performance mode reopens it.
  */
 
 #include <aaudio/AAudio.h>
@@ -52,7 +56,9 @@ typedef struct {
 
     pthread_mutex_t ctl;      /* stream start / stop / restart */
     AAudioStream *stream;
-    int want_running;
+    int stream_low_latency;   /* the open stream's performance mode */
+    int want_audible;         /* unmuted: the callback plays the core's audio, else silence */
+    int want_keepalive;       /* analog capture: low-latency stream, even when silent */
 } monitor_t;
 
 static aaudio_data_callback_result_t monitor_cb(AAudioStream *st, void *user, void *data, int32_t n)
@@ -61,7 +67,7 @@ static aaudio_data_callback_result_t monitor_cb(AAudioStream *st, void *user, vo
     monitor_t *m = user;
     int16_t *out = data;
     int played = 0;
-    if (pthread_mutex_trylock(&m->lock) == 0) {
+    if (__atomic_load_n(&m->want_audible, __ATOMIC_RELAXED) && pthread_mutex_trylock(&m->lock) == 0) {
         if (m->session) {
             int got = pin_monitor_read(m->session, out, n);
             if (got < 0) got = 0;
@@ -148,16 +154,28 @@ static void monitor_close_stream(monitor_t *m)
 /* ctl held */
 static void monitor_open_stream(monitor_t *m)
 {
-    if (m->stream || !m->want_running)
+    if (m->stream || !(m->want_audible || m->want_keepalive))
         return;
     pthread_mutex_lock(&m->lock);
     m->primed = 0;
     m->prime_frames = 0;
     pthread_mutex_unlock(&m->lock);
-    m->stream = open_output(0, monitor_cb, monitor_error_cb, m);
+    m->stream_low_latency = m->want_keepalive;
+    m->stream = open_output(m->stream_low_latency, monitor_cb, monitor_error_cb, m);
     if (m->stream)
-        MJ_LOGI("audio monitor: started (%d Hz, %d frames per burst)",
-                AAudioStream_getSampleRate(m->stream), AAudioStream_getFramesPerBurst(m->stream));
+        MJ_LOGI("audio monitor: started (%s%s, %d Hz, %d frames per burst, performance mode %d)",
+                m->want_audible ? "audible" : "silent", m->want_keepalive ? ", keep-alive" : "",
+                AAudioStream_getSampleRate(m->stream), AAudioStream_getFramesPerBurst(m->stream),
+                AAudioStream_getPerformanceMode(m->stream));
+}
+
+/* ctl held: opens, closes or reopens the stream to match what is wanted */
+static void monitor_apply(monitor_t *m)
+{
+    int need = m->want_audible || m->want_keepalive;
+    if (m->stream && (!need || m->stream_low_latency != m->want_keepalive))
+        monitor_close_stream(m);
+    monitor_open_stream(m);
 }
 
 /* A disconnected stream (output device changed) is reopened on a thread of its own: AAudio
@@ -221,7 +239,7 @@ MJ_FN(void, audioDetach)(JNIEnv *env, jclass c, jlong h)
     pthread_mutex_unlock(&m->lock);
 }
 
-/* Plays the monitor (on = unmuted and attached) or releases the output entirely. */
+/* Unmuted and attached (on) or muted: the stream keeps running while the keep-alive wants it. */
 MJ_FN(void, audioSetRunning)(JNIEnv *env, jclass c, jlong h, jboolean on)
 {
     (void)env; (void)c;
@@ -229,44 +247,20 @@ MJ_FN(void, audioSetRunning)(JNIEnv *env, jclass c, jlong h, jboolean on)
     if (!m)
         return;
     pthread_mutex_lock(&m->ctl);
-    m->want_running = on ? 1 : 0;
-    if (on)
-        monitor_open_stream(m);
-    else
-        monitor_close_stream(m);
+    __atomic_store_n(&m->want_audible, on ? 1 : 0, __ATOMIC_RELAXED);
+    monitor_apply(m);
     pthread_mutex_unlock(&m->ctl);
 }
 
-/* ---- keep-alive ----------------------------------------------------------------------------- */
-
-static pthread_mutex_t g_keep_mu = PTHREAD_MUTEX_INITIALIZER;
-static AAudioStream *g_keep;
-
-static aaudio_data_callback_result_t silence_cb(AAudioStream *st, void *user, void *data, int32_t n)
-{
-    (void)st; (void)user;
-    memset(data, 0, (size_t)n * 4);
-    return AAUDIO_CALLBACK_RESULT_CONTINUE;
-}
-
-MJ_FN(void, keepAliveSet)(JNIEnv *env, jclass c, jboolean on)
+/* An analog capture runs: low-latency stream (silent while muted) so the CPU stays responsive. */
+MJ_FN(void, audioSetKeepAlive)(JNIEnv *env, jclass c, jlong h, jboolean on)
 {
     (void)env; (void)c;
-    pthread_mutex_lock(&g_keep_mu);
-    if (on && !g_keep) {
-        g_keep = open_output(1, silence_cb, NULL, NULL);
-        if (g_keep)
-            MJ_LOGI("audio keep-alive: started (performance mode %d, %d frames per burst)",
-                    AAudioStream_getPerformanceMode(g_keep), AAudioStream_getFramesPerBurst(g_keep));
-    } else if (!on && g_keep) {
-        AAudioStream_requestStop(g_keep);
-        AAudioStream_close(g_keep);
-        g_keep = NULL;
-        MJ_LOGI("audio keep-alive: stopped");
-    } else if (on && g_keep && AAudioStream_getState(g_keep) == AAUDIO_STREAM_STATE_DISCONNECTED) {
-        /* the output changed under it: reopen (called again on every service tick) */
-        AAudioStream_close(g_keep);
-        g_keep = open_output(1, silence_cb, NULL, NULL);
-    }
-    pthread_mutex_unlock(&g_keep_mu);
+    monitor_t *m = M(h);
+    if (!m)
+        return;
+    pthread_mutex_lock(&m->ctl);
+    m->want_keepalive = on ? 1 : 0;
+    monitor_apply(m);
+    pthread_mutex_unlock(&m->ctl);
 }

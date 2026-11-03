@@ -182,7 +182,7 @@ public final class CaptureService extends Service {
         unregisterReceiver(detachReceiver);
         closeSession("");
         coreThread.shutdown();
-        Core.keepAliveSet(false);
+        Core.audioSetKeepAlive(MarvinApp.monitor, false);
         if (wakeLock.isHeld()) wakeLock.release();
         super.onDestroy();
     }
@@ -320,7 +320,7 @@ public final class CaptureService extends Service {
         Core.audioSetRunning(MarvinApp.monitor, false);
         Core.audioDetach(MarvinApp.monitor);      // never call into a closed session
         Core.previewDetach(MarvinApp.renderer);
-        Core.keepAliveSet(false);
+        Core.audioSetKeepAlive(MarvinApp.monitor, false);
         keepAlive = false;
         status.i[Core.ST_STATE] = Core.STATE_CLOSED;
         closing++;
@@ -529,8 +529,9 @@ public final class CaptureService extends Service {
     }
 
     private void updateKeepAlive(boolean on) {
-        if (on != keepAlive || on) Core.keepAliveSet(on);   // while on: reopens a disconnected stream
+        if (on == keepAlive) return;   // a disconnected stream restarts itself (audio.c)
         keepAlive = on;
+        Core.audioSetKeepAlive(MarvinApp.monitor, on);
     }
 
     // ---- notifications ---------------------------------------------------------------------------

@@ -5,9 +5,15 @@
   SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 <resources>
-    <!-- Framework theme only (no AppCompat / Material Components): dark, edge to edge. -->
-    <style name="Theme.Marvin" parent="@android:style/Theme.DeviceDefault.NoActionBar">
-        <item name="android:windowBackground">@android:color/black</item>
+    <!-- Framework theme only (no AppCompat / Material Components): light or dark as the system
+         says (DayNight), edge to edge. The accent colours are set explicitly: the device's own
+         dark accent can be too dark to see a selected radio button or menu entry. -->
+    <style name="Theme.Marvin" parent="@android:style/Theme.DeviceDefault.DayNight">
+        <item name="android:windowActionBar">false</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowBackground">@color/ui_panel</item>
+        <item name="android:colorAccent">@color/ui_accent</item>
+        <item name="android:colorControlActivated">@color/ui_accent</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
         <item name="android:enforceStatusBarContrast">false</item>

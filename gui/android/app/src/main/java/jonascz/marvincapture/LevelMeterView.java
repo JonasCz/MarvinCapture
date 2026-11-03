@@ -55,11 +55,11 @@ public final class LevelMeterView extends View {
     public LevelMeterView(Context c, AttributeSet a) {
         super(c, a);
         dp = getResources().getDisplayMetrics().density;
-        track.setColor(0x33ffffff);
+        track.setColor(Ui.TRACK);
         zones[0].setColor(0xff34c759);
         zones[1].setColor(0xffffcc00);
         zones[2].setColor(0xffff3b30);
-        label.setColor(0xb3ffffff);
+        label.setColor(Ui.TEXT2);
         label.setTextSize(10 * getResources().getDisplayMetrics().scaledDensity);
         setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_YES);
         setContentDescription("Audio level meters: silent");
@@ -122,7 +122,7 @@ public final class LevelMeterView extends View {
             }
             c.restore();
             if (hold[ch] > FLOOR_DB) {
-                holdPaint.setColor(hold[ch] > -1 ? 0xffff3b30 : 0xffffffff);
+                holdPaint.setColor(hold[ch] > -1 ? 0xffff3b30 : Ui.TEXT);
                 float hx = x0 + frac(hold[ch]) * w;
                 c.drawRect(Math.max(x0, hx - 2 * dp), y, Math.max(x0 + 2 * dp, hx), y + barH, holdPaint);
             }

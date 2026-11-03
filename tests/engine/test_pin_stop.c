@@ -79,6 +79,7 @@ int main(void)
     CHECK(strstr(b, "standard output") != NULL, "no video, no path");
     CHECK(pin_stop_disk_reserve(0, 0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
     CHECK(pin_stop_disk_reserve(10, 20, 30) == 60, "margin + backlog + remux");
+    CHECK(pin_stop_remux_reserve(100) == 200, "remux keeps twice the written size free");
 
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);

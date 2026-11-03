@@ -41,6 +41,11 @@ extern "C" {
  * writes a temp .ts and remuxes it at close). margin 0 = PIN_STOP_DISK_MARGIN. */
 uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_t remux_bytes);
 
+/* What a format that rewraps the whole file when it is closed (HDV to MOV / MKV: a temp .ts, then
+ * the remux) keeps free while it runs: twice what is written so far (the remux output is as big
+ * as the temp file, the rest is slack). Pass it as remux_bytes. */
+uint64_t pin_stop_remux_reserve(uint64_t bytes_written);
+
 /* pin_stop_reason_abnormal(): device / camera gone, disk full, write or other error. */
 int pin_stop_abnormal(pin_stop_reason_t reason);
 

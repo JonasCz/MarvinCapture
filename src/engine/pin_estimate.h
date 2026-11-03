@@ -133,6 +133,11 @@ double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, dou
 /* free_bytes / rate, or 0 when the rate is unknown. */
 double pin_est_seconds_left(uint64_t free_bytes, double bytes_per_s);
 
+/* Time left for a format that is rewrapped when the file closes: the capture stops when the free
+ * space falls below pin_stop_remux_reserve() of what is written by then, i.e. free - 2 * written
+ * is used up three times as fast as the data arrives. written_bytes = 0 before a capture. */
+double pin_est_seconds_left_remux(uint64_t free_bytes, uint64_t written_bytes, double bytes_per_s);
+
 /* Settings persistence of the learned FFV1 rate. load returns bytes/hour, or 0
  * when unset or implausible (< 1 GB/h, > 300 GB/h); store ignores implausible
  * values and returns 0 on success. path is the settings file. */

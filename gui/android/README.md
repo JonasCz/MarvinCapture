@@ -152,7 +152,8 @@ API 35); the system bar and cutout insets are padding.
 
 ## Options
 
-`OptionsPanel`, built on first use. Input; analog: TV standard, file name, format,
+`OptionsPanel`, built on first use (the input selector is not in it: it is always on the main
+panel, a segmented control at the top, locked while capturing). Analog: TV standard, file name, format,
 aspect, stop after no signal / total time, picture and audio-gain sliders
 (`pin_get_control` / `pin_set_control`, live during a capture, hue enabled by the
 core); DV and HDV (shown for the DV input, which detects which one arrives): file name,
@@ -174,11 +175,14 @@ Linux. Two substitutes, both on by default:
 
 - the core's keep-busy thread (one core busy at idle priority while the analog read
   loop runs);
-- a silent AAudio output stream in `AAUDIO_PERFORMANCE_MODE_LOW_LATENCY` while an
-  analog capture runs (`keepAliveSet` in `audio.c`). On several phones the power HAL
-  then holds a PM QoS CPU-latency request (Pixel: the `AUDIO_STREAMING_LOW_LATENCY`
-  power hint, which writes `/dev/cpu_dma_latency`). Device dependent, and not measured
-  yet.
+- the audio monitor's own AAudio output stream, opened in `AAUDIO_PERFORMANCE_MODE_LOW_LATENCY`
+  while an analog capture runs, playing silence while muted (`audioSetKeepAlive` in
+  `audio.c`: one stream, reopened when the mode changes; DV and HDV never ask for it, their
+  unmuted stream is the normal-latency one). The mechanism is AOSP's, not Pixel's: the audio
+  HAL tells the power HAL that a low-latency stream is active (`Mode::AUDIO_STREAMING_LOW_LATENCY`;
+  Qualcomm's audio HAL does it for every low-latency stream) and what the power HAL does with
+  it is the vendor's: on Pixel it sets a PM QoS CPU-latency request (`/dev/cpu_dma_latency`).
+  Other makers' behaviour is undocumented and not measured. Device dependent.
 
 ## Settings
 
@@ -249,7 +253,7 @@ then closes the session.
   `connectedDevice`; `mediaPlayback` for the replay device, which has no USB permission
   to show for the first) with the ongoing notification (state, file, sizes, frames, a
   chronometer, the countdown, Stop), takes a partial wake lock and, for analog, the
-  keep-alive stream. All three stay while the file is finalised (`STOPPING`, or a
+  keep-alive. All three stay while the file is finalised (`STOPPING`, or a
   `pin_close` that finalises) and end with it; then the service leaves the foreground
   and posts the result: a normal end as a notification, an abnormal one
   (`pin_stop_reason_abnormal`) as a dialog when the activity is visible, else as a
@@ -282,3 +286,15 @@ and the attach intent, `fd:` opening, firmware upload, DV / HDV / analog capture
 device, detach during a capture, the analog controls on a live input, the keep-busy
 thread and the low-latency keep-alive on a phone, H.264 / HEVC with a hardware encoder,
 the 16 KB page devices, Android 11-13 behaviour (only API 34 ran).
+
+## Look
+
+The system theme decides (`Theme.DeviceDefault.DayNight`; palette in `res/values/colors.xml`
+and `values-night/`, read by `Ui.applyTheme`). The activity handles `uiMode` itself, so a theme
+change rebuilds the views in place (the service, session and surface carry on). The accent
+colours are set in the theme and the drop-down lists colour the chosen entry themselves,
+because some devices' own dark accent is too dark to see.
+
+Edge to edge: the preview frame reaches behind the status bar and the display cutout (the
+picture and the REC badge stay inside the insets); the panel takes the insets of the sides it
+touches as padding. Without a picture the card has the shape of the chosen aspect (16:9 is wider).

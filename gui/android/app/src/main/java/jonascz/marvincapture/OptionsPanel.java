@@ -45,7 +45,7 @@ import java.util.List;
 import java.util.function.BooleanSupplier;
 
 /**
- * The options, behind the gear: input, TV standard, the output format per kind (analog, DV, HDV)
+ * The options, behind the gear: TV standard, the output format per kind (analog, DV, HDV)
  * with the format's own settings, aspect, file name, scene split, the two automatic stops, the
  * analog picture and audio-gain controls, screen and performance options, about. In place of the
  * status panel, so the preview stays visible (useful for the picture controls). Every list,
@@ -145,31 +145,6 @@ final class OptionsPanel extends LinearLayout {
         lockableCond.clear();
         sliders.clear();
 
-        content.addView(Ui.header(c, "Input"));
-        RadioGroup input = new RadioGroup(c);
-        input.setOrientation(RadioGroup.HORIZONTAL);
-        String[] names = { "DV / HDV", "S-Video", "Composite" };
-        for (int i = 0; i < 3; i++) {
-            RadioButton rb = new RadioButton(c);
-            rb.setText(names[i]);
-            rb.setId(View.generateViewId());
-            rb.setPadding(0, 0, Ui.dp(c, 12), 0);
-            input.addView(rb);
-            lock(rb);
-            if (i == Settings.input()) rb.setChecked(true);
-        }
-        input.setOnCheckedChangeListener((g, id) -> {
-            int i = g.indexOfChild(g.findViewById(id));
-            if (i < 0 || i == Settings.input()) return;
-            CaptureService svc = host.service();
-            if (svc != null) svc.setInput(i);
-            else Settings.setInt("gui.last_input", i);
-            updateInputVisibility();
-            refreshControls();
-            host.optionsChanged();
-        });
-        content.addView(input, Ui.fillWidth());
-
         // analog
         analogBlock = Ui.column(c);
         analogBlock.addView(Ui.header(c, "Analog"));
@@ -226,18 +201,23 @@ final class OptionsPanel extends LinearLayout {
                 "gui.cpu_keep_busy", Settings.cpuKeepBusy(),
                 on -> Core.setCpuKeepBusy(on ? Core.KEEP_BUSY_AUTO : Core.KEEP_BUSY_OFF), true));
         content.addView(toggle(c, "Low-latency audio keep-alive during analog capture",
-                "Plays silence through a low-latency audio stream while an analog capture runs. On many phones "
-                        + "(Pixel among them) that makes the system keep the processor quick to respond, which helps "
-                        + "analog captures not to lose frames. Device dependent: on some phones it does nothing.",
+                "Runs the audio output in low-latency mode (silent while muted) during an analog capture. On "
+                        + "some phones (Pixels among them) that makes the system keep the processor quick to respond, "
+                        + "which helps analog captures not to lose frames. Device dependent: on others it does nothing. "
+                        + "DV and HDV use the normal audio output only when unmuted.",
                 "gui.audio_keepalive", Settings.audioKeepAlive(), on -> {}, true));
 
-        content.addView(Ui.header(c, "About"));
+        TextView aboutHeader = Ui.header(c, "About");
+        aboutHeader.setPadding(0, Ui.dp(c, 40), 0, Ui.dp(c, 6));
+        content.addView(aboutHeader);
         content.addView(Ui.help(c, "MarvinCapture " + Core.appVersion() + " · " + Core.versionString()
                 + "\nFree software under the GNU AGPL v3."));
         Button about = new Button(c);
         about.setText("About and licences");
         about.setOnClickListener(v -> host.showAbout());
-        content.addView(about, Ui.wrap());
+        LinearLayout.LayoutParams ap = Ui.wrap();
+        ap.topMargin = Ui.dp(c, 10);
+        content.addView(about, ap);
 
         updateInputVisibility();
         refreshControls();

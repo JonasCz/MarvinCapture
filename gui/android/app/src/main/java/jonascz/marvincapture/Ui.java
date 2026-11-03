@@ -19,7 +19,9 @@
 package jonascz.marvincapture;
 
 import android.content.Context;
+import android.content.res.Configuration;
 import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
 import android.text.TextUtils;
 import android.util.TypedValue;
 import android.view.Gravity;
@@ -38,8 +40,26 @@ import java.util.function.IntConsumer;
 final class Ui {
     private Ui() {}
 
-    static final int TEXT = 0xffffffff, TEXT2 = 0xb3ffffff, TEXT3 = 0x80ffffff, WARN = 0xffffc04d,
-            ERROR = 0xffff6b61, ACCENT = 0xff8ab4ff, CARD = 0xff1d1e23, PANEL = 0xff121316;
+    /** The palette (res/values/colors.xml, values-night for dark): set by applyTheme, which the
+     *  activity calls before it builds its views and again when the system theme changes. */
+    static int TEXT, TEXT2, TEXT3, WARN, ERROR, ACCENT, ON_ACCENT, CARD, PANEL, BUTTON, TRACK;
+    static boolean dark = true;
+
+    static void applyTheme(Context c) {
+        dark = (c.getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK)
+                == Configuration.UI_MODE_NIGHT_YES;
+        TEXT = c.getColor(R.color.ui_text);
+        TEXT2 = c.getColor(R.color.ui_text2);
+        TEXT3 = c.getColor(R.color.ui_text3);
+        WARN = c.getColor(R.color.ui_warn);
+        ERROR = c.getColor(R.color.ui_error);
+        ACCENT = c.getColor(R.color.ui_accent);
+        ON_ACCENT = c.getColor(R.color.ui_on_accent);
+        CARD = c.getColor(R.color.ui_card);
+        PANEL = c.getColor(R.color.ui_panel);
+        BUTTON = c.getColor(R.color.ui_button);
+        TRACK = c.getColor(R.color.ui_track);
+    }
 
     static int dp(Context c, float v) {
         return Math.round(v * c.getResources().getDisplayMetrics().density);
@@ -110,7 +130,18 @@ final class Ui {
     /** A drop-down of labels; onPick gets the index of a choice the user made (not the initial one). */
     static Spinner spinner(Context c, List<String> items, int selected, IntConsumer onPick) {
         Spinner sp = new Spinner(c, Spinner.MODE_DROPDOWN);
-        ArrayAdapter<String> a = new ArrayAdapter<>(c, android.R.layout.simple_spinner_item, items);
+        ArrayAdapter<String> a = new ArrayAdapter<String>(c, android.R.layout.simple_spinner_item, items) {
+            @Override
+            public View getDropDownView(int pos, View convert, ViewGroup parent) {
+                // the chosen entry in the accent colour and bold: the device's own highlight can
+                // be too dark to see on the dark theme
+                TextView t = (TextView) super.getDropDownView(pos, convert, parent);
+                boolean cur = pos == sp.getSelectedItemPosition();
+                t.setTextColor(cur ? ACCENT : TEXT);
+                t.setTypeface(cur ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                return t;
+            }
+        };
         a.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         sp.setAdapter(a);
         sp.setSelection(Math.max(0, Math.min(items.size() - 1, selected)), false);
@@ -128,6 +159,63 @@ final class Ui {
             public void onNothingSelected(AdapterView<?> parent) {}
         });
         return sp;
+    }
+
+    /** A segmented choice (one of several, always visible): equal-width labels, the chosen one filled
+     *  with the accent colour. The view's tag holds the chosen index; setChosen changes it without
+     *  calling onPick. */
+    static final class Segmented extends LinearLayout {
+        private final TextView[] items;
+        private int chosen = -1;
+
+        Segmented(Context c, String[] names, int chosen, IntConsumer onPick) {
+            super(c);
+            setOrientation(HORIZONTAL);
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(BUTTON);
+            bg.setCornerRadius(dp(c, 18));
+            setBackground(bg);
+            setPadding(dp(c, 3), dp(c, 3), dp(c, 3), dp(c, 3));
+            items = new TextView[names.length];
+            for (int i = 0; i < names.length; i++) {
+                TextView t = text(c, names[i], 13, TEXT);
+                t.setGravity(Gravity.CENTER);
+                t.setSingleLine(true);
+                t.setPadding(dp(c, 4), dp(c, 8), dp(c, 4), dp(c, 8));
+                t.setClickable(true);
+                t.setFocusable(true);
+                int idx = i;
+                t.setOnClickListener(v -> {
+                    if (idx == this.chosen) return;
+                    setChosen(idx);
+                    onPick.accept(idx);
+                });
+                items[i] = t;
+                addView(t, new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
+            }
+            setChosen(chosen);
+        }
+
+        void setChosen(int i) {
+            chosen = i;
+            for (int k = 0; k < items.length; k++) {
+                boolean on = k == i;
+                GradientDrawable d = new GradientDrawable();
+                d.setCornerRadius(dp(getContext(), 15));
+                d.setColor(on ? ACCENT : 0);
+                items[k].setBackground(d);
+                items[k].setTextColor(on ? ON_ACCENT : TEXT);
+                items[k].setTypeface(on ? Typeface.DEFAULT_BOLD : Typeface.DEFAULT);
+                items[k].setSelected(on);
+            }
+        }
+
+        @Override
+        public void setEnabled(boolean e) {
+            super.setEnabled(e);
+            for (TextView t : items) t.setEnabled(e);
+            setAlpha(e ? 1f : 0.5f);
+        }
     }
 
     /** "Never", "1 min", "1 h 30 min" for a minute count. */

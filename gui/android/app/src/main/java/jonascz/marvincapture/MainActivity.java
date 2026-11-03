@@ -45,6 +45,7 @@ import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.view.WindowInsets;
+import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
@@ -92,6 +93,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private MarvinIdleView marvin;
     private LevelMeterView meters;
     private Glyphs.Button speaker, gear;
+    private Ui.Segmented input;
     private Glyphs.RecordButton record;
     private OptionsPanel options;   // built on first use
     private FrameLayout side;
@@ -112,6 +114,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             return;
         }
         getWindow().setDecorFitsSystemWindows(false);   // edge to edge (enforced from API 35 anyway)
+        Ui.applyTheme(this);
         buildViews();
         setContentView(root);
         replayPath = replayExtra(getIntent());
@@ -120,6 +123,25 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         registerReceiver(usbReceiver, f, Context.RECEIVER_NOT_EXPORTED);
         bindService(new Intent(this, CaptureService.class), connection, Context.BIND_AUTO_CREATE);
+    }
+
+    /** The system theme changed (the activity handles uiMode itself, see the manifest): rebuilds the
+     *  views in the new palette; the service, session and surface carry on. */
+    @Override
+    public void onConfigurationChanged(android.content.res.Configuration cfg) {
+        super.onConfigurationChanged(cfg);
+        if (root == null) return;
+        boolean wasDark = Ui.dark;
+        Ui.applyTheme(this);
+        if (wasDark == Ui.dark) return;
+        boolean optionsOpen = options != null && options.getVisibility() == View.VISIBLE;
+        if (optionsOpen) closeOptions();
+        options = null;
+        buildViews();
+        setContentView(root);
+        root.requestApplyInsets();
+        if (optionsOpen) openOptions();
+        if (svc != null) onStatus(svc.status());
     }
 
     @Override
@@ -254,15 +276,16 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
     private void buildViews() {
         root = new MainLayout(this);
-        root.setBackgroundColor(Color.BLACK);
+        root.setBackgroundColor(Ui.PANEL);
         root.setOnApplyWindowInsetsListener((v, insets) -> {
             Insets in = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-            v.setPadding(in.left, in.top, in.right, in.bottom);
+            root.setInsets(in.left, in.top, in.right, in.bottom);   // the preview goes behind them
             return WindowInsets.CONSUMED;
         });
 
-        // preview
-        FrameLayout preview = new FrameLayout(this);
+        // preview: the surface, the no-video card, the REC badge (MainLayout.PreviewFrame)
+        MainLayout.PreviewFrame preview = new MainLayout.PreviewFrame(this);
+        preview.setBackgroundColor(Color.BLACK);
         surface = new SurfaceView(this);
         surface.getHolder().addCallback(new SurfaceHolder.Callback() {
             @Override public void surfaceCreated(SurfaceHolder h) {}
@@ -273,7 +296,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
                 Core.previewSetSurface(MarvinApp.renderer, null);
             }
         });
-        preview.addView(surface, new FrameLayout.LayoutParams(-1, -1));
+        preview.addView(surface);
 
         card = Ui.column(this);
         card.setGravity(Gravity.CENTER);
@@ -304,7 +327,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
                 root.postDelayed(this::findDevice, 300);
             }
         });
-        preview.addView(card, new FrameLayout.LayoutParams(-1, -1));
+        preview.addView(card);
 
         recBadge = Ui.row(this);
         GradientDrawable pill = new GradientDrawable();
@@ -322,10 +345,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         recText.setTypeface(Typeface.DEFAULT_BOLD);
         recText.setPadding(Ui.dp(this, 8), 0, 0, 0);
         recBadge.addView(recText, Ui.wrap());
-        FrameLayout.LayoutParams blp = new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START);
-        blp.setMargins(Ui.dp(this, 12), Ui.dp(this, 12), 0, 0);
         recBadge.setVisibility(View.GONE);
-        preview.addView(recBadge, blp);
+        preview.addView(recBadge);
         root.addView(preview);
 
         // side panel: status + buttons, or the options
@@ -339,7 +360,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         LinearLayout top = Ui.column(this);
         banner = Ui.row(this);
         GradientDrawable bbg = new GradientDrawable();
-        bbg.setColor(0x33ff6b61);
+        bbg.setColor(0x33ff6b61);   // recoloured by showInfo
         bbg.setCornerRadius(Ui.dp(this, 8));
         banner.setBackground(bbg);
         banner.setPadding(Ui.dp(this, 12), Ui.dp(this, 8), Ui.dp(this, 4), Ui.dp(this, 8));
@@ -358,6 +379,12 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         LinearLayout.LayoutParams bl = Ui.fillWidth();
         bl.bottomMargin = Ui.dp(this, 10);
         top.addView(banner, bl);
+
+        input = new Ui.Segmented(this, new String[] { "DV / HDV", "S-Video", "Composite" }, Settings.input(), this::inputPicked);
+        input.setContentDescription("Input");
+        LinearLayout.LayoutParams il = Ui.fillWidth();
+        il.bottomMargin = Ui.dp(this, 12);
+        top.addView(input, il);
 
         statusShort = Ui.text(this, "", 17, Ui.TEXT);   // a file name, or the core's sentence about the last capture
         statusShort.setTypeface(Typeface.DEFAULT_BOLD);
@@ -404,7 +431,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         gear.setOnClickListener(v -> openOptions());
         buttons.addView(speaker, new LinearLayout.LayoutParams(-2, -2));
         LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
-        rl.leftMargin = rl.rightMargin = Ui.dp(this, 36);
+        rl.leftMargin = rl.rightMargin = Ui.dp(this, 22);
         buttons.addView(record, rl);
         buttons.addView(gear, new LinearLayout.LayoutParams(-2, -2));
         controls.addView(buttons, Ui.fillWidth());
@@ -413,6 +440,18 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         this.side = side;   // the options panel joins it when first opened
         root.addView(side);
         updateSpeaker();
+    }
+
+    /** The input selector (always on the main panel): the same as the options' used to be. */
+    private void inputPicked(int i) {
+        if (i == Settings.input()) return;
+        if (svc != null) svc.setInput(i);
+        else Settings.setInt("gui.last_input", i);
+        if (options != null) {
+            options.updateInputVisibility();
+            options.refreshControls();
+        }
+        onSessionChanged();
     }
 
     private static void set(TextView t, String s) {
@@ -442,8 +481,17 @@ public final class MainActivity extends Activity implements CaptureService.Liste
 
         // preview and the no-video card
         boolean video = has && Core.previewInfo(MarvinApp.renderer, dar) == 1;
-        if (video) root.setAspect(dar[0], dar[1]);
-        else if (!has) root.setAspect(4, 3);
+        if (video) {
+            root.setAspect(dar[0], dar[1]);
+        } else {
+            // no picture: the card has the shape the picture will have (the chosen aspect)
+            int kind = !has ? (Settings.input() == Core.INPUT_DV ? Core.KIND_DV : Core.KIND_ANALOG)
+                    : st.analog() ? Core.KIND_ANALOG : svc.streamKind();
+            int a = Settings.aspect(kind);
+            if (a == 2) root.setAspect(16, 9);
+            else if (a == 1 || !has) root.setAspect(4, 3);
+        }
+        updateBars(video);
         show(card, !video);
         if (!video) {
             String why;
@@ -512,9 +560,21 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         show(recBadge, capturing && !finishing && state == Core.STATE_CAPTURING);
         if (recBadge.getVisibility() == View.VISIBLE) set(recText, "REC  " + hms(st.d[Core.SD_ELAPSED]));
         if (options != null) options.setLocked(capturing);
+        input.setEnabled(!capturing && !finishing);
+        if (input.getTag() == null || (int) input.getTag() != Settings.input()) {
+            input.setTag(Settings.input());
+            input.setChosen(Settings.input());
+        }
         boolean keepOn = capturing && Settings.keepScreenOn();
         if (keepOn) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    }
+
+    /** Status / navigation bar icons: dark ones on the light theme, except over a black picture. */
+    private void updateBars(boolean video) {
+        boolean lightBars = !Ui.dark && !(video && !root.isLandscape());
+        int mask = WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS;
+        getWindow().getInsetsController().setSystemBarsAppearance(lightBars ? mask : 0, mask);
     }
 
     /** The line under the stop button (port of captureSubtitleText): the no-signal countdown if it

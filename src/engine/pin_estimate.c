@@ -18,6 +18,7 @@
 
 #include "pin_estimate.h"
 #include "pin_settings.h"
+#include "pin_stop.h"
 #include <string.h>
 
 double pin_est_default_rate(pin_est_kind_t kind, int width, int height, int is_60hz,
@@ -73,6 +74,13 @@ double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, dou
 double pin_est_seconds_left(uint64_t free_bytes, double bytes_per_s)
 {
     return bytes_per_s > 0 ? (double)free_bytes / bytes_per_s : 0.0;
+}
+
+double pin_est_seconds_left_remux(uint64_t free_bytes, uint64_t written_bytes, double bytes_per_s)
+{
+    uint64_t keep = pin_stop_remux_reserve(written_bytes);
+    uint64_t usable = free_bytes > keep ? free_bytes - keep : 0;
+    return bytes_per_s > 0 ? (double)usable / (3.0 * bytes_per_s) : 0.0;
 }
 
 #define FFV1_SECTION "core"

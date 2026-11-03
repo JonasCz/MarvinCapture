@@ -116,8 +116,8 @@ final class Glyphs {
             this.glyph = glyph;
             this.sizeDp = sizeDp;
             dp = getResources().getDisplayMetrics().density;
-            bg.setColor(0x26ffffff);
-            fg.setColor(0xffffffff);
+            bg.setColor(Ui.BUTTON);
+            fg.setColor(Ui.TEXT);
             setClickable(true);
             setFocusable(true);
             setBackground(c.getDrawable(R.drawable.ripple_round));
@@ -160,8 +160,8 @@ final class Glyphs {
             super(c);
             dp = getResources().getDisplayMetrics().density;
             ring.setStyle(Paint.Style.STROKE);
-            ring.setColor(0xffffffff);
-            glyph.setColor(0xffffffff);
+            ring.setColor(Ui.TEXT);
+            glyph.setColor(0xffffffff);   // on the red disc
             setClickable(true);
             setFocusable(true);
             setBackground(c.getDrawable(R.drawable.ripple_round));

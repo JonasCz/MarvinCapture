@@ -25,6 +25,11 @@ uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_
     return (margin ? margin : PIN_STOP_DISK_MARGIN) + writer_backlog + remux_bytes;
 }
 
+uint64_t pin_stop_remux_reserve(uint64_t bytes_written)
+{
+    return 2 * bytes_written;
+}
+
 int pin_stop_abnormal(pin_stop_reason_t reason)
 {
     switch (reason) {

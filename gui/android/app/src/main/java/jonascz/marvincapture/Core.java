@@ -166,5 +166,5 @@ final class Core {
     static native void audioAttach(long monitor, long session);
     static native void audioDetach(long monitor);
     static native void audioSetRunning(long monitor, boolean on);
-    static native void keepAliveSet(boolean on);
+    static native void audioSetKeepAlive(long monitor, boolean on);
 }

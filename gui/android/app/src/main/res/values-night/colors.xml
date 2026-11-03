@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Dark palette (see values/colors.xml).
+-->
+<resources>
+    <color name="ui_text">#FFFFFFFF</color>
+    <color name="ui_text2">#B3FFFFFF</color>
+    <color name="ui_text3">#80FFFFFF</color>
+    <color name="ui_warn">#FFFFC04D</color>
+    <color name="ui_error">#FFFF6B61</color>
+    <color name="ui_accent">#FF8AB4FF</color>
+    <color name="ui_on_accent">#FF0B1B3A</color>
+    <color name="ui_card">#FF1D1E23</color>
+    <color name="ui_panel">#FF121316</color>
+    <color name="ui_button">#26FFFFFF</color>
+    <color name="ui_track">#33FFFFFF</color>
+</resources>

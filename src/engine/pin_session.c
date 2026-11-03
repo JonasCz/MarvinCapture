@@ -1847,7 +1847,7 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
     int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
     /* plus the files the closer is still finishing (an earlier scene's remux) */
     uint64_t reserve = pin_stop_disk_reserve(0, wst.backlog_bytes,
-                                             remux ? s->bytes_written : 0) +
+                                             remux ? pin_stop_remux_reserve(s->bytes_written) : 0) +
                        pin_closer_pending_bytes(s->closer);
     char detail[PIN_TEXT_MAX];
     pin_stop_reason_t why;
@@ -3725,7 +3725,11 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         double rate = nominal_bytes_per_second(s, hint_kind, hint_fmt, rate_opts, measured, &src);
         out->est_bytes_per_hour = rate * 3600.0;
         out->est_rate_source = src;
-        out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
+        if (hint_fmt == PIN_FMT_HDV_MOV || hint_fmt == PIN_FMT_HDV_MKV)   /* rewrapped at close */
+            out->est_seconds_left = pin_est_seconds_left_remux(
+                free_bytes, s->state == PIN_STATE_CAPTURING ? s->bytes_written : 0, rate);
+        else
+            out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
         out->disk_low = out->est_seconds_left < 3600.0 || free_bytes < (50ull << 30);
     }
     pin_session_unlock(s);
