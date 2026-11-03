@@ -367,27 +367,55 @@ static int ensure_dir(const char *path)
         return 0;
     return (errno == EEXIST) ? 0 : -1;
 }
+#endif
 
-/* Creates every missing component of path (POSIX/macOS only; the Windows
- * config directory is always exactly one level below %APPDATA%, which
- * already exists, so it only ever needs ensure_dir()). */
+/* Creates every missing component of path (on Windows with either separator: a directory
+ * from pin_set_app_dirs() may be several levels below one that exists). */
 static int ensure_dir_recursive(const char *path)
 {
     char buf[2048];
     snprintf(buf, sizeof(buf), "%s", path);
     for (char *p = buf + 1; *p; p++) {
+#ifdef _WIN32
+        if (*p == '/' || *p == '\\') {
+#else
         if (*p == '/') {
+#endif
+            char sep = *p;
             *p = '\0';
             ensure_dir(buf);
-            *p = '/';
+            *p = sep;
         }
     }
     return ensure_dir(buf);
 }
-#endif
+
+/* pin_settings_set_dir(): "" = the platform default. */
+static char g_settings_dir[1024];
+
+int pin_settings_set_dir(const char *dir)
+{
+    if (!dir || !dir[0]) {
+        g_settings_dir[0] = '\0';
+        return 0;
+    }
+    if (strlen(dir) >= sizeof(g_settings_dir))
+        return -1;
+    snprintf(g_settings_dir, sizeof(g_settings_dir), "%s", dir);
+    return 0;
+}
 
 int pin_settings_default_path(char *out, size_t out_size)
 {
+    if (g_settings_dir[0]) {
+        ensure_dir_recursive(g_settings_dir);
+#ifdef _WIN32
+        int n = snprintf(out, out_size, "%s\\settings.ini", g_settings_dir);
+#else
+        int n = snprintf(out, out_size, "%s/settings.ini", g_settings_dir);
+#endif
+        return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
+    }
 #ifdef _WIN32
     const char *appdata = getenv("APPDATA");
     char buf[2048];

@@ -14,14 +14,20 @@ Transport actions (--rew --ff --play --pause --stop) return as soon as the deck 
 
 Settings:
   -d, --device ID          device id (usb:2-1), 16-hex serial, or a .dv/.ts file to replay (default: first device). See the device list at the end of this text. Only before the first action.
+                           fd:N: the USB device behind open file descriptor N, for Android, where programs cannot list USB devices (Termux: termux-usb passes the descriptor; see docs/cli.md). Linux and Android only.
   -i, --input dv|svideo|composite
                            dv = DV and HDV over FireWire (default)
   --std S                  analog standard: auto pal ntsc pal-m pal-n pal-60 ntsc-443 ntsc-j secam (default auto)
   --format KEY             output file format. Overrides the file extension if one is given with the file name passed to --capture; the format's extension is appended if none is given. One per input signal type:
-                             analog (-i svideo|composite)  avi ffv1-mkv
-                             DV  (-i dv, DV tape)          dv dv-avi dv-mov
+                             analog (-i svideo|composite)  avi ffv1-mkv h264-mkv hevc-mkv
+                             DV  (-i dv, DV tape)          dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv
                              HDV (-i dv, HDV tape)         hdv-ts hdv-mov hdv-mkv
                            A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t .mov .mkv for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.
+                           h264-mkv, hevc-mkv, dv-h264-mkv and dv-hevc-mkv encode with the operating system's own (normally hardware) video encoder, with FLAC audio: small files, but lossy. Windows, macOS and Android, where the encoder is there; never on Linux. A --capture with one that is missing fails (exit 1). See --quality and --deinterlace.
+  --quality N              H.264 / HEVC: 0 (best, biggest files) to 51 (smallest), like x264's CRF: 6 steps up halve the size (default 18)
+  --deinterlace yes|no     H.264 / HEVC: yes (default) turns every field into a frame (bwdif), 25i into 50p and 29.97i into 59.94p; no keeps the fields, storing each interlaced frame as one progressive picture, which loses quality on motion
+  --ffv1-compression fast|smaller|smallest
+                           ffv1-mkv: fast (default) is the quickest; smaller (range coder) and smallest (range coder, large context model) save a few percent for more CPU time. All are lossless.
   --aspect auto|4:3|16:9   (default auto) sets the display aspect ratio flag in the output file, for containers that can carry it: avi, mkv, mov, and the NUT stream on stdout. Raw .dv and .ts/.m2t files have no such flag and are unchanged. auto = from the stream for DV, 16:9 for HDV, 4:3 for analog.
   --split                  scene split (DV/HDV): a confirmed timecode or recording-date break starts a new file. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.
   --title T                metadata title, where the format supports it
@@ -80,6 +86,30 @@ Examples:
 
 -h, --help, or no arguments at all: this text, followed by the device list.
 ```
+
+## Android (Termux)
+
+The CLI from the Android build (`scripts/build-android-native.sh`: `MarvinCaptureCLI` and
+`libmarvin-core.so` in `build/android-arm64-v8a/dist`, copied together into Termux's home)
+runs in [Termux](https://termux.dev). Android does not let a program list or open
+`/dev/bus/usb` itself; the Termux:API app (package `termux-api`) opens the device after you
+allow it and hands the command an open file descriptor, which `-d fd:N` takes:
+
+```sh
+termux-usb -l                              # e.g. ["/dev/bus/usb/001/002"]
+termux-usb -r /dev/bus/usb/001/002         # once per plug-in: Android asks for permission
+cat > capture.sh <<'EOF'
+#!/data/data/com.termux/files/usr/bin/sh
+# termux-usb runs this with the descriptor as the first argument
+cd "$HOME/marvin" && exec ./MarvinCaptureCLI -d "fd:$1" --capture /sdcard/Movies/tape01.dv --wait nosignal=00:00:30
+EOF
+chmod +x capture.sh
+termux-usb -e ./capture.sh /dev/bus/usb/001/002
+```
+
+With `-E`, termux-usb puts the descriptor into the environment variable `TERMUX_USB_FD`
+instead (`-d "fd:$TERMUX_USB_FD"`). The descriptor belongs to that one command: run the whole
+capture inside it. Writing to the shared `Movies/` folder needs `termux-setup-storage` once.
 
 ## Running the GUI from a shell
 

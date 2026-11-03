@@ -24,6 +24,7 @@
 #include <libavutil/pixfmt.h>
 
 #include "../core/pin_log.h"
+#include "../sinks/pin_sink.h"
 #include "hdv_aux.h"
 #include "pin_pace.h"
 
@@ -95,38 +96,9 @@ struct pin_preview {
     int hdv_have_seq;   /* a sequence header (00 00 01 B3) has gone into the HDV decoder */
 };
 
-/* FFmpeg writes its own messages ("Concealing bitstream errors", "Detected
- * timecode is invalid", ...) straight to stderr, which clutters a command line
- * and is invisible in a GUI. Route them into the core log instead: errors as
- * warnings, everything else at debug level (the log level decides what shows). */
-static void pv_av_log(void *avcl, int level, const char *fmt, va_list vl)
-{
-    if (level > AV_LOG_INFO)
-        return;
-    /* what the decoder says when it is handed the middle of a picture before the first
-     * sequence header: harmless, the preview just waits for the next GOP */
-    if (fmt && strstr(fmt, "Invalid frame dimensions"))
-        level = AV_LOG_DEBUG + 1;
-    /* libavformat's dv demuxer (the per-frame audio demux in sink_rewrap.c) logs this at
-     * error level whenever the first subcode pack of a frame is not a timecode pack
-     * (blank 0xFF subcode, as in tests/data/dv-ntsc.dv). It only feeds a metadata tag we
-     * never use; the capture's own timecode comes from dv_subcode.c */
-    if (fmt && strstr(fmt, "timecode is invalid"))
-        level = AV_LOG_DEBUG + 1;
-    static __thread int in_line_prefix;
-    char line[512];
-    int prefix = in_line_prefix;
-    av_log_format_line(avcl, level, fmt, vl, line, (int)sizeof(line), &prefix);
-    in_line_prefix = prefix;
-    pin_logf(level <= AV_LOG_ERROR ? PIN_LOG_WARN : PIN_LOG_DEBUG, "ffmpeg: %s", line);
-}
-
-static pthread_once_t g_av_log_once = PTHREAD_ONCE_INIT;
-static void av_log_install(void) { av_log_set_callback(pv_av_log); }
-
 pin_preview_t *pin_previewer_create(void)
 {
-    pthread_once(&g_av_log_once, av_log_install);
+    pin_sink_av_log_install();
     pin_preview_t *p = calloc(1, sizeof(*p));
     if (!p)
         return NULL;

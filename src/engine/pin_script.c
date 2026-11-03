@@ -17,6 +17,7 @@
  */
 
 #include "pin_script.h"
+#include "pin_format_opts.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -240,14 +241,20 @@ const char *pin_script_help_text(void)
         "\n"
         "Settings:\n"
         "  -d, --device ID          device id (usb:2-1), 16-hex serial, or a .dv/.ts file to replay (default: first device). See the device list at the end of this text. Only before the first action.\n"
+        "                           fd:N: the USB device behind open file descriptor N, for Android, where programs cannot list USB devices (Termux: termux-usb passes the descriptor; see docs/cli.md). Linux and Android only.\n"
         "  -i, --input dv|svideo|composite\n"
         "                           dv = DV and HDV over FireWire (default)\n"
         "  --std S                  analog standard: auto pal ntsc pal-m pal-n pal-60 ntsc-443 ntsc-j secam (default auto)\n"
         "  --format KEY             output file format. Overrides the file extension if one is given with the file name passed to --capture; the format's extension is appended if none is given. One per input signal type:\n"
-        "                             analog (-i svideo|composite)  avi ffv1-mkv\n"
-        "                             DV  (-i dv, DV tape)          dv dv-avi dv-mov\n"
+        "                             analog (-i svideo|composite)  avi ffv1-mkv h264-mkv hevc-mkv\n"
+        "                             DV  (-i dv, DV tape)          dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv\n"
         "                             HDV (-i dv, HDV tape)         hdv-ts hdv-mov hdv-mkv\n"
         "                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t .mov .mkv for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.\n"
+        "                           h264-mkv, hevc-mkv, dv-h264-mkv and dv-hevc-mkv encode with the operating system's own (normally hardware) video encoder, with FLAC audio: small files, but lossy. Windows, macOS and Android, where the encoder is there; never on Linux. A --capture with one that is missing fails (exit 1). See --quality and --deinterlace.\n"
+        "  --quality N              H.264 / HEVC: 0 (best, biggest files) to 51 (smallest), like x264's CRF: 6 steps up halve the size (default 18)\n"
+        "  --deinterlace yes|no     H.264 / HEVC: yes (default) turns every field into a frame (bwdif), 25i into 50p and 29.97i into 59.94p; no keeps the fields, storing each interlaced frame as one progressive picture, which loses quality on motion\n"
+        "  --ffv1-compression fast|smaller|smallest\n"
+        "                           ffv1-mkv: fast (default) is the quickest; smaller (range coder) and smallest (range coder, large context model) save a few percent for more CPU time. All are lossless.\n"
         "  --aspect auto|4:3|16:9   (default auto) sets the display aspect ratio flag in the output file, for containers that can carry it: avi, mkv, mov, and the NUT stream on stdout. Raw .dv and .ts/.m2t files have no such flag and are unchanged. auto = from the stream for DV, 16:9 for HDV, 4:3 for analog.\n"
         "  --split                  scene split (DV/HDV): a confirmed timecode or recording-date break starts a new file. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.\n"
         "  --title T                metadata title, where the format supports it\n"
@@ -321,6 +328,9 @@ typedef struct {
     char title[PIN_TEXT_MAX];
     int keep_raw;
     int overwrite;
+    int deinterlace;
+    int video_quality;
+    int ffv1_compression;
     int started;
     int capture_open;
     int stdout_used;            /* a --capture - was seen: only one per script */
@@ -369,8 +379,10 @@ static int parse_int(const char *s, int32_t *out)
 static int fmt_kind(pin_format_t f)
 {
     switch (f) {
-    case PIN_FMT_ANALOG_AVI: case PIN_FMT_ANALOG_FFV1_MKV: return PIN_KIND_ANALOG;
-    case PIN_FMT_DV_RAW: case PIN_FMT_DV_AVI: case PIN_FMT_DV_MOV: return PIN_KIND_DV;
+    case PIN_FMT_ANALOG_AVI: case PIN_FMT_ANALOG_FFV1_MKV:
+    case PIN_FMT_ANALOG_H264_MKV: case PIN_FMT_ANALOG_HEVC_MKV: return PIN_KIND_ANALOG;
+    case PIN_FMT_DV_RAW: case PIN_FMT_DV_AVI: case PIN_FMT_DV_MOV:
+    case PIN_FMT_DV_H264_MKV: case PIN_FMT_DV_HEVC_MKV: return PIN_KIND_DV;
     default: return PIN_KIND_HDV;
     }
 }
@@ -379,8 +391,10 @@ static int fmt_from_key(const char *key, pin_format_t *out)
 {
     static const struct { const char *key; pin_format_t f; } tbl[] = {
         { "dv", PIN_FMT_DV_RAW }, { "dv-avi", PIN_FMT_DV_AVI }, { "dv-mov", PIN_FMT_DV_MOV },
+        { "dv-h264-mkv", PIN_FMT_DV_H264_MKV }, { "dv-hevc-mkv", PIN_FMT_DV_HEVC_MKV },
         { "hdv-ts", PIN_FMT_HDV_TS }, { "hdv-mov", PIN_FMT_HDV_MOV }, { "hdv-mkv", PIN_FMT_HDV_MKV },
         { "avi", PIN_FMT_ANALOG_AVI }, { "ffv1-mkv", PIN_FMT_ANALOG_FFV1_MKV },
+        { "h264-mkv", PIN_FMT_ANALOG_H264_MKV }, { "hevc-mkv", PIN_FMT_ANALOG_HEVC_MKV },
     };
     for (unsigned i = 0; i < sizeof(tbl) / sizeof(tbl[0]); i++)
         if (strcmp(key, tbl[i].key) == 0) {
@@ -457,6 +471,9 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
     p.input = PIN_INPUT_DV;
     for (int k = 0; k < 3; k++)
         p.fmt[k] = k_default_format[k];
+    p.deinterlace = PIN_DEINTERLACE_DEFAULT;
+    p.video_quality = PIN_QUALITY_DEFAULT;
+    p.ffv1_compression = PIN_FFV1_DEFAULT;
 
     if (argc <= 0) {
         sc->help = 1;
@@ -501,7 +518,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
         /* the value of a setting: after '=' or the next word, whatever it is */
         const char *val = NULL;
         static const char *const value_opts[] = { "--device", "--input", "--std", "--format", "--aspect",
-            "--title", "--brightness", "--contrast", "--saturation", "--hue", "--sharpness", "--audio-gain" };
+            "--title", "--brightness", "--contrast", "--saturation", "--hue", "--sharpness", "--audio-gain",
+            "--quality", "--deinterlace", "--ffv1-compression" };
         int takes_value = 0;
         for (unsigned k = 0; k < sizeof(value_opts) / sizeof(value_opts[0]); k++)
             if (strcmp(name, value_opts[k]) == 0)
@@ -562,7 +580,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
         } else if (strcmp(name, "--format") == 0) {
             pin_format_t f;
             if (!fmt_from_key(val, &f))
-                FAIL("--format: unknown format \"%s\" (dv dv-avi dv-mov hdv-ts hdv-mov hdv-mkv avi ffv1-mkv)", val);
+                FAIL("--format: unknown format \"%s\" (dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv hdv-ts hdv-mov "
+                     "hdv-mkv avi ffv1-mkv h264-mkv hevc-mkv)", val);
             int k = fmt_kind(f);
             p.fmt[k] = f;
             p.fmt_set[k] = 1;
@@ -591,6 +610,28 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
         } else if (strcmp(name, "--keep-raw") == 0) {
             p.keep_raw = 1;
             if (!p.started) { sc->initial.has_keep_raw = 1; sc->initial.keep_raw = 1; }
+        } else if (strcmp(name, "--quality") == 0) {
+            int32_t q;
+            if (!parse_int(val, &q) || q < PIN_QUALITY_MIN || q > PIN_QUALITY_MAX)
+                FAIL("--quality: expected a whole number from %d to %d, got \"%s\"", PIN_QUALITY_MIN,
+                     PIN_QUALITY_MAX, val);
+            p.video_quality = (int)q;
+            if (!p.started) { sc->initial.has_video_quality = 1; sc->initial.video_quality = (int)q; }
+        } else if (strcmp(name, "--deinterlace") == 0) {
+            int d;
+            if (ieq(val, "yes")) d = PIN_DEINTERLACE_DOUBLE_RATE;
+            else if (ieq(val, "no")) d = PIN_DEINTERLACE_KEEP_FIELDS;
+            else FAIL("--deinterlace: expected yes or no, got \"%s\"", val);
+            p.deinterlace = d;
+            if (!p.started) { sc->initial.has_deinterlace = 1; sc->initial.deinterlace = d; }
+        } else if (strcmp(name, "--ffv1-compression") == 0) {
+            int c;
+            if (ieq(val, "fast")) c = PIN_FFV1_FAST;
+            else if (ieq(val, "smaller")) c = PIN_FFV1_SMALLER;
+            else if (ieq(val, "smallest")) c = PIN_FFV1_SMALLEST;
+            else FAIL("--ffv1-compression: expected fast, smaller or smallest, got \"%s\"", val);
+            p.ffv1_compression = c;
+            if (!p.started) { sc->initial.has_ffv1_compression = 1; sc->initial.ffv1_compression = c; }
         } else if (strcmp(name, "--overwrite") == 0) {
             p.overwrite = 1;
         } else if (strcmp(name, "--debug") == 0) {
@@ -648,6 +689,9 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             snprintf(c->title, sizeof(c->title), "%s", p.title);
             c->keep_raw = p.keep_raw;
             c->overwrite = p.overwrite;
+            c->deinterlace = p.deinterlace;
+            c->video_quality = p.video_quality;
+            c->ffv1_compression = p.ffv1_compression;
             for (int k = 0; k < 3; k++)
                 c->format[k] = p.fmt[k];
             if (strcmp(inl, "-") == 0) {

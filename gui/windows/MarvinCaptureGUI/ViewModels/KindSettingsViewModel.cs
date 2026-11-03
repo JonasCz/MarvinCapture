@@ -31,8 +31,9 @@ public sealed partial class FormatItem
 }
 
 /// <summary>
-/// One tab of the "Settings for: DV | HDV" TabView: format, title (disabled
-/// per format capability), scene split, idle-stop minutes and pass count.
+/// One tab of the "Settings for: DV | HDV" TabView: format (with its settings behind the
+/// gear, <see cref="FormatOptions"/>), title (disabled per format capability), scene split,
+/// idle-stop minutes and pass count.
 /// </summary>
 public sealed partial class KindSettingsViewModel : ObservableObject
 {
@@ -44,6 +45,15 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(TitleEnabled), nameof(SplitEnabled), nameof(PassesEnabled), nameof(PassesUsable))]
     private FormatItem? _selectedFormat;
+
+    partial void OnSelectedFormatChanged(FormatItem? value) => FormatOptions.Format = value?.Format;
+
+    /// <summary>The selected format's settings (deinterlace, quality, ...), behind the gear next to the drop-down.</summary>
+    public FormatOptionsViewModel FormatOptions { get; }
+
+    /// <summary>A saved or command-line format that the list may not have yet: the H.264 / HEVC
+    /// entries only appear once the encoder probe is done (<see cref="RefreshFormats"/>).</summary>
+    private PinFormat? _wantedFormat;
 
     [ObservableProperty] private bool _splitIntoScenes;
     [ObservableProperty]
@@ -94,15 +104,26 @@ public sealed partial class KindSettingsViewModel : ObservableObject
 
     public string SettingsPrefix => Kind == PinKind.Dv ? "dv" : "hdv";
 
-    public KindSettingsViewModel(PinKind kind, string tabHeader)
+    /// <summary>The list stays empty until <see cref="RefreshFormats"/>: pin_formats() would run the
+    /// encoder probe on the UI thread.</summary>
+    public KindSettingsViewModel(PinKind kind, string tabHeader, FormatChoices choices)
     {
         Kind = kind;
         TabHeader = tabHeader;
-        foreach (var f in Native.Formats(kind))
+        FormatOptions = new FormatOptionsViewModel(choices, analog: false); // DV and HDV share the DV choices
+    }
+
+    /// <summary>(Re)fills the format list (after the encoder probe), keeping the selection or the
+    /// wanted format if the list has it, else the kind's default.</summary>
+    public void RefreshFormats()
+    {
+        var keep = SelectedFormat?.Format ?? _wantedFormat;
+        Formats.Clear(); // the ComboBox may push a null selection meanwhile
+        foreach (var f in Native.Formats(Kind))
         {
             Formats.Add(new FormatItem(f));
         }
-        _selectedFormat = PickDefault();
+        SelectedFormat = Formats.FirstOrDefault(f => f.Format == keep) ?? PickDefault();
     }
 
     private FormatItem? PickDefault()
@@ -119,6 +140,7 @@ public sealed partial class KindSettingsViewModel : ObservableObject
 
     public void ApplyFormat(PinFormat format)
     {
+        _wantedFormat = format;
         foreach (var f in Formats)
         {
             if (f.Format == format)

@@ -130,7 +130,29 @@ public enum PinFormat : int
     HdvTs,
     HdvMov,
     HdvMkv,
+    // Appended: lossy, with the system's (normally hardware) encoder; listed by pin_formats()
+    // only where the encoder opened (pin_encoders_probe).
+    AnalogH264Mkv,
+    AnalogHevcMkv,
+    DvH264Mkv,
+    DvHevcMkv,
     Count,
+}
+
+/// <summary>pin_deinterlace_t: the H.264 / HEVC formats' handling of interlaced video.</summary>
+public enum PinDeinterlace : int
+{
+    KeepFields = 0,     // each interlaced frame encoded as one progressive picture
+    DoubleRate = 1,     // bwdif: every field becomes a frame (25i -> 50p, 29.97i -> 59.94p)
+}
+
+/// <summary>pin_ffv1_compression_t: FFV1's coder settings, all lossless.</summary>
+public enum PinFfv1Compression : int
+{
+    Fast = 0,
+    Smaller,
+    Smallest,
+    LevelCount,
 }
 
 public enum PinKind : int

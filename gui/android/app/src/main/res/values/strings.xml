@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<resources>
+    <string name="shortcut_dv_short">DV / HDV</string>
+    <string name="shortcut_dv_long">Capture from DV / HDV</string>
+    <string name="shortcut_svideo_short">S-Video</string>
+    <string name="shortcut_svideo_long">Capture from S-Video</string>
+    <string name="shortcut_composite_short">Composite</string>
+    <string name="shortcut_composite_long">Capture from Composite</string>
+    <string name="shortcut_library_short">Library</string>
+    <string name="shortcut_library_long">Play back captures</string>
+</resources>

@@ -18,6 +18,7 @@
 
 #include "pin_estimate.h"
 #include "pin_settings.h"
+#include "pin_stop.h"
 #include <string.h>
 
 double pin_est_default_rate(pin_est_kind_t kind, int width, int height, int is_60hz,
@@ -43,6 +44,23 @@ double pin_est_default_rate(pin_est_kind_t kind, int width, int height, int is_6
     }
 }
 
+double pin_est_hwenc_rate(int hevc, int width, int height, int is_60hz, int deinterlace, int q)
+{
+    if (width <= 0 || height <= 0) { width = 720; height = is_60hz ? 480 : 576; }
+    double fps = is_60hz ? 30000.0 / 1001.0 : 25.0;
+    if (deinterlace)
+        fps *= 2.0;
+    double bits = pin_est_video_bitrate(hevc, width, height, fps, deinterlace != 0, q) + PIN_EST_FLAC_BPS;
+    return bits / 8.0 * 1.01;
+}
+
+double pin_est_ffv1_factor(int ffv1_compression)
+{
+    /* PIN_FFV1_SMALLER / SMALLEST: the range coder saved 2-11 % on synthetic test pictures,
+     * the large context model nothing more with 16 slices (sink_ffv1.c) */
+    return ffv1_compression == 1 || ffv1_compression == 2 ? 0.95 : 1.0;
+}
+
 double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, double learned_bph,
                     double measured_bps, int *source)
 {
@@ -56,6 +74,13 @@ double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, dou
 double pin_est_seconds_left(uint64_t free_bytes, double bytes_per_s)
 {
     return bytes_per_s > 0 ? (double)free_bytes / bytes_per_s : 0.0;
+}
+
+double pin_est_seconds_left_remux(uint64_t free_bytes, uint64_t written_bytes, double bytes_per_s)
+{
+    uint64_t keep = pin_stop_remux_reserve(written_bytes);
+    uint64_t usable = free_bytes > keep ? free_bytes - keep : 0;
+    return bytes_per_s > 0 ? (double)usable / (3.0 * bytes_per_s) : 0.0;
 }
 
 #define FFV1_SECTION "core"

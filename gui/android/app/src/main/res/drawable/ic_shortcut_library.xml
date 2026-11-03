@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Launcher shortcut icon: the library (a stack of two videos).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="48dp"
+    android:height="48dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- the logo's navy as the backdrop -->
+    <path android:fillColor="#2D3080" android:pathData="M12,12m-12,0a12,12 0 1,1 24,0a12,12 0 1,1 -24,0" />
+    <group android:translateX="-0.2" android:translateY="-1.1">
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M8.1,10.6 L8.1,9.2 Q8.1,7.4 9.9,7.4 L18.4,7.4 Q20.2,7.4 20.2,9.2 L20.2,15.6 Q20.2,17.4 18.4,17.4 L17.4,17.4" />
+    <path android:strokeColor="#FFFFFF" android:strokeWidth="1.5" android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M5.4,10.8 L16.2,10.8 Q17.4,10.8 17.4,12 L17.4,17.6 Q17.4,18.8 16.2,18.8 L5.4,18.8 Q4.2,18.8 4.2,17.6 L4.2,12 Q4.2,10.8 5.4,10.8 Z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M9.4,12.7 L13.2,14.8 L9.4,16.9 Z" />
+    </group>
+</vector>

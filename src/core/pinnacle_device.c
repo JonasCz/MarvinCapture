@@ -25,10 +25,26 @@
 #include "protocol_data.h"
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(__linux__)
+#include <fcntl.h>
+#endif
+
+/* Opening a device from a file descriptor ("fd:N"): libusb_wrap_sys_device()
+ * exists since libusb 1.0.23 and the option that keeps libusb from scanning
+ * /dev/bus/usb (which an Android app may not read) since 1.0.24, where it is
+ * called LIBUSB_OPTION_WEAK_AUTHORITY (renamed NO_DEVICE_DISCOVERY in 1.0.25,
+ * the old name kept as an alias). Only the Linux backend (Android included)
+ * implements wrapping a usbfs descriptor. */
+#if defined(__linux__) && defined(LIBUSB_API_VERSION) && LIBUSB_API_VERSION >= 0x01000108
+#define PIN_HAVE_FD_OPEN 1
+#else
+#define PIN_HAVE_FD_OPEN 0
+#endif
 
 static uint64_t mono_ms(void)
 {
@@ -79,6 +95,13 @@ const char *pinnacle_strerror(pinnacle_status_t status)
     case PINNACLE_ERR_LOCK: return "internal locking error";
     case PINNACLE_ERR_NO_FX2_FIRMWARE:
         return "the device's USB controller has no firmware loaded and the host-side download failed (is firmware/fx2-marvin.bin present?)";
+    case PINNACLE_ERR_BAD_FD:
+        return "the file descriptor is not an open USB device of a supported model";
+    case PINNACLE_ERR_FD_UNSUPPORTED:
+        return "opening a USB device from a file descriptor is not supported on this platform";
+    case PINNACLE_ERR_FD_REENUMERATE:
+        return "this model needs its USB controller firmware loaded and then reappears as a new USB "
+               "device; reopening it from a file descriptor (Android) is not supported yet";
     }
     return "unknown error";
 }
@@ -132,9 +155,154 @@ static pinnacle_status_t find_device(libusb_context *ctx, const char *device_id,
     return status;
 }
 
+int pinnacle_parse_fd_id(const char *device_id, int *fd)
+{
+    if (!device_id || strncmp(device_id, "fd:", 3) != 0)
+        return 0;
+    const char *num = device_id + 3;
+    if (*num < '0' || *num > '9')
+        return -1;          /* "fd:", "fd:-1", "fd: 3", "fd:abc" */
+    errno = 0;
+    char *end = NULL;
+    long v = strtol(num, &end, 10);
+    if (errno != 0 || !end || *end != 0 || v < 0 || v > INT_MAX)
+        return -1;
+    if (fd)
+        *fd = (int)v;
+    return 1;
+}
+
+pinnacle_status_t pinnacle_check_fd_id(const char *device_id)
+{
+    int fd = -1;
+    int form = pinnacle_parse_fd_id(device_id, &fd);
+    if (form == 0)
+        return PINNACLE_OK;
+    if (form < 0)
+        return PINNACLE_ERR_BAD_FD;
+#if PIN_HAVE_FD_OPEN
+    return fcntl(fd, F_GETFD) == -1 ? PINNACLE_ERR_BAD_FD : PINNACLE_OK;
+#else
+    return PINNACLE_ERR_FD_UNSUPPORTED;
+#endif
+}
+
+/* The tail every open shares: configuration 1, then the vendor interface. On
+ * failure the handle and context are gone and dev is zeroed. */
+static pinnacle_status_t claim_device(pinnacle_device_t *dev)
+{
+    libusb_set_auto_detach_kernel_driver(dev->handle, 1);
+
+    /* libusb_reset_device() was tried here to clear bad state without a
+     * physical replug, but is suspect: a wedge reproduced even right after
+     * a fresh physical replug, with byte-exact cold-boot commands, and a
+     * soft USB reset on this device is one of the few remaining variables.
+     * Disabled pending investigation -- see git history if reintroducing. */
+
+    /* On Linux a second process gets as far as libusb_open(); it's setting
+     * the configuration of an interface someone else has claimed that fails,
+     * with LIBUSB_ERROR_BUSY. Report that as "in use", not as a USB fault. */
+    int rc = libusb_set_configuration(dev->handle, 1);
+    if (rc != 0) {
+        libusb_close(dev->handle);
+        libusb_exit(dev->usb_ctx);
+        memset(dev, 0, sizeof(*dev));
+        return rc == LIBUSB_ERROR_BUSY ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_CONFIG;
+    }
+
+    rc = libusb_claim_interface(dev->handle, PINNACLE_INTERFACE_NUM);
+    if (rc != 0) {
+        libusb_close(dev->handle);
+        libusb_exit(dev->usb_ctx);
+        memset(dev, 0, sizeof(*dev));
+        return rc == LIBUSB_ERROR_BUSY ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_CLAIM;
+    }
+    dev->interface_claimed = 1;
+    return PINNACLE_OK;
+}
+
+/* "fd:N": the device behind a usbfs descriptor someone else opened. An app on
+ * Android cannot list or open /dev/bus/usb itself; UsbManager opens the device
+ * after the user allowed it and hands the app the descriptor. The context is
+ * created without device discovery (it would find nothing there anyway, and
+ * fail trying), the handle wraps the descriptor, and everything after that --
+ * the event loops in pinnacle_stream.c / pinnacle_analog.c that run on
+ * dev->usb_ctx, the transfers, release and close -- works on it unchanged.
+ * libusb_close() leaves the descriptor open: the caller owns it. */
+static pinnacle_status_t open_fd(pinnacle_device_t *dev, int fd)
+{
+#if PIN_HAVE_FD_OPEN
+    /* A closed descriptor (or garbage) must fail here, not inside libusb. */
+    if (fcntl(fd, F_GETFD) == -1) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d is not an open file descriptor\n", fd);
+        return PINNACLE_ERR_BAD_FD;
+    }
+    int rc;
+#if LIBUSB_API_VERSION >= 0x0100010A
+    struct libusb_init_option opt[1];
+    memset(opt, 0, sizeof(opt));
+    opt[0].option = LIBUSB_OPTION_NO_DEVICE_DISCOVERY;
+    rc = libusb_init_context(&dev->usb_ctx, opt, 1);
+#else
+    /* Before 1.0.27 the option can only be set as a default for contexts created
+     * afterwards (and the Linux backend kept it process-wide): later contexts in
+     * this process, e.g. pinnacle_enumerate()'s, then find no devices either. A
+     * process that is handed its device as a descriptor cannot list any anyway. */
+    libusb_set_option(NULL, LIBUSB_OPTION_WEAK_AUTHORITY);
+    rc = libusb_init(&dev->usb_ctx);
+#endif
+    if (rc != 0) {
+        dev->usb_ctx = NULL;
+        return PINNACLE_ERR_USB_INIT;
+    }
+    rc = libusb_wrap_sys_device(dev->usb_ctx, (intptr_t)fd, &dev->handle);
+    if (rc != 0 || !dev->handle) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d is not a USB device libusb can use (%s)\n", fd,
+                 libusb_error_name(rc));
+        dev->handle = NULL;
+        libusb_exit(dev->usb_ctx);
+        dev->usb_ctx = NULL;
+        return PINNACLE_ERR_BAD_FD;
+    }
+    struct libusb_device_descriptor desc;
+    const pinnacle_model_t *model = NULL;
+    if (libusb_get_device_descriptor(libusb_get_device(dev->handle), &desc) == 0 &&
+        desc.idVendor == PINNACLE_VID)
+        model = pinnacle_model_lookup(desc.idProduct);
+    if (!model || !model->supported) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d is USB device %04x:%04x, not a supported Pinnacle model\n",
+                 fd, desc.idVendor, desc.idProduct);
+        libusb_close(dev->handle);
+        libusb_exit(dev->usb_ctx);
+        memset(dev, 0, sizeof(*dev));
+        return PINNACLE_ERR_BAD_FD;
+    }
+    dev->model = model;
+    dev->from_fd = 1;
+    dev->sys_fd = fd;
+    pinnacle_status_t st = claim_device(dev);
+    if (st != PINNACLE_OK)
+        return st;
+    pin_logf(PIN_LOG_DEBUG, "pinnacle: opened %s (%04x:%04x, fd:%d), interface %d claimed\n",
+             model->name, PINNACLE_VID, model->pid, fd, PINNACLE_INTERFACE_NUM);
+    return PINNACLE_OK;
+#else
+    (void)dev;
+    pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d: %s\n", fd, pinnacle_strerror(PINNACLE_ERR_FD_UNSUPPORTED));
+    return PINNACLE_ERR_FD_UNSUPPORTED;
+#endif
+}
+
 pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device_id)
 {
     memset(dev, 0, sizeof(*dev));
+
+    int fd = -1;
+    int fd_form = pinnacle_parse_fd_id(device_id, &fd);
+    if (fd_form < 0)
+        return PINNACLE_ERR_BAD_FD;
+    if (fd_form > 0)
+        return open_fd(dev, fd);
 
     if (libusb_init(&dev->usb_ctx) != 0)
         return PINNACLE_ERR_USB_INIT;
@@ -163,33 +331,9 @@ pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device
     }
 
     dev->model = model;
-    libusb_set_auto_detach_kernel_driver(dev->handle, 1);
-
-    /* libusb_reset_device() was tried here to clear bad state without a
-     * physical replug, but is suspect: a wedge reproduced even right after
-     * a fresh physical replug, with byte-exact cold-boot commands, and a
-     * soft USB reset on this device is one of the few remaining variables.
-     * Disabled pending investigation -- see git history if reintroducing. */
-
-    /* On Linux a second process gets as far as libusb_open(); it's setting
-     * the configuration of an interface someone else has claimed that fails,
-     * with LIBUSB_ERROR_BUSY. Report that as "in use", not as a USB fault. */
-    rc = libusb_set_configuration(dev->handle, 1);
-    if (rc != 0) {
-        libusb_close(dev->handle);
-        libusb_exit(dev->usb_ctx);
-        memset(dev, 0, sizeof(*dev));
-        return rc == LIBUSB_ERROR_BUSY ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_CONFIG;
-    }
-
-    rc = libusb_claim_interface(dev->handle, PINNACLE_INTERFACE_NUM);
-    if (rc != 0) {
-        libusb_close(dev->handle);
-        libusb_exit(dev->usb_ctx);
-        memset(dev, 0, sizeof(*dev));
-        return rc == LIBUSB_ERROR_BUSY ? PINNACLE_ERR_BUSY : PINNACLE_ERR_USB_CLAIM;
-    }
-    dev->interface_claimed = 1;
+    pinnacle_status_t st = claim_device(dev);
+    if (st != PINNACLE_OK)
+        return st;
 
     {
         char id[PINNACLE_ENUM_ID_MAX];
@@ -471,6 +615,21 @@ pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_fi
     pin_logf(PIN_LOG_DEBUG, "pinnacle: probing for FX2 firmware (classic model)\n");
     if (fx2_probe(dev))
         return PINNACLE_OK;
+
+    /* The download makes the unit drop off the bus and come back as a new USB
+     * device, which is found again below by enumerating its port. A unit opened
+     * from a borrowed descriptor (Android) cannot be followed that way: the old
+     * descriptor dies with the old device and only the app can open the new one.
+     * Supporting it would mean reporting "re-enumerating" to the front end and
+     * letting the app hand over a new descriptor for the device that reappears
+     * (a call that supplies the session a new fd, or pin_open() again with it);
+     * no such call exists until someone can test it on a MovieBox Deluxe. */
+    if (dev->from_fd) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: %s needs its USB controller firmware loaded and then "
+                 "reappears as a new USB device; reopening it from an Android file descriptor "
+                 "is not supported yet\n", dev->model->name);
+        return PINNACLE_ERR_FD_REENUMERATE;
+    }
 
     /* image: <dir of any_firmware_path>/<fx2_firmware> */
     const char *base = any_firmware_path ? any_firmware_path : "";

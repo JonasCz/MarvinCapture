@@ -62,6 +62,10 @@ typedef enum {
     PINNACLE_ERR_BUSY,          /* device/lock already held by another process */
     PINNACLE_ERR_LOCK,          /* pinnacle_lock.[ch]: OS lock primitive failed (not a BUSY case) */
     PINNACLE_ERR_NO_FX2_FIRMWARE, /* the unit's FX2 has no firmware running and the host-side download failed or its file is missing */
+    PINNACLE_ERR_BAD_FD,        /* "fd:N": N is not an open USB device file descriptor of a supported model */
+    PINNACLE_ERR_FD_UNSUPPORTED, /* "fd:N" on a platform / libusb that cannot wrap a file descriptor */
+    PINNACLE_ERR_FD_REENUMERATE, /* "fd:N": the unit needs its FX2 firmware and then reappears as a new
+                                    USB device, which a borrowed descriptor cannot follow (see pinnacle_ensure_fx2) */
 } pinnacle_status_t;
 
 const char *pinnacle_strerror(pinnacle_status_t status);
@@ -92,6 +96,11 @@ typedef struct {
     char bitstream_path[512];  /* the DV bitstream path of the last pinnacle_init_hardware (cold fallback) */
     char progress_last[96];    /* last step pinnacle_progress() logged (debug log), "" = none */
     uint64_t progress_ms;      /* monotonic ms when it was logged */
+    /* 1: opened from a file descriptor the caller owns ("fd:N", pinnacle_open_by_id; sys_fd is
+     * N): libusb wraps it and never closes it, and the unit cannot be found again by
+     * enumerating (Android). 0: opened by enumeration. */
+    int from_fd;
+    int sys_fd;
 } pinnacle_device_t;
 
 /* Reports a bring-up step to the progress callback (if set) and logs it at
@@ -112,8 +121,28 @@ pinnacle_status_t pinnacle_open(pinnacle_device_t *dev);
  * a matching device exists but another process (or driver) already has it
  * open -- see pinnacle_lock.h for the cross-process story; this is only the
  * libusb-level ACCESS/BUSY fallback for a caller that opens without taking
- * that lock first. */
+ * that lock first.
+ *
+ * "fd:N" opens the device behind file descriptor N, a usbfs node the caller
+ * already opened (Android: UsbDeviceConnection.getFileDescriptor(); Termux:
+ * termux-usb). No enumeration: libusb wraps the descriptor
+ * (libusb_wrap_sys_device), the model comes from its device descriptor. The
+ * caller keeps N open until pinnacle_close() returns; libusb never closes it.
+ * Linux/Android only; PINNACLE_ERR_FD_UNSUPPORTED elsewhere or with a libusb
+ * older than 1.0.24, PINNACLE_ERR_BAD_FD for anything that is not an open
+ * descriptor of a supported model. */
 pinnacle_status_t pinnacle_open_by_id(pinnacle_device_t *dev, const char *device_id);
+
+/* Parses "fd:N" (N a decimal number >= 0). Returns 1 and sets *fd for that
+ * form, 0 if device_id does not start with "fd:" at all, -1 if it does but N
+ * is missing or not a number. */
+int pinnacle_parse_fd_id(const char *device_id, int *fd);
+
+/* Checks an "fd:N" id without opening anything: PINNACLE_OK for an id of another form or a
+ * descriptor that is open, PINNACLE_ERR_BAD_FD for a malformed id or a closed descriptor,
+ * PINNACLE_ERR_FD_UNSUPPORTED where this build cannot open descriptors (Windows, macOS,
+ * libusb < 1.0.24). */
+pinnacle_status_t pinnacle_check_fd_id(const char *device_id);
 
 /* Releases the interface (if claimed) and closes the device. Safe to call
  * on a zero-initialised or partially-opened dev. */
@@ -140,7 +169,9 @@ pinnacle_status_t pinnacle_read_guid(pinnacle_device_t *dev, uint32_t *guid_hi, 
  * any_firmware_path, e.g. the bitstream path), waits for the unit to
  * re-enumerate on the same USB port and re-opens it (dev->handle changes).
  * No-op for other models. PINNACLE_ERR_NO_FX2_FIRMWARE if the file is missing
- * or the unit does not come back. Called by pinnacle_init_hardware and
+ * or the unit does not come back; PINNACLE_ERR_FD_REENUMERATE if the download
+ * is needed on a unit opened from a file descriptor ("fd:N"), which cannot be
+ * re-opened after it re-enumerates. Called by pinnacle_init_hardware and
  * pinnacle_analog_open. Untested on real hardware. */
 pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_firmware_path);
 

@@ -27,6 +27,7 @@
 #include "dv_error.h"
 #include "hdv_error.h"
 #include "pin_estimate.h"
+#include "pin_format_opts.h"
 #include "pin_stop.h"
 #include "pin_vidfmt.h"
 #include "pin_naming.h"
@@ -36,6 +37,7 @@
 #include "../core/pin_log.h"
 #include "../sinks/sinks_internal.h"
 #include "../sinks/pin_stdout.h"
+#include "../sinks/pin_hwenc.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -294,6 +296,21 @@ static int exe_dir(char *out, size_t cap)
 #endif
 }
 
+pin_status_t pin_session_set_app_dirs(const char *config_dir, const char *runtime_dir,
+                                      const char *temp_dir)
+{
+    /* Each module keeps its own directory (settings, lock files, sinks). All or nothing:
+     * 511 bytes fit every one of the three. */
+    const char *dirs[3] = { config_dir, runtime_dir, temp_dir };
+    for (int i = 0; i < 3; i++)
+        if (dirs[i] && strlen(dirs[i]) > 511)
+            return PIN_ERR_ARG;
+    pin_settings_set_dir(config_dir);
+    pinnacle_lock_set_dir(runtime_dir);
+    pin_sink_set_temp_dir(temp_dir);
+    return PIN_OK;
+}
+
 pin_status_t pin_session_set_firmware_dir(const char *utf8_dir)
 {
     pthread_mutex_lock(&g_fw_mtx);
@@ -506,10 +523,14 @@ static void set_init_error(pin_session_t *s, pinnacle_status_t pst, const char *
     else if (pst == PINNACLE_ERR_NOT_READY)
         snprintf(msg, sizeof(msg), "The device did not accept the FPGA bitstream %s: %s", fw,
                  pinnacle_strerror(pst));
+    else if (pst == PINNACLE_ERR_FD_REENUMERATE)
+        snprintf(msg, sizeof(msg), "%s: %s", s->dev.model ? s->dev.model->name : "This model",
+                 pinnacle_strerror(pst));
     else
         snprintf(msg, sizeof(msg), "Device initialisation failed: %s", pinnacle_strerror(pst));
-    set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY
-                     ? PIN_ERR_FIRMWARE : PIN_ERR_USB, msg);
+    /* FD_REENUMERATE: not a USB fault; the model cannot be driven from "fd:N" (yet) */
+    set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY ? PIN_ERR_FIRMWARE
+                 : pst == PINNACLE_ERR_FD_REENUMERATE ? PIN_ERR_ARG : PIN_ERR_USB, msg);
 }
 
 /* ========================================================================
@@ -573,6 +594,12 @@ static int looks_like_serial(const char *s)
 
 static int resolve_device_id(const char *want, char *out, size_t out_size)
 {
+    if (pinnacle_parse_fd_id(want, NULL) > 0) {
+        /* "fd:N": a descriptor the caller opened (pin_session_open() checked it); never a
+         * file name, an enumerated id or a serial */
+        snprintf(out, out_size, "%s", want);
+        return 0;
+    }
     if (want && strncmp(want, "replay:", 7) == 0) {
         /* pin_enumerate() lists the replay device as "replay:<file name>"
          * because pin_device_info_t.id is short; map that back to the full
@@ -695,8 +722,10 @@ static void rate_persist(pin_session_t *s)
     if (bps <= 0) return;
     char path[PIN_PATH_MAX];
     if (pin_settings_default_path(path, sizeof(path)) != 0) return;
-    if (pin_est_store_ffv1(path, bps * 3600.0) == 0)
-        s->ffv1_learned_bph = bps * 3600.0;
+    /* kept as the "fast" level's rate, so a later capture at another level scales it */
+    double bph = bps * 3600.0 / pin_est_ffv1_factor(s->capture_opts.ffv1_compression);
+    if (pin_est_store_ffv1(path, bph) == 0)
+        s->ffv1_learned_bph = bph;
 }
 
 /* The learned FFV1 rate, read from the settings once per session. */
@@ -757,6 +786,8 @@ static void file_closed(void *user, const pin_closer_done_t *d)
         pin_session_push_event(s, PIN_EVT_FILE_CLOSED, (int32_t)d->status, d->path);
 }
 
+static void adopt_renumbered_file(pin_session_t *s);
+
 /* Hands the open file (writer and sink) to the closer, which drains and
  * finalises it on its own thread, so the capture can go on into the next
  * file at once. What it has written so far goes into the capture's totals
@@ -767,6 +798,7 @@ static void hand_over_file(pin_session_t *s)
 {
     if (!s->sink)
         return;
+    adopt_renumbered_file(s);
     pin_sink_status_t sst;
     memset(&sst, 0, sizeof(sst));
     if (s->sink->get_status)
@@ -935,13 +967,23 @@ static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *d
 
 /* ---- format table (pin_api.h's pin_formats()/pin_format_info()) --------- */
 
+/* The analog default: uncompressed AVI everywhere but Android, where 75 GB per hour is more
+ * than phone storage keeps up with or holds for long (pin_session_format_warning() says so if
+ * the user picks it anyway), so lossless FFV1 is the default there. pin_capture_opts_defaults()
+ * (pin_api.c) follows the same rule. */
+#if defined(__ANDROID__)
+#define ANALOG_DEFAULT_IS_AVI 0
+#else
+#define ANALOG_DEFAULT_IS_AVI 1
+#endif
+
 static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_ANALOG_AVI] = { .format = PIN_FMT_ANALOG_AVI, .kind = PIN_KIND_ANALOG,
         .label = "Uncompressed AVI (YUY2)", .extension = "avi",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 1 },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = ANALOG_DEFAULT_IS_AVI },
     [PIN_FMT_ANALOG_FFV1_MKV] = { .format = PIN_FMT_ANALOG_FFV1_MKV, .kind = PIN_KIND_ANALOG,
         .label = "FFV1 + FLAC lossless (MKV)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = !ANALOG_DEFAULT_IS_AVI },
     [PIN_FMT_DV_RAW] = { .format = PIN_FMT_DV_RAW, .kind = PIN_KIND_DV,
         .label = "Raw DV stream", .extension = "dv",
         .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1 },
@@ -960,13 +1002,69 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_HDV_MKV] = { .format = PIN_FMT_HDV_MKV, .kind = PIN_KIND_HDV,
         .label = "HDV in Matroska", .extension = "mkv",
         .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+    [PIN_FMT_ANALOG_H264_MKV] = { .format = PIN_FMT_ANALOG_H264_MKV, .kind = PIN_KIND_ANALOG,
+        .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
+    [PIN_FMT_ANALOG_HEVC_MKV] = { .format = PIN_FMT_ANALOG_HEVC_MKV, .kind = PIN_KIND_ANALOG,
+        .label = "HEVC in MKV (hardware encoder)", .extension = "mkv",
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
+    [PIN_FMT_DV_H264_MKV] = { .format = PIN_FMT_DV_H264_MKV, .kind = PIN_KIND_DV,
+        .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+    [PIN_FMT_DV_HEVC_MKV] = { .format = PIN_FMT_DV_HEVC_MKV, .kind = PIN_KIND_DV,
+        .label = "HEVC in MKV (hardware encoder)", .extension = "mkv",
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
 };
+
+int pin_session_format_available(pin_format_t f)
+{
+    if (!pin_fmt_is_hwenc(f))
+        return (unsigned)f < PIN_FMT_COUNT;
+    return pin_hwenc_available(pin_fmt_is_hevc(f) ? PIN_HWENC_HEVC : PIN_HWENC_H264);
+}
+
+/* Formats this platform does not offer: pin_formats() leaves them out, pin_format_info() and
+ * a capture still take them. Android: HDV to MOV / MKV remuxes the whole recording when it
+ * stops (minutes, and twice the space), so only the raw transport stream there. The H.264 /
+ * HEVC formats only where their encoder opened (a capture refuses them elsewhere). */
+static int format_offered(pin_format_t f)
+{
+    if (pin_fmt_is_hwenc(f))
+        return pin_session_format_available(f);
+#if defined(__ANDROID__)
+    return f != PIN_FMT_HDV_MOV && f != PIN_FMT_HDV_MKV;
+#else
+    (void)f;
+    return 1;
+#endif
+}
+
+void pin_session_format_warning(pin_format_t f, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    if (pin_fmt_is_hwenc(f)) {
+        pin_fmt_hwenc_warning(f, out, cap);
+        return;
+    }
+#if defined(__ANDROID__)
+    /* the rates of pin_estimate.c: YUY2 720x576 at 25 fps + PCM is 20.9 MB/s, 75 GB/h */
+    if (f == PIN_FMT_ANALOG_AVI)
+        snprintf(out, cap, "Uncompressed video takes about 75 GB per hour (21 MB/s). Phone storage "
+                 "may be too slow to keep up with that, or fill up quickly; FFV1 (lossless, about "
+                 "30 GB per hour) is the safer choice.");
+#else
+    (void)f;
+#endif
+}
 
 int pin_session_formats(pin_kind_t kind, pin_format_info_t *out, int max)
 {
     int n = 0;
     for (int i = 0; i < PIN_FMT_COUNT; i++) {
-        if (g_formats[i].kind != kind)
+        /* the kind first: listing HDV formats needs no encoder probe */
+        if (g_formats[i].kind != kind || !format_offered((pin_format_t)i))
             continue;
         if (out && n < max) {
             out[n] = g_formats[i];
@@ -1025,6 +1123,36 @@ static void count_frame(pin_session_t *s, int err, int dropped)
     if (dropped) { s->frames_dropped++; s->clip_frames_dropped++; }
 }
 
+/* Numbered output: the names after a taken one, for the lazy sink (sink_lazy.c, "Taken names":
+ * Android shared storage can hold files of this name that the app cannot see). Owned by the
+ * sink, which may use it on the writer thread after the session moved on, hence the copy. */
+typedef struct {
+    char base[PIN_PATH_MAX];
+    char ext[16];
+    pin_naming_opts_t nopts;
+} renumber_ctx_t;
+
+static int renumber_next(void *ctx, unsigned k, char *out, size_t cap)
+{
+    const renumber_ctx_t *c = ctx;
+    pin_naming_opts_t o = c->nopts;
+    o.scene_index += k;
+    return pin_naming_build(c->base, &o, c->ext, out, cap) == 0 ? 0 : -1;
+}
+
+/* Takes over the name the lazy sink moved the open file to, if it had to skip a taken number:
+ * current_file (status, events, the closer) and scene_index (the next scene counts on from
+ * it). Caller holds the lock. */
+static void adopt_renumbered_file(pin_session_t *s)
+{
+    char path[PIN_PATH_MAX];
+    unsigned k = s->sink ? pin_sink_lazy_renumbered(s->sink, path, sizeof(path)) : 0;
+    if (k == 0 || strcmp(path, s->current_file) == 0)
+        return;     /* none, or already taken over */
+    snprintf(s->current_file, sizeof(s->current_file), "%s", path);
+    s->scene_index += k;
+}
+
 static void open_sink_for_scene(pin_session_t *s)
 {
     pin_naming_opts_t nopts = {
@@ -1048,6 +1176,15 @@ static void open_sink_for_scene(pin_session_t *s)
     if (!s->sink) {
         set_error(s, PIN_ERR_ARG, "unsupported output format");
         return;
+    }
+    if (!to_stdout && s->capture_opts.first_number != 0) {
+        renumber_ctx_t *rc = calloc(1, sizeof(*rc));
+        if (rc) {
+            snprintf(rc->base, sizeof(rc->base), "%s", s->naming_base);
+            snprintf(rc->ext, sizeof(rc->ext), "%s", s->naming_ext);
+            rc->nopts = nopts;
+            pin_sink_lazy_set_renumber(s->sink, renumber_next, rc, free);
+        }
     }
 
     pin_sink_params_t params;
@@ -1098,6 +1235,9 @@ static void open_sink_for_scene(pin_session_t *s)
     pin_sink_sar_for(s->stream_kind, is_pal, params.aspect, params.width,
                       &params.sample_aspect_num, &params.sample_aspect_den);
     params.colour_matrix = s->stream_kind == PIN_KIND_HDV ? PIN_MATRIX_BT709 : PIN_MATRIX_BT601;
+    params.deinterlace = pin_fmt_clamp_deinterlace(s->capture_opts.deinterlace);
+    params.video_quality = pin_fmt_clamp_quality(s->capture_opts.video_quality);
+    params.ffv1_compression = pin_fmt_clamp_ffv1(s->capture_opts.ffv1_compression);
 
     pin_status_t st = s->sink->open(s->sink, path, &params);
     if (st != PIN_OK) {
@@ -1116,6 +1256,7 @@ static void open_sink_for_scene(pin_session_t *s)
                : s->stream_kind == PIN_KIND_ANALOG ? PIN_WRITER_ANALOG_CAPACITY : 0;
     s->writer = pin_writer_start_ex(cap, writer_consume, s->sink, PIN_WRITER_OVERFLOW_FATAL);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
+    s->encoder_behind_logged = 0;
     pin_split_new_file(&s->split);
     /* the clip counters restart with every file (frames still held back by a
      * pending split were counted into the previous clip: at most ~1 s) */
@@ -1136,6 +1277,7 @@ static void file_announce(pin_session_t *s)
     memset(&sst, 0, sizeof(sst));
     s->sink->get_status(s->sink, &sst);
     if (sst.units_written > 0) {
+        adopt_renumbered_file(s);
         s->file_announced = 1;
         pin_session_push_event(s, PIN_EVT_FILE_OPENED, 0, s->current_file);
     }
@@ -1705,7 +1847,7 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
     int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
     /* plus the files the closer is still finishing (an earlier scene's remux) */
     uint64_t reserve = pin_stop_disk_reserve(0, wst.backlog_bytes,
-                                             remux ? s->bytes_written : 0) +
+                                             remux ? pin_stop_remux_reserve(s->bytes_written) : 0) +
                        pin_closer_pending_bytes(s->closer);
     char detail[PIN_TEXT_MAX];
     pin_stop_reason_t why;
@@ -1714,8 +1856,18 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         snprintf(detail, sizeof(detail), "the output drive is almost full (%.0f MB left)",
                  (double)free_bytes / 1048576.0);
     } else if (wst.failed) {
-        why = PIN_STOP_WRITE_ERROR;
-        detail[0] = 0;
+        /* the H.264 / HEVC sink reports a failed encoder as a codec error, not a disk one */
+        pin_sink_status_t sst;
+        memset(&sst, 0, sizeof(sst));
+        if (s->sink->get_status)
+            s->sink->get_status(s->sink, &sst);
+        if (sst.last_error == PIN_ERR_CODEC && pin_fmt_is_hwenc(s->active_format)) {
+            why = PIN_STOP_ERROR;
+            snprintf(detail, sizeof(detail), "the video encoder failed");
+        } else {
+            why = PIN_STOP_WRITE_ERROR;
+            detail[0] = 0;
+        }
     } else {
         return 0;
     }
@@ -2056,6 +2208,13 @@ static void dv_tick(void *user)
             pin_sink_status_t sst;
             s->sink->get_status(s->sink, &sst);
             s->bytes_written = sst.bytes_written;
+            if (sst.encoder_behind && !s->encoder_behind_logged) {
+                /* the queue in front of the disk writer absorbs it; if it stays behind that
+                 * fills and the capture ends (PIN_STOP_DISK_SLOW) */
+                s->encoder_behind_logged = 1;
+                pin_logf(PIN_LOG_WARN, "session: the encoder of %s is falling behind the capture\n",
+                         s->current_file);
+            }
         } else {
             s->bytes_written = wst.bytes_pushed;
         }
@@ -2616,6 +2775,37 @@ static uint64_t replay_unplug_after(void)
     return v && v[0] ? (uint64_t)strtoull(v, NULL, 10) : 0;
 }
 
+/* The replay loops' share of what a hardware loop keeps up to date in the status (the DV and
+ * analog ticks): the capture time, the writer backlog, the bytes on disk, the file-opened event
+ * and the rate window behind the time-left estimate. At most every 100 ms (*last: the loop's
+ * own timestamp; the HDV loop runs per 188-byte packet). Status only: the replay device ends a
+ * capture at the end of its file, not by the time limits. Caller holds the lock. */
+static void replay_stats(pin_session_t *s, double *last)
+{
+    double now = pin_session_now();
+    if (now - *last < 0.1)
+        return;
+    *last = now;
+    if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
+        s->elapsed_s = now - s->capture_start_s;
+    if (!s->writer)
+        return;
+    pin_writer_stats_t wst;
+    pin_writer_get_stats(s->writer, &wst);
+    s->writer_backlog = wst.backlog_bytes;
+    s->writer_backlog_max = wst.backlog_high_water;
+    if (s->sink && s->sink->get_status) {
+        pin_sink_status_t sst;
+        memset(&sst, 0, sizeof(sst));
+        s->sink->get_status(s->sink, &sst);
+        s->bytes_written = sst.bytes_written;
+    } else {
+        s->bytes_written = wst.bytes_pushed;
+    }
+    file_announce(s);
+    rate_sample(s);
+}
+
 /* HDV .ts replay: the file is already a plain, 188-byte-aligned MPEG2-TS
  * (unlike the real EP 0x88 stream, it carries no OHCI/type-9 framing), so
  * dv_reassembler_feed() does not apply. Instead this mirrors what
@@ -2643,6 +2833,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     uint8_t pkt[HDV_TS_PACKET_SIZE];
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
+    double stats_t = 0;
 
     s->loop_stop = 0;
     while (!s->loop_stop) {
@@ -2650,6 +2841,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
 
         pin_session_lock(s);
         capture_guard(s, 0);
+        replay_stats(s, &stats_t);
         pin_deck_state_t d = s->deck;
         if (unplug_after && s->sink && s->frames >= unplug_after)
             unplugged = 1;
@@ -2755,12 +2947,14 @@ static int replay_run(pin_session_t *s)
     int chunks_idle = 0; /* raw dump: chunks in a row that ended no frame */
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
+    double stats_t = 0;
     s->loop_stop = 0;
     while (!s->loop_stop) {
         if (handle_inline_commands(s, 0)) { s->loop_stop = 1; break; }
 
         pin_session_lock(s);
         capture_guard(s, 0);
+        replay_stats(s, &stats_t);
         pin_deck_state_t d = s->deck;
         if (unplug_after && s->sink && s->frames >= unplug_after)
             unplugged = 1;
@@ -2889,7 +3083,9 @@ static void *worker_main(void *arg)
                     pin_session_lock(s);
                     char omsg[PIN_TEXT_MAX];
                     snprintf(omsg, sizeof(omsg), "Cannot open the device: %s", pinnacle_strerror(pst));
-                    set_error(s, pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY : PIN_ERR_USB, omsg);
+                    set_error(s, pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY
+                                 : pst == PINNACLE_ERR_BAD_FD ? PIN_ERR_NOT_FOUND
+                                 : pst == PINNACLE_ERR_FD_UNSUPPORTED ? PIN_ERR_ARG : PIN_ERR_USB, omsg);
                     pin_session_unlock(s);
                     continue;
                 }
@@ -2954,6 +3150,16 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
 {
     if (!out)
         return PIN_ERR_ARG;
+    /* "fd:N" is checked now (malformed, closed, or a platform that cannot use it), not at
+     * the first pin_set_input(), where the device is actually opened. */
+    pinnacle_status_t fdst = pinnacle_check_fd_id(device_id);
+    if (fdst != PINNACLE_OK) {
+        pin_logf(PIN_LOG_ERROR, "pin_open: \"%s\": %s\n", device_id,
+                 fdst == PINNACLE_ERR_BAD_FD
+                     ? "expected fd:N, N being an open file descriptor of the USB device"
+                     : pinnacle_strerror(fdst));
+        return PIN_ERR_ARG;
+    }
     char resolved[PIN_PATH_MAX];
     if (resolve_device_id(device_id, resolved, sizeof(resolved)) != 0)
         return PIN_ERR_NOT_FOUND;
@@ -3223,13 +3429,35 @@ static int fat32_and_free(const char *path, uint64_t *free_bytes, int *fat32)
  * one-off estimate for a hypothetical capture) and by the live
  * disk_free_bytes/est_seconds_left in pin_session_get_status(). */
 static double nominal_bytes_per_second(pin_session_t *s, pin_kind_t kind, pin_format_t fmt,
-                                       double measured_bps, int *source)
+                                       const pin_capture_opts_t *o, double measured_bps, int *source)
 {
+    if (pin_fmt_is_hwenc(fmt)) {
+        /* the bit rate the quality setting maps to (pin_estimate.h), until measured */
+        if (measured_bps > 0) {
+            if (source) *source = PIN_EST_SRC_MEASURED;
+            return measured_bps;
+        }
+        if (source) *source = PIN_EST_SRC_DEFAULT;
+        return pin_est_hwenc_rate(pin_fmt_is_hevc(fmt), s->width, s->height, s->is_60hz,
+                                  o && pin_fmt_clamp_deinterlace(o->deinterlace) == PIN_DEINTERLACE_DOUBLE_RATE,
+                                  o ? pin_fmt_clamp_quality(o->video_quality) : PIN_QUALITY_DEFAULT);
+    }
     pin_est_kind_t k = kind == PIN_KIND_HDV ? PIN_EST_HDV
                        : kind == PIN_KIND_ANALOG
                              ? (fmt == PIN_FMT_ANALOG_FFV1_MKV ? PIN_EST_ANALOG_FFV1 : PIN_EST_ANALOG_AVI)
                              : PIN_EST_DV;
-    return pin_est_rate(k, s->width, s->height, s->is_60hz, learned_ffv1_bph(s), measured_bps, source);
+    double rate = pin_est_rate(k, s->width, s->height, s->is_60hz, learned_ffv1_bph(s), measured_bps, source);
+    /* the default and the learned FFV1 rate are the "fast" level's */
+    if (k == PIN_EST_ANALOG_FFV1 && measured_bps <= 0)
+        rate *= pin_est_ffv1_factor(o ? pin_fmt_clamp_ffv1(o->ffv1_compression) : PIN_FFV1_DEFAULT);
+    return rate;
+}
+
+pin_format_t pin_session_format_for(const pin_session_t *s, const pin_capture_opts_t *o)
+{
+    if (s->input != PIN_INPUT_DV)
+        return o->format_analog;
+    return s->stream_kind == PIN_KIND_HDV ? o->format_hdv : o->format_dv;
 }
 
 pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t *o,
@@ -3278,10 +3506,15 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     out->free_bytes = free_bytes;
     out->low_space = pin_output_space_low(free_bytes);
 
-    double bytes_per_s = nominal_bytes_per_second(s, kind, fmt, 0, NULL);
+    double bytes_per_s = nominal_bytes_per_second(s, kind, fmt, o, 0, NULL);
     out->minutes_left = bytes_per_s > 0 ? (uint64_t)(free_bytes / bytes_per_s / 60.0) : 0;
 
     out->message[0] = 0;
+    pin_format_t want = pin_session_format_for(s, o);
+    if (!pin_session_format_available(want)) {
+        pin_fmt_unavailable_text(want, out->message, sizeof(out->message));
+        return PIN_ERR_CODEC;
+    }
     if (out->collision)
         snprintf(out->message, sizeof(out->message), "%.200s already exists", first_match);
     else if (out->fat32 && out->minutes_left > 0)
@@ -3311,6 +3544,8 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     pin_status_t cs = pin_session_check_output(s, o, &chk);
     if (cs == PIN_ERR_ARG)
         return cs; /* unusable file name */
+    if (!pin_path_is_stdout(o->path) && !pin_session_format_available(pin_session_format_for(s, o)))
+        return PIN_ERR_CODEC; /* no encoder for it here (chk.message says so) */
     if (pin_path_is_stdout(o->path) && pin_stdout_check(NULL, 0) != 0)
         return PIN_ERR_ARG; /* a terminal, or no standard output */
     if (!overwrite && cs == PIN_OK && chk.collision)
@@ -3485,10 +3720,16 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         out->disk_free_bytes = free_bytes;
         int src = 0;
         double measured = s->state == PIN_STATE_CAPTURING ? pin_rate_bytes_per_s(&s->rate_win, 10.0) : -1;
-        double rate = nominal_bytes_per_second(s, hint_kind, hint_fmt, measured, &src);
+        const pin_capture_opts_t *rate_opts = s->state == PIN_STATE_CAPTURING ? &s->capture_opts
+                                              : s->have_output_hint ? &s->output_hint : NULL;
+        double rate = nominal_bytes_per_second(s, hint_kind, hint_fmt, rate_opts, measured, &src);
         out->est_bytes_per_hour = rate * 3600.0;
         out->est_rate_source = src;
-        out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
+        if (hint_fmt == PIN_FMT_HDV_MOV || hint_fmt == PIN_FMT_HDV_MKV)   /* rewrapped at close */
+            out->est_seconds_left = pin_est_seconds_left_remux(
+                free_bytes, s->state == PIN_STATE_CAPTURING ? s->bytes_written : 0, rate);
+        else
+            out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
         out->disk_low = out->est_seconds_left < 3600.0 || free_bytes < (50ull << 30);
     }
     pin_session_unlock(s);

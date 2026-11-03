@@ -20,6 +20,7 @@
 #include "../core/pin_log.h"
 
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -45,10 +46,15 @@ struct pin_closer {
     void *user;
 };
 
-/* Stops the writer, counts, closes. Returns the close status. */
-static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, uint64_t *final_units)
+/* Stops the writer, counts, closes. Returns the close status. final_path: the name the file
+ * ended up with, which is not the submitted one if the lazy sink had to skip a taken number
+ * only after the session handed the file over (sink_lazy.c, "Taken names"). */
+static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, uint64_t *final_units,
+                              char *final_path, size_t final_cap)
 {
     int wfail = j->writer ? pin_writer_stop(j->writer) != 0 : 0;
+    if (pin_sink_lazy_renumbered(j->sink, final_path, final_cap) == 0)
+        snprintf(final_path, final_cap, "%s", j->path);
     pin_sink_status_t sst;
     memset(&sst, 0, sizeof(sst));
     if (j->sink->get_status) {
@@ -64,11 +70,11 @@ static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, ui
     return st == PIN_OK && wfail ? PIN_ERR_IO : st;
 }
 
-static void report(pin_closer_t *c, const job_t *j, pin_status_t st, uint64_t units)
+static void report(pin_closer_t *c, const job_t *j, pin_status_t st, uint64_t units, const char *path)
 {
     if (st != PIN_OK)
-        pin_logf(PIN_LOG_WARN, "closer: %s: %s\n", j->path, pin_strerror(st));
-    pin_closer_done_t d = { .status = st, .units = units, .announced = j->announced, .path = j->path };
+        pin_logf(PIN_LOG_WARN, "closer: %s: %s\n", path, pin_strerror(st));
+    pin_closer_done_t d = { .status = st, .units = units, .announced = j->announced, .path = path };
     if (c->done)
         c->done(c->user, &d);
 }
@@ -91,8 +97,9 @@ static void *closer_thread(void *arg)
 
         int64_t bytes, units;
         uint64_t final_units;
-        pin_status_t st = close_job(j, &bytes, &units, &final_units);
-        report(c, j, st, final_units);
+        char final_path[PIN_PATH_MAX];
+        pin_status_t st = close_job(j, &bytes, &units, &final_units, final_path, sizeof(final_path));
+        report(c, j, st, final_units, final_path);
 
         pthread_mutex_lock(&c->lock);
         c->more_bytes += bytes;
@@ -140,9 +147,10 @@ void pin_closer_submit(pin_closer_t *c, pin_writer_t *writer, pin_sink_t *sink, 
                       .announced = announced, .bytes = bytes, .units = units };
         int64_t b, u;
         uint64_t final_units;
-        pin_status_t st = close_job(&now, &b, &u, &final_units);
+        char final_path[PIN_PATH_MAX];
+        pin_status_t st = close_job(&now, &b, &u, &final_units, final_path, sizeof(final_path));
         if (c) {
-            report(c, &now, st, final_units);
+            report(c, &now, st, final_units, final_path);
             pthread_mutex_lock(&c->lock);
             c->more_bytes += b;
             c->more_units += u;

@@ -82,13 +82,48 @@ then the warning can be ignored. Hover over the entry for the same advice.
 (The core reports it: `pin_device_info_t.hub_depth > 0`, text from
 `pin_usb_hub_hint()`; see also the [main README](../../README.md#connection-via-usb-hub).)
 
+## Format settings
+
+The gear button right of each format drop-down (analog, and DV / HDV in the
+per-kind options) opens a Flyout with the selected format's settings: for the
+H.264 / HEVC formats the interlaced-video choice (deinterlace to 50 / 60 fps, or
+keep the fields, whose help shows as a warning) and the quality slider (0 best
+... 51 smallest, like x264's CRF, with the data rate it comes to under it), for
+FFV1 the compression level (Fast, Smaller, Smallest, all lossless). Everything
+in it comes from the core: which parts apply (`pin_format_options()`, one
+control per `has_*` flag), labels, range, defaults and help texts, and the data
+rate line (`pin_format_quality_hint()`, for the signal's 50 / 60 Hz). The gear
+is disabled for a format without settings (raw DV, AVI, HDV, ...). A format
+with a warning (`pin_format_warning()`: H.264 / HEVC are lossy) shows it in a
+warning InfoBar under the drop-down while it is selected.
+
+The choices are stored per device like the other options, under the Android
+app's keys: `gui.deinterlace_analog`, `gui.deinterlace_dv`, `gui.quality_analog`,
+`gui.quality_dv` (DV and HDV share the DV ones), `gui.ffv1_compression`; missing
+or -1 means the format's default. They go into `pin_capture_opts_t`'s
+`deinterlace`, `video_quality` and `ffv1_compression` for the input being
+captured, and are locked while capturing. Code: `FormatChoices` and
+`FormatOptionsViewModel` (`ViewModels/FormatOptionsViewModel.cs`),
+`Views/FormatOptionsView.xaml` (the Flyout content).
+
+The H.264 / HEVC formats are listed only where their encoder opens on this
+machine. `pin_encoders_probe()` finds that out once (it opens each encoder,
+50-300 ms) on a worker thread started with the window
+(`MainViewModel.ProbeEncoders`); the format lists stay empty until it returns
+and are then filled (`RefreshFormats`), so the UI thread never waits for it. A
+saved or command-line H.264 / HEVC choice is selected then; on a machine
+without that encoder the drop-down shows the kind's default and the stored
+choice is left alone.
+
 ## Command line
 
 The core parses the command line (`pin_script_parse`), so every front-end
 accepts the same language, documented in [docs/cli.md](../../docs/cli.md):
 settings and actions processed left to right. The settings the window has
 fields for (`--device`, `--input`, `--std`, `--format`, `--aspect`, `--split`,
-the analog controls) are applied over the selected device's saved settings;
+`--deinterlace`, `--quality`, `--ffv1-compression`, the analog controls) are
+applied over the selected device's saved settings (`--aspect`, `--deinterlace`
+and `--quality` to the kinds the chosen input delivers);
 `--title` and `--keep-raw` have no field here and only affect the script's own
 captures. If there are actions (`--rew`, `--play`, `--capture PATH`, `--wait`,
 ...), they run (`pin_script_run`) once the device is ready, and the window shows
@@ -182,9 +217,11 @@ MarvinCaptureGUI/
                 NativeStructs.cs / NativeEnums.cs (blittable mirrors),
                 PinSessionHandle.cs (SafeHandle -> pin_close), Win32.cs
   ViewModels/   MainViewModel (all state + the 100 ms status/event tick),
-                KindSettingsViewModel (DV / HDV tab), ControlSliderViewModel,
+                KindSettingsViewModel (DV / HDV tab), FormatOptionsViewModel
+                (+ FormatChoices: the format settings), ControlSliderViewModel,
                 DeviceItemViewModel
-  Views/        KindSettingsView (format, title, split, idle, passes)
+  Views/        KindSettingsView (format, title, split, idle, passes),
+                FormatOptionsView (the format gear's Flyout)
   Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarButton + TaskbarIcons (ITaskbarList3), DbThumbConverter,
                 MarvinIdle (the animated logo on the no-signal screen, XAML shapes)
   Preview/      D3DPreview (swap chain + render thread), Shaders (HLSL)

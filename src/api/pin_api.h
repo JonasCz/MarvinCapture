@@ -109,6 +109,22 @@ PIN_API const char *pin_strerror(pin_status_t s);
  * library. */
 PIN_API pin_status_t pin_set_firmware_dir(const char *utf8_dir);
 
+/* Optional; for an app whose process has none of the usual directories (Android). Call it once,
+ * before anything else. Each NULL or "" keeps the platform default for that one (and resets an
+ * earlier call's choice):
+ *   config_dir   where settings.ini lives (default: %APPDATA%\PinnacleOSS,
+ *                ~/Library/Application Support/PinnacleOSS, $XDG_CONFIG_HOME/pinnacle-oss)
+ *   runtime_dir  where the cross-process lock files go (default: $XDG_RUNTIME_DIR/pinnacle-oss,
+ *                $TMPDIR/pinnacle-oss or /tmp/pinnacle-oss-<uid>; unused on Windows). On Android
+ *                none of these exists: pass the app's cache directory, or pin_open() fails.
+ *   temp_dir     where HDV to MOV / MKV writes the "<name>.rawts.tmp" it remuxes when the
+ *                capture stops (default: next to the output file; Android's media provider
+ *                refuses a .tmp file in Movies/)
+ * Directories are created if missing. PIN_ERR_ARG (and nothing changed) if a path is longer
+ * than 511 bytes. */
+PIN_API pin_status_t pin_set_app_dirs(const char *config_dir, const char *runtime_dir,
+                                      const char *temp_dir);
+
 /* ---- devices ---------------------------------------------------------- */
 
 typedef enum {
@@ -146,6 +162,13 @@ typedef struct {
  * PIN_REPLAY environment variable or pin_set_replay_file() names a file. */
 PIN_API int pin_enumerate(pin_device_info_t *out, int max);
 
+/* Names a USB device found some other way, without enumerating or opening it (Android:
+ * UsbManager lists the devices, the core cannot): fills name, vid, pid, tested, state
+ * (PIN_DEV_READY for a model the core drives, PIN_DEV_UNSUPPORTED for a sibling it
+ * recognises but does not drive), hub_depth -1, and an empty id, serial and owner_pid.
+ * out->size must be set. PIN_ERR_NOT_FOUND for a vid / pid that is not in the model table. */
+PIN_API pin_status_t pin_usb_model(uint16_t vid, uint16_t pid, pin_device_info_t *out);
+
 /* One short paragraph for a device with hub_depth > 0: it shares the hub's
  * bandwidth, plug it straight into the computer, and the platform's tool to
  * check (USBTreeView / lsusb -t / System Information). Static, never NULL. */
@@ -156,11 +179,28 @@ PIN_API const char *pin_usb_hub_hint(void);
  * PIN_PERF_* items that apply right now (0 = nothing to recommend); pin_perf_text() is the
  * message for one bit, and pin_perf_fix() the shell commands that fix it (one per line, "" if
  * the front end should open the OS settings instead). Static strings, never NULL. */
-#define PIN_PERF_CPU_LATENCY 0x1   /* Linux: /dev/cpu_dma_latency is not writable */
+#define PIN_PERF_CPU_LATENCY 0x1   /* Linux: /dev/cpu_dma_latency is not writable (never on Android,
+                                      where nothing can be done about it) */
 #define PIN_PERF_POWER_PLAN  0x2   /* Windows: power plan is Power saver or Balanced */
 PIN_API int pin_perf_check(void);
 PIN_API const char *pin_perf_text(int kind);
 PIN_API const char *pin_perf_fix(int kind);
+
+/* Process-wide: whether a capture keeps one CPU core busy at idle priority, so the CPUs stay
+ * out of the deep idle states whose wake-up latency makes analog captures lose frames
+ * (docs/analog.md, "Power saving and capture reliability"). It runs next to the USB read loop
+ * and costs one core's worth of power and heat. Takes effect when the next read loop starts.
+ *   AUTO  (default) Linux: only when the /dev/cpu_dma_latency request (the better remedy) is
+ *         refused; Android: always, since an app cannot make that request
+ *   ON    always (Linux, Android), even when the latency request was granted
+ *   OFF   never
+ * Windows and macOS: no effect. Other values are ignored. */
+typedef enum {
+    PIN_KEEP_BUSY_AUTO = 0,
+    PIN_KEEP_BUSY_ON,
+    PIN_KEEP_BUSY_OFF,
+} pin_keep_busy_t;
+PIN_API void pin_set_cpu_keep_busy(int mode);
 
 /* Sets (or, with NULL/"", clears) the process-wide replay source: a file
  * pin_enumerate() lists as a virtual "replay:<basename>" device and
@@ -213,7 +253,18 @@ typedef enum {
  * (pin_device_info_t.serial, 16 hex chars, matched case-insensitively) when
  * no id matches it literally; "replay:<basename>" for the configured replay
  * file; or a path to an existing file, which is equivalent to calling
- * pin_set_replay_file() with it first and then opening it by name. */
+ * pin_set_replay_file() with it first and then opening it by name.
+ *
+ * "fd:<n>" opens the device behind file descriptor n, a USB device the caller
+ * opened itself: on Android UsbDeviceConnection.getFileDescriptor() (an app
+ * cannot enumerate USB devices there), in Termux the descriptor termux-usb
+ * passes. Nothing is enumerated; the model comes from the device. The caller
+ * keeps the descriptor (and the UsbDeviceConnection) open until pin_close()
+ * returns; the core never closes it. The device has no port id (hub_depth -1).
+ * PIN_ERR_ARG for a malformed "fd:" id, a descriptor that is not open, or a
+ * platform that cannot do this (Linux / Android only); a descriptor that is no
+ * supported USB device fails at pin_set_input(). The MovieBox Deluxe cannot be
+ * opened this way yet (see pin_device_fd_problem()). */
 PIN_API pin_status_t pin_open(const char *device_id, pin_session_t **out);
 
 /* Stops any capture (finalising files), releases the device. Blocks until
@@ -292,6 +343,15 @@ typedef enum {
     PIN_FMT_HDV_TS,             /* .ts (m2t) */
     PIN_FMT_HDV_MOV,
     PIN_FMT_HDV_MKV,
+    /* Appended. Lossy, with the operating system's own (normally hardware) encoder: Android
+     * MediaCodec, macOS VideoToolbox, Windows Media Foundation; video_quality and deinterlace
+     * apply (pin_format_options()). FLAC audio, Matroska, written live (a crash leaves a
+     * playable file). Listed by pin_formats() only where the encoder opens on this machine;
+     * never on Linux. DV input is decoded first (its scene split and passes work as usual). */
+    PIN_FMT_ANALOG_H264_MKV,
+    PIN_FMT_ANALOG_HEVC_MKV,
+    PIN_FMT_DV_H264_MKV,
+    PIN_FMT_DV_HEVC_MKV,
     PIN_FMT_COUNT
 } pin_format_t;
 
@@ -313,9 +373,98 @@ typedef struct {
     int is_default;             /* the default format for its kind */
 } pin_format_info_t;
 
-/* Formats for a kind, in display order. Returns the count. */
+/* Formats for a kind, in display order. Returns the count. Only the formats this platform
+ * offers: Android leaves out PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV (they remux the whole
+ * recording when it stops), and the H.264 / HEVC formats appear only where their encoder
+ * opened in pin_encoders_probe() (which the first call runs if nobody did: see there).
+ * pin_format_info() answers for every format. */
 PIN_API int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 PIN_API pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out);
+
+/* Finds out once per process which of the H.264 / HEVC formats this machine can write: opens
+ * each encoder with a small test configuration (720 x 576, 25 fps) and closes it again, on a
+ * thread of its own (Media Foundation must not run on a GUI's single-threaded COM apartment).
+ * Blocking: typically 50-300 ms per encoder, up to about a second on a phone that needs every
+ * fallback (pixel format, profile), and nothing at all on Linux. The result is cached, so later
+ * calls (and pin_formats()) return at once. A GUI calls it from a worker thread at start-up,
+ * before it first lists the formats; otherwise the first pin_formats() pays for it. Returns a
+ * bitmask of PIN_ENC_* for the encoders that opened. */
+#define PIN_ENC_H264 0x1
+#define PIN_ENC_HEVC 0x2
+PIN_API int pin_encoders_probe(void);
+
+/* A one-paragraph warning to show when the user picks format f on this platform, or "" when
+ * there is none: the H.264 / HEVC formats (lossy; for DV input a re-encode of the DV, which is
+ * already compressed), and on Android uncompressed analog AVI, whose data rate phone storage
+ * may not sustain. "" for every other format. 512 bytes are enough. */
+PIN_API void pin_format_warning(pin_format_t f, char *out, size_t cap);
+
+/* The format settings of pin_capture_opts_t and which format each applies to. */
+typedef enum {
+    PIN_DEINTERLACE_KEEP_FIELDS = 0,    /* each interlaced frame is encoded as one progressive picture */
+    PIN_DEINTERLACE_DOUBLE_RATE = 1,    /* bwdif: every field becomes a frame, 25i -> 50p, 29.97i -> 59.94p */
+} pin_deinterlace_t;
+
+typedef enum {
+    PIN_FFV1_FAST = 0,          /* Golomb-Rice coder (FFmpeg's default): least CPU, largest files */
+    PIN_FFV1_SMALLER,           /* range coder: a few percent smaller, more CPU */
+    PIN_FFV1_SMALLEST,          /* range coder and the large context model: smallest, most CPU */
+    PIN_FFV1_LEVEL_COUNT
+} pin_ffv1_compression_t;
+
+#define PIN_OPT_HELP_MAX 512
+
+/* What pin_format_options() reports: which of the format settings apply to a format and how a
+ * GUI presents them, with ready-made labels and help texts (UTF-8, English, like the other
+ * ready-made texts). A GUI shows one control per has_* flag and nothing else. */
+typedef struct {
+    uint32_t size;
+    int has_quality;            /* video_quality applies (H.264 / HEVC) */
+    int has_deinterlace;        /* deinterlace applies (H.264 / HEVC) */
+    int has_ffv1_compression;   /* ffv1_compression applies (FFV1) */
+
+    /* video_quality: a slider or spin box from quality_min to quality_max in steps of 1,
+     * quality_default preselected. Lower is better (bigger files), like x264's CRF; the encoder
+     * gets the closest it supports (constant quality or a bit rate derived from the value). */
+    int quality_min, quality_max, quality_default;
+    int quality_lower_is_better;            /* 1 */
+    char quality_label[PIN_NAME_MAX];       /* "Quality" */
+    char quality_low_label[PIN_NAME_MAX];   /* the quality_min end of the slider: "Best" */
+    char quality_high_label[PIN_NAME_MAX];  /* the quality_max end: "Smallest" */
+    char quality_help[PIN_OPT_HELP_MAX];    /* what the number means, the default, lossy */
+
+    /* deinterlace: two choices (radio buttons or a drop-down), in pin_deinterlace_t order. */
+    int deinterlace_default;                        /* PIN_DEINTERLACE_DOUBLE_RATE */
+    char deinterlace_label[PIN_NAME_MAX];           /* "Interlaced video" */
+    char deinterlace_keep_label[PIN_NAME_MAX];      /* "Keep fields (25/30 fps)" */
+    char deinterlace_double_label[PIN_NAME_MAX];    /* "Deinterlace (50/60 fps)" */
+    char deinterlace_keep_help[PIN_OPT_HELP_MAX];   /* the warning: interlaced material loses quality */
+    char deinterlace_double_help[PIN_OPT_HELP_MAX];
+
+    /* ffv1_compression: PIN_FFV1_LEVEL_COUNT choices in pin_ffv1_compression_t order. */
+    int ffv1_default;                               /* PIN_FFV1_FAST */
+    char ffv1_label[PIN_NAME_MAX];                  /* "Compression" */
+    char ffv1_fast_label[PIN_NAME_MAX];             /* "Fast" */
+    char ffv1_smaller_label[PIN_NAME_MAX];          /* "Smaller" */
+    char ffv1_smallest_label[PIN_NAME_MAX];         /* "Smallest" */
+    char ffv1_help[PIN_OPT_HELP_MAX];               /* smaller files cost more CPU; all lossless */
+
+    char note[PIN_OPT_HELP_MAX];    /* one line for the whole settings panel of this format, or "":
+                                       H.264 / HEVC: lossy, made by the hardware encoder */
+} pin_format_options_t;
+
+/* Fills *out (out->size set by the caller) for format f. Settings that do not apply have their
+ * has_* flag 0 (the texts and ranges are filled all the same). PIN_ERR_ARG for an unknown format,
+ * PIN_ERR_ABI for a size the library does not know. Pure, cheap. */
+PIN_API pin_status_t pin_format_options(pin_format_t f, pin_format_options_t *out);
+
+/* The data rate one quality setting comes to, for a line under the quality control: "About 2.9
+ * GB per hour (6.4 Mbit/s)". f is an H.264 / HEVC format (else ""), is_60hz the video standard
+ * (0 = PAL / SECAM 25 fps, 1 = NTSC / PAL-M 29.97 fps), deinterlace a pin_deinterlace_t. An
+ * estimate from the same mapping the encoders' bit rates come from (pin_status_snapshot_t's
+ * est_bytes_per_hour before a capture has measured its own rate). 128 bytes are enough. */
+PIN_API void pin_format_quality_hint(pin_format_t f, int video_quality, int deinterlace,
+                                     int is_60hz, char *out, size_t cap);
 
 /* ---- capture ------------------------------------------------------------ */
 
@@ -359,8 +508,17 @@ typedef struct {
     char ts_extension[8];       /* extension of a raw HDV transport stream file (PIN_FMT_HDV_TS),
                                     without the dot: "" = "ts", or "m2t" to keep the name the user
                                     gave. Appended field, ABI-compatible. */
+    /* Appended fields, ABI-compatible: the format settings (pin_format_options() says which
+     * apply to which format; the others are ignored). A caller compiled before them passes the
+     * old size and gets the defaults. */
+    int deinterlace;            /* H.264 / HEVC: a pin_deinterlace_t (default DOUBLE_RATE) */
+    int video_quality;          /* H.264 / HEVC: 0 (best) .. 51 (smallest), like a CRF (default 18) */
+    int ffv1_compression;       /* PIN_FMT_ANALOG_FFV1_MKV: a pin_ffv1_compression_t (default FAST) */
 } pin_capture_opts_t;
 
+/* Fills *o with the defaults. A caller compiled against an older pin_api.h sets o->size to its
+ * sizeof() first; only that many bytes are written then. Any other size (0 included) means
+ * the full struct of this header. */
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);
 
 /* Multi-pass needs a way to notice the end of a pass: the no-signal timeout
@@ -389,7 +547,9 @@ typedef struct {
 } pin_output_check_t;
 
 /* Checks free space, file system limits and name collisions before a
- * capture. input tells it which format/data rate applies. */
+ * capture. input tells it which format/data rate applies. PIN_ERR_CODEC, with the
+ * reason in message, when the format for the current input is an H.264 / HEVC one whose
+ * encoder this machine does not have (pin_capture_start() refuses it the same way). */
 PIN_API pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
                                       pin_output_check_t *out);
 
@@ -402,7 +562,10 @@ PIN_API pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t
 PIN_API pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opts_t *o);
 
 /* Non-blocking. Refuses with PIN_ERR_EXISTS if a target file exists unless
- * overwrite is set (the GUI asks the user first). */
+ * overwrite is set (the GUI asks the user first), and with PIN_ERR_CODEC when the
+ * format for the current input needs an encoder this machine does not have (see
+ * pin_check_output() for the message). An encoder that fails later, while capturing,
+ * ends the capture like a write error (PIN_STOP_ERROR, "the video encoder failed"). */
 PIN_API pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite);
 
 /* Non-blocking. State goes STOPPING -> READY. Also stops the deck if the
@@ -821,7 +984,7 @@ PIN_API void pin_script_free(pin_script_t *sc);   /* safe with NULL; a running s
 PIN_API const char *pin_script_help(void);
 
 PIN_API int pin_script_help_requested(const pin_script_t *sc);
-/* -d / --device value (an id, a serial, or a file to replay; pass it to
+/* -d / --device value (an id, a serial, "fd:<n>", or a file to replay; pass it to
  * pin_open()), or NULL when none was given (= the first device). */
 PIN_API const char *pin_script_device(const pin_script_t *sc);
 /* --debug was given: the front end sets the log level to 0 and prints the status
@@ -855,6 +1018,11 @@ typedef struct {
     uint32_t controls_set;  /* bit (1 << pin_control_t) per control that was given */
     int32_t control_brightness, control_contrast, control_saturation;
     int32_t control_hue, control_sharpness, control_audio_gain;
+    /* Appended: --deinterlace, --quality, --ffv1-compression (pin_capture_opts_t's fields). A
+     * caller compiled before them passes the old size and gets the old layout. */
+    int has_deinterlace;    int deinterlace;
+    int has_video_quality;  int video_quality;
+    int has_ffv1_compression; int ffv1_compression;
 } pin_script_settings_t;
 
 PIN_API pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_settings_t *out);
@@ -1017,6 +1185,12 @@ PIN_API int pin_device_open_problem(const pin_device_info_t *d, char *out, size_
 
 /* The hint shown while pin_enumerate() finds nothing; platform-specific. Static. */
 PIN_API const char *pin_no_devices_hint(void);
+
+/* For a device opened from a file descriptor (pin_open("fd:<n>"), Android): returns 1 and a
+ * sentence for the user when its model cannot be driven that way yet, else 0 and "". d is
+ * typically filled by pin_usb_model(). Today that is the MovieBox Deluxe, which reappears as
+ * a new USB device after the core loads its USB controller firmware. */
+PIN_API int pin_device_fd_problem(const pin_device_info_t *d, char *out, size_t cap);
 
 /* ---- update check ---------------------------------------------------------
  * The published VERSION file (JSON: "version", "release_notes", "download_url") is

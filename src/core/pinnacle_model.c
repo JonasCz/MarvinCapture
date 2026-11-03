@@ -42,3 +42,8 @@ const pinnacle_model_t *pinnacle_model_lookup(uint16_t pid)
     }
     return NULL;
 }
+
+int pinnacle_model_fd_ok(const pinnacle_model_t *model)
+{
+    return model && model->supported && !model->fx2_firmware;
+}

@@ -6,14 +6,17 @@
 # the core actually uses are enabled -- no GPL or nonfree code, no network,
 # no autodetected external libraries.
 #
-# Works on MSYS2 UCRT64 (Windows), Linux and macOS.
+# Works on MSYS2 UCRT64 (Windows), Linux and macOS, and cross-compiles for
+# Android with the NDK (scripts/android-ndk.sh says which NDK and API level).
 #
 # Usage:
-#   scripts/build-ffmpeg.sh            # download, verify, configure, build, install
-#   scripts/build-ffmpeg.sh --clean    # remove the build/install dirs for this OS/arch first
+#   scripts/build-ffmpeg.sh                     # download, verify, configure, build, install
+#   scripts/build-ffmpeg.sh --clean             # remove the build/install dirs for this OS/arch first
+#   scripts/build-ffmpeg.sh --android ABI       # Android, ABI arm64-v8a or x86_64 (with --clean too)
 #
-# Output goes to third_party/ffmpeg-<os>-<arch>/ (the install prefix), with
-# sources fetched into third_party/ffmpeg-src/. Neither is committed to git.
+# Output goes to third_party/ffmpeg-<os>-<arch>/ (the install prefix; Android:
+# third_party/ffmpeg-android-arm64 or -x86_64), with sources fetched into
+# third_party/ffmpeg-src/. Neither is committed to git.
 
 set -euo pipefail
 
@@ -37,9 +40,26 @@ SRC_DIR="${THIRD_PARTY}/ffmpeg-src"
 TARBALL_PATH="${SRC_DIR}/${FFMPEG_TARBALL}"
 
 # ---------------------------------------------------------------------------
-# OS / arch detection
+# Arguments
+# ---------------------------------------------------------------------------
+CLEAN=0
+ANDROID_ABI=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --clean) CLEAN=1; shift ;;
+        --android)
+            [[ $# -ge 2 ]] || { echo "build-ffmpeg.sh: --android needs an ABI (arm64-v8a or x86_64)" >&2; exit 2; }
+            ANDROID_ABI="$2"; shift 2 ;;
+        --android=*) ANDROID_ABI="${1#--android=}"; shift ;;
+        *) echo "build-ffmpeg.sh: unknown option '$1'" >&2; exit 2 ;;
+    esac
+done
+
+# ---------------------------------------------------------------------------
+# OS / arch detection (the target's: Android is cross-compiled)
 # ---------------------------------------------------------------------------
 UNAME_S="$(uname -s)"
+[[ -n "${ANDROID_ABI}" ]] && UNAME_S="Android"
 case "${UNAME_S}" in
     MINGW*|MSYS*|CYGWIN*|UCRT*|CLANG*)
         OS_NAME="windows"
@@ -52,6 +72,14 @@ case "${UNAME_S}" in
     Darwin)
         OS_NAME="macos"
         THREAD_FLAG="--enable-pthreads"
+        ;;
+    Android)
+        OS_NAME="android"
+        THREAD_FLAG="--enable-pthreads"
+        # shellcheck source=android-ndk.sh
+        source "${SCRIPT_DIR}/android-ndk.sh"
+        pin_android_abi "${ANDROID_ABI}" || exit 2
+        pin_find_ndk || exit 1
         ;;
     *)
         echo "build-ffmpeg.sh: unrecognized OS '${UNAME_S}'" >&2
@@ -70,22 +98,23 @@ case "${ARCH_NAME}" in
     x86_64|amd64) ARCH_NAME="x86_64" ;;
     aarch64|arm64) ARCH_NAME="arm64" ;;
 esac
+[[ "${OS_NAME}" == android ]] && ARCH_NAME="${PIN_ABI_DIR}"
 
 BUILD_DIR="${THIRD_PARTY}/ffmpeg-${OS_NAME}-${ARCH_NAME}-build"
 PREFIX_DIR="${THIRD_PARTY}/ffmpeg-${OS_NAME}-${ARCH_NAME}"
 
-if [[ "${1:-}" == "--clean" ]]; then
+if [[ "${CLEAN}" -eq 1 ]]; then
     echo "Removing ${BUILD_DIR} and ${PREFIX_DIR}"
     rm -rf "${BUILD_DIR}" "${PREFIX_DIR}"
-    shift || true
 fi
 
-# sha256 of a file: sha256sum (Linux, MSYS2, macOS 15+) or shasum (older macOS).
+# sha256 of a file (or, with no argument, of stdin): sha256sum (Linux, MSYS2, macOS 15+) or
+# shasum (older macOS).
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
-        sha256sum "$1" | awk '{print $1}'
+        sha256sum "$@" | awk '{print $1}'
     else
-        shasum -a 256 "$1" | awk '{print $1}'
+        shasum -a 256 "$@" | awk '{print $1}'
     fi
 }
 
@@ -151,8 +180,13 @@ mkdir -p "${BUILD_DIR}"
 cd "${WORK_BUILD_DIR}"
 
 # Components actually used by marvin-core:
-#   encode:  FFV1 + FLAC (analog capture), PCM s16le
-#   decode:  FFV1, FLAC, DV (dvvideo), MPEG-2 video (HDV), PCM s16le/s16be, MP2 (HDV audio)
+#   encode:  FFV1 + FLAC (analog capture), PCM s16le; per platform the OS's own H.264 / HEVC
+#            encoder (the hardware-encoder sink, sink_hwenc.c; see the case below)
+#   decode:  FFV1, FLAC, DV (dvvideo: preview, and DV to H.264 / HEVC), MPEG-2 video (HDV),
+#            PCM s16le/s16be, MP2 (HDV audio)
+#   filter:  bwdif (the H.264 / HEVC sink's "deinterlace" option); configure always adds the
+#            buffer source and sink a filter graph needs. No swscale: the sink converts
+#            the few pixel formats it sees itself.
 #   mux:     Matroska (FFV1+FLAC sink), MOV, AVI, DV, MPEG-TS, NUT (analog to stdout)
 #   demux:   DV, MPEG-TS, Matroska, MOV, AVI, NUT (rewrap sources / smoke test readback)
 #   parse:   mpegvideo (MPEG-2), mpegaudio (MP2), flac (FLAC-in-Matroska readback)
@@ -175,7 +209,7 @@ CONFIGURE_ARGS=(
     --disable-network
     --disable-autodetect
     --disable-avdevice
-    --disable-avfilter
+    --enable-avfilter
     --disable-iconv
     --disable-zlib
     --disable-bzlib
@@ -219,16 +253,81 @@ CONFIGURE_ARGS=(
 
     --enable-protocol=file
 
+    --enable-filter=bwdif
+
     --disable-bsfs
 )
 
-# Windows: name the target explicitly, configure would take it from uname (MSYS2's
-# own, see above). The CLANGARM64 environment has clang, not gcc.
-if [[ "${OS_NAME}" == windows ]]; then
-    CONFIGURE_ARGS+=(--target-os=mingw32)
-    [[ "${ARCH_NAME}" == arm64 ]] && CONFIGURE_ARGS+=(--arch=aarch64)
-    command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
-fi
+# Per-platform additions: the target, the toolchain, and each platform's own H.264 / HEVC
+# encoder for the hardware-encoder sink (src/sinks/sink_hwenc.c). All of them are wrappers
+# around an encoder that comes with the OS, so the build stays LGPL: nothing GPL (x264,
+# x265) or nonfree goes in. --disable-autodetect (above) means each system framework has
+# to be named here. Linux gets none: it has no encoder of its own that is LGPL-safe to
+# use (VAAPI needs libva and the driver), so the core does not offer those formats there.
+case "${OS_NAME}" in
+    windows)
+        # Name the target explicitly, configure would take it from uname (MSYS2's
+        # own, see above). The CLANGARM64 environment has clang, not gcc.
+        CONFIGURE_ARGS+=(--target-os=mingw32)
+        [[ "${ARCH_NAME}" == arm64 ]] && CONFIGURE_ARGS+=(--arch=aarch64)
+        command -v gcc >/dev/null 2>&1 || CONFIGURE_ARGS+=(--cc=clang)
+        # Media Foundation: the GPU vendor's encoder MFT (hw_encoding=1) or Microsoft's
+        # software one. mfplat.dll is loaded at run time; the static libs add mfuuid,
+        # ole32 and strmiids (libavcodec.pc). FFmpeg 8.1's mfenc.c uses the D3D11 types
+        # unconditionally (it compiles only with d3d11va), so that is on as well: only
+        # libavutil's D3D11 device context, d3d11.dll and dxgi.dll loaded at run time (no
+        # import libraries), no hardware decoding (no hwaccels are enabled).
+        CONFIGURE_ARGS+=(
+            --enable-mediafoundation
+            --enable-d3d11va
+            --enable-encoder=h264_mf
+            --enable-encoder=hevc_mf
+        )
+        ;;
+    macos)
+        # VideoToolbox (CoreFoundation, CoreMedia, CoreVideo and VideoToolbox frameworks,
+        # listed in libavcodec.pc / libavutil.pc as "-framework X").
+        CONFIGURE_ARGS+=(
+            --enable-videotoolbox
+            --enable-encoder=h264_videotoolbox
+            --enable-encoder=hevc_videotoolbox
+        )
+        ;;
+    android)
+        # NDK clang for the app's minimum API level; static libraries with PIC, linked
+        # into libmarvin-core.so.
+        NDK_CC="$(pin_ndk_tool "${PIN_ABI_TRIPLE}${PIN_ANDROID_API}-clang")"
+        [[ -x "${NDK_CC}" ]] || { echo "build-ffmpeg.sh: ${NDK_CC} not found" >&2; exit 1; }
+        CONFIGURE_ARGS+=(
+            --target-os=android
+            --enable-cross-compile
+            --arch="${PIN_ABI_FFARCH}"
+            --cc="${NDK_CC}"
+            --cxx="${NDK_CC}++"
+            --ar="$(pin_ndk_tool llvm-ar)"
+            --nm="$(pin_ndk_tool llvm-nm)"
+            --ranlib="$(pin_ndk_tool llvm-ranlib)"
+            --strip="$(pin_ndk_tool llvm-strip)"
+            --sysroot="$(dirname "$(dirname "${NDK_CC}")")/sysroot"
+        )
+        # MediaCodec through the NDK (AMediaCodec; FFmpeg dlopens libmediandk.so, so no
+        # JVM is needed: the sink sets ndk_codec=1). configure insists on --enable-jni
+        # for it. The encoders need these bitstream filters (--disable-bsfs above turns
+        # them off, and a disabled dependency would silently drop the encoder):
+        # extract_extradata for the global header Matroska wants, h264_metadata /
+        # hevc_metadata to crop the 16-aligned picture back (not needed for 720 x 576
+        # or 480, but the encoders do not build without them).
+        CONFIGURE_ARGS+=(
+            --enable-jni
+            --enable-mediacodec
+            --enable-encoder=h264_mediacodec
+            --enable-encoder=hevc_mediacodec
+            --enable-bsf=extract_extradata
+            --enable-bsf=h264_metadata
+            --enable-bsf=hevc_metadata
+        )
+        ;;
+esac
 
 # x86 assembly needs nasm. Without it FFmpeg's configure stops; a build
 # without asm is slower but fine for what we use (FFV1 is mostly C), so
@@ -264,9 +363,14 @@ if [[ "${WORK_PREFIX_DIR}" != "${PREFIX_DIR}" ]]; then
     done
 fi
 
-# scripts/build.ps1 and scripts/build.sh rebuild FFmpeg when this stamp no
-# longer matches this script (the script holds the whole component list).
-sha256_of "${SCRIPT_DIR}/build-ffmpeg.sh" > "${PREFIX_DIR}/build-script.sha256"
+# scripts/build.ps1, scripts/build.sh and scripts/build-android-native.sh rebuild
+# FFmpeg when this stamp no longer matches this script (the script holds the whole
+# component list); for Android it also covers android-ndk.sh (NDK, API level).
+if [[ "${OS_NAME}" == android ]]; then
+    cat "${SCRIPT_DIR}/build-ffmpeg.sh" "${SCRIPT_DIR}/android-ndk.sh" | sha256_of > "${PREFIX_DIR}/build-script.sha256"
+else
+    sha256_of "${SCRIPT_DIR}/build-ffmpeg.sh" > "${PREFIX_DIR}/build-script.sha256"
+fi
 
 # ---------------------------------------------------------------------------
 # Report
@@ -276,5 +380,9 @@ echo "=== Installed static libs ==="
 ls -la "${PREFIX_DIR}/lib"/*.a 2>/dev/null || true
 
 echo
-echo "=== pkg-config --static --libs libavformat ==="
-PKG_CONFIG_PATH="${PREFIX_DIR}/lib/pkgconfig" pkg-config --static --libs libavformat
+echo "=== pkg-config --static --libs libavfilter libavformat ==="
+PKG_CONFIG_PATH="${PREFIX_DIR}/lib/pkgconfig" pkg-config --static --libs libavfilter libavformat || true
+
+echo
+echo "=== Encoders and filters built in ==="
+grep -E '^#define CONFIG_[A-Z0-9_]+_(ENCODER|FILTER) 1' "${WORK_BUILD_DIR}/config_components.h" || true

@@ -46,6 +46,21 @@ typedef struct {
  * ':', which all show up in real ids) becomes '_'. Collisions between two
  * different ids that sanitise to the same string are not a real-world
  * concern here -- ids are short USB port paths or a single replay path. */
+/* pinnacle_lock_set_dir(): "" = the platform default. Set once before any lock is taken. */
+static char g_lock_dir[512];
+
+int pinnacle_lock_set_dir(const char *dir)
+{
+    if (!dir || !dir[0]) {
+        g_lock_dir[0] = '\0';
+        return 0;
+    }
+    if (strlen(dir) >= sizeof(g_lock_dir))
+        return -1;
+    snprintf(g_lock_dir, sizeof(g_lock_dir), "%s", dir);
+    return 0;
+}
+
 static void sanitize_id(const char *id, char *out, size_t out_cap)
 {
     size_t j = 0;
@@ -322,7 +337,8 @@ struct pinnacle_lock {
     char path[768];
 };
 
-/* $XDG_RUNTIME_DIR/pinnacle-oss (Linux: a per-user tmpfs cleared at logout
+/* pinnacle_lock_set_dir()'s directory if set, else
+ * $XDG_RUNTIME_DIR/pinnacle-oss (Linux: a per-user tmpfs cleared at logout
  * or reboot), else $TMPDIR/pinnacle-oss (macOS: cleared at reboot), else
  * /tmp/pinnacle-oss-<uid> as a last resort. Created mode 0700 and verified
  * (not just created) to be a real directory we own, so a symlink or a
@@ -330,6 +346,10 @@ struct pinnacle_lock {
  * redirect our lock file -- see ensure_private_dir(). */
 static int lock_dir(char *out, size_t out_cap)
 {
+    if (g_lock_dir[0]) {
+        snprintf(out, out_cap, "%s", g_lock_dir);
+        return 0;
+    }
     const char *base = getenv("XDG_RUNTIME_DIR");
     if (!base || !base[0])
         base = getenv("TMPDIR");

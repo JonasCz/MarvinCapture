@@ -41,6 +41,20 @@
 #endif
 #endif
 
+static volatile int g_keep_busy = PIN_THREAD_KEEP_BUSY_AUTO;
+
+void pin_thread_set_keep_busy(int mode)
+{
+    if (mode == PIN_THREAD_KEEP_BUSY_AUTO || mode == PIN_THREAD_KEEP_BUSY_ON ||
+        mode == PIN_THREAD_KEEP_BUSY_OFF)
+        g_keep_busy = mode;
+}
+
+int pin_thread_get_keep_busy(void)
+{
+    return g_keep_busy;
+}
+
 #if defined(__linux__)
 /* Keeps one core out of the idle states when /dev/cpu_dma_latency is not available (a busy
  * core is enough: every wake-up the xHCI needs is then served by a running CPU or a shallow
@@ -79,6 +93,14 @@ void pin_thread_boost(pin_thread_boost_t *b)
      * request of 0 us keeps the CPUs out of them for as long as the descriptor stays open.
      * /dev/cpu_dma_latency is root-only by default, so this works only where a udev rule or
      * the user's privileges allow it. */
+    int keep_busy = g_keep_busy;
+#if defined(__ANDROID__)
+    /* An app cannot open it (SELinux; Termux without root neither), so AUTO means the
+     * keep-busy thread there. Not even tried: every attempt would log an SELinux denial. */
+    b->pmqos_fd = -1;
+    if (keep_busy == PIN_THREAD_KEEP_BUSY_AUTO)
+        keep_busy = PIN_THREAD_KEEP_BUSY_ON;
+#else
     b->pmqos_fd = open("/dev/cpu_dma_latency", O_WRONLY);
     if (b->pmqos_fd >= 0) {
         int32_t zero = 0;
@@ -87,8 +109,13 @@ void pin_thread_boost(pin_thread_boost_t *b)
             b->pmqos_fd = -1;
         }
     }
-    if (b->pmqos_fd < 0 &&
-        pthread_create(&b->busy_thread, NULL, busy_main, b) == 0)
+#endif
+    /* AUTO: the busy core is only the fallback for a refused latency request. ON runs it
+     * even next to a granted one (for a machine where the request alone is not enough);
+     * OFF never (saves the power and heat of a busy core, at the risk of lost frames). */
+    int want_busy = keep_busy == PIN_THREAD_KEEP_BUSY_ON ||
+                    (keep_busy == PIN_THREAD_KEEP_BUSY_AUTO && b->pmqos_fd < 0);
+    if (want_busy && pthread_create(&b->busy_thread, NULL, busy_main, b) == 0)
         b->busy = 1;
     /* Real-time FIFO if RLIMIT_RTPRIO / CAP_SYS_NICE allow it (a low priority is enough: the
      * thread sleeps in poll() between completions); otherwise a negative nice value, which
@@ -145,5 +172,19 @@ const char *pin_thread_boost_desc(const pin_thread_boost_t *b)
     return "normal";
 #else
     return b->raised ? "raised" : "normal";
+#endif
+}
+
+const char *pin_thread_boost_latency_desc(const pin_thread_boost_t *b)
+{
+#if defined(__linux__)
+    if (b->pmqos_fd >= 0)
+        return b->busy ? "set, and keeping a core busy as well (keep-busy on)" : "set";
+    if (b->busy)
+        return "not available, keeping a core busy instead";
+    return g_keep_busy == PIN_THREAD_KEEP_BUSY_OFF ? "not available (keep-busy off)" : "not available";
+#else
+    (void)b;
+    return "not used on this platform";
 #endif
 }

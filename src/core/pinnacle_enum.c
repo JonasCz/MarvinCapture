@@ -118,7 +118,14 @@ int pinnacle_enumerate(pinnacle_enum_entry_t *out, int max)
     if (!g_enum_ctx && libusb_init(&g_enum_ctx) != 0) {
         g_enum_ctx = NULL;
         pthread_mutex_unlock(&g_enum_mtx);
+#if defined(__ANDROID__)
+        /* Expected there: an app (and Termux without root) may not list /dev/bus/usb; the
+         * device comes as a file descriptor instead (pin_open("fd:N")). Not worth a warning
+         * on every call. */
+        pin_logf(PIN_LOG_DEBUG, "pinnacle_enumerate: libusb_init failed\n");
+#else
         pin_logf(PIN_LOG_WARN, "pinnacle_enumerate: libusb_init failed\n");
+#endif
         return 0;
     }
     libusb_context *ctx = g_enum_ctx;

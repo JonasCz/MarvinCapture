@@ -16,11 +16,14 @@
 
 # File-output layer: pin_writer (bounded queue + writer thread) and the
 # pin_sink_t implementations (raw passthrough, analog AVI, analog FFV1/MKV,
-# DV/HDV rewrap). Links the minimal static FFmpeg built by
-# scripts/build-ffmpeg.sh (see third_party/README.md).
+# DV/HDV rewrap, analog/DV to H.264/HEVC with the OS's encoder). Links the
+# minimal static FFmpeg built by scripts/build-ffmpeg.sh (see
+# third_party/README.md).
 
 if(WIN32)
     set(PIN_FFMPEG_OS "windows")
+elseif(ANDROID)
+    set(PIN_FFMPEG_OS "android")
 elseif(APPLE)
     set(PIN_FFMPEG_OS "macos")
 else()
@@ -75,7 +78,7 @@ set(ENV{PKG_CONFIG_PATH} "${_pin_ffmpeg_pkgconfig}")
 # FindPkgConfig module shipped with the CMake used here, so PIN_FFMPEG_STATIC_*
 # is used directly below instead of an IMPORTED_TARGET (which would wire up
 # the non-static flags).
-pkg_check_modules(PIN_FFMPEG REQUIRED libavformat libavcodec libavutil)
+pkg_check_modules(PIN_FFMPEG REQUIRED libavfilter libavformat libavcodec libavutil)
 set(ENV{PKG_CONFIG_PATH} "${_pin_saved_pkg_config_path}")
 
 add_library(pinnacle_sinks STATIC
@@ -89,6 +92,10 @@ add_library(pinnacle_sinks STATIC
     sink_ffv1.c
     sink_rewrap.c
     sink_lazy.c
+    sink_avlog.c
+    sink_hwenc.c
+    pin_hwenc.c
+    hwenc_convert.c
 )
 target_include_directories(pinnacle_sinks PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     ${PIN_FFMPEG_STATIC_INCLUDE_DIRS})
@@ -105,6 +112,6 @@ if(APPLE)
 endif()
 target_link_options(pinnacle_sinks PUBLIC ${_pin_ffmpeg_ldflags})
 
-if(EXISTS ${CMAKE_SOURCE_DIR}/tests/sinks/CMakeLists.txt)
+if(PIN_BUILD_TESTS AND EXISTS ${CMAKE_SOURCE_DIR}/tests/sinks/CMakeLists.txt)
     add_subdirectory(${CMAKE_SOURCE_DIR}/tests/sinks ${CMAKE_BINARY_DIR}/tests/sinks)
 endif()

@@ -54,6 +54,12 @@ typedef struct {
     int audio_rate;              /* 48000, 44100 or 32000 */
     int audio_channels;          /* 2, or 4 for the 32 kHz 12-bit DV mode (two stereo pairs) */
     char title[PIN_TEXT_MAX];    /* UTF-8, "" for none */
+    /* The format settings of pin_capture_opts_t (pin_format_options()); a sink ignores the
+     * ones that are not its own. A zeroed struct is FFV1 "fast" and keep-fields, but quality
+     * 0 = the best (largest) H.264 / HEVC: set video_quality. */
+    int deinterlace;             /* sink_hwenc: a pin_deinterlace_t */
+    int video_quality;           /* sink_hwenc: 0..51, lower = better (pin_hwenc.h) */
+    int ffv1_compression;        /* sink_ffv1: a pin_ffv1_compression_t */
 } pin_sink_params_t;
 
 typedef struct {
@@ -61,7 +67,7 @@ typedef struct {
     uint64_t units_written;
     uint64_t units_damaged;      /* e.g. a DV/HDV unit that didn't pass the sequence-count check */
     uint64_t audio_padded_samples; /* silence inserted to keep audio in sync with video */
-    int encoder_behind;          /* sink_ffv1: the encode thread's queue is backing up */
+    int encoder_behind;          /* sink_ffv1, sink_hwenc: the encode thread's queue is backing up */
     int pipe_closed;             /* stdout sinks: the reading program is gone (not a disk error) */
     pin_status_t last_error;
 } pin_sink_status_t;
@@ -111,9 +117,37 @@ pin_sink_t *pin_sink_create(pin_format_t format);
  * get_status().units_written counts the video units the real sink accepted. See sink_lazy.c. */
 pin_sink_t *pin_sink_lazy(pin_sink_t *inner);
 
+/* Numbered output (pin_capture_opts_t.first_number >= 1): what a lazy sink does when its file
+ * cannot be created under its name because the name is taken (Android shared storage: a file
+ * this app cannot see; see sink_lazy.c). next(ctx, k, out, cap) writes the name k numbers further
+ * on (k = 1, 2, ...) and returns 0, or -1 if there is none; at most PIN_SINK_LAZY_MAX_SKIP are
+ * tried. The sink owns ctx from here on and calls ctx_free(ctx) when it is closed (at once if s
+ * is not a lazy sink). Call before open(). */
+#define PIN_SINK_LAZY_MAX_SKIP 1000
+typedef int (*pin_sink_name_fn)(void *ctx, unsigned k, char *out, size_t cap);
+void pin_sink_lazy_set_renumber(pin_sink_t *s, pin_sink_name_fn next, void *ctx,
+                                void (*ctx_free)(void *ctx));
+
+/* How many numbers a lazy sink skipped for its file (0: it kept its name, or it is no lazy
+ * sink, or the file does not exist yet) and, if that is not 0, the name it used in out. Safe from
+ * any thread while the writer feeds the sink. */
+unsigned pin_sink_lazy_renumbered(pin_sink_t *s, char *out, size_t cap);
+
+/* Where the HDV MOV / MKV sink writes its "<name>.rawts.tmp" (the raw stream it remuxes at
+ * close): NULL or "" = next to the output file (the default), else this directory. Process-wide
+ * (pin_set_app_dirs()), for sinks opened afterwards. -1 if dir is too long. */
+int pin_sink_set_temp_dir(const char *dir);
+
 /* The sink for `--capture -` (open() it with the path "-"): DV raw DIF, HDV
  * MPEG-TS, analog NUT (rawvideo YUY2 + pcm_s16le). NULL for an unknown kind. */
 pin_sink_t *pin_sink_create_stdout(pin_kind_t kind);
+
+/* Routes FFmpeg's own log messages into the core log (pin_log.h) instead of stderr: once per
+ * process, from whoever uses FFmpeg first (sink_avlog.c). With pin_sink_av_log_quiet(1) the
+ * calling thread's messages go to the debug level (an encoder probe whose attempts may fail);
+ * pin_sink_av_log_quiet(0) ends that. */
+void pin_sink_av_log_install(void);
+void pin_sink_av_log_quiet(int quiet);
 
 #ifdef __cplusplus
 }

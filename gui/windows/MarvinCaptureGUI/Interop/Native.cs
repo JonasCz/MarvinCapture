@@ -208,6 +208,84 @@ public static unsafe partial class Native
         return pin_format_info(f, ref info);
     }
 
+    [LibraryImport(Lib)]
+    private static partial int pin_encoders_probe();
+
+    /// <summary>
+    /// Opens each H.264 / HEVC encoder once (blocking, typically 50-300 ms each; cached) and returns
+    /// the PIN_ENC_* mask of those that opened. Run it on a worker thread at startup: the first
+    /// <see cref="Formats"/> call of the analog or DV kind otherwise runs it on its caller's thread.
+    /// </summary>
+    public static int EncodersProbe()
+    {
+        try
+        {
+            return pin_encoders_probe();
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return 0; // older core: no such formats
+        }
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_warning(PinFormat f, byte* out_, nuint cap);
+
+    /// <summary>The paragraph to show when format f is picked (the H.264 / HEVC formats are lossy), or "".</summary>
+    public static string FormatWarning(PinFormat f)
+    {
+        const int cap = 512;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_warning(f, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial PinStatus pin_format_options(PinFormat f, ref PinFormatOptions out_);
+
+    /// <summary>Which format settings apply to f, with the core's labels, ranges and help texts.</summary>
+    public static PinStatus FormatOptions(PinFormat f, out PinFormatOptions options)
+    {
+        options = PinFormatOptions.Create();
+        try
+        {
+            return pin_format_options(f, ref options);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return PinStatus.ErrInternal;
+        }
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_quality_hint(PinFormat f, int videoQuality, int deinterlace, int is60Hz,
+                                                        byte* out_, nuint cap);
+
+    /// <summary>"About 2.9 GB per hour (6.4 Mbit/s)" for one quality setting of an H.264 / HEVC format, else "".</summary>
+    public static string FormatQualityHint(PinFormat f, int videoQuality, int deinterlace, bool is60Hz)
+    {
+        const int cap = 128;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_quality_hint(f, videoQuality, deinterlace, is60Hz ? 1 : 0, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
     // ---- capture --------------------------------------------------------------
 
     [LibraryImport(Lib)]

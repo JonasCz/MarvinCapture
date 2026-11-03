@@ -317,6 +317,9 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     o.aspect = c->aspect;
     o.scene_split = c->split;
     o.keep_raw = c->keep_raw;
+    o.deinterlace = c->deinterlace;
+    o.video_quality = c->video_quality;
+    o.ffv1_compression = c->ffv1_compression;
     o.start_deck = 0;
     o.rewind_first = 0;
     o.passes = 1;
@@ -327,6 +330,8 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     pin_status_t cs = pin_session_check_output(r->s, &o, &chk);
     if (cs == PIN_ERR_ARG)
         return failf(r, EXIT_USAGE, "--capture %s: %s", c->path, chk.message[0] ? chk.message : "unusable file name");
+    if (cs == PIN_ERR_CODEC)    /* an H.264 / HEVC format without its encoder here */
+        return failf(r, EXIT_USAGE, "--capture %s: %s", c->path, chk.message);
     if (!c->overwrite && !c->to_stdout) {
         /* pin_check_output() looks at the kind that is arriving, which a stopped deck has
          * not told us yet: check the file name of every kind that could arrive. */

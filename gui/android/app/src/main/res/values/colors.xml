@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Light palette (the system theme decides; values-night/colors.xml is the dark one). Ui.applyTheme
+  reads these for the views built in code.
+-->
+<resources>
+    <color name="ic_launcher_background">#F6F1E6</color>
+    <color name="ui_text">#FF1C1B1F</color>
+    <color name="ui_text2">#FF49454F</color>
+    <color name="ui_text3">#FF6E6A75</color>
+    <color name="ui_warn">#FF8A5100</color>
+    <color name="ui_error">#FFB3261E</color>
+    <color name="ui_accent">#FF1A5FD0</color>
+    <color name="ui_on_accent">#FFFFFFFF</color>
+    <color name="ui_card">#FFE9E5EE</color>
+    <color name="ui_panel">#FFF7F5FA</color>
+    <color name="ui_button">#1F000000</color>
+    <color name="ui_track">#26000000</color>
+</resources>

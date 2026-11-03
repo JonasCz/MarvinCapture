@@ -25,8 +25,9 @@
  *   Linux    SCHED_FIFO 10 if RLIMIT_RTPRIO allows, else nice -10 if RLIMIT_NICE
  *            does; plus a PM QoS request of 0 us on /dev/cpu_dma_latency (when
  *            the node is writable) so the CPUs stay out of deep idle states
- *            for the duration; docs/analog.md, "Power saving and capture
- *            reliability".
+ *            for the duration, or a keep-busy thread instead (see
+ *            pin_thread_set_keep_busy); docs/analog.md, "Power saving and
+ *            capture reliability".
  *
  * Failing any of it is not an error: the thread just stays as it was.
  */
@@ -58,5 +59,20 @@ void pin_thread_boost(pin_thread_boost_t *b);
 void pin_thread_unboost(pin_thread_boost_t *b);
 /* "raised (SCHED_FIFO)", "raised (nice -10)", "raised" or "normal" */
 const char *pin_thread_boost_desc(const pin_thread_boost_t *b);
+/* The CPU idle-state limit of a boosted thread for the log: "set", "not available, keeping a
+ * core busy instead", ... */
+const char *pin_thread_boost_latency_desc(const pin_thread_boost_t *b);
+
+/* Process-wide keep-busy mode for the Linux read loops (pin_api.h's pin_set_cpu_keep_busy(),
+ * same values): AUTO keeps a core busy only when /dev/cpu_dma_latency cannot be held (always
+ * on Android, where apps cannot open it), ON always, OFF never. Takes effect at the next
+ * pin_thread_boost(). Other values are ignored. No effect on Windows and macOS. */
+enum {
+    PIN_THREAD_KEEP_BUSY_AUTO = 0,
+    PIN_THREAD_KEEP_BUSY_ON = 1,
+    PIN_THREAD_KEEP_BUSY_OFF = 2,
+};
+void pin_thread_set_keep_busy(int mode);
+int pin_thread_get_keep_busy(void);
 
 #endif

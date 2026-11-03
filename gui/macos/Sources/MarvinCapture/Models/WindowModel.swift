@@ -160,7 +160,12 @@ final class WindowModel {
 
     /// True from capture start until the core reports READY again (includes STOPPING / REWINDING).
     private(set) var isCapturing = false {
-        didSet { if isCapturing != oldValue { refreshDevices() } }   // the open device's badge reads "Capturing"
+        didSet {
+            guard isCapturing != oldValue else { return }
+            refreshDevices()   // the open device's badge reads "Capturing"
+            // The format settings apply at capture start: locked while capturing, like the other options.
+            for o in allFormatOptions { o.isEditable = !isCapturing }
+        }
     }
     var isIdle: Bool { !isCapturing }
 
@@ -272,12 +277,24 @@ final class WindowModel {
     let audioGain: ControlSliderModel
     private var allSliders: [ControlSliderModel] { pictureSliders + [audioGain] }
 
-    let analogFormats: [FormatItem]
-    var analogFormat: FormatItem? {
+    /// Empty until the encoder probe is done (`refreshFormats`).
+    private(set) var analogFormats: [FormatItem] = []
+    var analogFormat: FormatItem? = nil {
         didSet {
+            analogFormatOptions.format = analogFormat?.format
             if let f = analogFormat { saveSetting("gui.format_analog", String(f.format.rawValue)) }
             pushOutputHint()
         }
+    }
+    /// A saved or command-line analog format the list may not have yet (see `refreshFormats`).
+    @ObservationIgnored private var wantedAnalogFormat: pin_format_t?
+
+    /// The format settings the user chose (deinterlace, quality, FFV1 compression), stored per device.
+    let formatChoices: FormatChoices
+    /// The analog format's settings, behind the gear next to its picker.
+    let analogFormatOptions: FormatOptionsModel
+    private var allFormatOptions: [FormatOptionsModel] {
+        [analogFormatOptions, dvSettings.formatOptions, hdvSettings.formatOptions]
     }
 
     /// File base name; also embedded as the title when the format supports one.
@@ -314,8 +331,8 @@ final class WindowModel {
         pushOutputHint()
     }
 
-    let dvSettings = KindSettingsModel(kind: PIN_KIND_DV, tabHeader: "DV")
-    let hdvSettings = KindSettingsModel(kind: PIN_KIND_HDV, tabHeader: "HDV")
+    let dvSettings: KindSettingsModel
+    let hdvSettings: KindSettingsModel
     var kindTabs: [KindSettingsModel] { [dvSettings, hdvSettings] }
 
     /// DV / HDV file-options tab. Follows the detected stream; remembered for the next start.
@@ -545,9 +562,13 @@ final class WindowModel {
 
     init() {
         // Initial values are assigned in init, which does not run the observers: a default must not be
-        // saved over a stored setting before it is loaded.
-        analogFormats = FormatItem.formats(for: PIN_KIND_ANALOG)
-        analogFormat = analogFormats.first(where: \.isDefault) ?? analogFormats.first
+        // saved over a stored setting before it is loaded. The format lists stay empty until the encoder
+        // probe is done (probeEncoders, refreshFormats): listing them would run it on the main thread.
+        let choices = FormatChoices()
+        formatChoices = choices
+        analogFormatOptions = FormatOptionsModel(choices: choices, analog: true)
+        dvSettings = KindSettingsModel(kind: PIN_KIND_DV, tabHeader: "DV", choices: choices)
+        hdvSettings = KindSettingsModel(kind: PIN_KIND_HDV, tabHeader: "HDV", choices: choices)
 
         var std = [StdItem(std: PIN_STD_AUTO, name: "Auto")]
         for i in 1..<Int(PIN_STD_COUNT.rawValue) {
@@ -568,6 +589,50 @@ final class WindowModel {
         for tab in kindTabs {
             tab.onChanged = { [unowned self] k, field in self.kindChanged(k, field) }
         }
+        formatChoices.onChanged = { [unowned self] field in self.formatChoiceChanged(field) }
+        probeEncoders()
+    }
+
+    private func formatChoiceChanged(_ field: FormatChoices.Field) {
+        let c = formatChoices
+        switch field {
+        case .deinterlaceAnalog: saveSetting("gui.deinterlace_analog", String(c.deinterlaceAnalog))
+        case .deinterlaceDv: saveSetting("gui.deinterlace_dv", String(c.deinterlaceDv))
+        case .qualityAnalog: saveSetting("gui.quality_analog", String(c.qualityAnalog))
+        case .qualityDv: saveSetting("gui.quality_dv", String(c.qualityDv))
+        case .ffv1Compression: saveSetting("gui.ffv1_compression", String(c.ffv1Compression))
+        }
+        pushOutputHint()
+    }
+
+    /// Finds out once which H.264 / HEVC encoders this machine has (pin_encoders_probe opens each, 50-300 ms;
+    /// blocking, so off the main thread), then fills the format lists, which offer those formats only where
+    /// the encoder opened. Runs from init, as early as possible.
+    private func probeEncoders() {
+        Task.detached(priority: .userInitiated) {
+            Pin.encodersProbe()
+            await MainActor.run { [weak self] in self?.refreshFormats() }
+        }
+    }
+
+    /// (Re)fills the analog, DV and HDV format lists (pin_formats; returns at once after the probe). A saved
+    /// or command-line choice that arrived while the lists were empty is selected now; a format this machine
+    /// does not offer falls back to the kind's default on screen, without overwriting the stored choice.
+    func refreshFormats() {
+        let wasLoading = loading
+        loading = true
+        let keep = analogFormat?.format ?? wantedAnalogFormat
+        analogFormats = FormatItem.formats(for: PIN_KIND_ANALOG)
+        analogFormat = analogFormats.first { $0.format == keep } ?? analogFormats.first(where: \.isDefault) ?? analogFormats.first
+        for k in kindTabs { k.refreshFormats() }
+        loading = wasLoading
+        pushOutputHint()
+    }
+
+    /// Selects an analog format (saved or from the command line), now or once the list has it.
+    private func selectAnalogFormat(_ format: pin_format_t) {
+        wantedAnalogFormat = format
+        if let f = analogFormats.first(where: { $0.format == format }) { analogFormat = f }
     }
 
     private func sliderChanged(_ c: pin_control_t, _ value: Int) {
@@ -856,6 +921,14 @@ final class WindowModel {
         o.passes = Int32(analog ? 1 : kind.effectivePasses)
         o.start_deck = startDeck ? 1 : 0
         o.rewind_first = rewindFirst ? 1 : 0   // "Automatic rewind & capture": start of tape, then play
+
+        // The format settings of the input being captured (DV and HDV share the DV ones); the core ignores
+        // those that do not apply to the format, -1 = leave the core's default.
+        let deinterlace = formatChoices.deinterlace(analog: analog)
+        let quality = formatChoices.quality(analog: analog)
+        if deinterlace >= 0 { o.deinterlace = Int32(clamping: deinterlace) }
+        if quality >= 0 { o.video_quality = Int32(clamping: quality) }
+        if formatChoices.ffv1Compression >= 0 { o.ffv1_compression = Int32(clamping: formatChoices.ffv1Compression) }
         return o
     }
 
@@ -1085,6 +1158,8 @@ final class WindowModel {
         feedMeter(st)
 
         set(\.tapePercent, Int(st.tape_percent))
+        let is60Hz = st.is_60hz != 0   // the format settings' data-rate line
+        for o in allFormatOptions where o.is60Hz != is60Hz { o.is60Hz = is60Hz }
         if lastStreamKind != st.stream_kind {
             lastStreamKind = st.stream_kind
             if st.stream_kind == PIN_KIND_DV || st.stream_kind == PIN_KIND_HDV {
@@ -1245,14 +1320,14 @@ final class WindowModel {
     // MARK: command line
 
     /// Applies the settings a command line gave before its first action (pin_script_settings) over the
-    /// loaded settings: input, standard, formats, aspect, split and the analog controls (applied when the
-    /// device opens, like the saved ones). The title and --keep-raw have no field in this window; the
+    /// loaded settings: input, standard, formats, aspect, split, the format settings (deinterlace, quality,
+    /// FFV1 compression) and the analog controls (applied when the device opens, like the saved ones). The title and --keep-raw have no field in this window; the
     /// script's own captures use them.
     func applyScriptSettings(_ l: pin_script_settings_t) {
         if l.has_input != 0 { inputIndex = Int(l.input.rawValue) }
         if l.has_std != 0, let s = standards.first(where: { $0.std == l.std }) { selectedStandard = s }
         let analog = !isDvInput
-        if l.has_format_analog != 0, let f = analogFormats.first(where: { $0.format == l.format_analog }) { analogFormat = f }
+        if l.has_format_analog != 0 { selectAnalogFormat(l.format_analog) }
         if l.has_format_dv != 0 { dvSettings.applyFormat(l.format_dv) }
         if l.has_format_hdv != 0 { hdvSettings.applyFormat(l.format_hdv) }
         if l.has_split != 0 {
@@ -1267,6 +1342,10 @@ final class WindowModel {
                 hdvSettings.aspectIndex = Int(l.aspect.rawValue)
             }
         }
+        // --deinterlace and --quality likewise (DV and HDV share theirs); --ffv1-compression is one setting.
+        if l.has_deinterlace != 0 { formatChoices.setDeinterlace(analog: analog, Int(l.deinterlace)) }
+        if l.has_video_quality != 0 { formatChoices.setQuality(analog: analog, Int(l.video_quality)) }
+        if l.has_ffv1_compression != 0 { formatChoices.ffv1Compression = Int(l.ffv1_compression) }
         for slider in allSliders {
             if let v = l.value(for: slider.control) { saveSetting("gui.control_\(slider.control.rawValue)", String(v)) }
         }
@@ -1347,7 +1426,14 @@ final class WindowModel {
         dvName = d.name
 
         let fa = loadInt("gui.format_analog", -1)
-        if let f = analogFormats.first(where: { Int($0.format.rawValue) == fa }) { analogFormat = f }
+        if fa >= 0 { selectAnalogFormat(pin_format_t(rawValue: UInt32(clamping: fa))) }
+
+        // -1 (or missing) = the format's own default (pin_format_options)
+        formatChoices.deinterlaceAnalog = loadInt("gui.deinterlace_analog", -1)
+        formatChoices.deinterlaceDv = loadInt("gui.deinterlace_dv", -1)
+        formatChoices.qualityAnalog = loadInt("gui.quality_analog", -1)
+        formatChoices.qualityDv = loadInt("gui.quality_dv", -1)
+        formatChoices.ffv1Compression = loadInt("gui.ffv1_compression", -1)
 
         for k in kindTabs {
             let p = k.settingsPrefix

@@ -29,6 +29,7 @@
 #include "../engine/pin_session.h"
 #include "../engine/pin_session_priv.h" /* pin_session_push_event(NULL, ...) and s->preview */
 #include "../engine/pin_deck.h"
+#include "../engine/pin_format_opts.h"
 #include "../engine/pin_settings.h"
 #include "../engine/pin_script.h"
 #include "../engine/pin_stop.h"
@@ -36,9 +37,11 @@
 #include "../engine/pin_update.h"
 #include "../engine/pin_usb_topology.h"
 #include "../core/pin_host_perf.h"
+#include "../core/pin_thread_boost.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
 #include "../core/pin_log.h"
+#include "../sinks/pin_hwenc.h"
 
 #include <math.h>
 #include <stddef.h> /* offsetof */
@@ -100,6 +103,11 @@ const char *pin_strerror(pin_status_t s)
 pin_status_t pin_set_firmware_dir(const char *utf8_dir)
 {
     return pin_session_set_firmware_dir(utf8_dir);
+}
+
+pin_status_t pin_set_app_dirs(const char *config_dir, const char *runtime_dir, const char *temp_dir)
+{
+    return pin_session_set_app_dirs(config_dir, runtime_dir, temp_dir);
 }
 
 /* ========================================================================
@@ -185,6 +193,31 @@ const char *pin_usb_hub_hint(void) { return pin_usb_hub_hint_text(); }
 int pin_perf_check(void) { return pin_host_perf_check(); }
 const char *pin_perf_text(int kind) { return pin_host_perf_text(kind); }
 const char *pin_perf_fix(int kind) { return pin_host_perf_fix(kind); }
+
+void pin_set_cpu_keep_busy(int mode)
+{
+    /* pin_keep_busy_t and the core's PIN_THREAD_KEEP_BUSY_* are the same numbers */
+    pin_thread_set_keep_busy(mode);
+}
+
+pin_status_t pin_usb_model(uint16_t vid, uint16_t pid, pin_device_info_t *out)
+{
+    if (!out)
+        return PIN_ERR_ARG;
+    const pinnacle_model_t *m = vid == PINNACLE_VID ? pinnacle_model_lookup(pid) : NULL;
+    if (!m)
+        return PIN_ERR_NOT_FOUND;
+    pin_device_info_t d;
+    memset(&d, 0, sizeof(d));
+    snprintf(d.name, sizeof(d.name), "%s", m->name);
+    d.vid = vid;
+    d.pid = pid;
+    d.tested = (uint32_t)m->tested;
+    d.state = m->supported ? PIN_DEV_READY : PIN_DEV_UNSUPPORTED;
+    d.hub_depth = -1;   /* not known for a device the core did not enumerate */
+    device_info_store(out, 0, device_info_stride(out), &d);
+    return PIN_OK;
+}
 
 int pin_enumerate(pin_device_info_t *out, int max)
 {
@@ -348,19 +381,89 @@ pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out)
     return pin_session_format_info(f, out);
 }
 
+void pin_format_warning(pin_format_t f, char *out, size_t cap)
+{
+    pin_session_format_warning(f, out, cap);
+}
+
+int pin_encoders_probe(void)
+{
+    int m = pin_hwenc_probe();
+    return ((m >> PIN_HWENC_H264) & 1 ? PIN_ENC_H264 : 0) | ((m >> PIN_HWENC_HEVC) & 1 ? PIN_ENC_HEVC : 0);
+}
+
+pin_status_t pin_format_options(pin_format_t f, pin_format_options_t *out)
+{
+    if (!out)
+        return PIN_ERR_ARG;
+    if (out->size != sizeof(*out))
+        return PIN_ERR_ABI;
+    return pin_fmt_options(f, out);
+}
+
+void pin_format_quality_hint(pin_format_t f, int video_quality, int deinterlace, int is_60hz,
+                             char *out, size_t cap)
+{
+    pin_fmt_quality_hint(f, video_quality, deinterlace, is_60hz, out, cap);
+}
+
 /* ========================================================================
  * capture
  * ==================================================================== */
 
-void pin_capture_opts_defaults(pin_capture_opts_t *o)
+/* sizeof(pin_capture_opts_t) before the format settings were appended: what a front end
+ * compiled against that header passes (the Windows GUI sets size itself). */
+#define CAPTURE_OPTS_SIZE_V3 offsetof(pin_capture_opts_t, deinterlace)
+
+static void opts_full_defaults(pin_capture_opts_t *o)
 {
     memset(o, 0, sizeof(*o));
     o->size = sizeof(*o);
+#if defined(__ANDROID__)
+    o->format_analog = PIN_FMT_ANALOG_FFV1_MKV;   /* the Android default, see the format table */
+#else
     o->format_analog = PIN_FMT_ANALOG_AVI;
+#endif
     o->format_dv = PIN_FMT_DV_RAW;
     o->format_hdv = PIN_FMT_HDV_TS;
     o->aspect = PIN_ASPECT_AUTO;
     o->passes = 1;
+    o->deinterlace = PIN_DEINTERLACE_DEFAULT;
+    o->video_quality = PIN_QUALITY_DEFAULT;
+    o->ffv1_compression = PIN_FFV1_DEFAULT;
+}
+
+/* How many bytes of the caller's struct are there: an older caller's known size, else (0 from
+ * a zero-initialised struct, or garbage from an uninitialised one) the whole struct, as before
+ * sizes were looked at. Only exact older sizes count, so stack garbage cannot shrink it. */
+static size_t opts_caller_size(const pin_capture_opts_t *o)
+{
+    return o->size == CAPTURE_OPTS_SIZE_V3 ? CAPTURE_OPTS_SIZE_V3 : sizeof(*o);
+}
+
+void pin_capture_opts_defaults(pin_capture_opts_t *o)
+{
+    if (!o)
+        return;
+    size_t n = opts_caller_size(o);
+    pin_capture_opts_t full;
+    opts_full_defaults(&full);
+    full.size = (uint32_t)n;
+    memcpy(o, &full, n);
+}
+
+/* The caller's options as this library's struct: an older caller's fields over the defaults. */
+static const pin_capture_opts_t *opts_import(const pin_capture_opts_t *o, pin_capture_opts_t *buf)
+{
+    if (!o)
+        return NULL;
+    size_t n = opts_caller_size(o);
+    if (n == sizeof(*o))
+        return o;
+    opts_full_defaults(buf);
+    memcpy(buf, o, n);
+    buf->size = sizeof(*buf);
+    return buf;
 }
 
 int pin_capture_passes_allowed(int idle_stop_minutes, int max_duration_minutes)
@@ -383,17 +486,20 @@ int pin_capture_opts_normalize(pin_capture_opts_t *o)
 pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
                                pin_output_check_t *out)
 {
-    return pin_session_check_output(s, o, out);
+    pin_capture_opts_t buf;
+    return pin_session_check_output(s, opts_import(o, &buf), out);
 }
 
 pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opts_t *o)
 {
-    return pin_session_set_output_hint(s, o);
+    pin_capture_opts_t buf;
+    return pin_session_set_output_hint(s, opts_import(o, &buf));
 }
 
 pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite)
 {
-    return pin_session_capture_start(s, o, overwrite);
+    pin_capture_opts_t buf;
+    return pin_session_capture_start(s, opts_import(o, &buf), overwrite);
 }
 
 pin_status_t pin_capture_stop(pin_session_t *s)
@@ -846,7 +952,14 @@ void pin_device_status_text(const pin_device_info_t *d, int capturing_here, char
 /* PIN_DEV_NO_DRIVER: on Windows no WinUSB driver is bound; on macOS / Linux it is what a
  * failed open with LIBUSB_ERROR_ACCESS maps to (pinnacle_enum.h, PINNACLE_ENUM_NO_PERMISSION):
  * on Linux a missing udev rule, on macOS another driver or program that holds the interface. */
-#if defined(_WIN32)
+#if defined(__ANDROID__)
+/* Android: the app gets the device from UsbManager once the user allowed it; a refused or
+ * expired permission is the only "cannot access" case, and there is no udev to configure. */
+#define NO_DRIVER_REASON "No permission to use the USB device (allow access when Android asks, then reconnect)"
+#define NO_DRIVER_PROBLEM "This app has no permission to use the USB device. Reconnect it and allow " \
+                          "access when Android asks."
+#define NO_DEVICES_HINT "No devices found. Connect the capture box with a USB OTG adapter."
+#elif defined(_WIN32)
 #define NO_DRIVER_REASON "Needs the WinUSB driver (install it with Zadig, then reconnect)"
 #define NO_DRIVER_PROBLEM "This device needs the WinUSB driver. Install it with Zadig, then reconnect."
 #define NO_DEVICES_HINT "No devices found. Connect the Studio 500-USB and make sure it uses the WinUSB driver."
@@ -916,6 +1029,22 @@ int pin_device_open_problem(const pin_device_info_t *d, char *out, size_t cap)
 }
 
 const char *pin_no_devices_hint(void) { return NO_DEVICES_HINT; }
+
+int pin_device_fd_problem(const pin_device_info_t *d, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return 0;
+    out[0] = 0;
+    if (!d || d->vid != PINNACLE_VID)
+        return 0;
+    const pinnacle_model_t *m = pinnacle_model_lookup(d->pid);
+    if (!m || !m->supported || pinnacle_model_fd_ok(m))
+        return 0;   /* fine, or not driven at all (pin_device_unavailable_reason says so) */
+    snprintf(out, cap, "The %s is not supported on Android yet: after the app loads its USB "
+             "controller firmware it reappears as a new USB device, which the app cannot follow yet.",
+             m->name);
+    return 1;
+}
 
 int pin_poll_event(pin_session_t *s, pin_event_t *out)
 {
@@ -1148,10 +1277,13 @@ pin_status_t pin_script_settings(const pin_script_t *sc, pin_script_settings_t *
 {
     if (!sc || !out)
         return PIN_ERR_ARG;
-    if (out->size != sizeof(*out))
+    /* a caller compiled before the format settings were appended gets the old layout */
+    size_t n = out->size == sizeof(*out) ? sizeof(*out)
+               : out->size == offsetof(pin_script_settings_t, has_deinterlace) ? out->size : 0;
+    if (n == 0)
         return PIN_ERR_ABI;
-    *out = sc->initial;
-    out->size = sizeof(*out);
+    memcpy(out, &sc->initial, n);
+    out->size = (uint32_t)n;
     return PIN_OK;
 }
 

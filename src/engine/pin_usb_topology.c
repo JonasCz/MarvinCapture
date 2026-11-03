@@ -43,8 +43,16 @@ int pin_usb_hub_depth(const uint8_t *ports, int count)
 
 const char *pin_usb_hub_hint_text(void)
 {
+#if defined(__ANDROID__)
+    /* Android cannot tell (hub_depth is -1 for a device opened from a file descriptor), so this
+     * is only shown if a front end does so on its own; there is no tool to name. */
+    return "The device is connected through a USB hub and shares its bandwidth with the other "
+           "devices on it, which can drop frames. Connect it to the phone or tablet with a plain "
+           "USB OTG adapter, or use a hub with nothing else plugged into it.";
+#else
     return "The device is connected through a USB hub and shares its bandwidth with the other "
            "devices on it, which can drop frames. Plug it directly into a USB port of the computer "
            "(not a hub, front-panel hub, dock or monitor). Check the connection with "
            PIN_USB_TOPOLOGY_TOOL ". Some computers have built-in hubs; then this warning is harmless.";
+#endif
 }

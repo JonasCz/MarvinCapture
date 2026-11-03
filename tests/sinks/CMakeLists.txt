@@ -55,3 +55,24 @@ add_test(NAME test_stdout_sinks COMMAND test_stdout_sinks)
 add_executable(test_lazy_sink test_lazy_sink.c)
 target_link_libraries(test_lazy_sink PRIVATE pinnacle_sinks)
 add_test(NAME test_lazy_sink COMMAND test_lazy_sink)
+
+# sink_hwenc's pixel conversions
+add_executable(test_hwenc_convert test_hwenc_convert.c)
+target_link_libraries(test_hwenc_convert PRIVATE pinnacle_sinks)
+add_test(NAME test_hwenc_convert COMMAND test_hwenc_convert)
+
+# sink_hwenc end to end (with FFV1 standing in for the encoder where there is none, as on
+# Linux) and sink_ffv1's compression levels; the DV recordings that are there
+add_executable(test_hwenc_sink test_hwenc_sink.c)
+target_link_libraries(test_hwenc_sink PRIVATE pinnacle_sinks)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_hwenc_sink PRIVATE m)
+endif()
+set(_pin_hwenc_dv "")
+foreach(_f ep88-pal.bin ep88-ntsc.bin dv-pal.dv dv-ntsc.dv)
+    if(EXISTS "${PROJECT_SOURCE_DIR}/tests/data/${_f}")
+        list(APPEND _pin_hwenc_dv "${PROJECT_SOURCE_DIR}/tests/data/${_f}")
+    endif()
+endforeach()
+add_test(NAME test_hwenc_sink COMMAND test_hwenc_sink ${_pin_hwenc_dv})
+set_tests_properties(test_hwenc_sink PROPERTIES TIMEOUT 300)

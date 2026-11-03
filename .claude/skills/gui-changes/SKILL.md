@@ -1,14 +1,15 @@
 ---
 name: gui-changes
-description: Make changes to the MarvinCapture GUIs (Windows: WinUI 3 / C#, gui/windows/MarvinCaptureGUI; macOS: SwiftUI + AppKit, gui/macos): where things live, how settings and capture options flow, the core-first rule, threading contracts, build/lock gotchas. Use before editing GUI XAML, view models, Swift views/models or the native interop.
+description: Make changes to the MarvinCapture GUIs (Windows: WinUI 3 / C#, gui/windows/MarvinCaptureGUI; macOS: SwiftUI + AppKit, gui/macos; Android: Java + framework widgets + a C JNI layer, gui/android): where things live, how settings and capture options flow, the core-first rule, threading contracts, build/lock gotchas. Use before editing GUI XAML, view models, Swift views/models, the Android app or the native interop.
 ---
 
 # GUI changes
 
-Two GUIs: `gui/windows/` (C#, WinUI 3; sections below up to "Taskbar / shell
-interop") and `gui/macos/` (Swift; see "macOS GUI" at the end). Docs:
-`gui/windows/README.md`, `gui/macos/README.md`. The macOS app is a port of the
-Windows one: when behaviour changes in one, check the other.
+Three GUIs: `gui/windows/` (C#, WinUI 3; sections below up to "Taskbar / shell
+interop"), `gui/macos/` (Swift; see "macOS GUI") and `gui/android/` (Java + JNI; see
+"Android app" at the end). Docs: `gui/windows/README.md`, `gui/macos/README.md`,
+`gui/android/README.md`. The macOS app is a port of the Windows one, the Android app a
+phone-shaped port of the macOS one: when behaviour changes in one, check the others.
 
 ## Core-first rule
 
@@ -52,6 +53,21 @@ only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing cal
   line presets.
 - `ViewModels/KindSettingsViewModel.cs` + `Views/KindSettingsView.xaml`: the
   per-kind (DV, HDV) format / aspect / split / idle / passes options.
+- Format settings (deinterlace, quality, FFV1 compression): `ViewModels/FormatOptionsViewModel.cs`
+  holds `FormatChoices` (the stored values, -1 = the format's default; keys
+  `gui.deinterlace_analog` / `_dv`, `gui.quality_analog` / `_dv`, `gui.ffv1_compression`, the
+  Android app's; DV and HDV share the DV ones; saved in `MainViewModel.OnFormatChoiceChanged`)
+  and `FormatOptionsViewModel` (one per format drop-down: `MainViewModel.AnalogFormatOptions`,
+  `KindSettingsViewModel.FormatOptions`; everything from `pin_format_options()`,
+  `pin_format_warning()`, `pin_format_quality_hint()`). `Views/FormatOptionsView.xaml` is the
+  Flyout of the gear right of each format drop-down, set as `Flyout.Content` in code
+  (constructor injection, like `KindSettingsView`). The warning is an InfoBar under the drop-down.
+- Format lists: **empty until the encoder probe is done.** `MainViewModel.ProbeEncoders`
+  (called first thing in the `MainWindow` constructor) runs `pin_encoders_probe()` on a worker
+  thread, then `RefreshFormats` fills the analog, DV and HDV lists. Never call `Native.Formats`
+  on the UI thread before that: listing the analog or DV formats runs the probe (50-300 ms per
+  encoder). Saved / command-line formats go through `SelectAnalogFormat` /
+  `KindSettingsViewModel.ApplyFormat`, which remember the wanted one for the refresh.
 - `Interop/`: `Native.cs` (P/Invoke), `NativeStructs.cs`, `NativeEnums.cs`. Enum
   members are prefixed like `PinStatus.ErrArg` (not `Arg`).
 - Output path = `OutputDir` + `Name` (analog: `AnalogOutputDir`/`AnalogName`,
@@ -66,7 +82,10 @@ only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing cal
   `ref`, never `out` (`out` zero-inits and wipes `size`, giving `PIN_ERR_ABI`).
 - Fixed-size embedded UTF-8 strings in structs (`Path`, `Title`, ...) go through
   `Utf8Fixed` property wrappers in `NativeStructs.cs`. A new field in
-  `pin_capture_opts_t` must be added in the same order/size in C and C#.
+  `pin_capture_opts_t` must be added in the same order/size in C and C#. Structs whose size
+  the core checks exactly (`pin_format_options_t`: `size != sizeof` is `PIN_ERR_ABI`) must match
+  byte for byte; appended fields of `pin_capture_opts_t` / `pin_script_settings_t` are fine
+  because the core also takes the older sizes.
 - Settings: `Native.SettingsGet/Set` -> core `pin_settings_get/set`. Keys are
   `gui.*`, all best-effort (try/catch). Writes are suppressed while `_loading`.
   Add the save in the `OnXChanged` hook and the load in `LoadSettings`. Options
@@ -217,13 +236,19 @@ AppKit owns the app, the window and the menus; SwiftUI is hosted inside the wind
   `applyStatus`, `handleEvent`. `AppModel`: command line (`pin_script_parse`).
   `KindSettingsModel` (DV / HDV tab), `ControlSliderModel`, `DeviceItem`,
   `FormatItem`. All `@MainActor @Observable`; non-observed state is
-  `@ObservationIgnored`.
+  `@ObservationIgnored`. `FormatOptionsModel.swift`: `FormatChoices` (stored deinterlace /
+  quality / FFV1 values, same keys as Windows and Android), `FormatOptions`
+  (`pin_format_options_t` as Swift strings) and `FormatOptionsModel` (one per format picker:
+  `analogFormatOptions`, `KindSettingsModel.formatOptions`). The format lists are empty until
+  `probeEncoders()` (a detached task started in `WindowModel.init`) returns and
+  `refreshFormats()` fills them; never list formats on the main thread before that.
 - `Services/`: `MediaSeams.swift` (the `PreviewSink` and `AudioMonitor` protocols
   and null implementations), `AudioMonitor.swift` (`CoreAudioMonitor`),
   `DockTile`, `Notifier`, `KeepAwake`, `ConsoleOutput`.
 - `Preview/`: `PreviewRenderer` (render thread, Metal), `PreviewShaders` (MSL as a
   string), `MetalPreview` (the `PreviewSink`: view, visibility).
-- `Views/`: SwiftUI (`Sidebar/`, `StatusBar/`, `PreviewArea`, ...).
+- `Views/`: SwiftUI (`Sidebar/`, `StatusBar/`, `PreviewArea`, ...). `Sidebar/FormatOptionsView.swift`:
+  the gear right of each format picker (`FormatOptionsButton`) and its popover.
   `StatusBarLayout.swift` decides which status items fit (drop order free space,
   frames, storage, time, deck: same as `FitStatusBar` on Windows).
 
@@ -308,3 +333,80 @@ A new aid goes in the same style and into that list in the README.
   core has not yet reported CAPTURING (the core starts asynchronously).
 - `bash scripts/build.sh` must stay green (tests + app). Keep the README's
   MARVIN_* list complete (`grep -rn MARVIN_ gui/macos/Sources`).
+
+## Android app (gui/android)
+
+Java (no Kotlin), framework widgets and `Theme.DeviceDefault` only: **no AndroidX, no
+Material, no dependencies** (a decision of the owner, for size; keep it). minSdk 30,
+target 36. One device, one screen; no deck control, no automatic capture or
+multi-pass, no command line. Docs: `gui/android/README.md`.
+
+### Where things are
+
+- `app/src/main/cpp/` (C, built by `scripts/build-android-native.sh`, not by Gradle):
+  `marvin_jni.c` (the `pin_api.h` wrappers as static natives of `Core`), `preview.c`
+  (EGL + GLES 3 renderer), `audio.c` (AAudio monitor + low-latency keep-alive).
+- `app/src/main/java/jonascz/marvincapture/`: `Core` (natives, mirrored enum values and
+  the array indices of `getStatus` / capture options: **keep them in step with
+  `pin_api.h` and `marvin_jni.c`**), `CaptureService` (session, USB connection, capture,
+  notification, wake lock, keep-alive, event queue, `buildPlan` = buildCaptureOpts),
+  `MainActivity` (screen, USB discovery / permission, capture flow = planCapture),
+  `OptionsPanel`, `Settings` (cached `gui.*` keys, global: no `dev_<GUID>.` scope),
+  `Formats` (lists only after the encoder probe), `MarvinIdleView` (Canvas port of
+  `docs/logo.html`; the launcher icon in `res/drawable/ic_launcher_foreground.xml` is
+  the still pose: keep both in step with the logo).
+- Views are built in code (`Ui` helpers), there is no layout XML.
+
+### Adding a native call
+
+Add the C function in `marvin_jni.c` with `MJ_FN(ret, name)` (= `Java_jonascz_marvincapture_Core_name`)
+and the `static native` declaration in `Core.java`. Strings go through `mj_string` /
+`mj_utf8` (UTF-16; never `NewStringUTF` / `GetStringUTFChars`). A new status field goes
+into one of the `getStatus` arrays: bump `N_*` in C and `ST_COUNT` etc. in `Core`.
+R8 keeps `Core`'s native methods by name (proguard-rules.pro); nothing uses reflection.
+Then `scripts/build-android-native.sh --abi x86_64` and the Gradle build.
+
+### Threading contracts (do not break)
+
+- Main thread: everything Java. The service's tick (5 Hz visible, 1 Hz otherwise) is
+  the **only** caller of `pin_get_status` / `pin_poll_event` for the session (audio peaks
+  are "since the previous read"); the activity gets the snapshot from it.
+- `pin_close` blocks while files are finalised: it runs on the service's single
+  "Core open/close" thread, after `audioDetach` and `previewDetach` (both synchronous),
+  and the `UsbDeviceConnection` is closed only after it returned. Opens queue on the
+  same thread.
+- Render thread (`preview.c`): enters the core only through `enter_core()`;
+  `previewDetach` and `previewSetSurface` wait for it (the latter until the old EGL
+  surface is gone, so `surfaceDestroyed` may return).
+- AAudio callback: only try-locks the monitor's lock; `audioDetach` takes it.
+- No blocking work on the main thread: the encoder probe runs on a worker thread at
+  start-up (`Formats.probe`); `pin_formats()` is only called after it.
+
+### Gotchas
+
+- Rotation and most config changes are handled in place (`configChanges` in the
+  manifest), so the bound service, session and surface survive; `MainLayout` re-measures.
+  A recreated activity would unbind and the service would close the device.
+- The foreground service type is `connectedDevice` for USB and `mediaPlayback` for the
+  replay device (no USB permission, so `connectedDevice` would throw on API 34+).
+- `ACTION_USB_DEVICE_DETACHED` during a capture: the service waits for the core to end
+  the capture (it finalises and reports `PIN_STOP_DEVICE_LOST`) before closing, else the
+  capture-ended event is lost with the session.
+- The output folder must exist before `pin_set_output_hint`, or the core cannot measure
+  free space (the service creates it).
+- Back: `OnBackInvokedCallback` from API 33 (`enableOnBackInvokedCallback="true"`),
+  `onBackPressed` for API 30-32.
+
+### Build and verify
+
+```sh
+scripts/build-android.sh --debug --abi x86_64        # natives + APK for the emulator
+cd gui/android && ./gradlew assembleDebug -PmarvinAbis=x86_64 && ./gradlew lintDebug
+```
+
+No real hardware in the emulator: use the replay device
+(`adb shell am start -n jonascz.marvincapture/.MainActivity --es replay <file in the app's
+external files dir>`). Logs: `adb logcat -s MarvinCapture marvin-core`. A software
+emulator renders slowly: `adb exec-out screencap` may return black frames, use
+`adb emu screenrecord screenshot <abs path>.png` (landscape shots come unrotated).
+

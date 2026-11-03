@@ -116,6 +116,9 @@ typedef struct {
     char title[PIN_TEXT_MAX];
     int keep_raw;
     int overwrite;
+    int deinterlace;            /* pin_capture_opts_t's format settings */
+    int video_quality;
+    int ffv1_compression;
 } pin_script_capture_t;
 
 typedef struct {

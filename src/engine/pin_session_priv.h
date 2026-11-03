@@ -221,6 +221,7 @@ struct pin_session {
     uint64_t units_total;    /* video units written by this capture's closed files */
     int file_announced;      /* PIN_EVT_FILE_OPENED was sent for the open file (it is created
                                 by its first video unit, see sink_lazy.c) */
+    int encoder_behind_logged; /* the open file's sink said its encoder fell behind (logged once) */
     char naming_base[PIN_PATH_MAX]; /* extension-stripped */
     char naming_ext[16];
 

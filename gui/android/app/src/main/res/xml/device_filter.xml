@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+
+  Pinnacle's USB vendor id (0x2304) only: the core's model table (pin_usb_model) decides which
+  products the app drives, so a model added there needs no change here.
+-->
+<resources>
+    <usb-device vendor-id="8964" />
+</resources>

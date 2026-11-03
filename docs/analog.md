@@ -512,6 +512,17 @@ the FLAC "subset" (levels above it use LPC orders up to 32, which some
 hardware players reject). The final STREAMINFO (total samples, MD5 of
 the audio) is written into the file when the capture ends.
 
+FFV1 compression (`pin_capture_opts_t.ffv1_compression`, `--ffv1-compression`): **fast**
+(default) is FFmpeg's default, Golomb-Rice coding with the small context model, the least
+CPU; **smaller** is the range coder with a custom state table; **smallest** adds the large
+context model. All are lossless. On synthetic SD test pictures the range coder saved 2-11 %;
+the large context model, whose many contexts start afresh in each of the 16 slices of every
+frame, came out 2-8 % larger than the range coder alone (it helped only with 4 slices), so
+on real tapes "smallest" is worth measuring before relying on it.
+
+H.264 / HEVC with the system's encoder (lossy, much smaller): see
+[usage.md](usage.md#h264--hevc-the-systems-video-encoder).
+
 ## Not done yet
 
 - NTSC S-video, PAL-M/N, PAL-60, NTSC-4.43/J and SECAM are untested. The

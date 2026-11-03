@@ -16,8 +16,8 @@
 
 import SwiftUI
 
-/// One kind's (DV or HDV) file options: format, aspect, scene split, the two minute limits, passes.
-/// Port of KindSettingsView.xaml. The caller disables the whole view while capturing.
+/// One kind's (DV or HDV) file options: format (its settings behind the gear), aspect, scene split, the two
+/// minute limits, passes. Port of KindSettingsView.xaml. The caller disables the whole view while capturing.
 struct KindSettingsView: View {
     @Bindable var settings: KindSettingsModel
 
@@ -25,20 +25,29 @@ struct KindSettingsView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .top, spacing: 8) {
                 Field("Format") {
-                    Picker("Format", selection: $settings.selectedFormat) {
-                        ForEach(settings.formats) { f in
-                            Text("\(f.label)  (.\(f.fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: "."))))")
-                                .tag(Optional(f))
+                    HStack(spacing: 4) {
+                        Picker("Format", selection: $settings.selectedFormat) {
+                            ForEach(settings.formats) { f in
+                                Text("\(f.label)  (.\(f.fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: "."))))")
+                                    .tag(Optional(f))
+                            }
                         }
+                        .labelsHidden()
+                        .accessibilityLabel("\(settings.tabHeader) format")
+                        // the selected format's settings (deinterlace, quality, FFV1 compression), if it has any
+                        FormatOptionsButton(options: settings.formatOptions,
+                                            accessibilityName: "\(settings.tabHeader) format settings")
                     }
-                    .labelsHidden()
-                    .accessibilityLabel("\(settings.tabHeader) format")
                 }
                 Field("Aspect") {
                     AspectPicker(selection: $settings.aspectIndex, label: "\(settings.tabHeader) aspect ratio",
                                  help: "Overrides the aspect ratio for the preview and the file. Auto uses what the tape reports.")
                 }
                 .frame(width: 104)
+            }
+            // the core's warning for the selected format (H.264 / HEVC: lossy)
+            if !settings.formatOptions.warning.isEmpty {
+                InfoBannerContent(severity: .warning, title: "", message: settings.formatOptions.warning)
             }
             Toggle("Split into scenes", isOn: $settings.splitIntoScenes)
                 .disabled(!settings.splitEnabled)

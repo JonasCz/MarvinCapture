@@ -3,3 +3,5 @@
 *.jpg binary
 *.ico binary
 *.bin binary
+# cmd.exe needs CRLF in batch files (labels / goto)
+gui/android/gradlew.bat text eol=crlf

@@ -120,6 +120,18 @@ This installs `/usr/bin/MarvinCaptureCLI` (program, core library and firmware ar
 
 To uninstall: `sudo apt remove marvincapture`.
 
+### Android
+
+**New and not yet tested with the hardware**: the app is built and runs on the emulator (against a recorded tape), but nobody has captured from the real device with it yet. Reports welcome.
+
+Needs Android 11 or later on a 64-bit ARM phone or tablet (arm64-v8a, nearly every phone from the last years), and a USB OTG adapter (USB-C to USB-A) for the device, which the phone powers.
+
+1. Download `MarvinCapture-<version>-android.apk` on the phone.
+2. Open it. Android asks to allow installing apps from your browser (or file manager) the first time: allow it, go back and tap **Install**. Google Play Protect may warn about an app from an unknown developer: **More details > Install anyway**.
+3. Plug the device in through the OTG adapter. Android offers to open MarvinCapture for it; tick "always" to skip the USB permission question next time.
+
+Recordings go to `Movies/MarvinCapture/` on the phone's storage. Updates install over the old version (same signature). To uninstall: long-press the app icon > **Uninstall** (recordings are kept). Details: [gui/android/README.md](gui/android/README.md).
+
 ## Reliability, performance & correctness
 
 For best performance & reliability, the following are recommended (The GUI and CLI will also warn you about them):
@@ -210,6 +222,11 @@ build/macos-arm64/dist/firmware/                      FPGA bitstreams
 On Linux, `bash scripts/build.sh` builds the core and `MarvinCaptureCLI` into
 `build/linux-x86_64/dist` (there is no Linux GUI yet).
 
+The Android app (`gui/android`) is cross-built on Linux or macOS with
+`scripts/build-android.sh` (needs the Android NDK and SDK and a JDK 17; see
+[docs/building.md](docs/building.md#android)) into
+`build/android/MarvinCapture-<version>-android.apk`.
+
 The device has to be bound to WinUSB, not the vendor driver
 ([docs/windows-driver.md](docs/windows-driver.md)). Then either run
 `MarvinCaptureGUI.exe`, or from `build\windows-x86_64\dist`:
@@ -225,8 +242,8 @@ The installers are built with `scripts/package-macos.sh` (.pkg), `scripts\packag
 Linux) or `scripts/package-linux-docker.sh` (the .deb in an Ubuntu 22.04 container, from
 any host with Docker), into `build/<os>-<arch>/installer`; see
 [docs/building.md](docs/building.md#installers). The GitHub Actions workflow builds all of
-them (Windows, macOS and Linux, x86_64 and arm64) on demand and can publish a release; see
-[docs/ci.md](docs/ci.md).
+them (Windows, macOS and Linux, x86_64 and arm64) and the Android APK on demand and can
+publish a release; see [docs/ci.md](docs/ci.md).
 
 ## Software architecture
 

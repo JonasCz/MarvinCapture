@@ -35,23 +35,51 @@
  * get_status() reports units_written as the number of video units the real
  * sink accepted, which unlike its own counter is exact at any time (sink_ffv1
  * counts in an encoder thread).
+ *
+ * Taken names (numbered output, pin_sink_lazy_set_renumber()): in Android's
+ * shared storage (Movies/) an app lists only its own files, and after a
+ * reinstall it no longer owns the ones it wrote before. pin_next_file_number()
+ * cannot see those, so it may pick a number whose file exists; creating it then
+ * fails (EEXIST from the media provider, or EACCES / EPERM) and the capture
+ * would end with a write error at its first frame. So before the real sink
+ * creates a numbered file, the name is claimed with an exclusive create (and
+ * the empty file removed again at once, so the real sink creates it as
+ * before); a name that is taken moves the file to the next number, up to
+ * PIN_SINK_LAZY_MAX_SKIP times. The engine picks the new name and number up
+ * with pin_sink_lazy_renumbered(). When the name is free nothing changes.
+ * Numbered output never overwrites, so an existing file of the same name
+ * (which pin_next_file_number() avoids anyway) counts as taken too. POSIX
+ * only: Windows has no such storage.
  */
 
 #include "pin_sink.h"
+#include "../core/pin_log.h"
 
+#include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 typedef struct {
     pin_sink_t *inner;
-    char path[PIN_PATH_MAX];
+    char path[PIN_PATH_MAX];    /* written by the writer thread when renumbered: under mtx */
     pin_sink_params_t params;
     int have_open;              /* open() was called */
     int opened;                 /* the real sink was opened (the file exists) */
     pin_status_t open_error;
     uint64_t units;             /* video units the real sink took */
+    /* numbered output: candidates for a taken name (pin_sink_lazy_set_renumber) */
+    pin_sink_name_fn next;
+    void *next_ctx;
+    void (*next_free)(void *ctx);
+    unsigned skipped;           /* names skipped (under mtx) */
+    pthread_mutex_t mtx;
 } lazy_priv_t;
 
 static pin_status_t lazy_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
@@ -78,6 +106,54 @@ static pin_status_t lazy_open(pin_sink_t *s, const char *path, const pin_sink_pa
     return PIN_OK;
 }
 
+#if !defined(_WIN32)
+/* 1 if path cannot become this capture's new file (see "Taken names" above); *err = why. A
+ * free name is created and removed again, so the real sink creates it exactly as before. */
+static int name_taken(const char *path, int *err)
+{
+    int fd = open(path, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (fd >= 0) {
+        close(fd);
+        unlink(path);
+        return 0;
+    }
+    *err = errno;
+    return errno == EEXIST || errno == EACCES || errno == EPERM;
+}
+#endif
+
+/* Moves a numbered file whose name is taken to the next free number. Any other failure
+ * (no directory, read-only volume) is left to the real sink's open, as before. */
+static void lazy_renumber(lazy_priv_t *p)
+{
+#if !defined(_WIN32)
+    char cand[PIN_PATH_MAX];
+    snprintf(cand, sizeof(cand), "%s", p->path);
+    int first_err = 0, err = 0;
+    unsigned k = 0;
+    while (name_taken(cand, &err)) {
+        if (k == 0)
+            first_err = err;
+        if (++k > PIN_SINK_LAZY_MAX_SKIP || p->next(p->next_ctx, k, cand, sizeof(cand)) != 0) {
+            pin_logf(PIN_LOG_WARN, "sink_lazy: %s cannot be created (%s) and no free number "
+                     "follows it\n", p->path, strerror(first_err));
+            return;
+        }
+    }
+    if (k == 0)
+        return;
+    pin_logf(PIN_LOG_INFO, "sink_lazy: %s cannot be created (%s; in Android's shared storage "
+             "usually a file left by an earlier installation, which this app cannot see): "
+             "writing %s instead\n", p->path, strerror(first_err), cand);
+    pthread_mutex_lock(&p->mtx);
+    snprintf(p->path, sizeof(p->path), "%s", cand);
+    p->skipped = k;
+    pthread_mutex_unlock(&p->mtx);
+#else
+    (void)p;
+#endif
+}
+
 static pin_status_t lazy_ensure_open(lazy_priv_t *p)
 {
     if (p->opened)
@@ -86,6 +162,8 @@ static pin_status_t lazy_ensure_open(lazy_priv_t *p)
         return p->open_error;
     if (!p->have_open)
         return PIN_ERR_STATE;
+    if (p->next)
+        lazy_renumber(p);
     pin_status_t st = p->inner->open(p->inner, p->path, &p->params);
     if (st != PIN_OK) {
         p->open_error = st;
@@ -148,9 +226,41 @@ static pin_status_t lazy_close(pin_sink_t *s)
         remove(p->path);    /* only damaged units reached it: the empty container we just created */
     if (rc == PIN_OK && p->open_error != PIN_OK)
         rc = p->open_error;
+    if (p->next_free)
+        p->next_free(p->next_ctx);
+    pthread_mutex_destroy(&p->mtx);
     free(p);
     free(s);
     return rc;
+}
+
+void pin_sink_lazy_set_renumber(pin_sink_t *s, pin_sink_name_fn next, void *ctx,
+                                void (*ctx_free)(void *ctx))
+{
+    if (!s || s->open != lazy_open || !next) {
+        if (ctx_free)
+            ctx_free(ctx);
+        return;
+    }
+    lazy_priv_t *p = s->priv;
+    if (p->next_free)
+        p->next_free(p->next_ctx);
+    p->next = next;
+    p->next_ctx = ctx;
+    p->next_free = ctx_free;
+}
+
+unsigned pin_sink_lazy_renumbered(pin_sink_t *s, char *out, size_t cap)
+{
+    if (!s || s->open != lazy_open)
+        return 0;
+    lazy_priv_t *p = s->priv;
+    pthread_mutex_lock(&p->mtx);
+    unsigned k = p->skipped;
+    if (k && out && cap)
+        snprintf(out, cap, "%s", p->path);
+    pthread_mutex_unlock(&p->mtx);
+    return k;
 }
 
 pin_sink_t *pin_sink_lazy(pin_sink_t *inner)
@@ -166,6 +276,7 @@ pin_sink_t *pin_sink_lazy(pin_sink_t *inner)
         return NULL;
     }
     p->inner = inner;
+    pthread_mutex_init(&p->mtx, NULL);
     s->priv = p;
     s->open = lazy_open;
     s->write_unit = lazy_write_unit;
