@@ -231,17 +231,34 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="104" />
                                         </Grid.ColumnDefinitions>
-                                        <ComboBox Header="Format" HorizontalAlignment="Stretch"
-                                                  ItemsSource="{x:Bind VM.AnalogFormats}"
-                                                  SelectedItem="{x:Bind VM.AnalogFormat, Mode=TwoWay}"
-                                                  IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
-                                                  AutomationProperties.Name="Analog format">
-                                            <ComboBox.ItemTemplate>
-                                                <DataTemplate x:DataType="vm:FormatItem">
-                                                    <TextBlock Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
-                                                </DataTemplate>
-                                            </ComboBox.ItemTemplate>
-                                        </ComboBox>
+                                        <Grid ColumnSpacing="4">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox Header="Format" HorizontalAlignment="Stretch"
+                                                      ItemsSource="{x:Bind VM.AnalogFormats}"
+                                                      SelectedItem="{x:Bind VM.AnalogFormat, Mode=TwoWay}"
+                                                      IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
+                                                      AutomationProperties.Name="Analog format">
+                                                <ComboBox.ItemTemplate>
+                                                    <DataTemplate x:DataType="vm:FormatItem">
+                                                        <TextBlock Text="{x:Bind Label}" TextTrimming="CharacterEllipsis" />
+                                                    </DataTemplate>
+                                                </ComboBox.ItemTemplate>
+                                            </ComboBox>
+                                            <!-- the selected format's settings (deinterlace, quality, FFV1 compression), if it has any -->
+                                            <Button Grid.Column="1" VerticalAlignment="Bottom" Width="36" Height="32" Padding="0"
+                                                    IsEnabled="{x:Bind local:MainWindow.Both(VM.AnalogFormatOptions.HasAny, VM.IsIdle), Mode=OneWay}"
+                                                    AutomationProperties.Name="Analog format settings"
+                                                    AutomationProperties.HelpText="Deinterlacing, quality or compression of the selected format, where it has any"
+                                                    ToolTipService.ToolTip="Format settings">
+                                                <FontIcon Glyph="&#xE713;" FontSize="14" />
+                                                <Button.Flyout>
+                                                    <Flyout x:Name="AnalogFormatFlyout" Placement="BottomEdgeAlignedRight" />
+                                                </Button.Flyout>
+                                            </Button>
+                                        </Grid>
                                         <ComboBox Grid.Column="1" Header="Aspect" HorizontalAlignment="Stretch"
                                                   SelectedIndex="{x:Bind VM.AnalogAspectIndex, Mode=TwoWay}"
                                                   IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
@@ -252,6 +269,10 @@
                                             <ComboBoxItem Content="16:9" />
                                         </ComboBox>
                                     </Grid>
+                                    <!-- the core's warning for the selected format (H.264 / HEVC: lossy) -->
+                                    <InfoBar Severity="Warning" IsClosable="False"
+                                             IsOpen="{x:Bind VM.AnalogFormatOptions.HasWarning, Mode=OneWay}"
+                                             Message="{x:Bind VM.AnalogFormatOptions.Warning, Mode=OneWay}" />
                                     <Grid ColumnSpacing="8">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*" />

@@ -13,6 +13,7 @@ public sealed partial class KindSettingsView : UserControl
     {
         ViewModel = viewModel;
         InitializeComponent();
+        FormatFlyout.Content = new FormatOptionsView(viewModel.FormatOptions);
     }
 
     public KindSettingsViewModel ViewModel { get; }
@@ -26,6 +27,7 @@ public sealed partial class KindSettingsView : UserControl
 
     public string FormatAutomationName => $"{ViewModel.TabHeader} format";
     public string AspectAutomationName => $"{ViewModel.TabHeader} aspect ratio";
+    public string FormatSettingsAutomationName => $"{ViewModel.TabHeader} format settings";
 
     public bool Both(bool a, bool b) => a && b;
 

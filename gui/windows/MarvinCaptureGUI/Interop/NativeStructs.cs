@@ -18,6 +18,7 @@ public static class PinLimits
     public const int PathMax = 1024;
     public const int NameMax = 64;
     public const int TextMax = 256;
+    public const int OptHelpMax = 512;  // PIN_OPT_HELP_MAX: the help texts of pin_format_options_t
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -109,6 +110,10 @@ public unsafe struct PinCaptureOpts
     public uint FirstNumber;    // >= 1: every file is "base-NNNN.ext", counting up per scene from here
     public int MaxDurationMinutes; // stop after this long of capture time, signal/data or not; 0 = never
     public fixed byte TsExtensionBuf[8]; // raw HDV file extension: empty = "ts" (the GUI leaves it empty)
+    // Appended later (the core takes the old size too): the format settings, see pin_format_options().
+    public int Deinterlace;     // H.264 / HEVC: a PinDeinterlace (default DoubleRate)
+    public int VideoQuality;    // H.264 / HEVC: 0 (best) .. 51 (smallest), like a CRF (default 18)
+    public int Ffv1Compression; // FFV1: a PinFfv1Compression (default Fast)
 
     public string Path
     {
@@ -126,6 +131,66 @@ public unsafe struct PinCaptureOpts
     {
         var o = new PinCaptureOpts();
         o.Size = (uint)sizeof(PinCaptureOpts);
+        return o;
+    }
+}
+
+/// <summary>
+/// pin_format_options_t: which of the format settings (deinterlace, quality, FFV1 compression)
+/// apply to a format, with the core's labels, ranges, defaults and help texts. A GUI shows one
+/// control per Has* flag and nothing else.
+/// </summary>
+[StructLayout(LayoutKind.Sequential)]
+public unsafe struct PinFormatOptions
+{
+    public uint Size;
+    public int HasQuality;
+    public int HasDeinterlace;
+    public int HasFfv1Compression;
+
+    public int QualityMin, QualityMax, QualityDefault;
+    public int QualityLowerIsBetter;
+    public fixed byte QualityLabelBuf[PinLimits.NameMax];
+    public fixed byte QualityLowLabelBuf[PinLimits.NameMax];
+    public fixed byte QualityHighLabelBuf[PinLimits.NameMax];
+    public fixed byte QualityHelpBuf[PinLimits.OptHelpMax];
+
+    public int DeinterlaceDefault;
+    public fixed byte DeinterlaceLabelBuf[PinLimits.NameMax];
+    public fixed byte DeinterlaceKeepLabelBuf[PinLimits.NameMax];
+    public fixed byte DeinterlaceDoubleLabelBuf[PinLimits.NameMax];
+    public fixed byte DeinterlaceKeepHelpBuf[PinLimits.OptHelpMax];
+    public fixed byte DeinterlaceDoubleHelpBuf[PinLimits.OptHelpMax];
+
+    public int Ffv1Default;
+    public fixed byte Ffv1LabelBuf[PinLimits.NameMax];
+    public fixed byte Ffv1FastLabelBuf[PinLimits.NameMax];
+    public fixed byte Ffv1SmallerLabelBuf[PinLimits.NameMax];
+    public fixed byte Ffv1SmallestLabelBuf[PinLimits.NameMax];
+    public fixed byte Ffv1HelpBuf[PinLimits.OptHelpMax];
+
+    public fixed byte NoteBuf[PinLimits.OptHelpMax];
+
+    public string QualityLabel { get { fixed (byte* p = QualityLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string QualityLowLabel { get { fixed (byte* p = QualityLowLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string QualityHighLabel { get { fixed (byte* p = QualityHighLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string QualityHelp { get { fixed (byte* p = QualityHelpBuf) return Utf8Fixed.Get(p, PinLimits.OptHelpMax); } }
+    public string DeinterlaceLabel { get { fixed (byte* p = DeinterlaceLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string DeinterlaceKeepLabel { get { fixed (byte* p = DeinterlaceKeepLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string DeinterlaceDoubleLabel { get { fixed (byte* p = DeinterlaceDoubleLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string DeinterlaceKeepHelp { get { fixed (byte* p = DeinterlaceKeepHelpBuf) return Utf8Fixed.Get(p, PinLimits.OptHelpMax); } }
+    public string DeinterlaceDoubleHelp { get { fixed (byte* p = DeinterlaceDoubleHelpBuf) return Utf8Fixed.Get(p, PinLimits.OptHelpMax); } }
+    public string Ffv1Label { get { fixed (byte* p = Ffv1LabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string Ffv1FastLabel { get { fixed (byte* p = Ffv1FastLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string Ffv1SmallerLabel { get { fixed (byte* p = Ffv1SmallerLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string Ffv1SmallestLabel { get { fixed (byte* p = Ffv1SmallestLabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
+    public string Ffv1Help { get { fixed (byte* p = Ffv1HelpBuf) return Utf8Fixed.Get(p, PinLimits.OptHelpMax); } }
+    public string Note { get { fixed (byte* p = NoteBuf) return Utf8Fixed.Get(p, PinLimits.OptHelpMax); } }
+
+    public static PinFormatOptions Create()
+    {
+        var o = new PinFormatOptions();
+        o.Size = (uint)sizeof(PinFormatOptions);
         return o;
     }
 }
@@ -362,6 +427,13 @@ public unsafe struct PinScriptSettings
     public int ControlHue;
     public int ControlSharpness;
     public int ControlAudioGain;
+    // Appended (the core takes the old size too): --deinterlace, --quality, --ffv1-compression.
+    public int HasDeinterlace;
+    public int Deinterlace;
+    public int HasVideoQuality;
+    public int VideoQuality;
+    public int HasFfv1Compression;
+    public int Ffv1Compression;
 
     public string Title
     {

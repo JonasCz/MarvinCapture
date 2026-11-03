@@ -63,6 +63,9 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        // Which H.264 / HEVC encoders exist: probed once on a worker thread (it opens each encoder),
+        // then the format lists are filled. Until then they are empty, so the UI thread never waits.
+        VM.ProbeEncoders(DispatcherQueue);
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _taskbar = new TaskbarButton(_hwnd);
@@ -86,6 +89,7 @@ public sealed partial class MainWindow : Window
         _hdvView = new KindSettingsView(VM.HdvSettings);
         KindSwitch.Children.Add(_dvView);
         KindSwitch.Children.Add(_hdvView);
+        AnalogFormatFlyout.Content = new FormatOptionsView(VM.AnalogFormatOptions);
 
         ConfigureAppWindow();
 

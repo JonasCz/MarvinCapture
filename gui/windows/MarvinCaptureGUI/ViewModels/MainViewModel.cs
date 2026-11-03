@@ -172,6 +172,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     {
         // The open device's badge reads "Capturing" while this window records.
         RefreshDevices();
+        // The format settings apply at capture start: locked while capturing, like the other options.
+        AnalogFormatOptions.IsEditable = DvSettings.FormatOptions.IsEditable = HdvSettings.FormatOptions.IsEditable = !value;
     }
     /// <summary>Analog button's second line: what Capture records, or while capturing the stop countdown (none otherwise).</summary>
     public string AnalogSubtitle => IsFinishing ? "" : IsCapturing ? _analogStopLine
@@ -233,10 +235,20 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public ControlSliderViewModel AudioGain { get; }
 
+    /// <summary>Empty until the encoder probe is done (<see cref="RefreshFormats"/>).</summary>
     public ObservableCollection<FormatItem> AnalogFormats { get; } = new();
 
     [ObservableProperty]
     private FormatItem? _analogFormat;
+
+    /// <summary>A saved or command-line analog format the list may not have yet (see <see cref="RefreshFormats"/>).</summary>
+    private PinFormat? _wantedAnalogFormat;
+
+    /// <summary>The format settings the user chose (deinterlace, quality, FFV1 compression), stored per device.</summary>
+    public FormatChoices FormatChoices { get; } = new();
+
+    /// <summary>The analog format's settings, behind the gear next to its drop-down.</summary>
+    public FormatOptionsViewModel AnalogFormatOptions { get; }
 
     /// <summary>File base name; also embedded as the title when the format supports one.</summary>
     [ObservableProperty] private string _analogName = "";
@@ -278,6 +290,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     partial void OnAnalogFormatChanged(FormatItem? value)
     {
+        AnalogFormatOptions.Format = value?.Format;
         if (value is not null)
         {
             SaveSetting("gui.format_analog", ((int)value.Format).ToString(CultureInfo.InvariantCulture));
@@ -528,22 +541,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     public MainViewModel()
     {
-        DvSettings = new KindSettingsViewModel(PinKind.Dv, "DV");
-        HdvSettings = new KindSettingsViewModel(PinKind.Hdv, "HDV");
+        // The format lists stay empty until the encoder probe is done (ProbeEncoders, RefreshFormats):
+        // listing them would run the probe on the UI thread.
+        AnalogFormatOptions = new FormatOptionsViewModel(FormatChoices, analog: true);
+        DvSettings = new KindSettingsViewModel(PinKind.Dv, "DV", FormatChoices);
+        HdvSettings = new KindSettingsViewModel(PinKind.Hdv, "HDV", FormatChoices);
         KindTabs.Add(DvSettings);
         KindTabs.Add(HdvSettings);
-
-        // Set the backing field, not the property: OnAnalogFormatChanged would save the
-        // default over gui.format_analog before LoadSettings gets to read it.
-        foreach (var f in Native.Formats(PinKind.Analog))
-        {
-            var item = new FormatItem(f);
-            AnalogFormats.Add(item);
-            if (item.IsDefault || _analogFormat is null)
-            {
-                _analogFormat = item;
-            }
-        }
+        FormatChoices.PropertyChanged += (_, e) => OnFormatChoiceChanged(e.PropertyName);
 
         foreach (var c in new[] { PinControl.Brightness, PinControl.Contrast, PinControl.Saturation,
                                   PinControl.Hue, PinControl.Sharpness })
@@ -584,6 +589,90 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Native.SetControl(Session, c, value);
         }
         SaveSetting($"gui.control_{(int)c}", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private void OnFormatChoiceChanged(string? property)
+    {
+        var c = FormatChoices;
+        var (key, value) = property switch
+        {
+            nameof(FormatChoices.DeinterlaceAnalog) => ("gui.deinterlace_analog", c.DeinterlaceAnalog),
+            nameof(FormatChoices.DeinterlaceDv) => ("gui.deinterlace_dv", c.DeinterlaceDv),
+            nameof(FormatChoices.QualityAnalog) => ("gui.quality_analog", c.QualityAnalog),
+            nameof(FormatChoices.QualityDv) => ("gui.quality_dv", c.QualityDv),
+            nameof(FormatChoices.Ffv1Compression) => ("gui.ffv1_compression", c.Ffv1Compression),
+            _ => ("", 0),
+        };
+        if (key.Length > 0)
+        {
+            SaveSetting(key, value.ToString(CultureInfo.InvariantCulture));
+        }
+        PushOutputHint();
+    }
+
+    /// <summary>
+    /// Finds out once which H.264 / HEVC encoders this machine has (pin_encoders_probe opens each,
+    /// 50-300 ms; blocking, so on a worker thread), then fills the format lists, which offer those
+    /// formats only where the encoder opened. Call it early at startup.
+    /// </summary>
+    public void ProbeEncoders(Microsoft.UI.Dispatching.DispatcherQueue ui)
+    {
+        _ = System.Threading.Tasks.Task.Run(() =>
+        {
+            try
+            {
+                Native.EncodersProbe();
+            }
+            catch (Exception)
+            {
+                // no core / old core: the lists are filled all the same
+            }
+            ui.TryEnqueue(() => RefreshFormats());
+        });
+    }
+
+    /// <summary>
+    /// (Re)fills the analog, DV and HDV format lists (pin_formats; returns at once after the probe).
+    /// A saved or command-line choice that arrived while the lists were empty is selected now; a
+    /// format this machine does not offer falls back to the kind's default on screen, without
+    /// overwriting the stored choice.
+    /// </summary>
+    public void RefreshFormats()
+    {
+        bool wasLoading = _loading;
+        _loading = true;
+        try
+        {
+            var keep = AnalogFormat?.Format ?? _wantedAnalogFormat;
+            AnalogFormats.Clear(); // the ComboBox may push a null selection meanwhile
+            foreach (var f in Native.Formats(PinKind.Analog))
+            {
+                AnalogFormats.Add(new FormatItem(f));
+            }
+            AnalogFormat = AnalogFormats.FirstOrDefault(f => f.Format == keep)
+                           ?? AnalogFormats.FirstOrDefault(f => f.IsDefault)
+                           ?? AnalogFormats.FirstOrDefault();
+            foreach (var k in KindTabs)
+            {
+                k.RefreshFormats();
+            }
+        }
+        finally
+        {
+            _loading = wasLoading;
+        }
+        PushOutputHint();
+    }
+
+    /// <summary>Selects an analog format (saved or from the command line), now or once the list has it.</summary>
+    private void SelectAnalogFormat(PinFormat format)
+    {
+        _wantedAnalogFormat = format;
+        var af = AnalogFormats.FirstOrDefault(f => f.Format == format);
+        if (af is not null)
+        {
+            AnalogFormat = af;
+        }
     }
 
     /// <summary>Re-applies the last-used proc-amp / gain values to a freshly opened device.</summary>
@@ -807,6 +896,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.Passes = analog ? 1 : kind.EffectivePasses;
         o.StartDeck = startDeck ? 1 : 0;
         o.RewindFirst = rewindFirst ? 1 : 0; // "Play and capture": start of tape, then play
+
+        // The format settings of the input being captured (DV and HDV share the DV ones); the core
+        // ignores those that do not apply to the format, -1 = leave the core's default.
+        int deinterlace = FormatChoices.DeinterlaceFor(analog);
+        int quality = FormatChoices.QualityFor(analog);
+        if (deinterlace >= 0) o.Deinterlace = deinterlace;
+        if (quality >= 0) o.VideoQuality = quality;
+        if (FormatChoices.Ffv1Compression >= 0) o.Ffv1Compression = FormatChoices.Ffv1Compression;
         return o;
     }
 
@@ -983,6 +1080,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
 
         TapePercent = st.TapePercent;
+        bool is60Hz = st.Is60Hz != 0; // the format settings' data rate line
+        AnalogFormatOptions.Is60Hz = DvSettings.FormatOptions.Is60Hz = HdvSettings.FormatOptions.Is60Hz = is60Hz;
         if (_lastStreamKind != st.StreamKind)
         {
             _lastStreamKind = st.StreamKind;
@@ -1303,11 +1402,17 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             DvName = dvName;
 
             int fa = LoadInt("gui.format_analog", -1);
-            var af = AnalogFormats.FirstOrDefault(f => (int)f.Format == fa);
-            if (af is not null)
+            if (fa >= 0)
             {
-                AnalogFormat = af;
+                SelectAnalogFormat((PinFormat)fa);
             }
+
+            // -1 (or missing) = the format's own default (pin_format_options)
+            FormatChoices.DeinterlaceAnalog = LoadInt("gui.deinterlace_analog", -1);
+            FormatChoices.DeinterlaceDv = LoadInt("gui.deinterlace_dv", -1);
+            FormatChoices.QualityAnalog = LoadInt("gui.quality_analog", -1);
+            FormatChoices.QualityDv = LoadInt("gui.quality_dv", -1);
+            FormatChoices.Ffv1Compression = LoadInt("gui.ffv1_compression", -1);
 
             foreach (var k in KindTabs)
             {
@@ -1349,8 +1454,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>
     /// Applies the settings a command line gave before its first action (pin_script_settings) over
-    /// the loaded settings: input, standard, formats, aspect, split and the analog controls (which
-    /// are applied when the device opens, like the saved ones). The title and --keep-raw have no
+    /// the loaded settings: input, standard, formats, aspect, split, the format settings
+    /// (deinterlace, quality, FFV1 compression) and the analog controls (which are applied when the
+    /// device opens, like the saved ones). The title and --keep-raw have no
     /// field in this window; the script's own captures use them.
     /// </summary>
     public void ApplyScriptSettings(in PinScriptSettings l)
@@ -1367,9 +1473,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         bool analog = !IsDvInput;
         if (l.HasFormatAnalog != 0)
         {
-            var wanted = l.FormatAnalog;
-            var af = AnalogFormats.FirstOrDefault(f => f.Format == wanted);
-            if (af is not null) AnalogFormat = af;
+            SelectAnalogFormat(l.FormatAnalog);
         }
         if (l.HasFormatDv != 0)
         {
@@ -1388,6 +1492,19 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             // --aspect applies to the kinds the chosen input can deliver.
             if (analog) AnalogAspectIndex = (int)l.Aspect;
             else DvSettings.AspectIndex = HdvSettings.AspectIndex = (int)l.Aspect;
+        }
+        // --deinterlace and --quality likewise (DV and HDV share theirs); --ffv1-compression is one setting.
+        if (l.HasDeinterlace != 0)
+        {
+            FormatChoices.SetDeinterlace(analog, l.Deinterlace);
+        }
+        if (l.HasVideoQuality != 0)
+        {
+            FormatChoices.SetQuality(analog, l.VideoQuality);
+        }
+        if (l.HasFfv1Compression != 0)
+        {
+            FormatChoices.Ffv1Compression = l.Ffv1Compression;
         }
         foreach (var slider in PictureSliders.Append(AudioGain))
         {

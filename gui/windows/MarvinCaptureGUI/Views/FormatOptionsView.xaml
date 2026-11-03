@@ -1,0 +1,78 @@
+<UserControl
+    x:Class="PinnacleCapture.Views.FormatOptionsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- The settings of one output format, in the Flyout of the gear next to its drop-down. Built from
+         the core's pin_format_options() for the selected format: only the parts whose has_* flag is set,
+         with the core's labels, range and help texts. Locked while capturing. -->
+    <StackPanel Spacing="12" Width="340">
+        <TextBlock Text="{x:Bind Options.Note, Mode=OneWay}"
+                   Visibility="{x:Bind Options.HasNote, Mode=OneWay}"
+                   TextWrapping="Wrap"
+                   Style="{StaticResource CaptionTextBlockStyle}"
+                   Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+
+        <!-- deinterlace: two choices in pin_deinterlace_t order -->
+        <StackPanel Spacing="6" Visibility="{x:Bind Options.HasDeinterlace, Mode=OneWay}">
+            <RadioButtons Header="{x:Bind Options.DeinterlaceLabel, Mode=OneWay}"
+                          SelectedIndex="{x:Bind Options.DeinterlaceIndex, Mode=TwoWay}"
+                          IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                          AutomationProperties.Name="{x:Bind Options.DeinterlaceLabel, Mode=OneWay}">
+                <RadioButton Content="{x:Bind Options.KeepFieldsLabel, Mode=OneWay}" />
+                <RadioButton Content="{x:Bind Options.DoubleRateLabel, Mode=OneWay}" />
+            </RadioButtons>
+            <InfoBar Severity="Warning" IsClosable="False"
+                     IsOpen="{x:Bind Options.KeepFieldsChosen, Mode=OneWay}"
+                     Message="{x:Bind Options.KeepFieldsHelp, Mode=OneWay}" />
+            <TextBlock Text="{x:Bind Options.DoubleRateHelp, Mode=OneWay}"
+                       Visibility="{x:Bind Options.DoubleRateChosen, Mode=OneWay}"
+                       TextWrapping="Wrap"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+
+        <!-- quality: lower is better; the data rate line follows the slider -->
+        <StackPanel Spacing="2" Visibility="{x:Bind Options.HasQuality, Mode=OneWay}">
+            <Slider Header="{x:Bind Options.QualityHeader, Mode=OneWay}"
+                    Minimum="{x:Bind Options.QualityMin, Mode=OneWay}"
+                    Maximum="{x:Bind Options.QualityMax, Mode=OneWay}"
+                    Value="{x:Bind Options.Quality, Mode=TwoWay}"
+                    StepFrequency="1" SmallChange="1" LargeChange="6" SnapsTo="StepValues"
+                    IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                    AutomationProperties.Name="{x:Bind Options.QualityLabel, Mode=OneWay}"
+                    AutomationProperties.HelpText="{x:Bind Options.QualityHelp, Mode=OneWay}" />
+            <Grid Margin="0,-4,0,0">
+                <TextBlock Text="{x:Bind Options.QualityLowLabel, Mode=OneWay}" HorizontalAlignment="Left"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+                <TextBlock Text="{x:Bind Options.QualityHighLabel, Mode=OneWay}" HorizontalAlignment="Right"
+                           Style="{StaticResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorTertiaryBrush}" />
+            </Grid>
+            <TextBlock Text="{x:Bind Options.QualityHint, Mode=OneWay}" Margin="0,6,0,0"
+                       TextWrapping="Wrap"
+                       AutomationProperties.LiveSetting="Polite" />
+            <TextBlock Text="{x:Bind Options.QualityHelp, Mode=OneWay}" Margin="0,4,0,0"
+                       TextWrapping="Wrap"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+
+        <!-- FFV1 compression: three levels in pin_ffv1_compression_t order, all lossless -->
+        <StackPanel Spacing="6" Visibility="{x:Bind Options.HasFfv1, Mode=OneWay}">
+            <RadioButtons Header="{x:Bind Options.Ffv1Label, Mode=OneWay}"
+                          SelectedIndex="{x:Bind Options.Ffv1Index, Mode=TwoWay}"
+                          IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                          AutomationProperties.Name="{x:Bind Options.Ffv1Label, Mode=OneWay}">
+                <RadioButton Content="{x:Bind Options.Ffv1FastLabel, Mode=OneWay}" />
+                <RadioButton Content="{x:Bind Options.Ffv1SmallerLabel, Mode=OneWay}" />
+                <RadioButton Content="{x:Bind Options.Ffv1SmallestLabel, Mode=OneWay}" />
+            </RadioButtons>
+            <TextBlock Text="{x:Bind Options.Ffv1Help, Mode=OneWay}"
+                       TextWrapping="Wrap"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>
