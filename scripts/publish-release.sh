@@ -25,12 +25,15 @@
 #
 # Refuses (exit 1) when a release for the tag already exists (drafts included), or
 # the tag exists on another commit: bump VERSION first. The commit must be pushed.
+# Also refuses an Android APK signed with the debug key (checked with apksigner from
+# the Android SDK's build-tools, when there is one): Android installs an update only
+# over an APK with the same signature, so the first published key is the app's for good.
 #
 # Usage:
 #   scripts/publish-release.sh [--draft] [--title TITLE] [--notes NOTES] DIR
 #   scripts/publish-release.sh --check
 #
-#   DIR             folder with the installers (*.exe, *.pkg, *.deb), all uploaded
+#   DIR             folder with the installers (*.exe, *.pkg, *.deb, *.apk), all uploaded
 #   --draft         create a draft (published later on the Releases page)
 #   --title TITLE   default "MarvinCapture <version>"
 #   --notes NOTES   Markdown; default "release_notes" from VERSION
@@ -88,8 +91,30 @@ fi
 # --- release ---------------------------------------------------------------------------
 [[ -d "${DIR}" ]] || die "${DIR} is not a folder"
 shopt -s nullglob
-FILES=("${DIR}"/*.exe "${DIR}"/*.pkg "${DIR}"/*.deb)
-[[ ${#FILES[@]} -gt 0 ]] || die "no installers (*.exe, *.pkg, *.deb) in ${DIR}"
+FILES=("${DIR}"/*.exe "${DIR}"/*.pkg "${DIR}"/*.deb "${DIR}"/*.apk)
+[[ ${#FILES[@]} -gt 0 ]] || die "no installers (*.exe, *.pkg, *.deb, *.apk) in ${DIR}"
+
+# apksigner: on PATH, else the newest one in the SDK's build-tools
+APKS=("${DIR}"/*.apk)
+if [[ ${#APKS[@]} -gt 0 ]]; then
+    APKSIGNER="$(command -v apksigner 2>/dev/null || true)"
+    SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+    if [[ -z "${APKSIGNER}" && -n "${SDK}" ]]; then
+        found=("${SDK}"/build-tools/*/apksigner)
+        [[ ${#found[@]} -eq 0 ]] || APKSIGNER="$(printf '%s\n' "${found[@]}" | sort -V | tail -n 1)"
+    fi
+    for apk in "${APKS[@]}"; do
+        if [[ -z "${APKSIGNER}" ]]; then
+            echo "warning: no apksigner (Android SDK build-tools): cannot check that $(basename "${apk}") is not debug-signed" >&2
+            continue
+        fi
+        signer="$("${APKSIGNER}" verify --print-certs "${apk}" | sed -n 's/^Signer #1 certificate DN: //p')" ||
+            die "$(basename "${apk}") does not verify (apksigner)"
+        [[ "${signer}" != *"Android Debug"* ]] ||
+            die "$(basename "${apk}") is signed with the debug key: build it with the release key (docs/ci.md, \"Android signing key\")"
+        echo "$(basename "${apk}"): signed by ${signer}"
+    done
+fi
 SUMS="${DIR}/SHA256SUMS.txt"
 (
     cd "${DIR}"
