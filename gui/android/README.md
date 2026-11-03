@@ -159,13 +159,15 @@ picture. On a tablet (a persistent taskbar) it stays between the bars.
   reports (destination problem, low space, overwrite).
 - **Audio card**: the L / R level meters (the theme's blue, yellow and red only when hot) with the speaker at
   their right: the audio monitor, muted by default (`gui.muted`).
-- **Button row**: settings on the left, capture in the middle, library on the right. The library button has a
-  count badge (the captures in the chosen place); it is disabled while capturing.
+- **Button rows**: the deck row (when shown) and the button row below it share four equal columns, so the small
+  buttons (46 dp) line up: settings under the first, capture (the big one) between the middle two, library under
+  the last. The library button (a row of books) has a count badge (the captures in the chosen place); it is disabled while capturing.
 - **Deck controls** (option "Use deck controls", `gui.deck_controls`, off by default; DV input only): a row
   above the buttons with rewind, play, stop and fast forward (`pin_deck`, enabled by `pin_deck_cmd_allowed`,
   lit with the deck's state), and the capture button becomes "rewind and capture"
   (`start_deck` + `rewind_first`, enabled by `pin_capture_action_allowed(START_AUTO)`); stopping it stops the
-  tape too. Without the option the button records what arrives (a manual capture).
+  tape too. Holding the capture button records what arrives without rewinding (a manual capture; it needs a
+  signal, `pin_manual_capture_allowed`). Without the option the button is always a manual capture.
 - **Gear**: the options, in place of the panel (the preview stays visible for the
   picture controls); Back closes them. On a tablet the options are always shown.
 
@@ -192,8 +194,8 @@ of its own would need a new native decode/convert/audio path; not done.
 
 ## Options
 
-`OptionsPanel`, built on first use (the input selector is not in it: it is always on the main
-panel, a segmented control at the top, locked while capturing). Analog: TV standard, file name, format,
+`OptionsPanel`, built on first use. First entry: the input (a segmented control, locked while capturing); a
+launcher shortcut can set it too. All segmented controls and cards share one corner radius (10 dp). Analog: TV standard, file name, format,
 aspect, stop after no signal / total time, picture and audio-gain sliders
 (`pin_get_control` / `pin_set_control`, live during a capture, hue enabled by the
 core); DV and HDV (shown for the DV input, which detects which one arrives): file name,

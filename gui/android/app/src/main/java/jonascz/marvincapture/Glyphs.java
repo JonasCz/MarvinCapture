@@ -98,17 +98,19 @@ final class Glyphs {
                 c.drawLine(6, 6, 18, 18, p);
                 c.drawLine(18, 6, 6, 18, p);
                 break;
-            case LIBRARY:   // a screen with a play triangle
-                p.setStyle(Paint.Style.STROKE);
-                p.setStrokeWidth(2.2f);
-                c.drawRoundRect(new RectF(3.5f, 5, 20.5f, 19), 2.5f, 2.5f, p);
+            case LIBRARY: {   // three books, the last one leaning
                 p.setStyle(Paint.Style.FILL);
-                path.moveTo(10, 9); path.lineTo(15, 12); path.lineTo(10, 15); path.close();
-                c.drawPath(path, p);
+                c.drawRoundRect(new RectF(4.5f, 5, 9, 19), 1.2f, 1.2f, p);
+                c.drawRoundRect(new RectF(10.5f, 5, 15, 19), 1.2f, 1.2f, p);
+                c.save();
+                c.rotate(-18, 19.5f, 19);
+                c.drawRoundRect(new RectF(17, 6, 21.5f, 19), 1.2f, 1.2f, p);
+                c.restore();
                 break;
+            }
             case PLAY:
                 p.setStyle(Paint.Style.FILL);
-                path.moveTo(8, 5); path.lineTo(19, 12); path.lineTo(8, 19); path.close();
+                path.moveTo(8, 5.5f); path.lineTo(17.5f, 12); path.lineTo(8, 18.5f); path.close();
                 c.drawPath(path, p);
                 break;
             case STOP:
@@ -116,12 +118,16 @@ final class Glyphs {
                 c.drawRoundRect(new RectF(6.5f, 6.5f, 17.5f, 17.5f), 1.5f, 1.5f, p);
                 break;
             case FF:
-            case REW: {
+            case REW: {   // two triangles, 15.5 units wide in all: centred on 12
                 p.setStyle(Paint.Style.FILL);
-                float d = g == FF ? 1 : -1;   // two triangles pointing the same way
                 for (int k = 0; k < 2; k++) {
-                    float x = 12 + d * (k * 7 - 7);
-                    path.moveTo(x - d * 4, 6.5f); path.lineTo(x + d * 4.5f, 12); path.lineTo(x - d * 4, 17.5f); path.close();
+                    if (g == FF) {
+                        float x = 4.25f + k * 7;
+                        path.moveTo(x, 6.5f); path.lineTo(x + 8.5f, 12); path.lineTo(x, 17.5f); path.close();
+                    } else {
+                        float x = 19.75f - k * 7;
+                        path.moveTo(x, 6.5f); path.lineTo(x - 8.5f, 12); path.lineTo(x, 17.5f); path.close();
+                    }
                 }
                 c.drawPath(path, p);
                 break;

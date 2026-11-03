@@ -59,6 +59,7 @@ final class OptionsPanel extends LinearLayout {
         void closeOptions();
         void showAbout();
         void optionsChanged();
+        void inputPicked(int input);
     }
 
     private static final int[] IDLE_PRESETS = { 0, 1, 2, 3, 5, 10, 15, 30, 60 };
@@ -74,6 +75,7 @@ final class OptionsPanel extends LinearLayout {
     private LinearLayout analogBlock, dvBlock, pictureRows;
     private TextView pictureNote;
     private Glyphs.Button closeButton;
+    private Ui.Segmented inputSeg;
     private boolean locked;
     private int builtFormatsReady = -1;
 
@@ -151,6 +153,13 @@ final class OptionsPanel extends LinearLayout {
         lockableCond.clear();
         sliders.clear();
 
+        // the input: DV / HDV, S-Video or composite (locked while capturing)
+        content.addView(Ui.header(c, "Input"));
+        inputSeg = new Ui.Segmented(c, new String[] { "DV / HDV", "S-Video", "Composite" }, Settings.input(),
+                host::inputPicked);
+        inputSeg.setContentDescription("Input");
+        content.addView(lock(inputSeg), Ui.fillWidth());
+
         storageSection();
 
         // analog
@@ -187,7 +196,8 @@ final class OptionsPanel extends LinearLayout {
         dvBlock.addView(toggle(c, "Use deck controls",
                 "Shows rewind, play, stop and fast-forward buttons for a camera or deck on the DV input, and the "
                         + "capture button then rewinds the tape, plays it and captures (stopping at the end of the "
-                        + "recording). Without it the capture button records whatever arrives.",
+                        + "recording). Hold the capture button to record what arrives without rewinding. Without "
+                        + "this option the capture button always records whatever arrives.",
                 "gui.deck_controls", Settings.deckControls(), on -> host.optionsChanged(), false));
         nameField(dvBlock, false);
         // like the desktop apps' "File options for" tab: one kind's settings at a time
@@ -274,6 +284,11 @@ final class OptionsPanel extends LinearLayout {
             })), Ui.fillWidth());
         }
         content.addView(where);
+    }
+
+    /** The input changed elsewhere (a launcher shortcut). */
+    void setInput(int i) {
+        if (inputSeg != null) inputSeg.setChosen(i);
     }
 
     /** The options stay on screen (a tablet): no close button. */

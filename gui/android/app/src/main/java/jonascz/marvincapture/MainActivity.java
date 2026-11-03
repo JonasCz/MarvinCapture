@@ -99,8 +99,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private Glyphs.Button speaker, gear;
     private LinearLayout deckGroup;
     private Glyphs.Button deckRew, deckPlay, deckStop, deckFf;
-    private boolean autoCapture;   // the capture button is "rewind and capture" (deck controls on, DV input)
-    private Ui.Segmented input;
+    private static final int BUTTON_DP = 46;   // the small round buttons (all but the capture button)
+    private boolean autoCapture, forceManual;   // the capture button is "rewind and capture" (deck controls on, DV input)
     private Glyphs.RecordButton record;
     private OptionsPanel options;   // built on first use
     private FrameLayout optionsHolder, frame;
@@ -241,7 +241,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         i.removeExtra("input");   // once: a recreated intent must not undo a later choice
         if (svc != null && svc.status().isCapturing()) return;
         inputPicked(in);
-        input.setChosen(in);
+        if (options != null) options.setInput(in);
     }
 
     private String replayExtra(Intent i) {
@@ -442,12 +442,6 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         bl.bottomMargin = Ui.dp(this, 10);
         top.addView(banner, bl);
 
-        input = new Ui.Segmented(this, new String[] { "DV / HDV", "S-Video", "Composite" }, Settings.input(), this::inputPicked);
-        input.setContentDescription("Input");
-        LinearLayout.LayoutParams il = Ui.fillWidth();
-        il.bottomMargin = Ui.dp(this, 8);
-        top.addView(input, il);
-
         statusShort = Ui.text(this, "", 17, Ui.TEXT);   // a file name, or the core's sentence about the last capture
         statusShort.setTypeface(Typeface.DEFAULT_BOLD);
         statusShort.setMaxLines(2);
@@ -471,7 +465,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         GradientDrawable abg = new GradientDrawable();
         abg.setColor(Ui.CARD);
         abg.setStroke(Ui.dp(this, 1), Ui.TRACK);
-        abg.setCornerRadius(Ui.dp(this, 12));
+        abg.setCornerRadius(Ui.dp(this, 10));
         audio.setBackground(abg);
         audio.setPadding(Ui.dp(this, 12), Ui.dp(this, 4), Ui.dp(this, 4), Ui.dp(this, 4));
         meters = new LevelMeterView(this, null);
@@ -495,7 +489,6 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         // deck controls (a setting): rewind, play, stop, fast forward, lit with the deck's state
         deckGroup = Ui.column(this);
         LinearLayout deckRow = Ui.row(this);   // the lit button is the deck's state; the tip has the words
-        deckRow.setGravity(Gravity.CENTER);
         deckRow.setPadding(0, Ui.dp(this, 2), 0, 0);
         deckRew = deckButton(deckRow, Glyphs.REW, "Rewind", Core.DECK_REW);
         deckPlay = deckButton(deckRow, Glyphs.PLAY, "Play", Core.DECK_PLAY);
@@ -505,23 +498,33 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         deckGroup.setVisibility(View.GONE);
         controls.addView(deckGroup, Ui.fillWidth());
 
-        // settings on the left, capture in the middle, playback on the right
+        // settings on the left, capture in the middle, library on the right, on the deck row's four columns
         LinearLayout buttons = Ui.row(this);
-        buttons.setGravity(Gravity.CENTER);
         buttons.setPadding(0, Ui.dp(this, 4), 0, 0);
-        gear = new Glyphs.Button(this, Glyphs.GEAR, 52);
+        gear = new Glyphs.Button(this, Glyphs.GEAR, BUTTON_DP);
         gear.setContentDescription("Options");
         gear.setOnClickListener(v -> openOptions());
         record = new Glyphs.RecordButton(this);
         record.setOnClickListener(v -> recordClicked());
-        libraryBtn = new Glyphs.Button(this, Glyphs.LIBRARY, 52);
+        // with the deck controls on, holding the capture button records what arrives, without rewinding
+        record.setOnLongClickListener(v -> {
+            if (!autoCapture || svc == null || !svc.hasSession() || svc.status().isCapturing()) return false;
+            Status st = svc.status();
+            if (!st.manualAllowed()) {
+                showInfo("Manual capture", st.text(Core.SS_MANUAL_BLOCK).isEmpty() ? "Not possible now." : st.text(Core.SS_MANUAL_BLOCK), false);
+                return true;
+            }
+            record.performHapticFeedback(android.view.HapticFeedbackConstants.LONG_PRESS);
+            forceManual = true;
+            recordClicked();
+            return true;
+        });
+        libraryBtn = new Glyphs.Button(this, Glyphs.LIBRARY, BUTTON_DP);
         libraryBtn.setContentDescription("Library: play back captures");
         libraryBtn.setOnClickListener(v -> openLibrary());
-        LinearLayout.LayoutParams rl = new LinearLayout.LayoutParams(-2, -2);
-        rl.leftMargin = rl.rightMargin = Ui.dp(this, 22);
-        buttons.addView(gear, new LinearLayout.LayoutParams(-2, -2));
-        buttons.addView(record, rl);
-        buttons.addView(libraryBtn, new LinearLayout.LayoutParams(-2, -2));
+        gridCell(buttons, gear, 1);
+        gridCell(buttons, record, 2);
+        gridCell(buttons, libraryBtn, 1);
         controls.addView(buttons, Ui.fillWidth());
         infoViews = new View[] { scroll, caption, deckGroup };
         root.addView(controls);
@@ -534,8 +537,9 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         updateLibraryCount();
     }
 
-    /** The input selector (always on the main panel): the same as the options' used to be. */
-    private void inputPicked(int i) {
+    /** The input selector (the first entry of the options). */
+    @Override
+    public void inputPicked(int i) {
         if (i == Settings.input()) return;
         if (svc != null) svc.setInput(i);
         else Settings.setInt("gui.last_input", i);
@@ -677,15 +681,11 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         show(recBadge, capturing && !finishing && state == Core.STATE_CAPTURING);
         if (recBadge.getVisibility() == View.VISIBLE) set(recText, "REC  " + hms(st.d[Core.SD_ELAPSED]));
         if (options != null) options.setLocked(capturing);
-        input.setEnabled(!capturing && !finishing);
         libraryBtn.setEnabled(!capturing && !finishing);
         capturingNow = capturing;
         if (!capturing) revealed = false;
         updatePanels(true);
-        if (input.getTag() == null || (int) input.getTag() != Settings.input()) {
-            input.setTag(Settings.input());
-            input.setChosen(Settings.input());
-        }
+        if (options != null) options.setInput(Settings.input());
         boolean keepOn = capturing && Settings.keepScreenOn();
         if (keepOn) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -792,17 +792,22 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         updateSpeaker();
     }
 
+    /** One cell of the button grid: both button bars are four equal columns, so the buttons line up. */
+    private void gridCell(LinearLayout row, View v, float weight) {
+        FrameLayout cell = new FrameLayout(this);
+        cell.addView(v, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
+        row.addView(cell, new LinearLayout.LayoutParams(0, -2, weight));
+    }
+
     private Glyphs.Button deckButton(LinearLayout row, int glyph, String name, int cmd) {
-        Glyphs.Button b = new Glyphs.Button(this, glyph, 42);
+        Glyphs.Button b = new Glyphs.Button(this, glyph, BUTTON_DP);
         b.setContentDescription(name);
         b.setOnClickListener(v -> {
             if (svc == null) return;
             int st = svc.deck(cmd);
             if (st != Core.OK) showInfo("Deck", Core.strerror(st), st != Core.ERR_STATE);
         });
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
-        lp.leftMargin = lp.rightMargin = Ui.dp(this, 6);
-        row.addView(b, lp);
+        gridCell(row, b, 1);
         return b;
     }
 
@@ -850,7 +855,9 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             showInfo("Can't capture to this location", "Could not create " + dir, true);
             return;
         }
-        CaptureService.Plan p = svc.buildPlan(autoCapture);
+        boolean auto = autoCapture && !forceManual;
+        forceManual = false;
+        CaptureService.Plan p = svc.buildPlan(auto);
         long[] nums = new long[5];
         String[] strs = { "", "" };
         int st = Core.checkOutput(svc.session(), p.path, p.title, p.opts, nums, strs);

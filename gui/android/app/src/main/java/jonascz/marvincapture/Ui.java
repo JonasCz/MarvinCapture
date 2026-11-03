@@ -173,7 +173,7 @@ final class Ui {
             setOrientation(HORIZONTAL);
             GradientDrawable bg = new GradientDrawable();
             bg.setColor(BUTTON);
-            bg.setCornerRadius(dp(c, 18));
+            bg.setCornerRadius(dp(c, 10));
             setBackground(bg);
             setPadding(dp(c, 3), dp(c, 3), dp(c, 3), dp(c, 3));
             items = new TextView[names.length];
@@ -197,11 +197,12 @@ final class Ui {
         }
 
         void setChosen(int i) {
+            if (i == chosen) return;
             chosen = i;
             for (int k = 0; k < items.length; k++) {
                 boolean on = k == i;
                 GradientDrawable d = new GradientDrawable();
-                d.setCornerRadius(dp(getContext(), 15));
+                d.setCornerRadius(dp(getContext(), 8));
                 d.setColor(on ? ACCENT : 0);
                 items[k].setBackground(d);
                 items[k].setTextColor(on ? ON_ACCENT : TEXT);
