@@ -39,7 +39,7 @@ Modern, native GUIs for Windows and Mac, plus a flexible command-line applicatio
 
 ## Supported hardware:
 
-|  | PID | internal name | model no | status |
+| Image | USB PID | internal name | model no | status |
 |---|---|---|---|---|
 | <a href="docs/images/500-usb.jpg"><img src="docs/images/500-usb.jpg" width="80" alt="500-USB"></a> | `0213` | Marvin-Lite | **500-USB** | supported, tested, DV/HDV/analog in |
 | <a href="docs/images/510-usb.jpg"><img src="docs/images/510-usb.jpg" width="80" alt="510-USB"></a> | `0223` | Marvin-510 | **510-USB** | supported, tested, DV/HDV/analog in |
@@ -119,18 +119,6 @@ sudo apt install ~/Downloads/marvincapture_<version>_amd64.deb
 This installs `/usr/bin/MarvinCaptureCLI` (program, core library and firmware are in `/usr/lib/marvincapture/`) and two udev rules: one gives all users access to the capture devices, the other to `/dev/cpu_dma_latency` (see below), so no sudo is needed to capture. Unplug and replug the device after installing.
 
 To uninstall: `sudo apt remove marvincapture`.
-
-### Android
-
-**New and not yet tested with the hardware**: the app is built and runs on the emulator (against a recorded tape), but nobody has captured from the real device with it yet. Reports welcome.
-
-Needs Android 11 or later on a 64-bit ARM phone or tablet (arm64-v8a, nearly every phone from the last years), and a USB OTG adapter (USB-C to USB-A) for the device, which the phone powers.
-
-1. Download `MarvinCapture-<version>-android.apk` on the phone.
-2. Open it. Android asks to allow installing apps from your browser (or file manager) the first time: allow it, go back and tap **Install**. Google Play Protect may warn about an app from an unknown developer: **More details > Install anyway**.
-3. Plug the device in through the OTG adapter. Android offers to open MarvinCapture for it; tick "always" to skip the USB permission question next time.
-
-Recordings go to `Movies/MarvinCapture/` on the phone's storage. Updates install over the old version (same signature). To uninstall: long-press the app icon > **Uninstall** (recordings are kept). Details: [gui/android/README.md](gui/android/README.md).
 
 ## Reliability, performance & correctness
 
