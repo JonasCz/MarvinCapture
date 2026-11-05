@@ -1018,6 +1018,9 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
 
 int pin_session_format_available(pin_format_t f)
 {
+    /* HDV to MOV / MKV is disabled for now (UNTESTED): the remux at close does not cope with tape errors / damage. Only the raw transport stream is offered; the code stays so it can be re-enabled. */
+    if (f == PIN_FMT_HDV_MOV || f == PIN_FMT_HDV_MKV)
+        return 0;
     if (!pin_fmt_is_hwenc(f))
         return (unsigned)f < PIN_FMT_COUNT;
     return pin_hwenc_available(pin_fmt_is_hevc(f) ? PIN_HWENC_HEVC : PIN_HWENC_H264);
@@ -1031,6 +1034,9 @@ static int format_offered(pin_format_t f)
 {
     if (pin_fmt_is_hwenc(f))
         return pin_session_format_available(f);
+    /* HDV to MOV / MKV is disabled for now (UNTESTED): the remux at close does not cope with tape errors / damage. Only the raw transport stream is offered; the code stays so it can be re-enabled. */
+    if (f == PIN_FMT_HDV_MOV || f == PIN_FMT_HDV_MKV)
+        return 0;
 #if defined(__ANDROID__)
     return f != PIN_FMT_HDV_MOV && f != PIN_FMT_HDV_MKV;
 #else

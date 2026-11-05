@@ -374,7 +374,8 @@ typedef struct {
 } pin_format_info_t;
 
 /* Formats for a kind, in display order. Returns the count. Only the formats this platform
- * offers: Android leaves out PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV (they remux the whole
+ * offers: every platform leaves out PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV for now (disabled, untested;
+ * they remux the whole
  * recording when it stops), and the H.264 / HEVC formats appear only where their encoder
  * opened in pin_encoders_probe() (which the first call runs if nobody did: see there).
  * pin_format_info() answers for every format. */

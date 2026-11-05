@@ -21,8 +21,8 @@ Settings:
   --format KEY             output file format. Overrides the file extension if one is given with the file name passed to --capture; the format's extension is appended if none is given. One per input signal type:
                              analog (-i svideo|composite)  avi ffv1-mkv h264-mkv hevc-mkv
                              DV  (-i dv, DV tape)          dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv
-                             HDV (-i dv, HDV tape)         hdv-ts hdv-mov hdv-mkv
-                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t .mov .mkv for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.
+                             HDV (-i dv, HDV tape)         hdv-ts
+                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.
                            h264-mkv, hevc-mkv, dv-h264-mkv and dv-hevc-mkv encode with the operating system's own (normally hardware) video encoder, with FLAC audio: small files, but lossy. Windows, macOS and Android, where the encoder is there; never on Linux. A --capture with one that is missing fails (exit 1). See --quality and --deinterlace.
   --quality N              H.264 / HEVC: 0 (best, biggest files) to 51 (smallest), like x264's CRF: 6 steps up halve the size (default 18)
   --deinterlace yes|no     H.264 / HEVC: yes (default) turns every field into a frame (bwdif), 25i into 50p and 29.97i into 59.94p; no keeps the fields, storing each interlaced frame as one progressive picture, which loses quality on motion

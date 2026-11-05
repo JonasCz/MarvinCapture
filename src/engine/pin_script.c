@@ -178,10 +178,11 @@ int pin_script_ext_formats(const char *ext, pin_format_t out[3], unsigned *unsup
     static const struct { const char *ext; pin_format_t f[3]; } tbl[] = {
         { "dv",  { PIN_FMT_COUNT, PIN_FMT_DV_RAW, PIN_FMT_COUNT } },
         { "avi", { PIN_FMT_ANALOG_AVI, PIN_FMT_DV_AVI, PIN_FMT_COUNT } },
-        { "mov", { PIN_FMT_COUNT, PIN_FMT_DV_MOV, PIN_FMT_HDV_MOV } },
+        /* HDV to MOV / MKV is disabled for now (UNTESTED): the remux at close does not cope with tape errors / damage. Only the raw transport stream is offered; the code stays so it can be re-enabled. */
+        { "mov", { PIN_FMT_COUNT, PIN_FMT_DV_MOV, PIN_FMT_COUNT /* PIN_FMT_HDV_MOV */ } },
         { "ts",  { PIN_FMT_COUNT, PIN_FMT_COUNT, PIN_FMT_HDV_TS } },
         { "m2t", { PIN_FMT_COUNT, PIN_FMT_COUNT, PIN_FMT_HDV_TS } },
-        { "mkv", { PIN_FMT_ANALOG_FFV1_MKV, PIN_FMT_COUNT, PIN_FMT_HDV_MKV } },
+        { "mkv", { PIN_FMT_ANALOG_FFV1_MKV, PIN_FMT_COUNT, PIN_FMT_COUNT /* PIN_FMT_HDV_MKV */ } },
     };
     if (!ext)
         return 0;
@@ -248,8 +249,8 @@ const char *pin_script_help_text(void)
         "  --format KEY             output file format. Overrides the file extension if one is given with the file name passed to --capture; the format's extension is appended if none is given. One per input signal type:\n"
         "                             analog (-i svideo|composite)  avi ffv1-mkv h264-mkv hevc-mkv\n"
         "                             DV  (-i dv, DV tape)          dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv\n"
-        "                             HDV (-i dv, HDV tape)         hdv-ts hdv-mov hdv-mkv\n"
-        "                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t .mov .mkv for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.\n"
+        "                             HDV (-i dv, HDV tape)         hdv-ts\n"
+        "                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.\n"
         "                           h264-mkv, hevc-mkv, dv-h264-mkv and dv-hevc-mkv encode with the operating system's own (normally hardware) video encoder, with FLAC audio: small files, but lossy. Windows, macOS and Android, where the encoder is there; never on Linux. A --capture with one that is missing fails (exit 1). See --quality and --deinterlace.\n"
         "  --quality N              H.264 / HEVC: 0 (best, biggest files) to 51 (smallest), like x264's CRF: 6 steps up halve the size (default 18)\n"
         "  --deinterlace yes|no     H.264 / HEVC: yes (default) turns every field into a frame (bwdif), 25i into 50p and 29.97i into 59.94p; no keeps the fields, storing each interlaced frame as one progressive picture, which loses quality on motion\n"
@@ -392,7 +393,9 @@ static int fmt_from_key(const char *key, pin_format_t *out)
     static const struct { const char *key; pin_format_t f; } tbl[] = {
         { "dv", PIN_FMT_DV_RAW }, { "dv-avi", PIN_FMT_DV_AVI }, { "dv-mov", PIN_FMT_DV_MOV },
         { "dv-h264-mkv", PIN_FMT_DV_H264_MKV }, { "dv-hevc-mkv", PIN_FMT_DV_HEVC_MKV },
-        { "hdv-ts", PIN_FMT_HDV_TS }, { "hdv-mov", PIN_FMT_HDV_MOV }, { "hdv-mkv", PIN_FMT_HDV_MKV },
+        { "hdv-ts", PIN_FMT_HDV_TS },
+        /* hdv-mov / hdv-mkv: disabled, untested (see pin_session.c format_offered). */
+        /* { "hdv-mov", PIN_FMT_HDV_MOV }, { "hdv-mkv", PIN_FMT_HDV_MKV }, */
         { "avi", PIN_FMT_ANALOG_AVI }, { "ffv1-mkv", PIN_FMT_ANALOG_FFV1_MKV },
         { "h264-mkv", PIN_FMT_ANALOG_H264_MKV }, { "hevc-mkv", PIN_FMT_ANALOG_HEVC_MKV },
     };
@@ -580,8 +583,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
         } else if (strcmp(name, "--format") == 0) {
             pin_format_t f;
             if (!fmt_from_key(val, &f))
-                FAIL("--format: unknown format \"%s\" (dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv hdv-ts hdv-mov "
-                     "hdv-mkv avi ffv1-mkv h264-mkv hevc-mkv)", val);
+                FAIL("--format: unknown format \"%s\" (dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv hdv-ts "
+                     "avi ffv1-mkv h264-mkv hevc-mkv)", val);
             int k = fmt_kind(f);
             p.fmt[k] = f;
             p.fmt_set[k] = 1;

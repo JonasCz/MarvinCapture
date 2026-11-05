@@ -192,12 +192,12 @@ static void test_extensions(void)
     CHECK(pin_script_ext_formats("dv", f, &mask) && f[1] == PIN_FMT_DV_RAW && mask == (1u | 4u), ".dv: DV only");
     CHECK(pin_script_ext_formats("avi", f, &mask) && f[0] == PIN_FMT_ANALOG_AVI && f[1] == PIN_FMT_DV_AVI &&
               f[2] == PIN_FMT_HDV_TS && mask == 4u, ".avi: analog and DV");
-    CHECK(pin_script_ext_formats("MOV", f, &mask) && f[1] == PIN_FMT_DV_MOV && f[2] == PIN_FMT_HDV_MOV &&
-              f[0] == PIN_FMT_ANALOG_AVI && mask == 1u, ".mov (case-insensitive): DV and HDV");
+    CHECK(pin_script_ext_formats("MOV", f, &mask) && f[1] == PIN_FMT_DV_MOV && f[2] == PIN_FMT_HDV_TS &&
+              f[0] == PIN_FMT_ANALOG_AVI && mask == (1u | 4u), ".mov (case-insensitive): DV only (HDV MOV disabled)");
     CHECK(pin_script_ext_formats("ts", f, &mask) && f[2] == PIN_FMT_HDV_TS && mask == (1u | 2u), ".ts");
     CHECK(pin_script_ext_formats("m2t", f, &mask) && f[2] == PIN_FMT_HDV_TS, ".m2t");
-    CHECK(pin_script_ext_formats("mkv", f, &mask) && f[0] == PIN_FMT_ANALOG_FFV1_MKV && f[2] == PIN_FMT_HDV_MKV &&
-              f[1] == PIN_FMT_DV_RAW && mask == 2u, ".mkv: analog and HDV");
+    CHECK(pin_script_ext_formats("mkv", f, &mask) && f[0] == PIN_FMT_ANALOG_FFV1_MKV && f[2] == PIN_FMT_HDV_TS &&
+              f[1] == PIN_FMT_DV_RAW && mask == (2u | 4u), ".mkv: analog only (HDV MKV disabled)");
     CHECK(!pin_script_ext_formats("mp4", f, &mask), "unknown extension");
 
     char base[128], ext[16];
@@ -344,7 +344,7 @@ static void test_settings_state(void)
     pin_script_t *sc;
     char err[256];
     CHECK(PARSE(sc, err, "-d", "usb:2-1", "--aspect", "16:9", "--split", "--title", "My tape", "--keep-raw",
-                "--overwrite", "--format", "dv-avi", "--format=hdv-mov", "--brightness", "-10", "--hue=5",
+                "--overwrite", "--format", "dv-avi", "--format=hdv-ts", "--brightness", "-10", "--hue=5",
                 "--audio-gain", "30", "--debug", "--capture", "a.mov", "--wait", "wallclock=00:00:05",
                 "--capture", "b.avi") == PIN_OK, "settings");
     CHECK(sc->has_device && strcmp(sc->device, "usb:2-1") == 0, "device");
@@ -353,14 +353,14 @@ static void test_settings_state(void)
     st = sc->initial;
     CHECK(st.has_aspect && st.aspect == PIN_ASPECT_16_9 && st.has_split && st.split && st.has_title &&
               strcmp(st.title, "My tape") == 0 && st.has_keep_raw, "initial capture settings");
-    CHECK(st.has_format_dv && st.format_dv == PIN_FMT_DV_AVI && st.has_format_hdv && st.format_hdv == PIN_FMT_HDV_MOV &&
+    CHECK(st.has_format_dv && st.format_dv == PIN_FMT_DV_AVI && st.has_format_hdv && st.format_hdv == PIN_FMT_HDV_TS &&
               !st.has_format_analog, "initial formats per kind");
     CHECK((st.controls_set & (1u << PIN_CTL_BRIGHTNESS)) && st.control_brightness == -10 && st.control_hue == 5 &&
               st.control_audio_gain == 30 && !(st.controls_set & (1u << PIN_CTL_CONTRAST)), "controls");
     const pin_script_item_t *a = find_step(sc, 0), *b = find_step(sc, 2);
     CHECK(a && a->cap.aspect == PIN_ASPECT_16_9 && a->cap.split && a->cap.keep_raw && a->cap.overwrite &&
               strcmp(a->cap.title, "My tape") == 0, "capture a carries the settings");
-    CHECK(a->cap.format[1] == PIN_FMT_DV_AVI && a->cap.format[2] == PIN_FMT_HDV_MOV, "explicit --format wins");
+    CHECK(a->cap.format[1] == PIN_FMT_DV_AVI && a->cap.format[2] == PIN_FMT_HDV_TS, "explicit --format wins");
     CHECK(b && b->cap.format[1] == PIN_FMT_DV_AVI, "format persists to the next capture");
     pin_script_destroy(sc);
 

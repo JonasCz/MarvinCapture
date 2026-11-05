@@ -199,14 +199,7 @@ enum Pin {
             return f
         }(), count: 16)
         let n = Int(pin_formats(kind, &list, Int32(list.count)))
-        // HDV to MOV / MKV is disabled for now (UNTESTED): it remuxes the recording when it stops and
-        // does not cope with tape errors / damage. Only the raw transport stream (.ts / .m2t) is
-        // offered. The core and the rest of the code still support them; to bring them back, remove
-        // this filter.
-        // return Array(list.prefix(max(0, min(n, list.count))))
-        return list.prefix(max(0, min(n, list.count))).filter {
-            $0.format != PIN_FMT_HDV_MOV && $0.format != PIN_FMT_HDV_MKV
-        }
+        return Array(list.prefix(max(0, min(n, list.count))))
     }
 
     /// Opens each H.264 / HEVC encoder once (blocking, typically 50-300 ms each; cached) and returns the
