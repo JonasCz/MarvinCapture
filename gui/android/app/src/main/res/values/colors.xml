@@ -8,7 +8,7 @@
   reads these for the views built in code.
 -->
 <resources>
-    <color name="ic_launcher_background">#F6F1E6</color>
+    <color name="ic_launcher_background">#2D3180</color>
     <color name="ui_text">#FF1C1B1F</color>
     <color name="ui_text2">#FF49454F</color>
     <color name="ui_text3">#FF6E6A75</color>

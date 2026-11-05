@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Themed (Android 13+) launcher icon: the same face as ic_launcher_foreground reduced to one
+  colour; the launcher tints it and uses its alpha as the shape. Same placement / safe zone.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="22"
+        android:translateY="20">
+        <group android:translateY="2.5">
+            <!-- Panel with the face pill cut out of it -->
+            <path
+                android:fillColor="#FFFFFF"
+                android:fillType="evenOdd"
+                android:pathData="M14,8.5H50A5,5 0,0 1,55 13.5V30.5H9V13.5A5,5 0,0 1,14 8.5Z M20.5,11.5H43.5A6.5,6.5 0,0 1,43.5 24.5H20.5A6.5,6.5 0,0 1,20.5 11.5Z" />
+            <!-- Eyes, with the pupils cut out -->
+            <path
+                android:fillColor="#FFFFFF"
+                android:fillType="evenOdd"
+                android:pathData="M18.6,18a4.4,4.4 0,1 0,8.8 0a4.4,4.4 0,1 0,-8.8 0Z M20.9,19.7a2.1,2.1 0,1 0,4.2 0a2.1,2.1 0,1 0,-4.2 0Z" />
+            <path
+                android:fillColor="#FFFFFF"
+                android:fillType="evenOdd"
+                android:pathData="M36.6,18a4.4,4.4 0,1 0,8.8 0a4.4,4.4 0,1 0,-8.8 0Z M38.9,19.7a2.1,2.1 0,1 0,4.2 0a2.1,2.1 0,1 0,-4.2 0Z" />
+            <!-- Cheeks -->
+            <path android:fillColor="#FFFFFF" android:pathData="M12.9,37.5a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0Z" />
+            <path android:fillColor="#FFFFFF" android:pathData="M45.9,37.5a2.6,2.6 0,1 0,5.2 0a2.6,2.6 0,1 0,-5.2 0Z" />
+            <!-- Mouth -->
+            <path android:fillColor="#FFFFFF" android:pathData="M24.5,34H39.5Q32,49 24.5,34Z" />
+        </group>
+    </group>
+</vector>
