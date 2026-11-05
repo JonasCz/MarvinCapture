@@ -48,6 +48,12 @@ int pin_update_compare(const char *a, const char *b);
  * the Android app through JNI) hands it over. */
 int pin_update_from_json(const char *json, size_t len, const char *current, pin_update_info_t *info);
 
+/* The release notes as one line of the settings file: newline becomes "\\n", backslash "\\\\", CR is
+ * dropped. Too long for cap: cut at a character boundary. Returns the length written (out is
+ * always terminated). pin_update_notes_decode() reverses it. */
+size_t pin_update_notes_encode(const char *notes, char *out, size_t cap);
+size_t pin_update_notes_decode(const char *line, char *out, size_t cap);
+
 /* The address of the published VERSION file: the environment variable MARVIN_UPDATE_URL if
  * set, else the project's GitHub repository. "" = the check is turned off. Static string. */
 const char *pin_update_address(void);

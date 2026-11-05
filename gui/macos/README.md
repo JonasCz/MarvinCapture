@@ -333,7 +333,7 @@ Environment variables, all harmless in a normal run:
   "update available" banner, point it at a local file such as
   `{"version":"9.9","release_notes":"Test","download_url":"https://github.com/JonasCz/MarvinCapture/releases/latest"}`.
   The core looks at most once a week: delete the `[update]` section (`last_check`) of settings.ini
-  to check again at the next start (the release notes show only right after a download).
+  to check again at the next start.
 - `MARVIN_SECONDARY=1` makes this process behave as a later instance (it never
   writes the saved window frame and cascades). "New Window" sets it for the process
   it starts, which is how a bare binary (no bundle id) knows.

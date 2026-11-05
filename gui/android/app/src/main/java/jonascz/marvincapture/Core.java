@@ -130,7 +130,7 @@ final class Core {
     static native boolean updateDue(long now);
     /** Hands the downloaded VERSION file to the core; true if it was valid (the check is then recorded). */
     static native boolean updateCheck(byte[] json, long now);
-    /** {notice, latest version, download address or ""} if the last check found a newer version, else null. */
+    /** {notice, latest version, download address or "", release notes or ""} if the last check found a newer version, else null. */
     static native String[] updateKnown();
     static native String stdName(int std);
     static native int[] formats(int kind);

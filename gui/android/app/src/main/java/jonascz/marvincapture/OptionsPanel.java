@@ -274,6 +274,11 @@ final class OptionsPanel extends LinearLayout {
         if (u == null) return;
         updateBox.addView(Ui.header(c, "Update available"));
         updateBox.addView(Ui.text(c, u[0], 15, Ui.TEXT));
+        String notes = u[3].trim();
+        if (!notes.isEmpty()) {
+            updateBox.addView(Ui.label(c, "What's new"));
+            updateBox.addView(Ui.help(c, notes));
+        }
         if (!u[2].isEmpty()) {
             Button download = new Button(c);
             download.setText("Download");

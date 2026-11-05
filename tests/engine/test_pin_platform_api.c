@@ -488,7 +488,7 @@ static void test_update_state(void)
     CHECK(pin_update_due(t0) == 1, "never checked: due");
     CHECK(pin_update_known(&u) == 0 && u.available == 0, "nothing known yet");
 
-    snprintf(file, sizeof(file), "{\"version\": \"%s\", \"download_url\": \"https://example.com/get\"}", newer);
+    snprintf(file, sizeof(file), "{\"version\": \"%s\", \"release_notes\": \"First line.\\nSecond \\\"line\\\".\", \"download_url\": \"https://example.com/get\"}", newer);
     CHECK(pin_update_check_json("junk", 4, t0, &u) == PIN_ERR_IO, "invalid file rejected");
     CHECK(pin_update_due(t0) == 1 && pin_update_known(&u) == 0, "invalid file remembers nothing");
     CHECK(pin_update_check_json(file, strlen(file), t0, &u) == PIN_OK && u.available == 1, "newer found");
@@ -502,6 +502,7 @@ static void test_update_state(void)
     CHECK(pin_update_known(&u) == 1 && u.available == 1, "remembered");
     CHECK(strcmp(u.latest, newer) == 0 && strcmp(u.current, ver) == 0, "remembered versions");
     CHECK(strcmp(u.download_url, "https://example.com/get") == 0, "remembered address");
+    CHECK(strcmp(u.notes, "First line.\nSecond \"line\".") == 0, "remembered release notes");
     char text[256];
     pin_format_update(&u, text, sizeof(text));
     CHECK(strstr(text, newer) != NULL && strstr(text, "is available") != NULL, "notice text");
@@ -522,7 +523,7 @@ static void test_update_state(void)
     FILE *f = fopen(vf, "wb");
     CHECK(f != NULL, "update: write VERSION file");
     if (f) {
-        fprintf(f, "{\"version\": \"%s\", \"release_notes\": \"Notes.\", \"download_url\": \"https://example.com/x\"}", newer);
+        fprintf(f, "{\"version\": \"%s\", \"release_notes\": \"Notes.\\nMore.\", \"download_url\": \"https://example.com/x\"}", newer);
         fclose(f);
     }
     char envs[800];
@@ -534,7 +535,7 @@ static void test_update_state(void)
     memset(&u, 0, sizeof(u));
     u.size = sizeof(u);
     CHECK(pin_update_refresh(&u, 1000) == 1 && u.available == 1, "refresh: downloads when due");
-    CHECK(strcmp(u.latest, newer) == 0 && strcmp(u.notes, "Notes.") == 0, "refresh: fresh notes");
+    CHECK(strcmp(u.latest, newer) == 0 && strcmp(u.notes, "Notes.\nMore.") == 0, "refresh: fresh notes");
     CHECK(pin_update_due((int64_t)time(NULL)) == 0, "refresh: counted as checked");
     f = fopen(vf, "wb");
     if (f) {
@@ -543,8 +544,8 @@ static void test_update_state(void)
     }
     memset(&u, 0, sizeof(u));
     u.size = sizeof(u);
-    CHECK(pin_update_refresh(&u, 1000) == 1 && strcmp(u.latest, newer) == 0 && u.notes[0] == '\0',
-          "refresh: not due, uses the remembered result");
+    CHECK(pin_update_refresh(&u, 1000) == 1 && strcmp(u.latest, newer) == 0 && strcmp(u.notes, "Notes.\nMore.") == 0,
+          "refresh: not due, uses the remembered result and notes");
     pin_settings_set("update.last_check", "1");   /* long ago: due, but the file is now invalid */
     memset(&u, 0, sizeof(u));
     u.size = sizeof(u);

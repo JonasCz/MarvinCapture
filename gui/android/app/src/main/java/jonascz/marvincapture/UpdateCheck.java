@@ -70,7 +70,7 @@ final class UpdateCheck {
         t.start();
     }
 
-    /** {notice, latest version, download address or ""} when a newer version is known, else null. */
+    /** {notice, latest version, download address or "", release notes or ""} when a newer version is known, else null. */
     static String[] known() { return Core.updateKnown(); }
 
     /** Opens the download page in the browser. */

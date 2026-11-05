@@ -225,10 +225,11 @@ download runs on a worker thread and the result goes back to the main thread. A 
 shows nothing and is tried again at the next start (only a successful check counts as "checked").
 
 The options panel shows "Update available" with the core's notice (`pin_update_known()`, the same
-text as the desktop banner) and a Download button (opens the release page) at the top for as long as
+text as the desktop banner), the release notes and a Download button (opens the release page) at the top for as long as
 the remembered version is newer than the running one. It is remembered in the core's settings:
-`update.last_check` (unix seconds), `update.latest`, `update.download_url`. These belong to the core, not
-to `Settings.java`. Release notes are not kept, so the panel does not show them.
+`update.last_check` (unix seconds), `update.latest`, `update.download_url`, `update.release_notes` (newlines
+stored as `\n`; the core encodes and decodes them). These belong to the core, not to `Settings.java`. The
+panel shows the release notes ("What's new") under the notice, also when no check ran in this start.
 
 ### Performance options
 

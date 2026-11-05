@@ -157,8 +157,8 @@ background thread) whether a newer release is known. The core downloads the vers
 most once a week (`update.last_check` in the settings; a failed download is retried at the next
 start) and remembers the answer, so the notice comes back at every start until the app is
 updated, without a request. If a newer one is known, a closable
-informational banner shows `pin_format_update`'s text, the release notes (only right after a
-download) and a
+informational banner shows `pin_format_update`'s text, the release notes (remembered
+with the answer) and a
 "Download" button that opens the release page in the default browser. Any
 failure (offline, bad answer, no newer version) shows nothing. The banner has
 its own InfoBar, so an error banner does not replace it. `MARVIN_UPDATE_URL`

@@ -79,6 +79,8 @@ void pin_format_update(const pin_update_info_t *info, char *out, size_t cap)
 #define UPDATE_KEY_LAST "update.last_check"
 #define UPDATE_KEY_LATEST "update.latest"
 #define UPDATE_KEY_URL "update.download_url"
+#define UPDATE_KEY_NOTES "update.release_notes"   /* newlines as \n, see pin_update_notes_encode */
+#define UPDATE_NOTES_LINE 3000   /* the settings file reads lines of up to 4096 bytes */
 
 const char *pin_update_url(void) { return pin_update_address(); }
 
@@ -99,6 +101,9 @@ static void update_remember(const pin_update_info_t *info, int64_t now)
     snprintf(v, sizeof(v), "%lld", (long long)now);
     pin_settings_set(UPDATE_KEY_LATEST, info->latest);
     pin_settings_set(UPDATE_KEY_URL, info->download_url);
+    char notes[UPDATE_NOTES_LINE];
+    pin_update_notes_encode(info->notes, notes, sizeof(notes));
+    pin_settings_set(UPDATE_KEY_NOTES, notes);
     pin_settings_set(UPDATE_KEY_LAST, v);
 }
 
@@ -144,6 +149,9 @@ int pin_update_known(pin_update_info_t *info)
     snprintf(info->current, sizeof(info->current), "%s", PIN_APP_VERSION);
     pin_settings_get(UPDATE_KEY_LATEST, info->latest, sizeof(info->latest));
     pin_settings_get(UPDATE_KEY_URL, info->download_url, sizeof(info->download_url));
+    char notes[UPDATE_NOTES_LINE] = "";
+    pin_settings_get(UPDATE_KEY_NOTES, notes, sizeof(notes));
+    pin_update_notes_decode(notes, info->notes, sizeof(info->notes));
     info->available = info->latest[0] && pin_update_compare(info->latest, info->current) > 0;
     return info->available;
 }

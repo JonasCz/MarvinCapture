@@ -1241,8 +1241,8 @@ PIN_API int pin_update_due(int64_t now);
 
 /* Takes the downloaded VERSION file (len bytes), compares it with pin_app_version() and fills
  * *info (size set by the caller). On PIN_OK it remembers `now` as the last check and the
- * published version and download address (for pin_update_known(), so the notice stays up between
- * checks). PIN_ERR_IO when the file is not a valid VERSION file: nothing is remembered, so the
+ * published version, download address and release notes (for pin_update_known(), so the notice
+ * stays up between checks). PIN_ERR_IO when the file is not a valid VERSION file: nothing is remembered, so the
  * next start tries again. */
 PIN_API pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now,
                                            pin_update_info_t *info);
@@ -1252,11 +1252,10 @@ PIN_API pin_status_t pin_update_check_json(const char *json, size_t len, int64_t
  * (timeout_ms bounds the fetch, 0 = 5000), evaluates it and remembers the result like
  * pin_update_check_json(); otherwise, or when the fetch fails (silently; tried again at the next
  * start), it uses what was remembered, like pin_update_known(). Returns 1 and fills *info
- * (size set by the caller) when a newer version is known, else 0. `notes` are filled only
- * right after a fresh download. */
+ * (size set by the caller) when a newer version is known, else 0. */
 PIN_API int pin_update_refresh(pin_update_info_t *info, uint32_t timeout_ms);
 
-/* 1 and *info filled (current, latest, download_url, available = 1; notes are not kept) when the
+/* 1 and *info filled (current, latest, download_url, notes, available = 1) when the
  * last check found a version newer than this one, else 0. Compared against the running version
  * each time, so the notice goes away by itself after the app was updated. No network. */
 PIN_API int pin_update_known(pin_update_info_t *info);

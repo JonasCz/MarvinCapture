@@ -57,8 +57,7 @@ public static unsafe partial class Native
     private static partial void pin_format_update(in PinUpdateInfo info, byte* out_, nuint cap);
 
     /// <summary>Blocking (network, at most once a week: otherwise the last result is used), so run it
-    /// off the UI thread. True = a newer version is known, <paramref name="info"/> describes it
-    /// (release notes only right after a download).</summary>
+    /// off the UI thread. True = a newer version is known, <paramref name="info"/> describes it.</summary>
     public static bool UpdateRefresh(out PinUpdateInfo info, uint timeoutMs)
     {
         info = PinUpdateInfo.Create();

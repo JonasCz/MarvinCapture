@@ -244,7 +244,7 @@ MJ_FN(jboolean, updateCheck)(JNIEnv *env, jclass c, jbyteArray json, jlong now)
 }
 
 /* {the notice ("MarvinCapture 1.1 is available (you have 1.0)."), latest version, download
- * address or ""} when the last check found a newer version, else null. */
+ * address or "", release notes (plain text, may contain newlines) or ""} when the last check found a newer version, else null. */
 MJ_FN(jobjectArray, updateKnown)(JNIEnv *env, jclass c)
 {
     (void)c;
@@ -255,11 +255,11 @@ MJ_FN(jobjectArray, updateKnown)(JNIEnv *env, jclass c)
         return NULL;
     char text[PIN_TEXT_MAX];
     pin_format_update(&info, text, sizeof(text));
-    jobjectArray r = (*env)->NewObjectArray(env, 3, (*env)->FindClass(env, "java/lang/String"), NULL);
+    jobjectArray r = (*env)->NewObjectArray(env, 4, (*env)->FindClass(env, "java/lang/String"), NULL);
     if (!r)
         return NULL;
-    const char *v[3] = { text, info.latest, info.download_url };
-    for (int i = 0; i < 3; i++) {
+    const char *v[4] = { text, info.latest, info.download_url, info.notes };
+    for (int i = 0; i < 4; i++) {
         jstring js = mj_string(env, v[i]);
         (*env)->SetObjectArrayElement(env, r, i, js);
         (*env)->DeleteLocalRef(env, js);

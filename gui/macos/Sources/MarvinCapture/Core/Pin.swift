@@ -72,7 +72,7 @@ enum Pin {
 
     /// Blocking (network, at most once a week: otherwise the core answers from its last check), so run it
     /// off the main thread. nil = no newer version known (or the check is disabled / failed and none was
-    /// remembered). `notes` are only filled right after a download.
+    /// remembered).
     static func checkForUpdate(timeoutMs: UInt32) -> UpdateInfo? {
         var info = pin_update_info_t()
         info.size = UInt32(MemoryLayout<pin_update_info_t>.size)

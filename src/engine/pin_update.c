@@ -319,6 +319,61 @@ int pin_update_from_json(const char *json, size_t len, const char *current, pin_
     return 0;
 }
 
+size_t pin_update_notes_encode(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+    if (!out || !cap)
+        return 0;
+    int cut = 0;
+    for (; in && *in; in++) {
+        char e[2];
+        size_t k = 1;
+        if (*in == '\r')
+            continue;
+        if (*in == '\n') {
+            e[0] = '\\';
+            e[1] = 'n';
+            k = 2;
+        } else if (*in == '\\') {
+            e[0] = e[1] = '\\';
+            k = 2;
+        } else {
+            e[0] = *in;
+        }
+        if (n + k + 1 > cap) {
+            cut = 1;
+            break;
+        }
+        memcpy(out + n, e, k);
+        n += k;
+    }
+    if (cut) {   /* do not leave half a UTF-8 sequence */
+        while (n > 0 && ((unsigned char)out[n - 1] & 0xC0) == 0x80)
+            n--;
+        if (n > 0 && (unsigned char)out[n - 1] >= 0xC0)
+            n--;
+    }
+    out[n] = '\0';
+    return n;
+}
+
+size_t pin_update_notes_decode(const char *in, char *out, size_t cap)
+{
+    size_t n = 0;
+    if (!out || !cap)
+        return 0;
+    for (; in && *in && n + 1 < cap; in++) {
+        char c = *in;
+        if (c == '\\' && in[1]) {
+            in++;
+            c = *in == 'n' ? '\n' : *in;
+        }
+        out[n++] = c;
+    }
+    out[n] = '\0';
+    return n;
+}
+
 #define UPDATE_URL "https://raw.githubusercontent.com/JonasCz/MarvinCapture/main/VERSION"
 
 const char *pin_update_address(void)

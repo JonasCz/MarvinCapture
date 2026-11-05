@@ -121,8 +121,30 @@ static void test_interval(void)
     CHECK(pin_update_interval_elapsed(t + 3600, t) == 1, "clock set back: due");
 }
 
+static void test_notes_line(void)
+{
+    char line[256], back[256];
+    const char *notes = "Line one.\nC:\\dir \xc3\xa9\n\nEnd";
+    size_t n = pin_update_notes_encode(notes, line, sizeof(line));
+    CHECK(n == strlen(line) && strchr(line, '\n') == NULL, "encoded on one line");
+    CHECK(strcmp(line, "Line one.\\nC:\\\\dir \xc3\xa9\\n\\nEnd") == 0, "encoding");
+    pin_update_notes_decode(line, back, sizeof(back));
+    CHECK(strcmp(back, notes) == 0, "round trip");
+    pin_update_notes_encode("a\r\nb", line, sizeof(line));
+    CHECK(strcmp(line, "a\\nb") == 0, "CR dropped");
+    /* too small: cut at a character boundary, never in the middle of an escape or a sequence */
+    n = pin_update_notes_encode("ab\xc3\xa9""cd", line, 4);   /* room for "ab" + the 2-byte letter would need 5 */
+    CHECK(strcmp(line, "ab") == 0 && n == 2, "cut before a half character");
+    n = pin_update_notes_encode("ab\ncd", line, 4);
+    CHECK(strcmp(line, "ab") == 0, "cut before a half escape");
+    CHECK(pin_update_notes_encode("x", line, 1) == 0 && line[0] == '\0', "no room");
+    pin_update_notes_decode("trailing\\", back, sizeof(back));
+    CHECK(strcmp(back, "trailing\\") == 0, "lone backslash kept");
+}
+
 int main(void)
 {
+    test_notes_line();
     test_from_json();
     test_interval();
     test_parse();
