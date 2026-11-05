@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using System.Text;
@@ -191,13 +192,21 @@ public static unsafe partial class Native
         }
         int count = pin_formats(kind, buf, max);
         int n = Math.Min(count, max);
-        if (n == buf.Length)
+        // HDV to MOV / MKV is disabled for now (UNTESTED): it remuxes the recording when it stops
+        // and does not cope with tape errors / damage. Only the raw transport stream (.ts / .m2t)
+        // is offered. The core and the rest of the code still support them; to bring them back,
+        // remove this filter.
+        // return n == buf.Length ? buf : buf[..n];
+        var list = new List<PinFormatInfo>(n);
+        for (int i = 0; i < n; i++)
         {
-            return buf;
+            if (buf[i].Format is PinFormat.HdvMov or PinFormat.HdvMkv)
+            {
+                continue;
+            }
+            list.Add(buf[i]);
         }
-        var trimmed = new PinFormatInfo[n];
-        Array.Copy(buf, trimmed, n);
-        return trimmed;
+        return list.ToArray();
     }
 
     [LibraryImport(Lib)]
