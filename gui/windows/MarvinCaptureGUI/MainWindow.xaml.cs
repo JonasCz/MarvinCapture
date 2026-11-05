@@ -909,7 +909,7 @@ public sealed partial class MainWindow : Window
             var msg = check.Message;
             if (check.Fat32 != 0 && string.IsNullOrEmpty(msg))
             {
-                msg = "The destination is a FAT32 drive. Files larger than 4 GB will fail.";
+                msg = "The destination is a FAT32 drive: its files cannot pass 4 GiB.";
             }
             var free = Native.FormatBytes(check.FreeBytes);
             var r = await ShowDialogAsync("Check the destination",

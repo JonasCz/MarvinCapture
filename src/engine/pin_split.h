@@ -26,8 +26,9 @@
  * frames with a weird timecode at the end of a capture/scene/tape from
  * producing a tiny useless file.
  *
- * Only content triggers go through here. Size-based splits (none exist
- * today; they would be hard limits like FAT32's 4 GiB) must NOT.
+ * Only content triggers go through here. The size cut (FAT32's 4 GiB,
+ * size_cut_begin() in pin_session.c) is a hard cut and does not: it cancels a
+ * pending split first, like a format change.
  *
  * The module is pure (callbacks only), so it is unit tested without a
  * session.

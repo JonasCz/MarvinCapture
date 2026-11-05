@@ -38,6 +38,8 @@
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <unistd.h>
+#else
+#include <process.h>
 #endif
 
 static int g_failures = 0;
@@ -53,6 +55,23 @@ static int exists(const char *path)
 {
     struct stat st;
     return stat(path, &st) == 0;
+}
+
+/* A fresh directory name under the temp directory: the time alone repeats when the test is run
+ * again within the same second, and the second run then found the first one's files. */
+static void temp_base(char *out, size_t cap, const char *what)
+{
+    static unsigned counter;
+    const char *tmp = getenv("TMPDIR");
+#if defined(_WIN32)
+    if (!tmp || !tmp[0])
+        tmp = getenv("TEMP");
+    long pid = (long)_getpid();
+#else
+    long pid = (long)getpid();
+#endif
+    snprintf(out, cap, "%s/marvin-%s-%ld-%ld-%u", tmp && tmp[0] ? tmp : "/tmp", what,
+             (long)time(NULL), pid, ++counter);
 }
 
 #if defined(__linux__)   /* only the Linux / Android fd test waits */
@@ -177,12 +196,7 @@ static void test_open_fd(void)
 static void test_app_dirs(void)
 {
     char base[512];
-    const char *tmp = getenv("TMPDIR");
-#if defined(_WIN32)
-    if (!tmp || !tmp[0])
-        tmp = getenv("TEMP");
-#endif
-    snprintf(base, sizeof(base), "%s/marvin-appdirs-%ld", tmp && tmp[0] ? tmp : "/tmp", (long)time(NULL));
+    temp_base(base, sizeof(base), "appdirs");
     char cfg[600], run[600], tdir[600], ini[700];
     snprintf(cfg, sizeof(cfg), "%s/config/sub", base);   /* created by the core */
     snprintf(run, sizeof(run), "%s/run", base);
@@ -463,12 +477,7 @@ static void test_keep_busy(void)
 static void test_update_state(void)
 {
     char base[512], cfg[600];
-    const char *tmp = getenv("TMPDIR");
-#if defined(_WIN32)
-    if (!tmp || !tmp[0])
-        tmp = getenv("TEMP");
-#endif
-    snprintf(base, sizeof(base), "%s/marvin-update-%ld", tmp && tmp[0] ? tmp : "/tmp", (long)time(NULL));
+    temp_base(base, sizeof(base), "update");
     snprintf(cfg, sizeof(cfg), "%s/config", base);
     CHECK(pin_set_app_dirs(cfg, NULL, NULL) == PIN_OK, "update: app dirs");
 

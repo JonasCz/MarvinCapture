@@ -84,6 +84,7 @@ set(ENV{PKG_CONFIG_PATH} "${_pin_saved_pkg_config_path}")
 add_library(pinnacle_sinks STATIC
     pin_writer.c
     pin_sink_factory.c
+    pin_sink_fault.c
     sink_sar.c
     sink_raw.c
     sink_nut.c

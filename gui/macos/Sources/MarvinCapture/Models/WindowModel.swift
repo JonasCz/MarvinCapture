@@ -964,7 +964,7 @@ final class WindowModel {
         if !message.isEmpty || check.fat32 != 0 {
             var msg = message
             if check.fat32 != 0, msg.isEmpty {
-                msg = "The destination is a FAT32 drive. Files larger than 4 GB will fail."
+                msg = "The destination is a FAT32 drive: its files cannot pass 4 GiB."
             }
             confirmations.append(CaptureConfirmation(
                 title: "Check the destination",

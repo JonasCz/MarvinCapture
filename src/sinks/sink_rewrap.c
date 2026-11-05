@@ -111,6 +111,8 @@ typedef struct {
     audio_track_t ch[2];       /* [0] = pair 1 (main), [1] = pair 2, if present */
     int header_written;
     int64_t vpts;
+    int fault_io;             /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
+    uint64_t io_left;         /* HDV temp file: the same seam's budget */
 
     pin_sink_status_t st;
 
@@ -455,7 +457,13 @@ static pin_status_t dv_open(pin_sink_t *s, const char *path, const pin_sink_para
     if (params->title[0])
         av_dict_set(&p->fmt->metadata, "title", params->title, 0);
 
-    rc = avio_open(&p->fmt->pb, path, AVIO_FLAG_WRITE);
+    uint64_t budget = pin_sink_fault_budget();
+    if (budget != UINT64_MAX) {
+        rc = pin_sink_fault_avio_open(&p->fmt->pb, path, budget);
+        p->fault_io = rc >= 0;
+    } else {
+        rc = avio_open(&p->fmt->pb, path, AVIO_FLAG_WRITE);
+    }
     if (rc < 0)
         return PIN_ERR_IO;
 
@@ -519,7 +527,9 @@ static pin_status_t dv_close(pin_sink_t *s)
         }
         if (p->header_written && av_write_trailer(p->fmt) < 0)
             rc = PIN_ERR_IO;
-        if (p->fmt->pb)
+        if (p->fault_io)
+            pin_sink_fault_avio_close(&p->fmt->pb);
+        else if (p->fmt->pb)
             avio_closep(&p->fmt->pb);
         avformat_free_context(p->fmt);
     }
@@ -554,13 +564,14 @@ static pin_status_t hdv_open(pin_sink_t *s, const char *path, const pin_sink_par
     if (!p->raw_f)
         return PIN_ERR_IO;
     setvbuf(p->raw_f, NULL, _IOFBF, 4 << 20);
+    p->io_left = pin_sink_fault_budget();
     return PIN_OK;
 }
 
 static pin_status_t hdv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
 {
     rewrap_priv_t *p = s->priv;
-    if (fwrite(data, 1, len, p->raw_f) != len) {
+    if (pin_sink_fault_fwrite(data, len, p->raw_f, &p->io_left) != len) {
         p->st.last_error = PIN_ERR_IO;
         return PIN_ERR_IO;
     }

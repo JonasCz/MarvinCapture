@@ -889,7 +889,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         boolean fat32 = nums[2] != 0, collision = nums[3] != 0, low = nums[4] != 0;
         List<String[]> confirm = new ArrayList<>();
         if (!message.isEmpty() || fat32) {
-            String msg = message.isEmpty() ? "The destination is a FAT32 drive. Files larger than 4 GB will fail." : message;
+            String msg = message.isEmpty() ? "The destination is a FAT32 drive: its files cannot pass 4 GiB." : message;
             confirm.add(new String[] { "Check the destination", msg + "\n\nFree space: " + Core.formatBytes(nums[0])
                     + " (about " + nums[1] + " minutes at this format).", "Capture anyway" });
         }

@@ -223,6 +223,14 @@ struct pin_session {
     double capture_start_s, last_data_s;
     int capture_began;       /* start_capture_now() opened the first file of this capture */
     double disk_check_s;     /* capture_guard(): last free-space check */
+    uint64_t file_limit;     /* the output drive's largest file (FAT32: PIN_FAT32_FILE_MAX), 0 = none
+                                or standard output: a file goes on in the next one before it
+                                (capture_unit()), an analog capture stops (capture_guard()) */
+    uint64_t cut_run_bytes;  /* bytes of the units since the last one a file may start with */
+    uint64_t cut_last_run;   /* ... and between the two before: a DV frame, an HDV GOP */
+    /* test seams, read as a capture starts (test_seams_read() in pin_session.c), 0 = off */
+    uint64_t test_free_space;
+    uint64_t test_writer_queue;
     /* how the last capture ended (pin_status_snapshot_t.stop_*) */
     pin_stop_reason_t stop_reason;
     double stop_captured_s;

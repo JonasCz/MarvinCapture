@@ -30,6 +30,50 @@ uint64_t pin_stop_remux_reserve(uint64_t bytes_written)
     return 2 * bytes_written;
 }
 
+uint64_t pin_stop_file_cap(uint64_t limit)
+{
+    return limit - limit / 64;
+}
+
+/* "4 GiB", or a test's limit in MB */
+static void limit_size(uint64_t limit, char *out, size_t cap)
+{
+    if (limit == PIN_FAT32_FILE_MAX)
+        snprintf(out, cap, "4 GiB");
+    else
+        snprintf(out, cap, "%.1f MB", (double)limit / 1e6);
+}
+
+void pin_stop_file_limit_text(uint64_t limit, char *out, size_t cap)
+{
+    if (!out || !cap)
+        return;
+    char size[32];
+    limit_size(limit, size, sizeof(size));
+    snprintf(out, cap, "the file reached the %s size limit of the FAT32 drive", size);
+}
+
+void pin_stop_file_limit_note(uint64_t limit, int analog, double minutes, char *out, size_t cap)
+{
+    if (!out || !cap)
+        return;
+    char size[32], when[80];
+    limit_size(limit, size, sizeof(size));
+    long m = minutes > 0 ? (long)minutes : 0;
+    if (analog && m < 1)
+        snprintf(when, sizeof(when), "stop in less than a minute");
+    else if (analog)
+        snprintf(when, sizeof(when), "stop after about %ld minute%s", m, m == 1 ? "" : "s");
+    else if (m < 1)
+        snprintf(when, sizeof(when), "go on in a new file more than once a minute");
+    else if (m == 1)
+        snprintf(when, sizeof(when), "go on in a new file about every minute");
+    else
+        snprintf(when, sizeof(when), "go on in a new file about every %ld minutes", m);
+    snprintf(out, cap, "This is a FAT32 drive: its files cannot pass %s, so the capture will %s.",
+             size, when);
+}
+
 int pin_stop_abnormal(pin_stop_reason_t reason)
 {
     switch (reason) {

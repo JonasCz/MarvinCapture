@@ -23,6 +23,7 @@
  */
 
 #include "pin_sink.h"
+#include "sinks_internal.h"
 #include "../engine/dv_subcode.h"
 #include "../core/pin_log.h"
 #include "pin_stdout.h"
@@ -33,6 +34,7 @@
 
 typedef struct {
     FILE *f;
+    uint64_t io_left;         /* bytes the file may still take: the test seam PIN_TEST_WRITE_FAIL_AFTER */
     int to_stdout;            /* path "-": pin_stdout_write(), no file */
     pin_kind_t kind;
     pin_sink_status_t st;
@@ -59,6 +61,7 @@ static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_par
         return PIN_ERR_IO;
     }
     setvbuf(p->f, NULL, _IOFBF, 4 << 20);
+    p->io_left = pin_sink_fault_budget();
     return PIN_OK;
 }
 
@@ -86,7 +89,7 @@ static pin_status_t raw_write_unit(pin_sink_t *s, const uint8_t *data, size_t le
             p->st.last_error = PIN_ERR_IO;
             return PIN_ERR_IO;
         }
-    } else if (fwrite(data, 1, len, p->f) != len) {
+    } else if (pin_sink_fault_fwrite(data, len, p->f, &p->io_left) != len) {
         p->st.last_error = PIN_ERR_IO;
         return PIN_ERR_IO;
     }

@@ -41,6 +41,12 @@ if(UNIX AND NOT APPLE)
 endif()
 add_test(NAME test_analog_sinks COMMAND test_analog_sinks)
 
+# avi_writer's OpenDML layout over a dozen RIFF segments (a small test segment limit),
+# read back through its indexes with libavformat
+add_executable(test_avi_odml test_avi_odml.c)
+target_link_libraries(test_avi_odml PRIVATE pinnacle_sinks)
+add_test(NAME test_avi_odml COMMAND test_avi_odml)
+
 add_executable(test_hdv_rewrap test_hdv_rewrap.c)
 target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
 add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts" "${PIN_TEST_DATA}/hdv-720p.ts")

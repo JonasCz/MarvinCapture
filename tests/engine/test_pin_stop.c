@@ -80,6 +80,22 @@ int main(void)
     CHECK(pin_stop_disk_reserve(0, 0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
     CHECK(pin_stop_disk_reserve(10, 20, 30) == 60, "margin + backlog + remux");
     CHECK(pin_stop_remux_reserve(100) == 200, "remux keeps twice the written size free");
+    CHECK(pin_stop_file_cap(PIN_FAT32_FILE_MAX) == PIN_FAT32_FILE_MAX - (64ull << 20) + 1,
+          "FAT32: files grow to 4 GiB less 64 MiB");
+    CHECK(pin_stop_file_cap(0) == 0, "no limit");
+    pin_stop_file_limit_text(PIN_FAT32_FILE_MAX, b, sizeof(b));
+    CHECK(strcmp(b, "the file reached the 4 GiB size limit of the FAT32 drive") == 0, "FAT32 text");
+    pin_stop_file_limit_text(2000000, b, sizeof(b));
+    CHECK(strcmp(b, "the file reached the 2.0 MB size limit of the FAT32 drive") == 0, "test limit text");
+    pin_stop_file_limit_note(PIN_FAT32_FILE_MAX, 0, 19.6, b, sizeof(b));
+    CHECK(strcmp(b, "This is a FAT32 drive: its files cannot pass 4 GiB, so the capture will go on "
+                    "in a new file about every 19 minutes.") == 0, "FAT32 note, DV");
+    pin_stop_file_limit_note(PIN_FAT32_FILE_MAX, 1, 3.4, b, sizeof(b));
+    CHECK(strcmp(b, "This is a FAT32 drive: its files cannot pass 4 GiB, so the capture will stop "
+                    "after about 3 minutes.") == 0, "FAT32 note, analog");
+    pin_stop_file_limit_note(2000000, 0, 0.01, b, sizeof(b));
+    CHECK(strcmp(b, "This is a FAT32 drive: its files cannot pass 2.0 MB, so the capture will go on "
+                    "in a new file more than once a minute.") == 0, "FAT32 note, test limit");
 
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);

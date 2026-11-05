@@ -48,7 +48,7 @@ Actions:
   --rew --ff --play --pause --stop
                            transport command; returns as soon as the deck accepted it (use a wait to wait for the action to complete). Closes an open capture first (the tape keeps running); --stop also stops the tape. DV/HDV input only.
   --capture PATH           start capturing to PATH; the file format comes from --format, else from the extension, else the default (see --format). It stays open across any number of waits and closes at the next transport action, the next --capture or the end of the arguments, whichever comes first. Put a wait after it, or the end of the arguments is reached at once and the capture closes immediately.
-                           A tape that changes format (DV/HDV, PAL/NTSC, HDV 1080i/720p; aspect or audio mode too, except into raw .dv) goes on in a new file in the new format, NAME-0002.EXT and so on (with --split: the next scene number).
+                           A tape that changes format (DV/HDV, PAL/NTSC, HDV 1080i/720p; aspect or audio mode too, except into raw .dv) goes on in a new file in the new format, NAME-0002.EXT and so on (with --split: the next scene number). On a FAT32 drive, which takes no file over 4 GiB, a DV or HDV file goes on in the next one the same way before it gets there; an analog capture stops there, exit 4.
                            PATH - writes the stream to stdout (pipe it into a program): DV as raw DIF, HDV as MPEG-TS, analog as NUT (YUY2 + PCM). --format is ignored; --split is refused; once per command line. If the reader exits or cannot keep up, or the tape changes between DV and HDV, the capture stops, exit 4.
   --wait-any COND[,COND...]
                            block until any condition is met

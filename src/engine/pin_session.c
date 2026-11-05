@@ -1043,6 +1043,9 @@ static void capture_format_change(pin_session_t *s, const pin_stream_fmt_t *old,
  * writer consume callback -> sink
  * ==================================================================== */
 
+/* Test seam PIN_TEST_SINK_DELAY_MS (test_seams_read()): a slow drive. */
+static int g_test_sink_delay_ms;
+
 static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, size_t len,
                            void *user)
 {
@@ -1052,6 +1055,8 @@ static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *d
     (void)index;
     if (!sink)
         return 0;
+    if (g_test_sink_delay_ms > 0)
+        sleep_ms(g_test_sink_delay_ms);
     pin_status_t st;
     if (kind == PIN_UNIT_VIDEO)
         st = sink->write_video(sink, data, len);
@@ -1365,6 +1370,8 @@ static void open_sink_for_scene(pin_session_t *s)
      * with a hole that the sinks, counting frames, would not show. */
     size_t cap = to_stdout ? PIN_WRITER_PIPE_CAPACITY
                : kind == PIN_KIND_ANALOG ? PIN_WRITER_ANALOG_CAPACITY : 0;
+    if (s->test_writer_queue)
+        cap = (size_t)s->test_writer_queue;
     s->writer = pin_writer_start_ex(cap, writer_consume, s->sink, PIN_WRITER_OVERFLOW_FATAL);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
     s->encoder_behind_logged = 0;
@@ -1563,6 +1570,44 @@ static void stream_status_from_format(pin_session_t *s)
     s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
 }
 
+/* What the open file holds once the units on their way to it are in: what its sink wrote, the
+ * writer's queue, and the units held back (pin_holdback.h) or by a pending scene split
+ * (pin_split.h), which go to it first when a hard cut comes. An estimate on the high side (an
+ * encoding sink writes less than it is given). Caller holds the lock. */
+static uint64_t file_bytes_due(pin_session_t *s)
+{
+    uint64_t n = 0;
+    if (s->sink && s->sink->get_status) {
+        pin_sink_status_t sst;
+        memset(&sst, 0, sizeof(sst));
+        s->sink->get_status(s->sink, &sst);
+        n = sst.bytes_written;
+    }
+    if (s->writer) {
+        pin_writer_stats_t wst;
+        pin_writer_get_stats(s->writer, &wst);
+        n += wst.backlog_bytes;
+    }
+    return n + s->hold.bytes + s->split.pend_bytes;
+}
+
+/* The new file of a size cut begins here (pin_holdback_cut()): the open file is full for its
+ * drive (FAT32), so it is finished and the capture goes on in the next one, numbered as after a
+ * format change ("name-0002" after "name"). The format stays; an HDV file starts with the PAT and
+ * PMT, then the cut picture, which opens a GOP. Caller holds the lock. */
+static void size_cut_begin(void *user, long index)
+{
+    pin_session_t *s = user;
+    (void)index;
+    hand_over_file(s);
+    s->scene_index++;
+    if (!s->capture_opts.scene_split)
+        s->fmt_numbered = 1;
+    open_sink_for_scene(s);
+    if (s->sink && s->file_kind == PIN_KIND_HDV)
+        hdv_emit_psi(s);
+}
+
 /* A DV / HDV unit during a capture: held (pin_holdback.h) while a format change or a scene
  * cut may still be back-dated to it, then on to the file (commit_unit_fi()). fmt_res and
  * old/fmt_start: what the format watcher said about this unit; rec: its scene record (NULL:
@@ -1571,7 +1616,31 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
                          unsigned flags, pin_fmtwatch_result_t fmt_res, const pin_stream_fmt_t *old,
                          long fmt_start, pin_scene_record_t *rec)
 {
+    /* A drive whose files have a size limit (FAT32: 4 GiB): the file goes on in a new one, at
+     * this unit if a file may start with it and the open file would otherwise grow past
+     * pin_stop_file_cap() before the next such unit, one DV frame or HDV GOP on (as long as the
+     * last one was). Not while a format change is pending: its cut comes first (the margin
+     * under the limit covers the wait). Never a pipe (file_limit 0). */
+    if (flags & PIN_HOLD_CUT_OK) {
+        s->cut_last_run = s->cut_run_bytes;
+        s->cut_run_bytes = 0;
+    }
+    s->cut_run_bytes += len;
+    uint64_t ahead = s->cut_last_run > len ? s->cut_last_run : len;
+    int size_cut = s->file_limit && (flags & PIN_HOLD_CUT_OK) && kind == s->file_kind &&
+                   s->split.file_units > 0 && fmt_res == PIN_FMTWATCH_SAME &&
+                   !pin_fmtwatch_pending(&s->fmtw, NULL) &&
+                   file_bytes_due(s) + ahead > pin_stop_file_cap(s->file_limit);
+
     hold_push(s, data, len, idx, flags);
+
+    if (size_cut) {
+        pin_logf(PIN_LOG_INFO, "session: %s is %.0f MB, near the drive's file size limit: "
+                               "going on in a new file\n", s->current_file, file_bytes_due(s) / 1e6);
+        split_ensure(s);
+        pin_split_cancel(&s->split); /* a pending scene split's units stay in the open file */
+        pin_holdback_cut(&s->hold, idx, size_cut_begin, s);
+    }
 
     /* a confirmed format change: a new file from its first unit on, or the end of a pipe */
     if (fmt_res == PIN_FMTWATCH_CHANGED)
@@ -2062,6 +2131,22 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         set_state(s, PIN_STATE_READY);
         return 1;
     }
+    if (s->file_limit && !wst.failed) {
+        /* A drive whose files cannot pass a size (FAT32): DV and HDV go on in a new file before
+         * it (capture_unit()), so for them this is only the backstop, half way into the margin
+         * (a stream that offers no place to cut); analog has no cut and stops at the cap. The
+         * file is finished in the margin left. */
+        uint64_t cap = pin_stop_file_cap(s->file_limit);
+        if (s->file_kind != PIN_KIND_ANALOG)
+            cap += (s->file_limit - cap) / 2;
+        if (file_bytes_due(s) > cap) {
+            char detail[PIN_TEXT_MAX];
+            pin_stop_file_limit_text(s->file_limit, detail, sizeof(detail));
+            capture_end(s, PIN_STOP_DISK_FULL, detail, deck_node);
+            set_state(s, PIN_STATE_READY);
+            return 1;
+        }
+    }
     double now = pin_session_now();
     if (!wst.failed && now - s->disk_check_s < 1.0)
         return 0;
@@ -2071,6 +2156,16 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
     uint64_t free_bytes = 0;
     int fat32 = 0;
     int known = fat32_and_free(dir, &free_bytes, &fat32) == 0;
+    if (s->test_free_space) {
+        /* test seam PIN_TEST_FREE_SPACE: a drive with that much room when the capture began */
+        pin_sink_status_t sst;
+        memset(&sst, 0, sizeof(sst));
+        if (s->sink->get_status)
+            s->sink->get_status(s->sink, &sst);
+        uint64_t used = s->bytes_closed + sst.bytes_written;
+        free_bytes = s->test_free_space > used ? s->test_free_space - used : 0;
+        known = 1;
+    }
     /* HDV to MOV / MKV remuxes the whole temp .ts when the file is closed */
     int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
     /* plus the files the closer is still finishing (an earlier scene's remux) */
@@ -2148,6 +2243,44 @@ static void file_format_for_stream(pin_session_t *s)
     s->hdv_await_gop = s->file_kind == PIN_KIND_HDV;
 }
 
+/* Test seams, like PIN_REPLAY_UNPLUG_AFTER: environment variables the ctest suite sets, read as a
+ * capture starts; unset (or 0) they change nothing.
+ *   PIN_TEST_FREE_SPACE=<bytes>    capture_guard() sees that much free space on the output drive,
+ *                                  less what the capture has written: a small drive
+ *   PIN_TEST_WRITER_QUEUE=<bytes>  the size of the writer queue in front of every file or pipe
+ *   PIN_TEST_SINK_DELAY_MS=<ms>    the writer thread waits that long before each unit: a slow drive
+ *   PIN_TEST_FAT32_LIMIT=<bytes>   the output drive is FAT32 with that file size limit (not 4 GiB)
+ * The sinks have PIN_TEST_WRITE_FAIL_AFTER (pin_sink_fault.c): writes that fail. */
+static uint64_t test_seam(const char *name)
+{
+    const char *v = getenv(name);
+    return v && v[0] ? (uint64_t)strtoull(v, NULL, 10) : 0;
+}
+
+/* Caller holds the lock. */
+static void test_seams_read(pin_session_t *s)
+{
+    s->test_free_space = test_seam("PIN_TEST_FREE_SPACE");
+    s->test_writer_queue = test_seam("PIN_TEST_WRITER_QUEUE");
+    g_test_sink_delay_ms = (int)test_seam("PIN_TEST_SINK_DELAY_MS");
+}
+
+/* The largest file the capture's output drive takes (FAT32: 4 GiB less a byte), 0 for none or
+ * standard output. Caller holds the lock. */
+static uint64_t output_file_limit(pin_session_t *s)
+{
+    if (pin_path_is_stdout(s->capture_opts.path))
+        return 0;
+    uint64_t seam = test_seam("PIN_TEST_FAT32_LIMIT");
+    if (seam)
+        return seam;
+    char dir[PIN_PATH_MAX];
+    dir_of(s->naming_base, dir, sizeof(dir));
+    uint64_t free_bytes = 0;
+    int fat32 = 0;
+    return fat32_and_free(dir, &free_bytes, &fat32) == 0 && fat32 ? PIN_FAT32_FILE_MAX : 0;
+}
+
 /* Actually opens the sink and enters CAPTURING, once the stream's kind
  * (DV/HDV/analog) is known and any requested rewind-to-start has finished.
  * s->capture_opts must already hold the requested options. */
@@ -2155,6 +2288,9 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
 {
     file_format_for_stream(s);
     pin_naming_strip_extension(s->capture_opts.path, s->naming_ext, s->naming_base, sizeof(s->naming_base));
+    test_seams_read(s);
+    s->file_limit = output_file_limit(s);
+    s->cut_run_bytes = s->cut_last_run = 0;
     s->fmt_numbered = 0;
     s->fmt_stop = 0;
     s->scene_cut_deferred = 0;
@@ -3803,6 +3939,11 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
 
     uint64_t free_bytes = 0;
     fat32_and_free(dir, &free_bytes, &out->fat32);
+    uint64_t file_limit = test_seam("PIN_TEST_FAT32_LIMIT");
+    if (file_limit)
+        out->fat32 = 1;
+    else if (out->fat32)
+        file_limit = PIN_FAT32_FILE_MAX;
     out->free_bytes = free_bytes;
     out->low_space = pin_output_space_low(free_bytes);
 
@@ -3817,9 +3958,10 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     }
     if (out->collision)
         snprintf(out->message, sizeof(out->message), "%.200s already exists", first_match);
-    else if (out->fat32 && out->minutes_left > 0)
-        snprintf(out->message, sizeof(out->message),
-                 "FAT32: files over 4 GiB will fail (raw DV/HDV and AVI in particular)");
+    else if (out->fat32)   /* DV / HDV go on in a new file at the limit, analog stops there */
+        pin_stop_file_limit_note(file_limit, kind == PIN_KIND_ANALOG,
+                                 bytes_per_s > 0 ? pin_stop_file_cap(file_limit) / bytes_per_s / 60.0 : 0,
+                                 out->message, sizeof(out->message));
     return PIN_OK;
 }
 

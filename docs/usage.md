@@ -291,8 +291,8 @@ capture starts (not for the user's own stop).
 | `END_OF_TAPE` | replay device: the end of the file in the last pass |
 | `DEVICE_LOST` | the USB stream failed and the unit no longer answers a standard GET_STATUS on EP0 (unplugged); the session goes to ERROR. Another USB failure is `ERROR` |
 | `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
-| `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second |
-| `WRITE_ERROR` | writing a file failed, or the next file (split, pass, format change) could not be created |
+| `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second. Also an analog file on a FAT32 drive that reached its 4 GiB limit (see "Long captures") |
+| `WRITE_ERROR` | writing a file failed, or the next file (split, pass, format change) could not be created. The file keeps what reached the drive: a raw `.dv` / `.m2t` ends with a cut frame or picture, an AVI or MOV has no index (it could not be written; players read the file without one or offer to repair it). A drive that is full gives `DISK_FULL` instead, before writing fails |
 | `ERROR` | any other error: a USB failure, a failed video encoder, and standard output seeing the tape change between DV and HDV |
 | `DISK_SLOW` | the output drive could not keep up and the disk writer's queue filled (64 MB for DV / HDV, ~18 s; 512 MB for analog, ~25 s). The file ends cleanly before the first unit that did not fit, rather than going on with a hole: the sinks count frames, so a lost analog frame would shift the audio against the video for the rest of the file |
 
@@ -360,7 +360,7 @@ are accepted as they are:
 
 | limit | where | reached after |
 |---|---|---|
-| Analog AVI: 1024 OpenDML segments of 1000 MiB (~1 TB) | `SUPER_ENTRIES` in `src/core/avi_writer.c` | ~14.2 h (PAL/NTSC at ~21 MB/s); then the write fails (`WRITE_ERROR`) |
+| Analog AVI: 1024 OpenDML segments of 1000 MiB (~1 TB) | `SUPER_ENTRIES` in `src/core/avi_writer.c` | ~14.2 h (PAL/NTSC at ~21 MB/s); then the write fails (`WRITE_ERROR`), the file whole and indexed up to there |
 | AVI audio `strh dwLength` is 32-bit samples | `avi_close` | 24.8 h at 48 kHz: players show the wrong audio length; the data is intact |
 | Windows GUI analog elapsed time is formatted `hh:mm:ss` | `MainViewModel.StatusTimeText` | 24 h: the display wraps to 00:00:00 |
 | Windows GUI "Stop after" / "Stop no signal" | `Maximum="600"` | 10 h |
@@ -368,8 +368,16 @@ are accepted as they are:
 | `MarvinCaptureCLI` waits at most 30 min for a file to close | `close_capture` in `src/engine/pin_script_run.c` | a 10 h+ HDV capture to MOV / MKV on a slow disk (the remux of the temp `.ts` happens at close) |
 | MPEG-TS PTS/PCR are 33-bit at 90 kHz | FFmpeg (HDV remux, preview) | 26.5 h; FFmpeg handles the wrap |
 
-Not a time limit, but the same in practice: FAT32 stops any capture at 4 GiB
-(~20 min DV/HDV, ~3.5 min analog AVI); the output check only warns.
+Not a time limit, but the same in practice: a FAT32 drive takes no file over
+4 GiB. A DV or HDV capture to a file on one goes on in a new file before the
+limit, about every 19 minutes for DV: `NAME.EXT`, `NAME-0002.EXT`, ... (with
+`--split`, the next scene number), cut on a frame (DV) or a GOP with the PAT
+and PMT in front (HDV), each file 64 MiB short of the limit, which leaves room
+for an AVI's index or a MOV's `moov`. An analog capture stops there instead
+(`DISK_FULL`, "the file reached the 4 GiB size limit of the FAT32 drive"; about
+3.5 min of AVI, 8 min of FFV1), with the file finished. Standard output is not
+affected. The output check says which happens before the capture starts. Use
+exFAT or NTFS for long analog captures.
 
 **Counters.** The device's video and audio packet counters are 16-bit and wrap
 every 65536 frames (43.7 min PAL, 36.4 min NTSC). Compare them only with the

@@ -45,10 +45,16 @@ avi_writer_t *avi_open_titled(const char *path, unsigned width, unsigned height,
                               unsigned fps_num, unsigned fps_den, unsigned aspect_num,
                               unsigned aspect_den, unsigned audio_rate, unsigned audio_channels,
                               const char *title_utf8);
+/* 0, or -1 if the write failed or the file is full (its super index lists 1024 segments of
+ * 1000 MiB; what was written before stays indexed and the file can still be closed). */
 int avi_write_video(avi_writer_t *w, const uint8_t *frame, size_t len);
 int avi_write_audio(avi_writer_t *w, const uint8_t *pcm, size_t len);
 /* Finalises the headers and indexes. Returns 0 on success. */
 int avi_close(avi_writer_t *w);
+
+/* Tests only: RIFF segments of at most `bytes` for the files opened afterwards (0: the normal
+ * 1000 MiB), so a test can write many segments without gigabytes. Process-wide. */
+void avi_writer_set_segment_limit(uint32_t bytes);
 
 #ifdef __cplusplus
 }

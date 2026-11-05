@@ -46,6 +46,26 @@ uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_
  * as the temp file, the rest is slack). Pass it as remux_bytes. */
 uint64_t pin_stop_remux_reserve(uint64_t bytes_written);
 
+/* The largest file FAT32 takes: 4 GiB less a byte. Larger writes fail (EFBIG). */
+#define PIN_FAT32_FILE_MAX 0xFFFFFFFFull
+
+/* How big a file may grow on a drive whose files cannot pass `limit` bytes (FAT32), counting what
+ * the capture writes into it: limit less 1/64 (64 MiB of FAT32's 4 GiB), which leaves room for
+ * what a container adds when it is closed (an AVI index, a MOV's moov: a few MB) and for the
+ * units on their way while a cut waits for a place a file may start. 0 for no limit. */
+uint64_t pin_stop_file_cap(uint64_t limit);
+
+/* "the file reached the 4 GiB size limit of the FAT32 drive" (a limit other than FAT32's own,
+ * from a test, in MB): the detail of a capture that had to stop there (analog; DV and HDV go on
+ * in a new file). */
+void pin_stop_file_limit_text(uint64_t limit, char *out, size_t cap);
+
+/* The output check's note for a FAT32 drive (pin_output_check_t.message): "This is a FAT32 drive:
+ * its files cannot pass 4 GiB, so the capture will go on in a new file about every 19 minutes."
+ * (DV and HDV), or for analog "... so the capture will stop after about 3 minutes.". minutes:
+ * how long a file lasts at the format's rate. */
+void pin_stop_file_limit_note(uint64_t limit, int analog, double minutes, char *out, size_t cap);
+
 /* pin_stop_reason_abnormal(): device / camera gone, disk full, write or other error. */
 int pin_stop_abnormal(pin_stop_reason_t reason);
 

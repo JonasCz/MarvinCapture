@@ -120,11 +120,36 @@ set_tests_properties(test_replay_mixed_dv PROPERTIES TIMEOUT 60)
 pin_engine_replay_test(test_replay_mixed_kind "${PIN_TEST_DATA}")
 set_tests_properties(test_replay_mixed_kind PROPERTIES TIMEOUT 60)
 
+# The output drive gets full, fails or is slow (the test seams PIN_TEST_FREE_SPACE,
+# PIN_TEST_WRITE_FAIL_AFTER, PIN_TEST_SINK_DELAY_MS, PIN_TEST_WRITER_QUEUE): DISK_FULL,
+# WRITE_ERROR, DISK_SLOW, and the file finished (libavformat reads it).
+add_executable(test_replay_disk test_replay_disk.c)
+target_link_libraries(test_replay_disk PRIVATE marvin-core pinnacle_sinks)
+add_test(NAME test_replay_disk COMMAND test_replay_disk "${PIN_TEST_DATA}/dv-pal.dv")
+pin_engine_replay_test_env(test_replay_disk)
+set_tests_properties(test_replay_disk PROPERTIES TIMEOUT 60)
+
+# FAT32 (the seam PIN_TEST_FAT32_LIMIT, with PIN_TEST_WRITE_FAIL_AFTER as the drive's refusal):
+# DV and HDV go on in a new file before the limit; raw DV, DV AVI and HDV files all finished.
+add_executable(test_replay_fat32 test_replay_fat32.c)
+target_link_libraries(test_replay_fat32 PRIVATE marvin-core pinnacle_sinks)
+add_test(NAME test_replay_fat32 COMMAND test_replay_fat32 "${PIN_TEST_DATA}/dv-pal.dv" "${PIN_HDV_CAPTURE}")
+pin_engine_replay_test_env(test_replay_fat32)
+set_tests_properties(test_replay_fat32 PROPERTIES TIMEOUT 60)
+
+# Pipe output end to end (check_cli_pipe.cmake): MarvinCaptureCLI --capture - into ffmpeg for DV
+# and HDV, a reader that exits early (PIPE_CLOSED, exit 4) and one that cannot keep up
+# (PIPE_SLOW, exit 4).
+add_test(NAME test_cli_pipe
+    COMMAND "${CMAKE_COMMAND}" "-DCLI=$<TARGET_FILE:MarvinCaptureCLI>" "-DFFMPEG=${PIN_TEST_FFMPEG}"
+            "-DDATA=${PIN_TEST_DATA}" -P "${PROJECT_SOURCE_DIR}/tests/check_cli_pipe.cmake")
+set_tests_properties(test_cli_pipe PROPERTIES TIMEOUT 120)
+
 # All of the above replay the generated recordings.
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
     test_replay_hdv test_replay_hdv_split test_replay_unplug test_replay_hwenc
-    test_replay_mixed_dv test_replay_mixed_kind
+    test_replay_mixed_dv test_replay_mixed_kind test_replay_disk test_replay_fat32 test_cli_pipe
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

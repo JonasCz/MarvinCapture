@@ -44,8 +44,17 @@ typedef struct {
     uint32_t size, duration;
 } super_entry_t;
 
+/* avi_writer_set_segment_limit(): tests only */
+static uint32_t g_segment_limit = SEGMENT_LIMIT;
+
+void avi_writer_set_segment_limit(uint32_t bytes)
+{
+    g_segment_limit = bytes ? bytes : SEGMENT_LIMIT;
+}
+
 struct avi_writer {
     FILE *f;
+    uint32_t segment_limit;         /* SEGMENT_LIMIT, unless a test set another */
     unsigned width, height, fps_num, fps_den, aspect_num, aspect_den, rate, channels;
     uint64_t frames, samples;
     uint64_t first_riff_frames;
@@ -63,6 +72,7 @@ struct avi_writer {
     struct { uint8_t s; uint32_t off, size; } *idx1;
     size_t nidx1, capidx1;
     int error;
+    int full;                       /* the super index has no room for another segment */
 };
 
 static void put32(FILE *f, uint32_t v)
@@ -348,9 +358,16 @@ static void open_segment(avi_writer_t *w)
 
 static int write_chunk(avi_writer_t *w, int s, const uint8_t *data, size_t len)
 {
-    if (!w || w->error)
+    if (!w || w->error || w->full)
         return -1;
-    if ((uint64_t)(ftello(w->f) - w->riff_at) + len > SEGMENT_LIMIT) {
+    if ((uint64_t)(ftello(w->f) - w->riff_at) + len > w->segment_limit) {
+        /* The super index lists SUPER_ENTRIES segments (~1 TB, 14 h of analog): the open one
+         * takes the last entry when it is closed, so the file is full. Refused, not written
+         * into a segment no index would reach; the file stays whole (avi_close() succeeds). */
+        if (w->nsuper[0] >= SUPER_ENTRIES - 1 || w->nsuper[1] >= SUPER_ENTRIES - 1) {
+            w->full = 1;
+            return -1;
+        }
         close_segment(w);
         open_segment(w);
     }
@@ -388,6 +405,7 @@ avi_writer_t *avi_open_titled(const char *path, unsigned width, unsigned height,
         return NULL;
     }
     setvbuf(w->f, NULL, _IOFBF, 4 << 20);
+    w->segment_limit = g_segment_limit;
     w->width = width;
     w->height = height;
     w->fps_num = fps_num;
