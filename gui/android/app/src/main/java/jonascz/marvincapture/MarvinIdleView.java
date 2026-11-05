@@ -75,7 +75,7 @@ public final class MarvinIdleView extends View {
         setMeasuredDimension(resolveSize((int) (150 * dp), w), height);
     }
 
-    /** The size of one logo unit in pixels in a view of this size (onDraw, and the splash flight). */
+    /** The size of one logo unit in pixels in a view of this size (onDraw). */
     static float unit(float w, float h) {
         return Math.min(w / 64f, h / SPAN_H);
     }

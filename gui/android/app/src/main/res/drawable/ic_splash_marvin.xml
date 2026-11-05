@@ -1,9 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   The system splash screen's icon (Android 12+; values-v31/themes.xml): the whole Marvin, the still
-  pose of docs/images/logo.svg, laid out exactly like MarvinIdleView draws him (logo x 0..64 and
-  y 5..58, drop 2.5, centred on the icon's centre) so that MainActivity.playSplashExit can fly this
-  icon onto the live view and swap them unseen. 288 dp is the splash icon size without an icon
+  pose of docs/images/logo.svg, laid out like MarvinIdleView draws him (logo x 0..64 and
+  y 5..58, drop 2.5, centred on the icon's centre). 288 dp is the splash icon size without an icon
   background; everything has to stay inside a circle of 192 dp around the centre: at 2.5 dp per logo
   unit Marvin's half-diagonal is about 95 dp. Keep it in step with the SVG and MarvinIdleView.
 -->
