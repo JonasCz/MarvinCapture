@@ -98,10 +98,11 @@ static size_t find_header(const uint8_t *buf, size_t len, size_t from, unsigned 
 /* Emits the completed frame in r->frame_buf to the output callbacks.
  * r->expected_dseq is the sequence count: it starts at 0, increments once
  * per sequence written (real or zero-padded), and the caller's completion
- * loop has already brought it up to at least system_seq_count -- so it's
- * equal to system_seq_count normally, or (matching the pre-refactor
- * file-sequential code, which had no ceiling of its own) larger, on a
- * capture where a bogus dseq briefly ran past the end of the frame. */
+ * loop has already brought it up to at least the frame's size (its own
+ * standard, else the confirmed one) -- so it's equal to that normally, or
+ * (matching the pre-refactor file-sequential code, which had no ceiling of
+ * its own) larger, on a capture where a bogus dseq briefly ran past the end
+ * of the frame. */
 static int emit_frame(dv_reassembler_t *r)
 {
     size_t len = (size_t)r->expected_dseq * DIF_SEQUENCE_BYTES;
@@ -112,6 +113,68 @@ static int emit_frame(dv_reassembler_t *r)
     return 0;
 }
 
+/* The frame in progress says by itself which standard it is: sequence 10 or
+ * 11 arrived (only PAL has them), or its sequence header blocks' DSF bits
+ * (byte 3, bit 7: 1 = 625/50) agree clearly. 0 = no such evidence. */
+static unsigned frame_own_seq_count(const dv_reassembler_t *r)
+{
+    if (r->expected_dseq > NTSC_SEQ_COUNT)
+        return PAL_SEQ_COUNT;
+    unsigned pal = r->frame_dsf_pal, ntsc = r->frame_dsf_ntsc;
+    if (pal >= DV_DSF_MIN_VOTES && pal > 2 * ntsc)
+        return PAL_SEQ_COUNT;
+    if (ntsc >= DV_DSF_MIN_VOTES && ntsc > 2 * pal)
+        return NTSC_SEQ_COUNT;
+    return 0;
+}
+
+/* After a frame: the confirmed standard follows DV_STD_SWITCH_FRAMES frames
+ * in a row whose own evidence says the other one. */
+static void std_follow(dv_reassembler_t *r, unsigned own)
+{
+    if (own && !r->std_known) {
+        /* the first frame that says: that is the standard, no change */
+        r->std_known = 1;
+        r->system_seq_count = own;
+    }
+    if (!own || own == r->system_seq_count) {
+        r->std_cand_frames = 0;
+        return;
+    }
+    if (++r->std_cand_frames >= DV_STD_SWITCH_FRAMES) {
+        r->system_seq_count = own;
+        r->std_cand_frames = 0;
+        r->std_switches++;
+    }
+}
+
+/* Ends the DV frame in progress at the end of the stream or of DV (a switch
+ * to HDV): emitted if it is complete, else dropped (it was never handed to
+ * the output callbacks) with the counters put back. */
+static int dv_end_frame(dv_reassembler_t *r)
+{
+    int rc = 0;
+    if (r->frame_started) {
+        unsigned own = frame_own_seq_count(r);
+        if (r->expected_dseq < (own ? own : r->system_seq_count)) {
+            /* Capture stopped mid-frame. Zero-padding it out would end every
+             * output with a frame that is part black, so drop the partial
+             * frame instead and leave the output a whole number of good
+             * frames. */
+            r->sequences_written = r->frame_start_written;
+            r->sequences_dropped = r->frame_start_dropped;
+        } else {
+            /* Fully received, but not yet flushed -- that only happens when
+             * a later frame's dseq 0 arrives, and the capture stopped first. */
+            rc = emit_frame(r);
+            r->frames_written++;
+            std_follow(r, own);
+        }
+        r->frame_started = 0;
+    }
+    return rc;
+}
+
 /* Handles one located DIF sequence at buf+p with the given dseq. Advances
  * frame/sequence bookkeeping and copies real data into the in-progress
  * frame buffer; a frame is only handed to the output callbacks once it's
@@ -119,28 +182,30 @@ static int emit_frame(dv_reassembler_t *r)
  * dv_reassembler_finish at end of capture). */
 static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
 {
-    if (dseq >= r->system_seq_count) {
-        /* Only PAL has sequence numbers 10/11; upgrade our assumption. */
-        r->system_seq_count = PAL_SEQ_COUNT;
-    }
-
     if (dseq == 0) {
         if (r->frame_started) {
-            while (r->expected_dseq < r->system_seq_count) {
+            /* the frame is as long as it says it is (PAL / NTSC), padded with
+             * empty sequences only for the ones that did not arrive */
+            unsigned own = frame_own_seq_count(r);
+            unsigned n = own ? own : r->system_seq_count;
+            while (r->expected_dseq < n) {
                 r->sequences_dropped++;
                 r->expected_dseq++;
             }
             if (emit_frame(r) != 0)
                 return -1;
             r->frames_written++;
+            std_follow(r, own);
         }
         r->frame_started = 1;
         r->frame_start_written = r->sequences_written;
         r->frame_start_dropped = r->sequences_dropped;
+        r->frame_dsf_pal = r->frame_dsf_ntsc = 0;
         memset(r->frame_buf, 0, sizeof(r->frame_buf));
         memcpy(r->frame_buf, p, DIF_SEQUENCE_BYTES);
         r->sequences_written++;
         r->expected_dseq = 1;
+        if (p[3] & 0x80) r->frame_dsf_pal++; else r->frame_dsf_ntsc++;
         return 0;
     }
 
@@ -162,6 +227,7 @@ static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
     memcpy(r->frame_buf + (size_t)dseq * DIF_SEQUENCE_BYTES, p, DIF_SEQUENCE_BYTES);
     r->sequences_written++;
     r->expected_dseq = dseq + 1;
+    if (p[3] & 0x80) r->frame_dsf_pal++; else r->frame_dsf_ntsc++;
     return 0;
 }
 
@@ -219,10 +285,10 @@ static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 /* Validates the 12 bytes of isoch header + CIP header we've accumulated, and
  * on success reports how many payload bytes follow, how much to skip after
  * them, and which format the CIP FMT field says this is. Kept strict so that
- * resync after a glitch can't latch onto noise. Once a format is locked, only
- * that format is accepted. */
-static int iso_header_ok(const uint8_t *h, dv_format_t locked, unsigned *dif_len,
-                         unsigned *skip_len, dv_format_t *fmt_out)
+ * resync after a glitch can't latch onto noise. A packet of the other format
+ * than the current one is valid here; ring_feed() decides what to do with it. */
+static int iso_header_ok(const uint8_t *h, unsigned *dif_len, unsigned *skip_len,
+                         dv_format_t *fmt_out)
 {
     uint32_t w = (uint32_t)h[0] | ((uint32_t)h[1] << 8) |
                  ((uint32_t)h[2] << 16) | ((uint32_t)h[3] << 24);
@@ -252,9 +318,6 @@ static int iso_header_ok(const uint8_t *h, dv_format_t locked, unsigned *dif_len
     } else {
         return 0;
     }
-    if (locked != DV_FORMAT_UNKNOWN && f != locked)
-        return 0;
-
     *fmt_out = f;
     *dif_len = dlen - CIP_HEADER_BYTES;
     /* Payload is padded to a quadlet, then the status/timestamp trailer. */
@@ -294,7 +357,7 @@ static void check_dbc(dv_reassembler_t *r, unsigned dbc, unsigned blocks)
          * (measured over 20 s, 30 s, 60 s and 300 s captures), so counting it
          * as loss would put a permanent false positive on every run. */
         int joining = (r->format == DV_FORMAT_HDV)
-                          ? r->ts_packets < HDV_JOIN_TS_PACKETS
+                          ? r->ts_packets - r->ts_join_base < HDV_JOIN_TS_PACKETS
                           : !r->frame_started;
         r->dbc_epoch++;
         if (!joining) {
@@ -353,6 +416,62 @@ static int emit_picture(dv_reassembler_t *r)
     }
     r->ts_pic_len = 0;
     return rc;
+}
+
+/* Drops the picture in progress (never handed to the output callbacks) and
+ * rolls the packet count back to match. */
+static void ts_drop_picture(dv_reassembler_t *r)
+{
+    if (r->ts_gate_open && r->ts_pic_active)
+        r->ts_packets = r->ts_pic_start_packets;
+    r->ts_pic_active = 0;
+    r->ts_pic_len = 0;
+}
+
+/* Closes the gate: nothing is written until the next picture that opens a GOP
+ * (ts_gate_try_open()). PAT/PMT and the CC table stay. */
+static void ts_rearm_gate(dv_reassembler_t *r)
+{
+    ts_drop_picture(r);
+    r->ts_gate_open = 0;
+    r->ts_video_pid = 0;
+    r->ts_newpid = 0;
+    r->ts_newpid_gops = 0;
+}
+
+/* Opens the gate on packet p if it is a video PES start with a sequence
+ * header, i.e. the start of a GOP, so the decoder has everything it needs
+ * from packet one. Returns 1 if it opened (p is the first packet of the
+ * first picture), 0 if not, -1 if an output callback failed. */
+static int ts_gate_try_open(dv_reassembler_t *r, const uint8_t *p, unsigned po, unsigned pid,
+                            int video_start)
+{
+    static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
+    if (!(video_start && contains4(p + po, TS_PACKET_BYTES - po, seq_hdr)))
+        return 0;
+    r->ts_gate_open = 1;
+    r->ts_video_pid = (int)pid;
+    r->ts_newpid = 0;
+    r->ts_newpid_gops = 0;
+    /* PAT/PMT replay is its own small unit, written immediately and
+     * unconditionally -- unlike a picture, it is never dropped even if
+     * the capture stops before the first picture completes. */
+    if (r->ts_pat_valid) {
+        if (r->out.write && r->out.write(r->ts_pat, TS_PACKET_BYTES, r->out.user) != 0)
+            return -1;
+        r->ts_packets++;
+    }
+    if (r->ts_pmt_valid) {
+        if (r->out.write && r->out.write(r->ts_pmt, TS_PACKET_BYTES, r->out.user) != 0)
+            return -1;
+        r->ts_packets++;
+    }
+    r->ts_pic_start_packets = r->ts_packets;
+    r->ts_pic_active = 1;
+    if (ts_pic_append(r, p) != 0)
+        return -1;
+    r->ts_packets++;
+    return 1;
 }
 
 /* HDV: handles one complete 188-byte TS packet. Buffers it into the picture
@@ -429,36 +548,33 @@ static int ts_handle_packet(dv_reassembler_t *r)
                       (p[po + 3] & 0xF0) == 0xE0;
 
     if (!r->ts_gate_open) {
-        /* Open on a picture that carries a sequence header, i.e. the start
-         * of a GOP, so the decoder has everything it needs from packet one. */
-        if (!(video_start && contains4(p + po, TS_PACKET_BYTES - po, seq_hdr))) {
+        int rc = ts_gate_try_open(r, p, po, pid, video_start);
+        if (rc == 0)
             r->ts_discarded++;
-            return 0;
+        return rc < 0 ? -1 : 0;
+    }
+
+    if (video_start && (int)pid != r->ts_video_pid &&
+        contains4(p + po, TS_PACKET_BYTES - po, seq_hdr)) {
+        /* A GOP on another video PID. The tracked one's pictures never end
+         * while its PID is silent, so a PID change that persists is followed:
+         * the picture in progress (which ran on into the new PID) is
+         * dropped and the gate opens again here. */
+        if (r->ts_newpid == (int)pid) {
+            r->ts_newpid_gops++;
+        } else {
+            r->ts_newpid = (int)pid;
+            r->ts_newpid_gops = 1;
         }
-        r->ts_gate_open = 1;
-        r->ts_video_pid = (int)pid;
-        /* PAT/PMT replay is its own small unit, written immediately and
-         * unconditionally -- unlike a picture, it is never dropped even if
-         * the capture stops before the first picture completes. */
-        if (r->ts_pat_valid) {
-            if (r->out.write && r->out.write(r->ts_pat, TS_PACKET_BYTES, r->out.user) != 0)
-                return -1;
-            r->ts_packets++;
+        if (r->ts_newpid_gops >= DV_TS_PID_SWITCH_GOPS) {
+            ts_rearm_gate(r);
+            r->ts_pid_switches++;
+            return ts_gate_try_open(r, p, po, pid, video_start) < 0 ? -1 : 0;
         }
-        if (r->ts_pmt_valid) {
-            if (r->out.write && r->out.write(r->ts_pmt, TS_PACKET_BYTES, r->out.user) != 0)
-                return -1;
-            r->ts_packets++;
-        }
-        r->ts_pic_start_packets = r->ts_packets;
-        r->ts_pic_active = 1;
-        if (ts_pic_append(r, p) != 0)
-            return -1;
-        r->ts_packets++;
-        return 0;
     }
 
     if (video_start && (int)pid == r->ts_video_pid) {
+        r->ts_newpid_gops = 0;
         if (r->ts_pic_active && emit_picture(r) != 0)
             return -1;
         r->ts_pic_start_packets = r->ts_packets;
@@ -468,6 +584,12 @@ static int ts_handle_packet(dv_reassembler_t *r)
     if (ts_pic_append(r, p) != 0)
         return -1;
     r->ts_packets++;
+    if (r->ts_pic_len > DV_TS_PIC_MAX) {
+        /* no picture start for far too long (the video PID went silent):
+         * drop what piled up and wait for the next GOP, on whatever PID */
+        ts_rearm_gate(r);
+        r->ts_pic_overflows++;
+    }
     return 0;
 }
 
@@ -500,13 +622,90 @@ static int ts_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
     return 0;
 }
 
+/* DV state back to "waiting for a frame start" (the confirmed standard stays). */
+static void dv_reset(dv_reassembler_t *r)
+{
+    r->frame_started = 0;
+    r->expected_dseq = 0;
+    r->frame_dsf_pal = r->frame_dsf_ntsc = 0;
+    r->std_cand_frames = 0;
+    r->buf_len = 0;
+}
+
+/* HDV state back to a closed gate with nothing known: a new transport stream
+ * starts on a sequence header with its own PAT/PMT, PIDs and CC table. */
+static void hdv_reset(dv_reassembler_t *r)
+{
+    ts_rearm_gate(r);
+    r->ts_pmt_pid = 0;
+    r->ts_pat_valid = r->ts_pmt_valid = 0;
+    r->ts_have = 0;
+    memset(r->ts_cc, 0xFF, sizeof(r->ts_cc));
+    r->ts_join_base = r->ts_packets;
+}
+
+/* Forgets the run of other-format packets (it was too short to switch). */
+static void fmt_cand_drop(dv_reassembler_t *r)
+{
+    r->fmt_dropped_packets += r->fmt_cand_packets;
+    r->fmt_cand = DV_FORMAT_UNKNOWN;
+    r->fmt_cand_packets = 0;
+    r->fmt_cand_len = 0;
+}
+
+/* Keeps a payload of the run aside (at most DV_FMT_SWITCH_PACKETS of them). Out of
+ * memory it is just not kept: the replay then has a gap, as a lost packet would. */
+static int fmt_cand_append(dv_reassembler_t *r, const uint8_t *data, size_t n)
+{
+    if (r->fmt_cand_len + n > r->fmt_cand_cap) {
+        size_t cap = r->fmt_cand_cap ? r->fmt_cand_cap : (64u << 10);
+        while (cap < r->fmt_cand_len + n)
+            cap *= 2;
+        uint8_t *nb = realloc(r->fmt_cand_buf, cap);
+        if (!nb)
+            return 0;
+        r->fmt_cand_buf = nb;
+        r->fmt_cand_cap = cap;
+    }
+    memcpy(r->fmt_cand_buf + r->fmt_cand_len, data, n);
+    r->fmt_cand_len += n;
+    return 0;
+}
+
+/* The other format persisted: end the current one's unit as at the end of a
+ * capture (a complete DV frame is emitted, a partial unit dropped), start the
+ * new one afresh and replay the run that made the switch into it. */
+static int switch_format(dv_reassembler_t *r, dv_format_t fmt)
+{
+    int rc = 0;
+    if (r->format == DV_FORMAT_DV)
+        rc = dv_end_frame(r);
+    dv_reset(r);
+    hdv_reset(r);
+    r->format = fmt;
+    r->format_switches++;
+    r->dbc_valid = 0; /* the new stream's DBC runs on its own */
+    if (rc == 0 && r->fmt_cand_len > 0) {
+        /* each payload is whole DIF blocks / source packets, so the run
+         * back to back parses exactly as the packets did */
+        r->iso_pos = 0;
+        rc = fmt == DV_FORMAT_HDV ? ts_feed(r, r->fmt_cand_buf, r->fmt_cand_len)
+                                  : dif_feed(r, r->fmt_cand_buf, r->fmt_cand_len);
+    }
+    r->fmt_cand = DV_FORMAT_UNKNOWN;
+    r->fmt_cand_packets = 0;
+    r->fmt_cand_len = 0;
+    return rc;
+}
+
 static int ring_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 {
     while (len > 0) {
         if (r->iso_dif_left > 0) {
             size_t n = r->iso_dif_left < len ? r->iso_dif_left : len;
-            int rc = (r->format == DV_FORMAT_HDV) ? ts_feed(r, data, n)
-                                                  : dif_feed(r, data, n);
+            int rc = r->iso_to_cand ? fmt_cand_append(r, data, n)
+                     : (r->format == DV_FORMAT_HDV) ? ts_feed(r, data, n)
+                                                    : dif_feed(r, data, n);
             if (rc != 0)
                 return -1;
             data += n;
@@ -534,18 +733,40 @@ static int ring_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 
         unsigned dif_len = 0, skip_len = 0;
         dv_format_t fmt = DV_FORMAT_UNKNOWN;
-        if (iso_header_ok(r->iso_hdr, r->format, &dif_len, &skip_len, &fmt)) {
-            if (dif_len > 0) {
-                r->iso_packets++;
-                r->format = fmt;
-            } else {
+        if (iso_header_ok(r->iso_hdr, &dif_len, &skip_len, &fmt)) {
+            r->iso_to_cand = 0;
+            if (dif_len == 0) {
+                /* empty packets of either format: rate padding, no data */
                 r->iso_empty++;
+            } else if (r->format == DV_FORMAT_UNKNOWN || fmt == r->format) {
+                if (r->fmt_cand != DV_FORMAT_UNKNOWN)
+                    fmt_cand_drop(r); /* the other format's run ended too short */
+                r->format = fmt;
+                r->iso_packets++;
+            } else {
+                /* the other format: counted, kept aside; it becomes the
+                 * format once DV_FMT_SWITCH_PACKETS of it come in a row */
+                if (r->fmt_cand != fmt) {
+                    fmt_cand_drop(r);
+                    r->fmt_cand = fmt;
+                }
+                if (++r->fmt_cand_packets >= DV_FMT_SWITCH_PACKETS) {
+                    /* the run so far is replayed, this packet fed below */
+                    if (switch_format(r, fmt) != 0)
+                        return -1;
+                    r->iso_packets++;
+                } else {
+                    r->iso_to_cand = 1;
+                }
             }
             r->iso_pos = 0;
             /* CIP data block size is DBS quadlets (0x78 = 480 bytes for DV,
-             * 6 = 24 bytes for HDV), not one 80-byte DIF block. */
+             * 6 = 24 bytes for HDV), not one 80-byte DIF block. A packet kept
+             * aside is not checked: if it was a stray, the next packet of the
+             * current format shows the data it took as a gap. */
             unsigned dbs_bytes = (r->iso_hdr[5] ? r->iso_hdr[5] : 256u) * 4u;
-            check_dbc(r, r->iso_hdr[7], dif_len / dbs_bytes);
+            if (!r->iso_to_cand && (dif_len == 0 || fmt == r->format))
+                check_dbc(r, r->iso_hdr[7], dif_len / dbs_bytes);
             r->iso_dif_left = dif_len;
             r->iso_skip_left = skip_len;
             r->iso_hdr_have = 0;
@@ -627,27 +848,17 @@ void dv_reassembler_finish(dv_reassembler_t *r)
         /* Drop the trailing partial picture (never handed to the output
          * callbacks in the first place) so the output ends on a whole one,
          * and roll the packet count back to match. */
-        if (r->ts_gate_open && r->ts_pic_active)
-            r->ts_packets = r->ts_pic_start_packets;
-        r->ts_pic_active = 0;
-    } else if (r->frame_started) {
-        if (r->expected_dseq < r->system_seq_count) {
-            /* Capture stopped mid-frame. Zero-padding it out would end every
-             * output with a frame that is part black, so drop the partial
-             * frame instead (it was never handed to the output callbacks)
-             * and leave the output a whole number of good frames. */
-            r->sequences_written = r->frame_start_written;
-            r->sequences_dropped = r->frame_start_dropped;
-        } else {
-            /* Fully received, but not yet flushed -- that only happens when
-             * a later frame's dseq 0 arrives, and the capture stopped first. */
-            emit_frame(r);
-            r->frames_written++;
-        }
-        r->frame_started = 0;
+        ts_drop_picture(r);
+    } else {
+        /* a complete frame not yet flushed is emitted, a partial one dropped */
+        dv_end_frame(r);
     }
+    if (r->fmt_cand != DV_FORMAT_UNKNOWN)
+        fmt_cand_drop(r);
     free(r->buf);
     r->buf = NULL;
     free(r->ts_pic_buf);
     r->ts_pic_buf = NULL;
+    free(r->fmt_cand_buf);
+    r->fmt_cand_buf = NULL;
 }

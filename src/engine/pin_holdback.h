@@ -19,8 +19,9 @@
 /*
  * Hold-back FIFO: the units (DV frames, HDV pictures, PAT/PMT) that have
  * arrived but are not written yet, so a cut that is only confirmed later (a
- * scene break that has to persist for a while before it counts) can still be
- * back-dated to the unit where it really began.
+ * scene break or a format change, pin_fmtwatch.h, that has to persist for a
+ * while before it counts) can still be back-dated to the unit where it really
+ * began.
  *
  * The caller decides how much to hold, after each unit:
  *   - pin_holdback_keep_last(n): the last n units (a fixed window, as the DV
@@ -55,7 +56,8 @@ extern "C" {
 #define PIN_HOLD_CUT_OK 1u /* a new file may start with this unit */
 
 /* 32 MiB: about 10 s of HDV (25 Mbit/s) or DV (3.6 MB/s), far more than a
- * pending scene cut holds (DV 6 frames, HDV 2-3 GOPs: about 1 s). */
+ * pending scene cut or format change holds (DV 6 frames, HDV 2-3 GOPs: about
+ * 1 s). */
 #define PIN_HOLD_MAX_BYTES (32u * 1024 * 1024)
 
 typedef struct {

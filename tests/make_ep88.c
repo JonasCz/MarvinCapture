@@ -22,13 +22,15 @@
  * plain DV and MPEG-2 TS files, so the tests can drive dv_reassembler and the replay
  * device without a recording of the real endpoint.
  *
- * usage: make_ep88 [--no-junk] <out.bin> <in.dv|in.ts>...
+ * usage: make_ep88 [--no-junk] <out.bin> <in.dv|in.ts>[@N]...
  *
  * The inputs are wrapped one after the other into one continuous stream, each by its
  * content: a file that starts with the TS sync byte 0x47 is an MPEG-2 TS (HDV, every
  * 188-byte packet must start with 0x47); one that starts with a DIF header block is DV,
  * whole frames, each frame 144,000 or 120,000 bytes by the DSF bit of its own header
- * block (so PAL and NTSC can follow each other, even within one file).
+ * block (so PAL and NTSC can follow each other, even within one file). "@N" after a
+ * name takes only its first N TS packets or DV frames (a stray burst of one format in
+ * the other).
  *
  * What it writes, from the inside out:
  *  - IEC 61883 packets as a camera sends them. DV (61883-2): 6 DIF blocks = 480 bytes
@@ -207,11 +209,11 @@ static int is_dif_frame_start(const uint8_t *p)
     return p[0] == 0x1F && p[1] == 0x07 && p[2] == 0x00; /* header block, Dseq 0 */
 }
 
-static unsigned long wrap_dv(ep88_t *e, FILE *in, const char *path)
+static unsigned long wrap_dv(ep88_t *e, FILE *in, const char *path, unsigned long limit)
 {
     static uint8_t frame[DV_FRAME_PAL];
     unsigned long frames = 0, pal_frames = 0;
-    for (;;) {
+    while (frames < limit) {
         size_t n = fread(frame, 1, DIF_BLOCK, in);
         if (n == 0)
             break;
@@ -250,7 +252,7 @@ static void hdv_packet(ep88_t *e, const uint8_t *src, unsigned count)
     e->dbc = (e->dbc + 8u * count) & 0xFF; /* DBS 6: 8 data blocks per source packet */
 }
 
-static unsigned long wrap_ts(ep88_t *e, FILE *in, const char *path)
+static unsigned long wrap_ts(ep88_t *e, FILE *in, const char *path, unsigned long limit)
 {
     uint8_t src[HDV_MAX_PER_PACKET * SRC_PACKET];
     unsigned long packets = 0;
@@ -260,7 +262,7 @@ static unsigned long wrap_ts(ep88_t *e, FILE *in, const char *path)
         unsigned got = 0;
         while (got < want) {
             uint8_t *sp = src + (size_t)got * SRC_PACKET;
-            size_t n = fread(sp + 4, 1, TS_PACKET, in);
+            size_t n = packets < limit ? fread(sp + 4, 1, TS_PACKET, in) : 0;
             if (n == 0) {
                 eof = 1;
                 break;
@@ -313,7 +315,7 @@ int main(int argc, char **argv)
         arg++;
     }
     if (argc - arg < 2) {
-        fprintf(stderr, "usage: %s [--no-junk] <out.bin> <in.dv|in.ts>...\n", argv[0]);
+        fprintf(stderr, "usage: %s [--no-junk] <out.bin> <in.dv|in.ts>[@N]...\n", argv[0]);
         return 2;
     }
 
@@ -332,19 +334,28 @@ int main(int argc, char **argv)
         junk(e);
 
     for (int i = arg + 1; i < argc; i++) {
-        FILE *in = fopen(argv[i], "rb");
+        /* name@N: the first N TS packets / DV frames only */
+        char path[4096];
+        unsigned long limit = (unsigned long)-1;
+        snprintf(path, sizeof(path), "%s", argv[i]);
+        char *at = strrchr(path, '@');
+        if (at && at[1] && strspn(at + 1, "0123456789") == strlen(at + 1)) {
+            limit = strtoul(at + 1, NULL, 10);
+            *at = 0;
+        }
+        FILE *in = fopen(path, "rb");
         if (!in)
-            die("cannot open", argv[i]);
+            die("cannot open", path);
         int c = fgetc(in);
         if (c == EOF)
-            die("empty input", argv[i]);
+            die("empty input", path);
         rewind(in);
         if (c == 0x47)
-            wrap_ts(e, in, argv[i]);
+            wrap_ts(e, in, path, limit);
         else if (c == 0x1F)
-            wrap_dv(e, in, argv[i]);
+            wrap_dv(e, in, path, limit);
         else
-            die("neither DV (DIF header block) nor MPEG-2 TS (0x47)", argv[i]);
+            die("neither DV (DIF header block) nor MPEG-2 TS (0x47)", path);
         fclose(in);
     }
     msg_flush(e);

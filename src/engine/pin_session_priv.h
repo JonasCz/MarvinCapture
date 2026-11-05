@@ -41,6 +41,7 @@
 #include "pin_scene.h"
 #include "pin_split.h"
 #include "pin_holdback.h"
+#include "pin_fmtwatch.h"
 #include "hdv_aux.h"
 #include "pin_estimate.h"
 #include "pin_naming.h"
@@ -186,7 +187,6 @@ struct pin_session {
     unsigned scene_index;         /* 1-based */
     unsigned pass_index;          /* 1-based */
     uint64_t unit_index;
-    long scene_frame_counter;
     pin_scene_detector_t scene_det;
     int scene_det_ready;
     unsigned opts_scene_split_window;
@@ -208,6 +208,18 @@ struct pin_session {
     hdv_psi_t hdv_psi;       /* HDV: the latest PAT/PMT the stream sent (dv_write_cb()), to start
                                 a file with (capture start, scene cut) */
     pin_split_t split;       /* content-split lookahead (zeroed = not initialised) */
+    /* DV / HDV: the stream's format with its cool-down (pin_fmtwatch.h); the status fields
+     * (stream_kind, detected_std, width, height, dar, hdv_*) follow its confirmed format */
+    pin_fmtwatch_t fmtw;
+    long unit_seq;           /* DV / HDV units seen: their index for the watcher, the scene
+                                detector and the hold-back FIFO */
+    pin_kind_t file_kind;    /* the kind the open file was opened for: units of another kind
+                                (a DV <-> HDV change not confirmed, or after its cut) never reach it */
+    int fmt_numbered;        /* no scene split: a format change started a numbered file this pass */
+    int fmt_stop;            /* standard output saw DV <-> HDV: capture_guard() ends the capture */
+    char fmt_stop_text[PIN_TEXT_MAX];
+    int scene_cut_deferred;  /* a confirmed scene cut waits for a pending format change */
+    long scene_cut_at;       /* its index */
     double capture_start_s, last_data_s;
     int capture_began;       /* start_capture_now() opened the first file of this capture */
     double disk_check_s;     /* capture_guard(): last free-space check */

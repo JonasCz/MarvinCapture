@@ -59,6 +59,13 @@ foreach(_pair "pal;dv-pal-32k.dv" "ntsc;dv-ntsc.dv")
     set_tests_properties(reassembler_ep88_${_std} PROPERTIES FIXTURES_REQUIRED pin_test_data)
 endforeach()
 
+# dv_reassembler on tapes that mix formats (PAL / NTSC, DV / HDV, a stray burst, an HDV
+# video PID change), from the mixed dumps make_fixtures.cmake makes.
+add_executable(test_reassembler_mixed test_reassembler_mixed.c)
+target_link_libraries(test_reassembler_mixed PRIVATE pinnacle_core)
+add_test(NAME test_reassembler_mixed COMMAND test_reassembler_mixed "${PIN_TEST_DATA}")
+set_tests_properties(test_reassembler_mixed PROPERTIES FIXTURES_REQUIRED pin_test_data TIMEOUT 60)
+
 # pinnacle_lock: hardware-free (see tests/test_lock.c), but it does spawn a
 # real child process (fork on POSIX, CreateProcess on Windows) to exercise
 # cross-process BUSY detection and crash cleanup, so give it more headroom

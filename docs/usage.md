@@ -101,6 +101,41 @@ are deferred this way; a hard size limit would not be. Details:
 GOPs, and the new file starts with PAT, PMT and the picture that opens the GOP where
 the new timecode begins ([hdv.md](hdv.md#scene-split---split)).
 
+**Tapes that mix formats.** The capture follows the stream: DV <-> HDV, PAL <-> NTSC,
+DV's 4:3 / 16:9 and audio mode (sample rate, channels, 12 / 16 bit), HDV's size, frame
+rate and interlaced / progressive. A change counts only once it persists, as a scene
+break does: **5 DV frames or 3 HDV GOPs** in a row with the new value, so a damaged
+frame or GOP never causes one; frames that do not carry the value (no VAUX / AAUX pack,
+a picture without a sequence header) neither count nor break the run. The frames are
+held in memory meanwhile, so the change is back-dated to its first frame. Then:
+
+| output | new file on |
+|---|---|
+| raw `.dv` | PAL <-> NTSC (aspect and audio are carried per frame) |
+| DV AVI / MOV / H.264 / HEVC | PAL <-> NTSC, aspect (unless `--aspect` is forced), audio mode: they fix them when the file is created |
+| HDV `.m2t` / `.ts` | size, frame rate, interlaced / progressive |
+| any | DV <-> HDV: the new file has the other kind's format and extension (`--format` per kind), an HDV one starts with PAT, PMT and a GOP |
+
+The new file gets the new format's parameters. Without `--split` the first file keeps its
+name and the ones after a change are numbered: `name.dv`, `name-0002.m2t`,
+`name-0003.dv` (`name-pass-2-0002.dv` in pass 2); with `--split` a change takes the next
+scene number. A format change is a hard cut: it never waits for the 1 s / 1 MB minimum,
+and a scene break still pending before it is merged into the previous file as usual.
+The name check before a capture covers both kinds' extensions. The status shows the
+confirmed format, and `PIN_EVT_INPUT_FORMAT` is sent when it changes. Nothing is lost
+at a PAL / NTSC or DV parameter change (the reassembler sizes every frame by its own
+header, [protocol.md](protocol.md)); at DV <-> HDV the last DV frame is kept if it is
+complete and the HDV picture in progress is dropped ([hdv.md](hdv.md#tapes-that-mix-dv-and-hdv-or-hdv-formats)).
+
+Standard output (`--capture -`) cannot start a new file: a standard, aspect, audio or
+HDV format change goes on in the same stream (raw DIF and TS carry it), but DV <-> HDV
+ends the capture: "Capture stopped after capturing 12s, because the input changed from
+DV to HDV; a pipe carries one format only." (an error: dialog, exit 4).
+
+Tested with synthetic streams only (`test_replay_mixed_dv`, `test_replay_mixed_kind`):
+what a camera or deck sends at such a change on a real tape (a bus reset, a gap) is not
+known yet.
+
 **Timing.** Bring-up takes about **5.5 s** before the first byte arrives:
 bitstream upload, a 1.5 s FPGA settle, the 1394 link start-up, finding the
 camera and connecting to its output plug ([startup.md](startup.md)). `-t`
@@ -257,7 +292,8 @@ capture starts (not for the user's own stop).
 | `DEVICE_LOST` | the USB stream failed and the unit no longer answers a standard GET_STATUS on EP0 (unplugged); the session goes to ERROR. Another USB failure is `ERROR` |
 | `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
 | `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second |
-| `WRITE_ERROR` | writing a file failed, or the next file (split, pass) could not be created |
+| `WRITE_ERROR` | writing a file failed, or the next file (split, pass, format change) could not be created |
+| `ERROR` | any other error: a USB failure, a failed video encoder, and standard output seeing the tape change between DV and HDV |
 | `DISK_SLOW` | the output drive could not keep up and the disk writer's queue filled (64 MB for DV / HDV, ~18 s; 512 MB for analog, ~25 s). The file ends cleanly before the first unit that did not fit, rather than going on with a hole: the sinks count frames, so a lost analog frame would shift the audio against the video for the rest of the file |
 
 A capture that drives the deck (`start_deck`) stops the tape when it ends for

@@ -343,11 +343,8 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
         int ncand = 0;
         if (st.input != PIN_INPUT_DV) {
             cand[ncand++] = o.format_analog;
-        } else if (st.signal && st.stream_kind == PIN_KIND_HDV) {
-            cand[ncand++] = o.format_hdv;
-        } else if (st.signal && st.stream_kind == PIN_KIND_DV) {
-            cand[ncand++] = o.format_dv;
         } else {
+            /* and a tape can change between DV and HDV during the capture */
             cand[ncand++] = o.format_dv;
             cand[ncand++] = o.format_hdv;
         }

@@ -85,7 +85,7 @@ int main(int argc, char **argv)
 
     fprintf(stderr, "replay_reassembler: %s -> %s\n", in_path, out_path);
     fprintf(stderr, "  chunks fed:          %lu\n", chunks);
-    fprintf(stderr, "  format:              %s\n",
+    fprintf(stderr, "  format (at the end): %s\n",
             reasm.format == DV_FORMAT_HDV ? "HDV" :
             reasm.format == DV_FORMAT_DV ? "DV" : "unknown");
     fprintf(stderr, "  bytes fed:           %lu\n", reasm.bytes_fed);
@@ -101,6 +101,11 @@ int main(int argc, char **argv)
     fprintf(stderr, "  iso resyncs:         %lu\n", reasm.iso_resyncs);
     fprintf(stderr, "  dbc gaps:            %lu\n", reasm.dbc_gaps);
     fprintf(stderr, "  dbc lost blocks:     %lu\n", reasm.dbc_lost_blocks);
+    fprintf(stderr, "  DV/HDV switches:     %lu (other-format packets dropped: %lu)\n",
+            reasm.format_switches, reasm.fmt_dropped_packets);
+    fprintf(stderr, "  PAL/NTSC switches:   %lu\n", reasm.std_switches);
+    fprintf(stderr, "  video PID switches:  %lu (pictures dropped as too big: %lu)\n",
+            reasm.ts_pid_switches, reasm.ts_pic_overflows);
 
     return 0;
 }

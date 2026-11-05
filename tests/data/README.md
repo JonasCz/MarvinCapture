@@ -18,6 +18,11 @@ changed. It takes about a second.
 | `hdv-split-a1.ts`, `-x.ts`, `-a2.ts`, `-b.ts` | Pieces encoded as `hdv.ts`, each with its own GOP timecode, the clock running on from one to the next: a1 34 pictures from 01:00:00:00, x one GOP with a stray timecode (03:00:00:00), a2 36 pictures from 01:00:01:21 (a1's timecode going on), b 48 pictures from 05:00:00:00; the test joins them into one tape | `test_replay_hdv_split` |
 | `ep88-pal.bin` | Raw EP 0x88 dump of `dv-pal-32k.dv` (2 MiB, short like a cut-down dump of a real camera: the replay tests count on it ending within a second) | `reassembler_ep88_pal`, the PAL replay tests (`test_replay_*`, `test_pin_script_run`, `test_pin_check_output`), `test_dv_rewrap`, `test_hwenc_sink` |
 | `ep88-ntsc.bin` | Raw EP 0x88 dump of `dv-ntsc.dv` | `reassembler_ep88_ntsc`, `test_dv_rewrap` |
+| `ep88-pal-ntsc.bin` | Tape that changes standard: `dv-pal.dv` then `dv-ntsc.dv` in one dump | `test_reassembler_mixed`, `test_replay_mixed_dv` |
+| `ep88-dv-hdv-dv.bin` | DV, HDV, DV: `dv-pal-32k.dv`, `hdv.ts`, `dv-ntsc.dv` | `test_reassembler_mixed`, `test_replay_mixed_kind` |
+| `ep88-dv-stray.bin` | `dv-pal-32k.dv`, the first 300 TS packets of `hdv.ts` (too short a burst to switch), `dv-pal-32k.dv` | `test_reassembler_mixed` |
+| `ep88-hdv-pid.bin` | `hdv.ts` then `hdv-720p.ts`: the video PID (0x810 to 0x100), PMT and format change | `test_reassembler_mixed` |
+| `ep88-pal-48k-32k.bin` | Audio mode change: `dv-pal.dv` (48 kHz) then `dv-pal-32k.dv` (32 kHz) | `test_replay_mixed_dv` |
 
 The DV and TS files are ffmpeg's `testsrc2` pattern and a tone (the exact commands are in
 `make_fixtures.cmake`). The `ep88-*.bin` dumps are what the device would send for those
@@ -26,9 +31,10 @@ records and type-9 messages, with a few hundred bytes of junk in front as when a
 a running stream (its header comment has the details). Reassembled, a dump gives back its
 `.dv` file byte for byte, which is what the `reassembler_ep88_*` tests check.
 
-`make_ep88 [--no-junk] <out.bin> <in.dv|in.ts>...` takes several inputs, wrapped one after
-the other into one stream, each detected by its content: whole DV frames (PAL or NTSC per
-frame, from the DSF bit) or an MPEG-2 TS (as IEC 61883-4 source packets).
+`make_ep88 [--no-junk] <out.bin> <in.dv|in.ts>[@N]...` takes several inputs, wrapped one
+after the other into one stream, each detected by its content: whole DV frames (PAL or NTSC
+per frame, from the DSF bit) or an MPEG-2 TS (as IEC 61883-4 source packets). `@N` takes
+only an input's first N DV frames or TS packets.
 
 **Without ffmpeg** (configure says so with a warning; `-DPIN_TEST_FFMPEG=OFF` configures as
 if there were none) the tests that need these files print `SKIP` and pass, except when the

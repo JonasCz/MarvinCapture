@@ -32,13 +32,20 @@ Traps (all learned the hard way):
   Continuity tracking must restart after a stream break (`hdv_err_reset`, >1 s
   without data) or every rewind/pause shows a false loss.
 - Clip counters count at arrival, not at commit, so units held by the split
-  lookahead (and by the scene cut's hold-back FIFO, `pin_holdback.h`) are
-  charged to the previous clip.
+  lookahead (and by the hold-back FIFO, `pin_holdback.h`, for a scene cut or a
+  format change) are charged to the previous clip.
+- A PAL / NTSC change no longer pads NTSC frames to 12 sequences: the reassembler
+  sizes each frame by its own DSF bits / sequences 10-11, so a clean mixed tape has
+  no error frames (`test_replay_mixed_dv` asserts zero). Units of the other kind
+  (DV <-> HDV) are counted at arrival like any unit, even those a file never gets.
 - The HDV replay (`replay_run_ts()`) hands what precedes the first video PES
   (SDT, PAT, PMT) to the write callback only, like the reassembler's PAT/PMT
   unit: on `dv_on_unit()` it would count as a picture with a PES error.
 - The only shipped views of these counters are the status line / snapshot fields
   of `MarvinCaptureCLI` and the GUI; the old CIP/DBC continuity line of `pincli` is
   gone (`dbc_gaps` / `dbc_joins` still live in `dv_reassembler.h` and the replay
-  baseline test checks them). Check a change with the replay tests and, for the
+  baseline test checks them; so do the format-change counters `format_switches`,
+  `fmt_dropped_packets`, `std_switches`, `ts_pid_switches`, `ts_pic_overflows`,
+  printed by `tests/replay_reassembler` and checked by `test_reassembler_mixed`,
+  not in the status). Check a change with the replay tests and, for the
   live behaviour, a `MarvinCaptureCLI --debug` capture.

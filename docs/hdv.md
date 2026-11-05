@@ -35,7 +35,8 @@ Observed stream from the test camera: MPEG-2 Main, 1440x1080 (SAR 4:3), 25 fps,
 25 Mbit/s, plus MP2 48 kHz stereo audio. PIDs: video `0x810`, audio `0x814`,
 PAT `0x0`, PMT `0x81`. The DV CIP validation in `dv_reassembler.c` distinguishes
 the two by the FMT field (`h[8] & 0x3f`) and, for HDV, `DBS == 6` and a payload
-that is a multiple of 192 bytes; the first data packet locks the format.
+that is a multiple of 192 bytes; the first data packet sets the format, and it
+follows a tape that changes between DV and HDV ([below](#tapes-that-mix-dv-and-hdv-or-hdv-formats)).
 
 ## What the capture does
 
@@ -91,6 +92,39 @@ Tested with an ffmpeg-made tape (a timecode jump, and a stray GOP that must not 
 `test_replay_hdv_split`), not with a camera's tape yet. Unverified: whether a camera
 starts a recording with a closed GOP (or sets `broken_link`); an open GOP's leading B
 pictures would not decode at the start of the new file.
+
+## Tapes that mix DV and HDV, or HDV formats
+
+- **DV <-> HDV.** The reassembler drops data packets of the other format until
+  `DV_FMT_SWITCH_PACKETS` (256) of them arrive in a row with no packet of the current
+  format between them: more than the receive ring holds (stale ring contents when a read
+  joins never switch it), about one DV frame's worth or 35 ms. Shorter runs stay
+  dropped (`fmt_dropped_packets`; if they were the current stream's packets with a
+  corrupt header, the next one shows them as a DBC gap). On a switch the run is replayed into the new format, so nothing of it is
+  lost; the old format's unit in progress ends as at the end of a capture (a complete DV
+  frame is written, the HDV picture in progress dropped), and HDV starts again at its
+  gate (PAT/PMT, then a picture with a sequence header; PIDs and continuity counters
+  learnt afresh). The session then confirms the new kind over its own cool-down (3 GOPs,
+  or 5 DV frames) and starts a new file in the other kind's format and extension from
+  the first unit of the new kind ([usage.md](usage.md#running-a-capture)); on standard
+  output the capture ends instead.
+- **1080i <-> 720p, or another frame rate.** A change of the sequence header's size,
+  frame rate or `progressive_sequence` counts after 3 GOPs in a row say it (a single
+  GOP with a corrupt header changes nothing) and starts a new file at the GOP where it
+  began, with PAT and PMT in front.
+- **Another video PID.** The video PID is the one the gate opened on. When GOPs
+  (a video PES with a sequence header) arrive on another video PID twice with no
+  picture of the tracked one between them, the gate opens again on the new PID: the
+  picture in progress (which ran on into the new PID) and the new PID's first GOP are
+  lost, the next picture comes behind the latest PAT/PMT. A picture that grows past
+  4 MB without another video PES start (the video PID went silent) is dropped and the
+  gate re-armed, so memory stays bounded.
+
+Tested with ffmpeg-made streams back to back in synthetic EP 0x88 dumps
+(`test_reassembler_mixed`, `test_replay_mixed_kind`), not with a camera. Unknown: what a
+camera sends when a tape switches between DV and HDV (a bus reset ends the capture as
+`CAMERA_LOST`; a gap or a burst of garbage should be handled as above), and whether any
+camera changes the video PID or the HDV format within a tape.
 
 ## Verifying integrity — read this before trusting the DBC line
 

@@ -877,10 +877,65 @@ static double unit_seconds(const pin_session_t *s)
     return s->is_60hz ? 1001.0 / 30000.0 : 0.04;
 }
 
+/* The kind of a DV / HDV unit by its bytes: an HDV unit is whole TS packets that start with
+ * the sync byte; a DV frame (120,000 / 144,000 bytes, a header block 0x1F first) never is. */
+static pin_kind_t unit_kind(const uint8_t *data, size_t len)
+{
+    return len && len % HDV_TS_PACKET_SIZE == 0 && data[0] == HDV_TS_SYNC_BYTE ? PIN_KIND_HDV
+                                                                                 : PIN_KIND_DV;
+}
+
+/* HDV: the PID of the unit's first TS packet if that starts a video PES (a picture, as the
+ * reassembler and the TS replay cut them), else -1 (PAT/PMT and what precedes a stream's
+ * first picture). */
+static int hdv_picture_pid(const uint8_t *d, size_t len)
+{
+    if (len < HDV_TS_PACKET_SIZE || d[0] != HDV_TS_SYNC_BYTE || !(d[1] & 0x40) || !(d[3] & 0x10))
+        return -1;
+    size_t po = (d[3] & 0x20) ? 5u + d[4] : 4u;
+    if (po + 4 > HDV_TS_PACKET_SIZE || d[po] || d[po + 1] || d[po + 2] != 1 || (d[po + 3] & 0xF0) != 0xE0)
+        return -1;
+    return ((d[1] & 0x1F) << 8) | d[2];
+}
+
+static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len);
+
+/* HDV: the latest PAT and PMT, so what follows decodes from its first packet. */
+static void hdv_emit_psi(pin_session_t *s)
+{
+    if (s->hdv_psi.pat_valid) commit_unit(s, s->hdv_psi.pat, HDV_TS_PACKET_SIZE);
+    if (s->hdv_psi.pmt_valid) commit_unit(s, s->hdv_psi.pmt, HDV_TS_PACKET_SIZE);
+}
+
+/* HDV file gate: a file opens at an arbitrary picture (a capture start, a pass, a format
+ * change), but a transport stream must start on a GOP (sequence header) or decoders reject
+ * the first pictures. Returns 1 if the unit may be written; when it opens, it first writes
+ * the latest PAT/PMT, so the file decodes from its first packet. Live and replay alike. */
+static int hdv_write_gate(pin_session_t *s, const uint8_t *data, size_t len)
+{
+    if (!s->hdv_await_gop)
+        return 1;
+    static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
+    int found = 0;
+    for (size_t i = 0; i + 4 <= len; i++)
+        if (!memcmp(data + i, seq_hdr, 4)) { found = 1; break; }
+    if (!found)
+        return 0;
+    s->hdv_await_gop = 0;
+    hdv_emit_psi(s);
+    return 1;
+}
+
 /* Every unit that reaches a file goes through here (so a pending content
- * split can hold it). frame_index < 0: carries no time (PAT/PMT, raw). */
+ * split can hold it). frame_index < 0: carries no time (PAT/PMT, raw). Units of
+ * another kind than the open file's (DV <-> HDV) are dropped: a stray one, or
+ * one of a change that is cut elsewhere (a new file, or the end of a pipe). */
 static void commit_unit_fi(pin_session_t *s, const uint8_t *data, size_t len, long frame_index)
 {
+    if (!s->sink || unit_kind(data, len) != s->file_kind)
+        return;
+    if (s->file_kind == PIN_KIND_HDV && !hdv_write_gate(s, data, len))
+        return;
     split_ensure(s);
     pin_split_push(&s->split, data, len, frame_index, unit_seconds(s));
 }
@@ -905,15 +960,6 @@ static void hold_push(pin_session_t *s, const uint8_t *data, size_t len, long fr
     pin_holdback_push(&s->hold, data, len, frame_index, flags);
 }
 
-/* HDV: the latest PAT and PMT, so what follows decodes from its first packet. */
-static void hdv_emit_psi(pin_session_t *s, void (*emit)(pin_session_t *, const uint8_t *, size_t))
-{
-    if (s->hdv_psi.pat_valid) emit(s, s->hdv_psi.pat, HDV_TS_PACKET_SIZE);
-    if (s->hdv_psi.pmt_valid) emit(s, s->hdv_psi.pmt, HDV_TS_PACKET_SIZE);
-}
-
-static void emit_commit(pin_session_t *s, const uint8_t *d, size_t n) { commit_unit(s, d, n); }
-
 /* The new segment of a scene cut begins here (pin_holdback_cut()): the units
  * before it went to the current file. HDV: a new file starts with the PAT and
  * PMT, then the cut picture (which opens a GOP). */
@@ -921,8 +967,8 @@ static void scene_cut_begin(void *user, long index)
 {
     pin_session_t *s = user;
     (void)index;
-    if (pin_split_begin(&s->split) && s->stream_kind == PIN_KIND_HDV)
-        hdv_emit_psi(s, emit_commit);
+    if (pin_split_begin(&s->split) && s->file_kind == PIN_KIND_HDV)
+        hdv_emit_psi(s);
 }
 
 /* A scene cut was confirmed at cut_frame_index. Units before it belong to
@@ -937,6 +983,60 @@ static void scene_cut(pin_session_t *s, long cut_frame_index)
     /* a still-pending earlier split never made it: its units stay in the old file */
     pin_split_cancel(&s->split);
     pin_holdback_cut(&s->hold, cut_frame_index, scene_cut_begin, s);
+}
+
+static void file_format_for_stream(pin_session_t *s);
+
+/* A format change's new file begins here (pin_holdback_cut()): the units before it went
+ * to the old one. It is a hard cut, never merged back like a scene split's: the old file
+ * is finished and the next one opened with the new format (kind, format and extension,
+ * geometry, aspect, audio), numbered like a scene: "name-0002" after "name" without scene
+ * split. A file that got nothing yet (a pass that began on the old format's last
+ * frames) is replaced under its own name. HDV: the file starts on a GOP with PAT/PMT
+ * (hdv_write_gate()). Caller holds the lock. */
+static void format_cut_begin(void *user, long index)
+{
+    pin_session_t *s = user;
+    (void)index;
+    int empty = s->split.file_units == 0;
+    hand_over_file(s);
+    if (!empty) {
+        s->scene_index++;
+        if (!s->capture_opts.scene_split)
+            s->fmt_numbered = 1;
+    }
+    file_format_for_stream(s);
+    s->scene_det_ready = 0; /* the scene detector starts over at the new frame rate */
+    open_sink_for_scene(s);
+}
+
+/* A change of the stream's format was confirmed (pin_fmtwatch.h) during a capture, its
+ * first unit at index start (held, with what followed it). What it does to the open file
+ * is pin_format_change_action()'s. Caller holds the lock. */
+static void capture_format_change(pin_session_t *s, const pin_stream_fmt_t *old, long start)
+{
+    const pin_stream_fmt_t *nf = &s->fmtw.cur;
+    int to_stdout = pin_path_is_stdout(s->capture_opts.path);
+    pin_fmtchg_t act = pin_format_change_action(s->active_format, to_stdout,
+                                                s->capture_opts.aspect != PIN_ASPECT_AUTO, old, nf);
+    if (act == PIN_FMTCHG_KEEP)
+        return; /* the open file carries it (a scene cut waiting for this goes ahead) */
+    s->scene_cut_deferred = 0; /* this is the cut */
+    if (act == PIN_FMTCHG_STOP) {
+        /* a pipe carries one kind: what came before the change still goes out, the new
+         * kind never does; capture_guard() ends the capture */
+        pin_holdback_flush(&s->hold);
+        if (!s->fmt_stop) {
+            s->fmt_stop = 1;
+            pin_format_change_stop_text(old->kind, nf->kind, s->fmt_stop_text, sizeof(s->fmt_stop_text));
+        }
+        return;
+    }
+    /* a pending scene split is settled first, by its own rule: still too short to be a file
+     * of its own, so its units stay in the current one */
+    split_ensure(s);
+    pin_split_cancel(&s->split);
+    pin_holdback_cut(&s->hold, start, format_cut_begin, s);
 }
 
 /* ========================================================================
@@ -1162,9 +1262,10 @@ static void adopt_renumbered_file(pin_session_t *s)
 
 static void open_sink_for_scene(pin_session_t *s)
 {
+    /* numbered: scene split, a first number, or the files after a format change */
     pin_naming_opts_t nopts = {
         .scene_split = s->capture_opts.scene_split,
-        .always_number = s->capture_opts.first_number != 0,
+        .always_number = s->capture_opts.first_number != 0 || s->fmt_numbered,
         .scene_index = s->scene_index,
         .pass = s->pass_index,
     };
@@ -1178,7 +1279,7 @@ static void open_sink_for_scene(pin_session_t *s)
     }
 
     /* a file is created by its first video unit (pin_sink_lazy): no video, no file */
-    s->sink = to_stdout ? pin_sink_create_stdout(s->stream_kind)
+    s->sink = to_stdout ? pin_sink_create_stdout(s->file_kind)
                         : pin_sink_lazy(pin_sink_create(s->active_format));
     if (!s->sink) {
         set_error(s, PIN_ERR_ARG, "unsupported output format");
@@ -1196,7 +1297,9 @@ static void open_sink_for_scene(pin_session_t *s)
 
     pin_sink_params_t params;
     memset(&params, 0, sizeof(params));
-    params.kind = s->stream_kind;
+    /* the open file's kind; its format is the stream's confirmed one (dv_on_unit()) */
+    const pin_kind_t kind = s->file_kind;
+    params.kind = kind;
     strncpy(params.title, s->capture_opts.title, sizeof(params.title) - 1);
     /* AUTO resolves to the stream's own detected aspect (DV: VAUX 16:9
      * flag via dv_on_unit(); analog: fixed 4:3; HDV: the sequence header's
@@ -1210,9 +1313,9 @@ static void open_sink_for_scene(pin_session_t *s)
     int is_pal = s->detected_std != PIN_STD_NTSC && s->detected_std != PIN_STD_NTSC_443 &&
                  s->detected_std != PIN_STD_NTSC_J;
     /* Analog: "PAL" here means 625/50, which PAL-M and PAL-60 are not. */
-    if (s->stream_kind == PIN_KIND_ANALOG)
+    if (kind == PIN_KIND_ANALOG)
         is_pal = !pinnacle_std_is_60hz(s->analog.cfg.standard);
-    if (s->stream_kind == PIN_KIND_ANALOG) {
+    if (kind == PIN_KIND_ANALOG) {
         params.width = (int)s->analog.width;
         params.height = (int)s->analog.height;
         params.fps_num = is_pal ? 25 : 30000;
@@ -1221,15 +1324,16 @@ static void open_sink_for_scene(pin_session_t *s)
         params.top_field_first = 1;
         params.audio_rate = 48000;
         params.audio_channels = 2;
-    } else if (s->stream_kind == PIN_KIND_DV) {
+    } else if (kind == PIN_KIND_DV) {
         params.width = 720;
         params.height = is_pal ? 576 : 480;
         params.fps_num = is_pal ? 25 : 30000;
         params.fps_den = is_pal ? 1 : 1001;
         params.interlaced = 1;
         params.top_field_first = 0; /* DV: BFF, per the plan */
-        params.audio_rate = 48000;
-        params.audio_channels = 2;
+        /* the audio the stream's AAUX says (the DV sinks also read it from the first frame) */
+        params.audio_rate = s->fmtw.cur.audio_rate > 0 ? s->fmtw.cur.audio_rate : 48000;
+        params.audio_channels = s->fmtw.cur.audio_channels > 0 ? s->fmtw.cur.audio_channels : 2;
     } else { /* HDV: what the stream says (dv_on_unit()); 1080i29.97 TFF until it is known */
         params.width = s->hdv_seq_w ? s->hdv_seq_w : 1440;
         params.height = s->hdv_seq_h ? s->hdv_seq_h : 1080;
@@ -1239,9 +1343,9 @@ static void open_sink_for_scene(pin_session_t *s)
         params.audio_rate = 48000;
         params.audio_channels = 2;
     }
-    pin_sink_sar_for(s->stream_kind, is_pal, params.aspect, params.width, params.height,
+    pin_sink_sar_for(kind, is_pal, params.aspect, params.width, params.height,
                       &params.sample_aspect_num, &params.sample_aspect_den);
-    params.colour_matrix = s->stream_kind == PIN_KIND_HDV ? PIN_MATRIX_BT709 : PIN_MATRIX_BT601;
+    params.colour_matrix = kind == PIN_KIND_HDV ? PIN_MATRIX_BT709 : PIN_MATRIX_BT601;
     params.deinterlace = pin_fmt_clamp_deinterlace(s->capture_opts.deinterlace);
     params.video_quality = pin_fmt_clamp_quality(s->capture_opts.video_quality);
     params.ffv1_compression = pin_fmt_clamp_ffv1(s->capture_opts.ffv1_compression);
@@ -1260,7 +1364,7 @@ static void open_sink_for_scene(pin_session_t *s)
      * the file then stops before the first lost unit instead of going on
      * with a hole that the sinks, counting frames, would not show. */
     size_t cap = to_stdout ? PIN_WRITER_PIPE_CAPACITY
-               : s->stream_kind == PIN_KIND_ANALOG ? PIN_WRITER_ANALOG_CAPACITY : 0;
+               : kind == PIN_KIND_ANALOG ? PIN_WRITER_ANALOG_CAPACITY : 0;
     s->writer = pin_writer_start_ex(cap, writer_consume, s->sink, PIN_WRITER_OVERFLOW_FATAL);
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
     s->encoder_behind_logged = 0;
@@ -1392,33 +1496,8 @@ typedef struct {
     int bus_sig_valid;
     hdv_err_state_t hdv_err;       /* continuity / reference tracking for the error stats */
     unsigned units_out;            /* frames / pictures handed to dv_on_unit() (replay pacing) */
+    pin_kind_t unit_kind;          /* the kind of the last unit (DV <-> HDV resets the above) */
 } dv_ctx_t;
-
-/* HDV capture gate: a session's sink opens at an arbitrary picture, but a
- * transport stream must start on a GOP (sequence header) or decoders reject
- * the first pictures. Returns 1 if the unit may be written; when it opens, it
- * first emits the latest PAT/PMT via emit(), so the file decodes from its
- * first packet. Live and replay alike (a replay's capture starts wherever the
- * file is playing, too). */
-static int hdv_write_gate(pin_session_t *s, const uint8_t *data, size_t len,
-                          void (*emit)(pin_session_t *, const uint8_t *, size_t))
-{
-    if (!s->hdv_await_gop)
-        return 1;
-    static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
-    int found = 0;
-    for (size_t i = 0; i + 4 <= len; i++)
-        if (!memcmp(data + i, seq_hdr, 4)) { found = 1; break; }
-    if (!found)
-        return 0;
-    s->hdv_await_gop = 0;
-    hdv_emit_psi(s, emit);
-    return 1;
-}
-
-/* HDV scene split: the gate's PAT/PMT go through the hold-back FIFO, ahead of
- * the first picture (no time of their own). */
-static void emit_hold(pin_session_t *s, const uint8_t *d, size_t n) { hold_push(s, d, n, -1, 0); }
 
 /* Forward decls: defined further down (near handle_inline_commands()), but
  * dv_on_unit()/analog_video_cb() above them need to call in when the
@@ -1429,26 +1508,127 @@ static int dv_write_cb(const uint8_t *data, size_t len, void *user)
 {
     dv_ctx_t *ctx = user;
     pin_session_t *s = ctx->s;
+    if (unit_kind(data, len) != PIN_KIND_HDV)
+        return 0; /* a DV frame: dv_on_unit() follows and routes it */
+    pin_session_lock(s);
     /* HDV: the latest PAT/PMT, to start a file with (hdv_write_gate(), scene_cut()); every unit,
-     * captured or not, including the reassembler's own PAT/PMT unit at its gate, which only
-     * comes through here. A DV frame is no whole number of TS packets. */
-    if (len && len % HDV_TS_PACKET_SIZE == 0 && data[0] == HDV_TS_SYNC_BYTE)
-        hdv_psi_scan(&s->hdv_psi, data, len / HDV_TS_PACKET_SIZE);
-    if (!s->sink) /* not capturing: nothing to write, still fully reassembled for preview */
-        return 0;
-    /* With scene split, dv_on_unit()'s two branches write instead, through the hold-back
-     * FIFO (DV per-frame subcode, HDV per-GOP timecode). s->stream_kind is only known once
-     * the first unit has gone through dv_on_unit(), which runs right after this on the very
-     * first unit, so the one-unit-late kind on that first call only ever affects whether
-     * that single first unit is buffered or committed immediately -- never a correctness
-     * issue, just which file it lands in. */
-    int scene_split_active = s->capture_opts.scene_split;
-    if (!scene_split_active) {
-        if (s->stream_kind == PIN_KIND_HDV && !hdv_write_gate(s, data, len, emit_commit))
-            return 0;
-        commit_unit(s, data, len);
-    }
+     * captured or not, including the reassembler's own PAT/PMT unit at its gate. */
+    hdv_psi_scan(&s->hdv_psi, data, len / HDV_TS_PACKET_SIZE);
+    /* A picture gets dv_on_unit() next, which routes it. A unit that is no picture (that
+     * PAT/PMT unit, what precedes the TS replay's first picture) gets none: it joins the
+     * held units here with the index of the picture that follows it, so it goes where that
+     * picture goes (after a new video PID or a DV -> HDV change: the new file, where the
+     * gate writes the latest PAT/PMT in front of the first GOP anyway). */
+    if (s->sink && hdv_picture_pid(data, len) < 0)
+        hold_push(s, data, len, s->unit_seq, 0);
+    pin_session_unlock(s);
     return 0;
+}
+
+/* The status fields of a DV / HDV stream from its confirmed format (s->fmtw.cur), so a
+ * single frame or GOP with another value neither shows nor reaches a file's parameters.
+ * Caller holds the lock. */
+static void stream_status_from_format(pin_session_t *s)
+{
+    const pin_stream_fmt_t *f = &s->fmtw.cur;
+    if (f->kind == 0)
+        return;
+    s->stream_kind = f->kind;
+    if (f->kind == PIN_KIND_DV) {
+        if (f->pal >= 0) {
+            s->detected_std = f->pal ? PIN_STD_PAL : PIN_STD_NTSC;
+            s->is_60hz = !f->pal;
+            s->width = 720;
+            s->height = f->pal ? 576 : 480;
+        }
+        s->dar_num = f->wide > 0 ? 16 : 4;
+        s->dar_den = f->wide > 0 ? 9 : 3;
+        return;
+    }
+    /* HDV: the format, as the stream says it (open_sink_for_scene() hands it to the sinks) */
+    if (f->width > 0 && f->height > 0) {
+        s->hdv_seq_w = f->width;
+        s->hdv_seq_h = f->height;
+    }
+    if (f->fps_num > 0 && f->fps_den > 0) {
+        s->hdv_fps_num = f->fps_num;
+        s->hdv_fps_den = f->fps_den;
+    }
+    s->hdv_seqext_seen = f->progressive >= 0;
+    s->hdv_progressive = f->progressive > 0;
+    s->width = s->hdv_seq_w ? s->hdv_seq_w : 1440;
+    s->height = s->hdv_seq_h ? s->hdv_seq_h : 1080;
+    s->dar_num = s->hdv_dar_num ? s->hdv_dar_num : 16;
+    s->dar_den = s->hdv_dar_num ? s->hdv_dar_den : 9;
+    s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
+}
+
+/* A DV / HDV unit during a capture: held (pin_holdback.h) while a format change or a scene
+ * cut may still be back-dated to it, then on to the file (commit_unit_fi()). fmt_res and
+ * old/fmt_start: what the format watcher said about this unit; rec: its scene record (NULL:
+ * none, e.g. an unreadable DV frame). Caller holds the lock. */
+static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_kind_t kind, long idx,
+                         unsigned flags, pin_fmtwatch_result_t fmt_res, const pin_stream_fmt_t *old,
+                         long fmt_start, pin_scene_record_t *rec)
+{
+    hold_push(s, data, len, idx, flags);
+
+    /* a confirmed format change: a new file from its first unit on, or the end of a pipe */
+    if (fmt_res == PIN_FMTWATCH_CHANGED)
+        capture_format_change(s, old, fmt_start);
+
+    /* scene split, on the units of the open file's kind */
+    int scene = s->capture_opts.scene_split && rec && kind == s->file_kind && s->sink;
+    if (scene) {
+        if (!s->scene_det_ready) {
+            pin_scene_config_t cfg;
+            if (kind == PIN_KIND_HDV) {
+                int fn, fd;
+                hdv_frame_rate(s, &fn, &fd); /* the GOP timecode counts pictures at this rate */
+                pin_scene_config_hdv(&cfg, (double)fn / fd);
+            } else {
+                pin_scene_config_defaults(&cfg, s->is_60hz ? 29.97 : 25.0);
+            }
+            pin_scene_init(&s->scene_det, &cfg);
+            s->opts_scene_split_window = pin_scene_debounce_window(&s->scene_det);
+            s->scene_det_ready = 1;
+        }
+        rec->frame_index = idx;
+        long cut_idx = 0;
+        if (pin_scene_feed(&s->scene_det, rec, &cut_idx)) {
+            if (pin_fmtwatch_pending(&s->fmtw, NULL)) {
+                /* a format change may be confirmed at about the same unit (a new recording
+                 * often brings both): it is the harder cut, so this one waits for it */
+                s->scene_cut_deferred = 1;
+                s->scene_cut_at = cut_idx;
+            } else {
+                scene_cut(s, cut_idx);
+            }
+        }
+    }
+    if (s->scene_cut_deferred && !pin_fmtwatch_pending(&s->fmtw, NULL)) {
+        /* the format change it waited for was not confirmed (or changes no file) */
+        s->scene_cut_deferred = 0;
+        scene_cut(s, s->scene_cut_at);
+    }
+
+    /* release what no pending cut can land on any more */
+    long keep_from = idx + 1, st;
+    if (pin_fmtwatch_pending(&s->fmtw, &st) && st < keep_from)
+        keep_from = st;
+    if (s->scene_cut_deferred && s->scene_cut_at < keep_from)
+        keep_from = s->scene_cut_at;
+    if (scene && s->scene_det_ready) {
+        /* hold from a pending break's first unit (HDV: it can span a few hundred pictures,
+         * the detector debounces over GOPs) */
+        if (pin_scene_pending(&s->scene_det, &st) && st < keep_from)
+            keep_from = st;
+        /* DV: and the last debounce_frames + 1 frames, as the detector confirms within
+         * debounce_frames records, each a frame */
+        if (kind == PIN_KIND_DV && idx - (long)s->opts_scene_split_window < keep_from)
+            keep_from = idx - (long)s->opts_scene_split_window;
+    }
+    pin_holdback_release_before(&s->hold, keep_from);
 }
 
 static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *user)
@@ -1458,28 +1638,40 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
     ctx->units_out++;
 
     pin_session_lock(s);
-    if (s->stream_kind == PIN_KIND_ANALOG || s->stream_kind == 0) {
-        /* first unit: lock in DV vs HDV and tell the caller (PIN_EVT_INPUT_FORMAT) */
-    }
     pin_kind_t kind = fmt == DV_FORMAT_HDV ? PIN_KIND_HDV : PIN_KIND_DV;
-    int format_changed = (s->stream_kind != kind);
     int kind_newly_known = !s->stream_kind_known;
-    s->stream_kind = kind;
+    int signal_back = !s->signal;
     s->stream_kind_known = 1;
     s->signal = 1;
+    if (kind != ctx->unit_kind) {
+        /* the first unit, or DV <-> HDV: the per-stream tracking starts afresh */
+        ctx->unit_kind = kind;
+        ctx->hdv_map_init = 0;
+        s->hdv_err_reset = 1;
+        s->hdv_tc_live = 0;
+    }
+    long idx = s->unit_seq++;
+    pin_stream_fmt_t obs;          /* what this unit says about the format */
+    pin_stream_fmt_init(&obs, kind);
+    unsigned flags = 0;            /* PIN_HOLD_CUT_OK: a file may start with it */
+    pin_scene_record_t rec;
+    memset(&rec, 0, sizeof(rec));
+    int have_rec = 0;
+    int hdv_dar_num = 0, hdv_dar_den = 0, hdv_bff = -1; /* this picture's, if it says */
 
     if (kind == PIN_KIND_DV) {
         dv_frame_info_t info;
         if (dv_subcode_parse_frame(data, len, &info) == 0) {
             int is_pal = info.dsf_valid ? info.is_pal : (info.sequence_count == DV_SEQ_COUNT_PAL);
-            s->detected_std = is_pal ? PIN_STD_PAL : PIN_STD_NTSC;
-            s->is_60hz = !is_pal;
-            s->width = 720;
-            s->height = is_pal ? 576 : 480;
+            obs.pal = is_pal;
             if (info.aspect.valid)
-                s->dar_num = info.aspect.is_16_9 ? 16 : 4, s->dar_den = info.aspect.is_16_9 ? 9 : 3;
-            else
-                s->dar_num = 4, s->dar_den = 3;
+                obs.wide = info.aspect.is_16_9 ? 1 : 0;
+            if (info.audio.valid && info.audio.sample_rate > 0) {
+                obs.audio_rate = info.audio.sample_rate;
+                obs.audio_channels = info.audio.channels;
+                obs.audio_bits = info.audio.bits;
+            }
+            flags = PIN_HOLD_CUT_OK;
             if (info.timecode.valid)
                 snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
                          info.timecode.hour, info.timecode.minute, info.timecode.second,
@@ -1519,49 +1711,29 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 }
             }
 
-            if (s->sink && s->capture_opts.scene_split) {
-                if (!s->scene_det_ready) {
-                    pin_scene_config_t cfg;
-                    pin_scene_config_defaults(&cfg, is_pal ? 25.0 : 29.97);
-                    pin_scene_init(&s->scene_det, &cfg);
-                    s->opts_scene_split_window = pin_scene_debounce_window(&s->scene_det);
-                    s->scene_det_ready = 1;
-                    s->scene_frame_counter = 0;
-                }
-                pin_scene_record_t rec;
-                memset(&rec, 0, sizeof(rec));
-                rec.frame_index = s->scene_frame_counter;
-                if (info.timecode.valid) {
-                    rec.tc_valid = 1;
-                    rec.tc_hour = info.timecode.hour; rec.tc_minute = info.timecode.minute;
-                    rec.tc_second = info.timecode.second; rec.tc_frame = info.timecode.frame;
-                    rec.tc_drop_frame = info.timecode.drop_frame;
-                }
-                if (info.rec_date.valid) {
-                    rec.date_valid = 1;
-                    rec.date_day = info.rec_date.day; rec.date_month = info.rec_date.month;
-                    rec.date_year = info.rec_date.year;
-                }
-                if (info.rec_time.valid) {
-                    rec.time_valid = 1;
-                    rec.time_hour = info.rec_time.hour; rec.time_minute = info.rec_time.minute;
-                    rec.time_second = info.rec_time.second;
-                }
-                rec.rec_start_valid = info.rec_start_valid;
-                rec.rec_start = info.rec_start;
-
-                /* the detector confirms within debounce_frames records, each a frame:
-                 * hold the last debounce_frames + 1 frames, so the cut can be back-dated */
-                pin_holdback_keep_last(&s->hold, s->opts_scene_split_window);
-                hold_push(s, data, len, s->scene_frame_counter, PIN_HOLD_CUT_OK);
-                long cut_idx = 0;
-                if (pin_scene_feed(&s->scene_det, &rec, &cut_idx))
-                    scene_cut(s, cut_idx);
-                s->scene_frame_counter++;
-            } else if (s->sink) {
-                /* non-scene-split path already committed in dv_write_cb() */
+            /* the scene record (scene split, capture_unit()) */
+            have_rec = 1;
+            if (info.timecode.valid) {
+                rec.tc_valid = 1;
+                rec.tc_hour = info.timecode.hour; rec.tc_minute = info.timecode.minute;
+                rec.tc_second = info.timecode.second; rec.tc_frame = info.timecode.frame;
+                rec.tc_drop_frame = info.timecode.drop_frame;
             }
+            if (info.rec_date.valid) {
+                rec.date_valid = 1;
+                rec.date_day = info.rec_date.day; rec.date_month = info.rec_date.month;
+                rec.date_year = info.rec_date.year;
+            }
+            if (info.rec_time.valid) {
+                rec.time_valid = 1;
+                rec.time_hour = info.rec_time.hour; rec.time_minute = info.rec_time.minute;
+                rec.time_second = info.rec_time.second;
+            }
+            rec.rec_start_valid = info.rec_start_valid;
+            rec.rec_start = info.rec_start;
         } else {
+            /* not 10 or 12 whole sequences (a bogus resync): says nothing about the format;
+             * the sink counts it as damaged and drops it */
             s->frames_damaged++;
             count_frame(s, 1, 1);
         }
@@ -1573,6 +1745,13 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             ctx->hdv_map_init = 1;
         }
         hdv_pid_map_t *map_p = &ctx->hdv_map;
+        int pic_pid = hdv_picture_pid(data, len);
+        if (pic_pid > 0 && map_p->video_pid > 0 && pic_pid != map_p->video_pid) {
+            /* the reassembler follows a new video PID (its gate opened again on it): so does
+             * the map, from the latest PAT/PMT */
+            memset(map_p, 0, sizeof(*map_p));
+            map_p->pmt_pid = -1; map_p->video_pid = -1; map_p->aux_pid = -1; map_p->audio_pid = -1;
+        }
         if (map_p->video_pid < 0) {
             /* The reassembler hands the PAT/PMT it has seen to the file only (dv_write_cb(),
              * which keeps them in hdv_psi), not in a picture: start from them, or the first
@@ -1617,81 +1796,74 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             s->err_video_blocks += herr.video_damaged || herr.tainted;
             s->err_missing_blocks += herr.cc_errors + herr.tei + herr.sync_lost;
         }
-        /* the format, as the stream says it (open_sink_for_scene() hands it to the sinks) */
+        /* the video format, from a sequence header (and its extension) */
         if (herr.seq_found && herr.seq_width > 0 && herr.seq_height > 0) {
-            s->hdv_seq_w = herr.seq_width;
-            s->hdv_seq_h = herr.seq_height;
-            if (pin_vidfmt_rate_from_code(herr.seq_frame_rate_code, &s->hdv_fps_num, &s->hdv_fps_den) &&
-                herr.seqext_found) {
-                s->hdv_fps_num *= herr.seq_fr_ext_n + 1;
-                s->hdv_fps_den *= herr.seq_fr_ext_d + 1;
+            obs.width = herr.seq_width;
+            obs.height = herr.seq_height;
+            int fn = 0, fd = 0;
+            if (pin_vidfmt_rate_from_code(herr.seq_frame_rate_code, &fn, &fd)) {
+                if (herr.seqext_found) {
+                    fn *= herr.seq_fr_ext_n + 1;
+                    fd *= herr.seq_fr_ext_d + 1;
+                }
+                obs.fps_num = fn;
+                obs.fps_den = fd;
             }
+            if (herr.seqext_found)
+                obs.progressive = herr.seq_progressive ? 1 : 0;
             pin_vidfmt_mpeg2_dar(herr.seq_aspect, herr.seq_width, herr.seq_height,
-                                 &s->hdv_dar_num, &s->hdv_dar_den);
-        }
-        if (herr.seqext_found) {
-            s->hdv_seqext_seen = 1;
-            s->hdv_progressive = herr.seq_progressive;
+                                 &hdv_dar_num, &hdv_dar_den);
         }
         /* field order: from interlaced pictures only (a progressive frame's top_field_first
          * belongs to its repeat_first_field); a field picture's first field is its structure */
         if (herr.picext_found && !herr.pic_progressive)
-            s->hdv_bff = herr.pic_structure == 3 ? !herr.pic_tff : herr.pic_structure == 2;
-        s->width = s->hdv_seq_w ? s->hdv_seq_w : 1440;
-        s->height = s->hdv_seq_h ? s->hdv_seq_h : 1080;
-        s->dar_num = s->hdv_dar_num ? s->hdv_dar_num : 16;
-        s->dar_den = s->hdv_dar_num ? s->hdv_dar_den : 9;
-        s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
+            hdv_bff = herr.pic_structure == 3 ? !herr.pic_tff : herr.pic_structure == 2;
 
-        /* Scene split for HDV: fed one picture at a time (frame_index counts pictures), with
-         * the GOP header's timecode on the picture that carries it as the only signal (HDV
-         * has no per-frame recording date/time here -- see hdv_aux.h's file header comment);
-         * the others are neutral. The detector debounces over GOPs (pin_scene_config_hdv()),
-         * so a pending break can span a few hundred pictures: the hold-back FIFO keeps
-         * everything from the pending run's first picture (none while nothing is pending),
-         * and the cut lands on that picture, which opens the GOP where the new timecode
-         * starts. HDV puts a sequence header in front of every GOP; a GOP without one is cut
-         * at its first picture all the same (the new file then decodes from the next
-         * sequence header). */
-        if (s->sink && s->capture_opts.scene_split) {
-            if (!s->scene_det_ready) {
-                pin_scene_config_t cfg;
-                int fn, fd;
-                hdv_frame_rate(s, &fn, &fd); /* the GOP timecode counts pictures at this rate */
-                pin_scene_config_hdv(&cfg, (double)fn / fd);
-                pin_scene_init(&s->scene_det, &cfg);
-                s->opts_scene_split_window = pin_scene_debounce_window(&s->scene_det);
-                s->scene_det_ready = 1;
-                s->scene_frame_counter = 0;
-            }
-            pin_scene_record_t rec;
-            memset(&rec, 0, sizeof(rec));
-            rec.frame_index = s->scene_frame_counter;
-            if (gop.found) {
-                rec.tc_valid = 1;
-                rec.tc_hour = gop.hours; rec.tc_minute = gop.minutes;
-                rec.tc_second = gop.seconds; rec.tc_frame = gop.pictures;
-                rec.tc_drop_frame = gop.drop_frame;
-            }
-            if (hdv_write_gate(s, data, len, emit_hold)) {
-                /* a file may start on a picture that opens a GOP */
-                unsigned flags = gop.found || herr.seq_found ? PIN_HOLD_CUT_OK : 0;
-                hold_push(s, data, len, s->scene_frame_counter, flags);
-                long cut_idx = 0;
-                if (pin_scene_feed(&s->scene_det, &rec, &cut_idx))
-                    scene_cut(s, cut_idx);
-                s->scene_frame_counter++;
-                long keep_from;
-                if (!pin_scene_pending(&s->scene_det, &keep_from))
-                    keep_from = s->scene_frame_counter;
-                pin_holdback_release_before(&s->hold, keep_from);
-            }
+        /* A file may start on a picture that opens a GOP (HDV puts a sequence header in
+         * front of every GOP; a GOP without one is cut at its first picture all the same,
+         * and the file then decodes from the next sequence header). Scene split: the GOP
+         * header's timecode on the picture that carries it is the only signal (HDV has no
+         * per-frame recording date/time here -- see hdv_aux.h's file header comment); the
+         * other pictures are neutral, and the detector debounces over GOPs
+         * (pin_scene_config_hdv()). */
+        flags = gop.found || herr.seq_found ? PIN_HOLD_CUT_OK : 0;
+        have_rec = 1;
+        if (gop.found) {
+            rec.tc_valid = 1;
+            rec.tc_hour = gop.hours; rec.tc_minute = gop.minutes;
+            rec.tc_second = gop.seconds; rec.tc_frame = gop.pictures;
+            rec.tc_drop_frame = gop.drop_frame;
         }
-        /* else: already committed directly in dv_write_cb() */
     }
+
+    /* The format, with its cool-down: a different value counts only once it persists
+     * (pin_fmtwatch.h); the status (and the next file) shows the confirmed one. */
+    long fmt_start = idx;
+    pin_stream_fmt_t old_fmt;
+    pin_fmtwatch_result_t fr = pin_fmtwatch_feed(&s->fmtw, &obs, idx, &fmt_start, &old_fmt);
+    if (kind == PIN_KIND_HDV && pin_stream_fmt_agrees(&s->fmtw.cur, &obs)) {
+        /* aspect and field order of the confirmed format's pictures */
+        if (hdv_dar_num > 0) {
+            s->hdv_dar_num = hdv_dar_num;
+            s->hdv_dar_den = hdv_dar_den;
+        }
+        if (hdv_bff >= 0)
+            s->hdv_bff = hdv_bff;
+    }
+    stream_status_from_format(s);
+    if (fr == PIN_FMTWATCH_CHANGED) {
+        char a[96], b[96];
+        pin_stream_fmt_describe(&old_fmt, a, sizeof(a));
+        pin_stream_fmt_describe(&s->fmtw.cur, b, sizeof(b));
+        pin_logf(PIN_LOG_INFO, "session: the input changed from %s to %s\n", a, b);
+    }
+
+    if (s->sink)
+        capture_unit(s, data, len, kind, idx, flags, fr, &old_fmt, fmt_start, have_rec ? &rec : NULL);
+
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
-    if (format_changed)
+    if (fr != PIN_FMTWATCH_SAME || signal_back)
         pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
     if (kind_newly_known)
         maybe_begin_capture(s, s->dev.camera_node);
@@ -1853,6 +2025,16 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
 {
     if (!s->sink || !s->writer || s->state != PIN_STATE_CAPTURING)
         return 0;
+    if (s->fmt_stop) {
+        /* standard output saw DV <-> HDV (capture_format_change()): the reading program
+         * expects the one format it got, and a pipe cannot start a new file */
+        s->fmt_stop = 0;
+        char detail[PIN_TEXT_MAX];
+        snprintf(detail, sizeof(detail), "%s", s->fmt_stop_text);
+        capture_end(s, PIN_STOP_ERROR, detail, deck_node);
+        set_state(s, PIN_STATE_READY);
+        return 1;
+    }
     pin_writer_stats_t wst;
     pin_writer_get_stats(s->writer, &wst);
     if (pin_path_is_stdout(s->capture_opts.path)) {
@@ -1949,21 +2131,33 @@ static int stream_failed(pin_session_t *s)
     return gone;
 }
 
+/* The next file's kind and format: the stream's (confirmed) kind, capture_opts' format for
+ * it (raw DIF / TS on standard output), its extension (the base name stays the one the
+ * capture started with) and, for HDV, the gate. A capture start, a pass and a DV <-> HDV
+ * change. Caller holds the lock. */
+static void file_format_for_stream(pin_session_t *s)
+{
+    s->file_kind = s->stream_kind;
+    s->active_format = s->file_kind == PIN_KIND_HDV ? s->capture_opts.format_hdv
+                      : s->file_kind == PIN_KIND_ANALOG ? s->capture_opts.format_analog
+                      : s->capture_opts.format_dv;
+    if (pin_path_is_stdout(s->capture_opts.path))     /* stdout: raw DIF / TS / NUT, see open_sink_for_scene() */
+        s->active_format = s->file_kind == PIN_KIND_HDV ? PIN_FMT_HDV_TS
+                           : s->file_kind == PIN_KIND_ANALOG ? PIN_FMT_ANALOG_AVI : PIN_FMT_DV_RAW;
+    format_ext(&s->capture_opts, s->active_format, s->naming_ext, sizeof(s->naming_ext));
+    s->hdv_await_gop = s->file_kind == PIN_KIND_HDV;
+}
+
 /* Actually opens the sink and enters CAPTURING, once the stream's kind
  * (DV/HDV/analog) is known and any requested rewind-to-start has finished.
  * s->capture_opts must already hold the requested options. */
 static void start_capture_now(pin_session_t *s, uint16_t camera_node)
 {
-    s->active_format = s->stream_kind == PIN_KIND_HDV ? s->capture_opts.format_hdv
-                      : s->stream_kind == PIN_KIND_ANALOG ? s->capture_opts.format_analog
-                      : s->capture_opts.format_dv;
-    if (pin_path_is_stdout(s->capture_opts.path))     /* stdout: raw DIF / TS / NUT, see open_sink_for_scene() */
-        s->active_format = s->stream_kind == PIN_KIND_HDV ? PIN_FMT_HDV_TS
-                           : s->stream_kind == PIN_KIND_ANALOG ? PIN_FMT_ANALOG_AVI : PIN_FMT_DV_RAW;
-    char ext[16];
-    format_ext(&s->capture_opts, s->active_format, ext, sizeof(ext));
-    pin_naming_strip_extension(s->capture_opts.path, ext, s->naming_base, sizeof(s->naming_base));
-    strncpy(s->naming_ext, ext, sizeof(s->naming_ext) - 1);
+    file_format_for_stream(s);
+    pin_naming_strip_extension(s->capture_opts.path, s->naming_ext, s->naming_base, sizeof(s->naming_base));
+    s->fmt_numbered = 0;
+    s->fmt_stop = 0;
+    s->scene_cut_deferred = 0;
     s->scene_index = first_scene_number(s);
     s->pass_index = 1;
     s->unit_index = 0;
@@ -1977,7 +2171,6 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
     s->scene_det_ready = 0;
-    s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
     pin_split_free(&s->split);
     memset(&s->split, 0, sizeof(s->split));
     open_sink_for_scene(s);
@@ -2323,10 +2516,14 @@ static void dv_tick(void *user)
             set_state(s, PIN_STATE_READY);
             maybe_begin_capture(s, node);
         } else {
-            /* start the next pass */
+            /* start the next pass, in the kind the stream has now (a change at the tape's
+             * start replaces the file, see format_cut_begin()) */
             s->pass_rewinding = 0;
             deck_send(s, node, PIN_DECK_CMD_PLAY);
             s->scene_index = first_scene_number(s);
+            s->fmt_numbered = 0;
+            s->scene_cut_deferred = 0;
+            file_format_for_stream(s);
             open_sink_for_scene(s);
             set_state(s, PIN_STATE_CAPTURING);
             pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
@@ -2335,7 +2532,6 @@ static void dv_tick(void *user)
             s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
             s->idle_s = 0;
             s->scene_det_ready = 0;
-            s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
         }
     }
     pin_session_unlock(s);
@@ -2798,13 +2994,15 @@ static void replay_handle_eot(pin_session_t *s)
         s->pass_index++;
         s->pass++;
         s->scene_index = first_scene_number(s);
+        s->fmt_numbered = 0;
+        s->scene_cut_deferred = 0;
+        file_format_for_stream(s);
         open_sink_for_scene(s);
         s->deck = PIN_DECK_PLAYING;
         s->capture_start_s = pin_session_now();
         /* as a live pass change (dv_tick()): the tape starts over, so does the scene
          * detector, and an HDV file starts on a GOP */
         s->scene_det_ready = 0;
-        s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
         pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
     } else if (s->sink) {
         /* last pass: stop */
@@ -3047,6 +3245,12 @@ static int replay_run(pin_session_t *s)
         if (d == PIN_DECK_REWINDING) {
             sleep_ms(2000); /* simulated rewind time, per the plan */
             fseek(f, 0, SEEK_SET);
+            /* the tape starts over: so does the reassembly (no half frame from before the
+             * rewind glued to the first one; a real deck sends nothing while winding) */
+            if (!frame_size) {
+                dv_reassembler_finish(&reasm);
+                dv_reassembler_init(&reasm, &out);
+            }
             pin_session_lock(s);
             s->deck = PIN_DECK_STOPPED;
             pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
@@ -3144,6 +3348,7 @@ static void *worker_main(void *arg)
             pthread_cond_broadcast(&s->cmd_idle);
             s->input = cmd.input;
             s->stream_kind_known = 0;
+            pin_fmtwatch_init(&s->fmtw); /* a new input: its format is learnt afresh */
             s->signal = 0;
             s->hdv_tc_live = 0;
             reset_frame_counters(s);
@@ -3262,6 +3467,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->tape_percent = -1;
     s->camera_present = -1;
     s->progress_pct = -1;
+    pin_fmtwatch_init(&s->fmtw);
     s->preview = pin_previewer_create();
     s->hdv_audio = pin_hdv_audio_create(pin_session_feed_monitor_audio, s);
     s->closer = pin_closer_create(file_closed, s);
@@ -3559,6 +3765,8 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
         return PIN_ERR_ARG;
 
     pin_kind_t kind = s->stream_kind;
+    if (s->input == PIN_INPUT_DV && kind != PIN_KIND_HDV)
+        kind = PIN_KIND_DV; /* DV / HDV input, nothing arriving yet: as for DV */
     pin_format_t fmt = kind == PIN_KIND_HDV ? o->format_hdv
                        : kind == PIN_KIND_DV ? o->format_dv : o->format_analog;
     char ext[16];
@@ -3573,6 +3781,15 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     char first_match[PIN_PATH_MAX];
     /* numbered naming: the caller already picked an unused number */
     int coll = o->first_number ? 0 : pin_naming_collides(base, ext, first_match, sizeof(first_match));
+    if (coll <= 0 && !o->first_number && s->input == PIN_INPUT_DV) {
+        /* a tape can change between DV and HDV: the capture then goes on in the other kind's
+         * format and extension, under the same base name (format_cut_begin()) */
+        pin_format_t other = kind == PIN_KIND_HDV ? o->format_dv : o->format_hdv;
+        char other_ext[16];
+        format_ext(o, other, other_ext, sizeof(other_ext));
+        if (strcmp(other_ext, ext) != 0)
+            coll = pin_naming_collides(base, other_ext, first_match, sizeof(first_match));
+    }
     out->collision = coll > 0;
 
     /* directory to check free space in: dirname(first_path) */

@@ -45,6 +45,15 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   unit a file may start with (an HDV picture that opens a GOP). Pure
   (callbacks), unit tested in `tests/engine/test_pin_holdback.c`.
 
+- **`pin_fmtwatch.[ch]`** — the DV / HDV format on a tape that mixes formats:
+  a watcher fed what each unit says (kind; DV standard, aspect, audio rate,
+  channels, bits; HDV size, frame rate, progressive from a sequence header),
+  that confirms a change only after it persists (DV 5 frames, HDV 3 GOPs; units
+  without the value are neutral) and reports its first unit, and the decision
+  what a confirmed change does to the open file (`pin_format_change_action()`:
+  keep it, a new file, or end a pipe). Pure, unit tested in
+  `tests/engine/test_pin_fmtwatch.c`.
+
 - **`pin_split.[ch]`** — split lookahead: a scene cut only becomes a new
   file once the new segment has >= 1 MB and >= 1 s; until then its units are
   held, and a later cut or the end of the capture/pass writes them to the
@@ -74,8 +83,9 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
 `pin_session.c`/`pin_deck.c`/`pin_preview.c` (built into `pinnacle_engine`,
 one level up in `CMakeLists.txt`) are the actual worker-thread state machine
 behind `pin_api.h`: device open/prepare, capture start/stop, deck control,
-scene splitting (feeding `pin_scene.c` per DV frame or HDV picture -- see
-`dv_on_unit()`'s two branches) and preview decode.
+scene splitting and format changes (`dv_on_unit()` reads each DV frame or HDV
+picture, `capture_unit()` holds it, feeds `pin_scene.c` and `pin_fmtwatch.c`
+and cuts) and preview decode.
 
 - **Script sequencer** (`pin_script_run.c`, `pin_script_run()` / `pin_script_cancel()`):
   a helper thread per session that performs a parsed script. It waits after each
@@ -86,8 +96,7 @@ scene splitting (feeding `pin_scene.c` per DV frame or HDV picture -- see
   exit code 4 on an abnormal end, and ends with `PIN_EVT_DONE` (`a` = exit
   code, `text` = reason). `pin_session_close()` cancels and joins it.
   The collision check for `--capture` looks at the file name of every kind that
-  could arrive, because `pin_check_output` only knows the kind once data flows
-  (a stopped deck sends none).
+  could arrive (DV and HDV on the DV input: a tape can change between them).
 
 - **Replay (virtual device)**, `PIN_REPLAY=<file>` or `pin_set_replay_file()`
   (also reachable as `--device <path to an existing file>` on any front end
@@ -118,6 +127,15 @@ scene splitting (feeding `pin_scene.c` per DV frame or HDV picture -- see
   pending break's first one in the hold-back FIFO (`pin_holdback.h`) and
   cuts on that GOP's first picture; the new file starts with the latest
   PAT/PMT (`hdv_psi_scan()` in `dv_write_cb()`). See [docs/hdv.md](../../docs/hdv.md).
+- **Format changes** (a tape that mixes DV and HDV, PAL and NTSC, aspect or
+  audio modes): the status shows the confirmed format (`pin_fmtwatch.h`), so a
+  single odd frame changes nothing. During a capture every unit goes through the
+  hold-back FIFO; a confirmed change is cut at its first unit
+  (`capture_format_change()`): a new file with the new format (`format_cut_begin()`,
+  numbered `-0002`... after the first without `--split`), the same file when it
+  carries the change (raw DV aspect / audio), or the end of a pipe on DV <-> HDV.
+  `file_kind` is the open file's kind; units of another kind never reach it
+  (`commit_unit_fi()`). See [docs/usage.md](../../docs/usage.md).
 - Hardware-free regression tests for all of the above live in
   `tests/engine_replay/` (driven only through `pin_api.h` against the
   replay device -- see that directory's own comments), not here.

@@ -99,6 +99,15 @@ This is implemented in `dv_reassembler.c` as three stacked layers
 (message demux → buffer-fill records → DIF sequence/frame assembly), each
 resynchronising independently.
 
+A frame is 10 DIF sequences (NTSC) or 12 (PAL), and a tape can hold both. Each
+frame is emitted at its own size, by its own evidence: sequence 10 or 11 arrived
+(PAL only), else the DSF bit (byte 3, bit 7) of its sequence header blocks when at
+least three of them agree and outnumber the others two to one. Missing sequences
+are zero-padded up to that size, never beyond it. Only a frame without such
+evidence (most of it lost) takes the confirmed standard, which follows the stream
+after three such frames in a row. A switch to HDV (CIP FMT 0x20) and back is
+followed too, after a run of 256 data packets ([hdv.md](hdv.md#tapes-that-mix-dv-and-hdv-or-hdv-formats)).
+
 ## Behaviours that matter
 
 **The config channel must be brought up first.** After the bitstream upload and

@@ -54,6 +54,31 @@
  * FMT=0x20, DBS=6, FN=3, SPH=1: the payload is 1..n source packets of 192
  * bytes, each a 4-byte timestamp followed by one 188-byte TS packet. The
  * timestamp is dropped and the TS packets are written back to back.
+ *
+ * A tape can hold both (DV recordings and HDV ones), and DV both standards.
+ * The format follows the stream, with a cool-down so a stray or corrupt
+ * packet or frame changes nothing:
+ *   - DV <-> HDV: data packets of the other format are dropped until
+ *     DV_FMT_SWITCH_PACKETS of them arrive in a row (no data packet of the
+ *     current format in between); then the format switches and that run is
+ *     replayed into the new format, so nothing of it is lost. The current
+ *     format's unit in progress ends as at dv_reassembler_finish(): a complete
+ *     DV frame is emitted, a partial one or HDV's picture in progress dropped.
+ *     The new format starts afresh: DV on its next Dseq 0, HDV at its gate (a
+ *     picture with a sequence header, PAT/PMT replayed in front).
+ *   - PAL / NTSC: each frame is emitted at its own size, by its own evidence:
+ *     sequence 10 or 11 arrived (PAL only), else the DSF bit of its sequence
+ *     header blocks when at least DV_DSF_MIN_VOTES of them agree clearly. Only
+ *     a frame without that evidence (most of it lost) takes the confirmed
+ *     standard, which follows the stream after DV_STD_SWITCH_FRAMES frames in a
+ *     row that say the other one. So the first frame of a new standard already
+ *     comes out at its right size, and nothing is padded or cut.
+ *   - HDV video PID: a GOP (video PES start with a sequence header) on another
+ *     video PID twice, with no picture of the tracked PID between, re-opens the
+ *     gate on that PID; the picture in progress (which ran on into the new PID)
+ *     is dropped. A picture that grows past DV_TS_PIC_MAX bytes without another
+ *     video PES start is dropped too and the gate re-armed, so memory stays
+ *     bounded whatever the stream does.
  */
 
 #ifndef DV_REASSEMBLER_H
@@ -72,6 +97,23 @@ typedef enum {
     DV_FORMAT_DV,          /* CIP FMT 0x00: DIF blocks -> raw .dv */
     DV_FORMAT_HDV          /* CIP FMT 0x20: MPEG2-TS  -> .ts */
 } dv_format_t;
+
+/* Data packets of the other format in a row that switch DV <-> HDV: more than
+ * the whole receive ring holds (36,864 bytes: ~75 DV / ~95 HDV packets), so
+ * stale ring contents met when a read joins the stream never switch it, and
+ * about one DV frame's worth (PAL 300, NTSC 250 packets), ~35 ms of either. */
+#define DV_FMT_SWITCH_PACKETS 256
+/* DV: frames in a row with clear evidence of the other standard before the
+ * confirmed one follows (it only sizes frames that carry no evidence). */
+#define DV_STD_SWITCH_FRAMES 3
+/* DV: sequence headers that must agree on the DSF bit for a frame to be sized
+ * by it (and outnumber the others two to one). */
+#define DV_DSF_MIN_VOTES 3
+/* HDV: GOPs on another video PID that make it the tracked one. */
+#define DV_TS_PID_SWITCH_GOPS 2
+/* HDV: a picture this big without another video PES start is dropped (an
+ * HDV picture is well under 1 MB; 4 MB is over a second of 25 Mbit/s). */
+#define DV_TS_PIC_MAX (4u << 20)
 
 /* Where reassembled output goes. Whole units only: `write` is called once
  * per complete DV frame or complete HDV picture (never a partial one, and
@@ -99,7 +141,19 @@ void dv_output_file(dv_output_t *out, FILE *fp);
 
 typedef struct {
     dv_output_t out;
-    dv_format_t format;    /* locked by the first packet that carries data */
+    dv_format_t format;    /* set by the first packet that carries data; follows the
+                            * stream (see the file header comment) */
+
+    /* DV <-> HDV switch: the run of data packets of the other format so far,
+     * their payloads kept to be replayed into it if it becomes the format. */
+    dv_format_t fmt_cand;
+    unsigned fmt_cand_packets;
+    uint8_t *fmt_cand_buf;
+    size_t fmt_cand_len, fmt_cand_cap;
+    int iso_to_cand;                    /* the current packet's payload goes to fmt_cand_buf */
+    unsigned long format_switches;      /* DV <-> HDV switches */
+    unsigned long fmt_dropped_packets;  /* data packets of the other format dropped (runs
+                                         * too short to switch) */
 
     /* Layer 1: type-9 message demux over the raw EP 0x88 stream. */
     uint8_t msg_hdr[4];
@@ -150,6 +204,11 @@ typedef struct {
     unsigned long ts_cc_forgiven;       /* CC jumps explained by an already-counted
                                          * CIP/DBC discontinuity (one hole shows
                                          * up once per PID) */
+    unsigned long ts_join_base;         /* ts_packets when HDV last began (join window) */
+    int ts_newpid;                      /* another video PID that opened a GOP, 0 = none */
+    unsigned ts_newpid_gops;            /* GOPs on it with no picture of ts_video_pid between */
+    unsigned long ts_pid_switches;      /* the video PID changed and was followed */
+    unsigned long ts_pic_overflows;     /* pictures dropped for growing past DV_TS_PIC_MAX */
 
     /* Layer 3: DIF sequence / frame assembly. */
     uint8_t *buf;
@@ -165,9 +224,14 @@ typedef struct {
      * frame, exactly mirroring the pre-refactor file-sequential behaviour
      * (which had no such ceiling either -- see emit_frame). */
     uint8_t frame_buf[16 * 150 * 80];
-    unsigned system_seq_count; /* 10 = NTSC, 12 = PAL; starts at 10, upgrades if seen */
+    unsigned system_seq_count; /* the confirmed standard, 10 = NTSC, 12 = PAL (10 until a
+                                * frame says); sizes only frames without evidence of their own */
     unsigned expected_dseq;
     int frame_started;
+    unsigned frame_dsf_pal, frame_dsf_ntsc; /* this frame's sequence headers by DSF bit */
+    int std_known;             /* a frame has said its standard (the first one sets it) */
+    unsigned std_cand_frames;  /* frames in a row whose evidence says the other standard */
+    unsigned long std_switches; /* the confirmed standard changed */
     /* State snapshotted at the start of the in-progress frame, so a capture
      * stopped mid-frame can drop that frame rather than leave a zero-padded
      * partial one — and so the counters stay honest when it does. */

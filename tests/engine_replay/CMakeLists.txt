@@ -109,10 +109,22 @@ add_test(NAME test_replay_hwenc COMMAND test_replay_hwenc "${PIN_TEST_DATA}/dv-p
 pin_engine_replay_test_env(test_replay_hwenc)
 set_tests_properties(test_replay_hwenc PROPERTIES TIMEOUT 60)
 
+# Tapes that mix formats: PAL -> NTSC as raw DV and 48 -> 32 kHz as DV AVI (two files each,
+# libavformat reads the AVIs); DV -> HDV -> DV to files (.dv, .m2t, .dv) and to a pipe (ends
+# at the change, with the reason).
+add_executable(test_replay_mixed_dv test_replay_mixed_dv.c)
+target_link_libraries(test_replay_mixed_dv PRIVATE marvin-core pinnacle_sinks)
+add_test(NAME test_replay_mixed_dv COMMAND test_replay_mixed_dv "${PIN_TEST_DATA}")
+pin_engine_replay_test_env(test_replay_mixed_dv)
+set_tests_properties(test_replay_mixed_dv PROPERTIES TIMEOUT 60)
+pin_engine_replay_test(test_replay_mixed_kind "${PIN_TEST_DATA}")
+set_tests_properties(test_replay_mixed_kind PROPERTIES TIMEOUT 60)
+
 # All of the above replay the generated recordings.
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
     test_replay_hdv test_replay_hdv_split test_replay_unplug test_replay_hwenc
+    test_replay_mixed_dv test_replay_mixed_kind
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

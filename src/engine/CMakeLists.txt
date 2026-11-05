@@ -32,6 +32,7 @@ add_library(pinnacle_engine_pure STATIC
     pin_scene.c
     pin_split.c
     pin_holdback.c
+    pin_fmtwatch.c
     pin_naming.c
     pin_settings.c
     pin_script.c
@@ -70,6 +71,7 @@ if(PIN_BUILD_TESTS)
     pinnacle_engine_test(test_pin_scene)
     pinnacle_engine_test(test_pin_split)
     pinnacle_engine_test(test_pin_holdback)
+    pinnacle_engine_test(test_pin_fmtwatch)
     pinnacle_engine_test(test_pin_naming)
     pinnacle_engine_test(test_pin_settings)
     pinnacle_engine_test(test_pin_script)
