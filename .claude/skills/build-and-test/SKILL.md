@@ -81,4 +81,10 @@ test suite**: unit tests plus replay tests that run on recordings, no device
 needed. Testing against the real device, its deck or camera is a separate,
 manual activity: use the **test-with-hardware-device** skill (MarvinCaptureCLI,
 `--debug` logs, diagnosing "USB error"). The replay tests use the `PIN_REPLAY`
-environment variable (the replay device); it is the only variable ctest relies on.
+environment variable (the replay device).
+
+The recordings are made at test time with the ffmpeg command-line tool (found on PATH
+at configure time) and `tests/make_ep88.c`, into `build/<os>-<arch>/core/tests/data/`;
+nothing is committed (`tests/data/README.md`). Without ffmpeg those tests print SKIP
+and pass, unless `CI` is set: then they fail. Install it with
+`scripts/install-deps.sh --tests` / `scripts\install-deps.ps1 -Tests`.

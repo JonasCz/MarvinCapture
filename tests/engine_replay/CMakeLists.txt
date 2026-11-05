@@ -24,10 +24,10 @@ if(NOT TARGET marvin-core)
     message(FATAL_ERROR "tests/engine_replay needs the marvin-core target")
 endif()
 
-set(PIN_TRACES_DIR "${PROJECT_SOURCE_DIR}/tests/data")
-set(PIN_TRACE_PAL "${PIN_TRACES_DIR}/ep88-pal.bin")           # PAL DV
-set(PIN_TRACE_NTSC "${PIN_TRACES_DIR}/ep88-ntsc.bin")     # NTSC DV
-set(PIN_HDV_CAPTURE "${PIN_TRACES_DIR}/hdv.ts")
+# The recordings are made at test time by the fixture-setup test pin_test_data
+# (tests/CMakeLists.txt, tests/data/README.md) into PIN_TEST_DATA.
+set(PIN_TRACE_PAL "${PIN_TEST_DATA}/ep88-pal.bin")    # PAL DV, raw EP 0x88 dump
+set(PIN_HDV_CAPTURE "${PIN_TEST_DATA}/hdv.ts")
 
 # On Windows, marvin-core is a DLL; these test executables live one
 # directory below it (tests/engine_replay/), so the loader won't find it on
@@ -54,54 +54,40 @@ function(pin_engine_replay_test name)
     set_tests_properties(${name} PROPERTIES TIMEOUT 30)
 endfunction()
 
-# The PAL trace is the developer's own recording and isn't committed
-# (.gitignore); the tests replaying it only exist when it's there.
-if(EXISTS "${PIN_TRACE_PAL}")
-    # 1a: replay capture output is a subset of the frozen Phase-1 baseline.
-    pin_engine_replay_test(test_replay_dv_baseline
-        $<TARGET_FILE:replay_reassembler> "${PIN_TRACE_PAL}")
+# 1a: replay capture output is a subset of what dv_reassembler makes of the dump.
+pin_engine_replay_test(test_replay_dv_baseline
+    $<TARGET_FILE:replay_reassembler> "${PIN_TRACE_PAL}")
 
-    # 1b: dv-avi / dv-mov via replay, checked with libavformat.
-    add_executable(test_replay_dv_formats test_replay_dv_formats.c)
-    target_link_libraries(test_replay_dv_formats PRIVATE marvin-core pinnacle_sinks)
-    add_test(NAME test_replay_dv_formats COMMAND test_replay_dv_formats "${PIN_TRACE_PAL}")
-    pin_engine_replay_test_env(test_replay_dv_formats)
-    set_tests_properties(test_replay_dv_formats PROPERTIES TIMEOUT 30)
+# 1b: dv-avi / dv-mov via replay, checked with libavformat.
+add_executable(test_replay_dv_formats test_replay_dv_formats.c)
+target_link_libraries(test_replay_dv_formats PRIVATE marvin-core pinnacle_sinks)
+add_test(NAME test_replay_dv_formats COMMAND test_replay_dv_formats "${PIN_TRACE_PAL}")
+pin_engine_replay_test_env(test_replay_dv_formats)
+set_tests_properties(test_replay_dv_formats PROPERTIES TIMEOUT 30)
 
-    # 1c: --passes 2 produces base.dv and base-pass-2.dv.
-    pin_engine_replay_test(test_replay_multipass "${PIN_TRACE_PAL}")
-endif()
+# 1c: --passes 2 produces base.dv and base-pass-2.dv.
+pin_engine_replay_test(test_replay_multipass "${PIN_TRACE_PAL}")
 
 # 1e: preview-dump equivalent (720x576, chroma shift 1,1, DAR 4:3 for PAL DV).
-if(EXISTS "${PIN_TRACE_PAL}")
-    pin_engine_replay_test(test_replay_preview "${PIN_TRACE_PAL}")
-endif()
+pin_engine_replay_test(test_replay_preview "${PIN_TRACE_PAL}")
 
 # 1e': the preview's jitter buffer (present_time on an even grid, lock_due).
-if(EXISTS "${PIN_TRACE_PAL}")
-    pin_engine_replay_test(test_replay_preview_pacing "${PIN_TRACE_PAL}")
-endif()
+pin_engine_replay_test(test_replay_preview_pacing "${PIN_TRACE_PAL}")
 
 # 1f: pin_script_run() against the replay device (the command-line sequencer).
-if(EXISTS "${PIN_TRACE_PAL}")
-    pin_engine_replay_test(test_pin_script_run "${PIN_TRACE_PAL}")
-    set_tests_properties(test_pin_script_run PROPERTIES TIMEOUT 120)
-endif()
+pin_engine_replay_test(test_pin_script_run "${PIN_TRACE_PAL}")
+set_tests_properties(test_pin_script_run PROPERTIES TIMEOUT 120)
 
 # 1g: pin_check_output() collision detection and free space, plus the
 # replay device's serial == "REPLAY" (task 3).
-if(EXISTS "${PIN_TRACE_PAL}")
-    pin_engine_replay_test(test_pin_check_output "${PIN_TRACE_PAL}")
-endif()
+pin_engine_replay_test(test_pin_check_output "${PIN_TRACE_PAL}")
 
-# Task 3/4: HDV .ts replay and HDV scene split (no spurious cuts). Skips
-# gracefully (exit 0) if the real capture isn't present -- see the test's
-# own header comment and tests/data/README.md.
+# Task 3/4: HDV .ts replay and HDV scene split (no spurious cuts).
 pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}")
 
 # Unplug during a capture (replay fakes the USB NO_DEVICE failure): files finalised,
 # stop reason DEVICE_LOST, session in ERROR, a new session opens afterwards.
-pin_engine_replay_test(test_replay_unplug "${PIN_TRACES_DIR}/dv-ntsc.dv" "${PIN_HDV_CAPTURE}")
+pin_engine_replay_test(test_replay_unplug "${PIN_TEST_DATA}/dv-ntsc.dv" "${PIN_HDV_CAPTURE}")
 
 # the H.264 / HEVC formats through the engine (FFV1 standing in for a missing encoder)
 add_executable(test_replay_hwenc test_replay_hwenc.c)
@@ -109,25 +95,35 @@ target_link_libraries(test_replay_hwenc PRIVATE marvin-core pinnacle_sinks)
 if(UNIX AND NOT APPLE)
     target_link_libraries(test_replay_hwenc PRIVATE m)
 endif()
-add_test(NAME test_replay_hwenc COMMAND test_replay_hwenc "${PIN_TRACES_DIR}/dv-pal.dv" "${PIN_TRACE_PAL}")
+add_test(NAME test_replay_hwenc COMMAND test_replay_hwenc "${PIN_TEST_DATA}/dv-pal.dv")
 pin_engine_replay_test_env(test_replay_hwenc)
 set_tests_properties(test_replay_hwenc PROPERTIES TIMEOUT 60)
+
+# All of the above replay the generated recordings.
+set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
+    test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
+    test_replay_hdv test_replay_unplug test_replay_hwenc
+    PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.
 pin_engine_replay_test(test_pin_color_matrix)
 
 # dv_audio.c's real SMPTE 314M/IEC 61834 deshuffle, validated sample-for-
-# sample against FFmpeg's own "dv" demuxer on real captures. Links
-# pinnacle_engine_pure directly (for dv_audio_extract()) and pinnacle_sinks
-# (for libavformat/libavcodec, already wired up there) rather than
-# marvin-core: dv_audio_extract() isn't part of the public pin_api.h
+# sample against FFmpeg's own "dv" demuxer: on the generated NTSC 48 kHz and
+# PAL 32 kHz files, and on a camera's recording with 32 kHz 12-bit audio when
+# tests/data/dv-ntsc-32k.dv is there (optional: ffmpeg cannot write 12-bit DV
+# audio). Links pinnacle_engine_pure directly (for dv_audio_extract()) and
+# pinnacle_sinks (for libavformat/libavcodec, already wired up there) rather
+# than marvin-core: dv_audio_extract() isn't part of the public pin_api.h
 # ABI, so it isn't exported from that DLL on Windows.
 if(TARGET pinnacle_sinks AND TARGET pinnacle_engine_pure)
     add_executable(test_dv_audio_vs_libavformat test_dv_audio_vs_libavformat.c)
     target_link_libraries(test_dv_audio_vs_libavformat PRIVATE pinnacle_sinks pinnacle_engine_pure)
     add_test(NAME test_dv_audio_vs_libavformat COMMAND test_dv_audio_vs_libavformat
-        WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
-    set_tests_properties(test_dv_audio_vs_libavformat PROPERTIES TIMEOUT 120)
+        "${PIN_TEST_DATA}/dv-ntsc.dv" "${PIN_TEST_DATA}/dv-pal-32k.dv"
+        --optional "${PROJECT_SOURCE_DIR}/tests/data/dv-ntsc-32k.dv")
+    set_tests_properties(test_dv_audio_vs_libavformat PROPERTIES TIMEOUT 120
+        FIXTURES_REQUIRED pin_test_data)
 endif()
 
 # Task: pin_devices_wait()/pin_devices_wake() and pin_set_replay_file()

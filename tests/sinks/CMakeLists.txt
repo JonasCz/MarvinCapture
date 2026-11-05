@@ -26,15 +26,13 @@ if(NOT TARGET pinnacle_engine_pure)
                          "add_subdirectory(src/engine) must run before src/sinks")
 endif()
 
+# The tests that read recordings use the ones made at test time by the fixture-setup test
+# pin_test_data (tests/CMakeLists.txt, tests/data/README.md) in PIN_TEST_DATA.
 add_executable(test_dv_rewrap test_dv_rewrap.c)
 target_link_libraries(test_dv_rewrap PRIVATE pinnacle_sinks pinnacle_engine_pure)
-# Uses the small local fixtures in tests/data/, which aren't committed (.gitignore).
-if(EXISTS "${PROJECT_SOURCE_DIR}/tests/data/ep88-pal.bin" AND
-   EXISTS "${PROJECT_SOURCE_DIR}/tests/data/ep88-ntsc.bin")
-    add_test(NAME test_dv_rewrap COMMAND test_dv_rewrap
-        "${PROJECT_SOURCE_DIR}/tests/data/ep88-pal.bin"
-        "${PROJECT_SOURCE_DIR}/tests/data/ep88-ntsc.bin")
-endif()
+add_test(NAME test_dv_rewrap COMMAND test_dv_rewrap
+    "${PIN_TEST_DATA}/ep88-pal.bin" "${PIN_TEST_DATA}/ep88-ntsc.bin")
+set_tests_properties(test_dv_rewrap PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 add_executable(test_analog_sinks test_analog_sinks.c)
 target_link_libraries(test_analog_sinks PRIVATE pinnacle_sinks)
@@ -45,8 +43,8 @@ add_test(NAME test_analog_sinks COMMAND test_analog_sinks)
 
 add_executable(test_hdv_rewrap test_hdv_rewrap.c)
 target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
-add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap
-    "${PROJECT_SOURCE_DIR}/tests/data/hdv.ts")
+add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts")
+set_tests_properties(test_hdv_rewrap PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 add_executable(test_stdout_sinks test_stdout_sinks.c)
 target_link_libraries(test_stdout_sinks PRIVATE pinnacle_sinks)
@@ -62,17 +60,12 @@ target_link_libraries(test_hwenc_convert PRIVATE pinnacle_sinks)
 add_test(NAME test_hwenc_convert COMMAND test_hwenc_convert)
 
 # sink_hwenc end to end (with FFV1 standing in for the encoder where there is none, as on
-# Linux) and sink_ffv1's compression levels; the DV recordings that are there
+# Linux) and sink_ffv1's compression levels; DV from an EP 0x88 dump and from a .dv file
 add_executable(test_hwenc_sink test_hwenc_sink.c)
 target_link_libraries(test_hwenc_sink PRIVATE pinnacle_sinks)
 if(UNIX AND NOT APPLE)
     target_link_libraries(test_hwenc_sink PRIVATE m)
 endif()
-set(_pin_hwenc_dv "")
-foreach(_f ep88-pal.bin ep88-ntsc.bin dv-pal.dv dv-ntsc.dv)
-    if(EXISTS "${PROJECT_SOURCE_DIR}/tests/data/${_f}")
-        list(APPEND _pin_hwenc_dv "${PROJECT_SOURCE_DIR}/tests/data/${_f}")
-    endif()
-endforeach()
-add_test(NAME test_hwenc_sink COMMAND test_hwenc_sink ${_pin_hwenc_dv})
-set_tests_properties(test_hwenc_sink PROPERTIES TIMEOUT 300)
+add_test(NAME test_hwenc_sink COMMAND test_hwenc_sink
+    "${PIN_TEST_DATA}/ep88-pal.bin" "${PIN_TEST_DATA}/dv-ntsc.dv")
+set_tests_properties(test_hwenc_sink PROPERTIES TIMEOUT 300 FIXTURES_REQUIRED pin_test_data)

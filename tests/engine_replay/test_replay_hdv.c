@@ -24,15 +24,15 @@
  *   - the stream is recognised as HDV and frames are counted;
  *   - --split produces no spurious cuts (HDV scene split only has the GOP
  *     timecode to go on -- see pin_session.c's HDV branch of dv_on_unit()
- *     -- so a real, single, uninterrupted recording must stay one file).
+ *     -- so a single, uninterrupted recording must stay one file).
  *
- * Skips (prints a message, exits 0) if tests/data/hdv.ts isn't
- * present -- it's the user's own recording, gitignored (see
- * tests/data/README.md). A live capture is ~1 GB; only the first ~30 MB
- * (a few seconds of 1080i/25 HDV, comfortably under this test's time
- * budget at replay_run_ts()'s ~33 ms-per-picture pacing) is copied into a
- * scratch file and replayed, so this checks "no spurious split over the
- * available slice" rather than literally the plan's "first minute".
+ * The capture is hdv.ts, 2 s of HDV-like TS made with ffmpeg at test time
+ * (continuous GOP timecode; see tests/data/README.md). Given a longer
+ * recording (a live capture is ~1 GB), only the first ~30 MB (a few
+ * seconds of 1080i/25 HDV, comfortably under this test's time budget at
+ * replay_run_ts()'s ~33 ms-per-picture pacing) is copied into a scratch
+ * file and replayed, so this checks "no spurious split over the available
+ * slice" rather than literally the plan's "first minute".
  *
  * Usage: test_replay_hdv <capture_ts_file>
  */
@@ -68,10 +68,7 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     const char *cap_path = argv[1];
-    if (!pin_test_file_exists(cap_path)) {
-        printf("SKIP: %s not present (see tests/data/README.md)\n", cap_path);
-        return 0;
-    }
+    pin_test_require_fixture(cap_path);
 
     const char *slice_path = "hdv_replay_slice.ts";
     make_slice(cap_path, slice_path);

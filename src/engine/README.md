@@ -87,10 +87,12 @@ scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
   so the engine (and any GUI built on it) can be developed and tested end to
   end -- see `pin_session.c`'s `replay_run()`. Its
   `pin_device_info_t.serial` is always the fixed string `"REPLAY"`. Three
-  source shapes, picked by extension:
+  source shapes:
   - `.dv`: a plain sequence of frame-aligned DIF frames (144000 bytes/frame
-    PAL, 120000 NTSC), played back frame by frame.
-  - `.ts`: a plain MPEG2-TS file (`replay_run_ts()`), split into "picture"
+    PAL, 120000 NTSC, by the DSF bit of the first header block), played back
+    frame by frame.
+  - an MPEG2-TS file (0x47 at the start of every 188-byte packet, or named
+    `.ts` / `.m2t`; `replay_run_ts()`), split into "picture"
     units at video PES starts (tracking the PAT/PMT via `hdv_aux.h`) exactly
     as a real HDV capture would be, then fed through the same
     `dv_write_cb()`/`dv_on_unit()` path a real capture uses.

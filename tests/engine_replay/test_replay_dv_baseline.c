@@ -17,17 +17,18 @@
  */
 
 /*
- * ctest: PIN_REPLAY=tests/data/ep88-pal.bin, `pin_capture_start` with
- * PIN_FMT_DV_RAW for a couple of seconds (through pin_api.h, same calls
- * the API capture path makes) must produce whole 144000/120000-byte
- * DV frames whose bytes are a prefix-aligned slice of the Phase-1 baseline
- * (tests/baseline_sha256.txt's frozen dv_reassembler output) -- at minimum,
- * every frame the capture wrote must appear somewhere in the baseline.
+ * ctest: PIN_REPLAY=ep88-pal.bin (an EP 0x88 dump made at test time, see
+ * tests/data/README.md), `pin_capture_start` with PIN_FMT_DV_RAW for a
+ * couple of seconds (through pin_api.h, same calls the API capture path
+ * makes) must produce whole 144000/120000-byte DV frames whose bytes are a
+ * prefix-aligned slice of the baseline (dv_reassembler's own output for the
+ * dump) -- at minimum, every frame the capture wrote must appear somewhere
+ * in the baseline.
  *
  * The baseline is produced fresh in the build dir by running
- * tests/replay_reassembler.c (the same tool tests/check_baseline.cmake uses)
- * over the same trace; its path is passed in by CMake ($<TARGET_FILE:...>)
- * so this test never hardcodes a build layout.
+ * tests/replay_reassembler.c (the same tool tests/check_reassembler.cmake
+ * uses) over the same trace; its path is passed in by CMake
+ * ($<TARGET_FILE:...>) so this test never hardcodes a build layout.
  *
  * Usage: test_replay_dv_baseline <replay_reassembler_exe> <trace_file>
  */
@@ -58,10 +59,7 @@ int main(int argc, char **argv)
     const char *reassembler_exe = argv[1];
     const char *trace_path = argv[2];
 
-    if (!pin_test_file_exists(trace_path)) {
-        printf("SKIP: %s not present\n", trace_path);
-        return 0;
-    }
+    pin_test_require_fixture(trace_path);
 
     /* 1. Produce the baseline fresh, in the current (build) directory. */
     const char *baseline_path = "dv_baseline_test.out";
@@ -106,9 +104,9 @@ int main(int argc, char **argv)
            (unsigned long long)snap.frames, (unsigned long long)snap.frames_error,
            (unsigned long long)snap.frames_dropped, (unsigned long long)snap.clip_frames,
            (unsigned long long)snap.clip_frames_error);
-    /* The ep88 dump is a raw bus capture that joined a running stream, so its
-     * frames carry real losses (shifted DIF blocks): only check the counters
-     * are consistent here; clean-frame behaviour is in test_dv_error. */
+    /* A dump of a real camera joins a running stream, so its frames can carry
+     * real losses (shifted DIF blocks): only check the counters are
+     * consistent here; clean-frame behaviour is in test_dv_error. */
     CHECK(snap.frames > 0 && snap.frames_error <= snap.frames && snap.frames_dropped <= snap.frames_error);
     CHECK(snap.clip_frames == snap.frames);
     pin_close(s);

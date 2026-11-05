@@ -10,7 +10,8 @@
     arm64   CLANGARM64 clang, cmake, ninja, libusb, pkgconf (MSYS2 has no gcc there)
 
   plus make, diffutils (FFmpeg's build) and NSIS (the x86_64 package on both: NSIS makes
-  x86 installers anyway). Packages already installed are left alone.
+  x86 installers anyway), and with -Tests the ffmpeg command-line tool of that toolchain.
+  Packages already installed are left alone.
 
   Not installed by this script, only checked (a warning when missing):
     * the .NET 10 SDK, for the GUI (winget install Microsoft.DotNet.SDK.10)
@@ -21,12 +22,17 @@
 .PARAMETER Msys2    MSYS2 root (default C:\msys64).
 .PARAMETER Refresh  Sync the package databases first (pacman -Sy). For a fresh MSYS2 (CI);
                     on an existing installation update it as a whole instead (pacman -Syu).
+.PARAMETER Tests    Also install ffmpeg (mingw-w64-ucrt-x86_64-ffmpeg / mingw-w64-clang-aarch64-ffmpeg):
+                    the ctest suite makes its test recordings with ffmpeg.exe (tests\data\README.md);
+                    without it those tests skip. The core links its own FFmpeg statically and loads
+                    none of the DLLs this package puts next to ffmpeg.exe.
 #>
 [CmdletBinding()]
 param(
     [ValidateSet('x64', 'arm64')] [string]$Arch = $(if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }),
     [string]$Msys2 = 'C:\msys64',
-    [switch]$Refresh
+    [switch]$Refresh,
+    [switch]$Tests
 )
 
 $ErrorActionPreference = 'Stop'
@@ -39,6 +45,9 @@ if ($Arch -eq 'arm64') {
     $pkgs += @('clang', 'cmake', 'ninja', 'libusb', 'pkgconf' | ForEach-Object { "mingw-w64-clang-aarch64-$_" })
 } else {
     $pkgs += @('gcc', 'cmake', 'ninja', 'libusb', 'pkgconf', 'nasm' | ForEach-Object { "mingw-w64-ucrt-x86_64-$_" })
+}
+if ($Tests) {
+    $pkgs += $(if ($Arch -eq 'arm64') { 'mingw-w64-clang-aarch64-ffmpeg' } else { 'mingw-w64-ucrt-x86_64-ffmpeg' })
 }
 
 $op = if ($Refresh) { '-Sy' } else { '-S' }

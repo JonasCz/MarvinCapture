@@ -8,8 +8,9 @@ marvin/
 pinnaclembusb/
 
 # --- Recordings ------------------------------------------------------------
-# Captured video and USB traces are never committed. tests/data/ holds small
-# local fixtures for the replay tests; see tests/data/README.md.
+# Captured video and USB traces are never committed. The test recordings are made
+# at test time in the build tree; tests/data/ may hold optional local ones (see
+# tests/data/README.md).
 *.pcap
 *.pcapng
 *.avi

@@ -24,8 +24,8 @@
  * following the quality setting. Linux has no H.264 encoder, so FFV1 stands in for it
  * (PIN_HWENC_ENCODER, tests only) wherever the probe finds none.
  *
- * Arguments: DV recordings to replay (tests/data/dv-pal.dv, ep88-pal.bin); the first one
- * present is used. None present: skipped.
+ * Argument: the PAL DV recording to replay (dv-pal.dv, made at test time, see
+ * tests/data/README.md).
  */
 
 #include "replay_test_util.h"
@@ -137,14 +137,9 @@ static double est_bph(pin_session_t *s, pin_capture_opts_t *o)
 
 int main(int argc, char **argv)
 {
-    const char *trace = NULL;
-    for (int i = 1; i < argc && !trace; i++)
-        if (pin_test_file_exists(argv[i]))
-            trace = argv[i];
-    if (!trace) {
-        printf("SKIP: no DV recording present (see tests/data/README.md)\n");
-        return 0;
-    }
+    CHECK(argc == 2);
+    const char *trace = argv[1];
+    pin_test_require_fixture(trace);
     int m = pin_encoders_probe();
     const char *standin = NULL;
     if (!(m & PIN_ENC_H264)) {

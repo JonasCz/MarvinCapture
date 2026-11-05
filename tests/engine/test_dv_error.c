@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../test_fixture.h"
+
 static int g_failures = 0;
 #define CHECK(cond, msg)                                                     \
     do {                                                                     \
@@ -129,13 +131,21 @@ static void test_synthetic(unsigned nseq)
     free(f);
 }
 
-#ifdef TEST_DATA_DIR
-static void test_fixture(const char *name, unsigned long frame_len)
+#if defined(TEST_DATA_DIR) || defined(TEST_SOURCE_DATA_DIR)
+/* A whole-frame .dv file: made at test time (tests/data/README.md; missing: skipped, or a
+ * failure when CI is set), or an optional camera recording. */
+static void test_fixture(const char *dir, const char *name, unsigned long frame_len, int optional)
 {
     char path[512];
-    snprintf(path, sizeof(path), "%s/%s", TEST_DATA_DIR, name);
+    snprintf(path, sizeof(path), "%s/%s", dir, name);
     FILE *fp = fopen(path, "rb");
-    if (!fp) { printf("skip %s (not present)\n", name); return; }
+    if (!fp) {
+        if (optional)
+            printf("%s: not present (an optional recording), not checked\n", path);
+        else
+            pin_test_have_fixture(path);
+        return;
+    }
     uint8_t *buf = malloc(frame_len);
     int n = 0, bad = 0;
     while (fread(buf, 1, frame_len, fp) == frame_len) {
@@ -145,11 +155,11 @@ static void test_fixture(const char *name, unsigned long frame_len)
         n++;
     }
     CHECK(n > 0, "fixture has frames");
-    CHECK(bad == 0, "real camera frames are error-free");
+    CHECK(bad == 0, "the fixture's frames are error-free");
     dv_frame_errors_t e; /* damage the last frame read: one STA nibble */
     buf[7 * 80 + 3] |= 0x70;
     dv_error_analyze(buf, frame_len, &e);
-    CHECK(e.frame_error && e.video_err >= 1, "damaged real frame detected");
+    CHECK(e.frame_error && e.video_err >= 1, "damaged fixture frame detected");
     free(buf);
     fclose(fp);
 }
@@ -160,8 +170,11 @@ int main(void)
     test_synthetic(10);
     test_synthetic(12);
 #ifdef TEST_DATA_DIR
-    test_fixture("dv-ntsc.dv", 120000);
-    test_fixture("dv-ntsc-32k.dv", 120000);
+    test_fixture(TEST_DATA_DIR, "dv-ntsc.dv", 120000, 0);
+#endif
+#ifdef TEST_SOURCE_DATA_DIR
+    /* a camera's recording with 32 kHz 12-bit audio, when there (tests/data/README.md) */
+    test_fixture(TEST_SOURCE_DATA_DIR, "dv-ntsc-32k.dv", 120000, 1);
 #endif
     if (g_failures == 0) printf("test_dv_error: ok\n");
     return g_failures;

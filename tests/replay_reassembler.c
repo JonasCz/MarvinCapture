@@ -21,12 +21,9 @@
  * fixed-size chunks, exactly like the USB read loop would (one callback per
  * completed transfer), and writes the reassembled output to a file.
  *
- * Used two ways:
- *   1. Phase 1 baseline: built against the pre-refactor dv_reassembler, its
- *      output is hashed and frozen as the "must stay byte-identical" target.
- *   2. ctest regression: built against the refactored (callback-based)
- *      dv_reassembler, its output is hashed again and compared to the frozen
- *      baseline.
+ * ctest runs it over the EP 0x88 dumps that make_ep88 makes from .dv files
+ * (tests/check_reassembler.cmake): the output must be the .dv file again, byte
+ * for byte. test_replay_dv_baseline uses it to get the frames a dump holds.
  *
  * usage: replay_reassembler <input.bin> <output.raw>
  */

@@ -38,6 +38,13 @@ No device is needed to build or to run the tests.
 everything listed below except MSYS2 itself, the .NET SDK and the Xcode Command Line
 Tools, skipping what is already there. CI uses the same scripts.
 
+For the tests, also the **ffmpeg command-line tool** (`scripts/install-deps.sh --tests`,
+`scripts\install-deps.ps1 -Tests`; or `apt install ffmpeg`, `brew install ffmpeg`, MSYS2
+`mingw-w64-ucrt-x86_64-ffmpeg` / `mingw-w64-clang-aarch64-ffmpeg`): the ctest suite makes
+its test recordings with it ([Tests](#tests)). Without it the build works and those tests
+skip. This is a separate program from the minimal static FFmpeg the core links (built
+from source into `third_party/`); the core loads none of ffmpeg's own libraries or DLLs.
+
 ### Windows
 
 - **MSYS2** with the UCRT64 toolchain (default location `C:\msys64`; use
@@ -284,12 +291,16 @@ workflow `.github/workflows/build.yml` runs these scripts for all six desktop pl
   engine through `pin_api.h` against the **replay device** (`PIN_REPLAY=<file>`,
   a virtual device that plays a recording back), covering DV/HDV formats, scene
   splitting, multi-pass, preview frames and output checks.
-- `tests/replay_reassembler.c` plus `tests/baseline_sha256.txt`: the DV
-  reassembler's output must stay byte-identical.
+- `tests/replay_reassembler.c` (`reassembler_ep88_*`): the DV reassembler must turn a
+  raw EP 0x88 dump back into the DV it carries, byte for byte.
 
-The replay tests need small recordings in `tests/data/`. They are not committed;
-without them those tests skip themselves. See
-[../tests/data/README.md](../tests/data/README.md).
+The recordings these tests run on are not committed: ctest makes them at test time
+(about a second, into `build/<os>-<arch>/core/tests/data/`) with the ffmpeg
+command-line tool and `tests/make_ep88.c`, which wraps DV into the device's EP 0x88
+framing. Configure finds ffmpeg on PATH and warns when there is none; then the tests
+that need the recordings skip themselves, except when the environment variable `CI` is
+set: then they fail. See [../tests/data/README.md](../tests/data/README.md), also for
+the one optional camera recording (12-bit DV audio) that ffmpeg cannot make.
 
 ## Repository layout
 
@@ -302,7 +313,7 @@ src/api/       pin_api.h / pin_api.c, the flat C API the GUI links
 src/cli/       MarvinCaptureCLI
 gui/windows/   WinUI 3 app
 gui/macos/     SwiftUI/AppKit app (SwiftPM)
-tests/         unit and replay tests; tests/data/ = local fixtures
+tests/         unit and replay tests (their recordings are made at test time, see tests/data/)
 firmware/      FPGA bitstreams (see firmware/README.md)
 scripts/       build.ps1 (Windows), build.sh (macOS/Linux), build-ffmpeg.sh,
                package-*.sh/.ps1 (installers), extract-bitstreams.py,

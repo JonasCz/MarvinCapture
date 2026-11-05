@@ -9,7 +9,7 @@ installers on:
 
 | Step | macOS / Linux | Windows | Android |
 |---|---|---|---|
-| Dependencies | `scripts/install-deps.sh` | `scripts\install-deps.ps1 -Arch <x64\|arm64> -Msys2 <root> -Refresh` (after `setup-msys2` installed a bare MSYS2, and `setup-dotnet`) | none (preinstalled on the runner) |
+| Dependencies | `scripts/install-deps.sh [--tests]` | `scripts\install-deps.ps1 -Arch <x64\|arm64> -Msys2 <root> -Refresh [-Tests]` (after `setup-msys2` installed a bare MSYS2, and `setup-dotnet`) | none (preinstalled on the runner) |
 | Build + installer | `scripts/package-macos.sh` / `scripts/package-linux.sh` `[--skip-tests]` | `scripts\package-windows.ps1 -Arch <x64\|arm64> -Msys2 <root> [-SkipTests]` | `scripts/build-android.sh --release --abi arm64-v8a` |
 | Release | `scripts/publish-release.sh [--draft] [--title T] [--notes N] <dir>` (and `--check` before building) | | |
 
@@ -18,7 +18,7 @@ installers on:
 | Input | Default | |
 |---|---|---|
 | Windows x86_64 / arm64, macOS arm64 / x86_64, Linux x86_64 / arm64, Android arm64 | all on | one checkbox per platform; unticked ones don't start a runner |
-| Run the ctest suite | off | `--skip-tests` / `-SkipTests` otherwise (not for Android: the core's tests cannot run on an Android target there) |
+| Run the ctest suite | off | on: `--tests` / `-Tests` for the dependencies, which adds the ffmpeg command-line tool the suite makes its test recordings with (see [below](#tests)); off: `--skip-tests` / `-SkipTests` for the build, and no ffmpeg. Not for Android: the core's tests cannot run on an Android target there |
 | What to do with the installers | artifacts only | `artifacts only`, `draft release` or `release` |
 | Release title | empty | `MarvinCapture <version>` when empty |
 | Release notes | empty | `"release_notes"` from `VERSION` when empty |
@@ -38,6 +38,23 @@ bump `VERSION` first, as described in [building.md](building.md#installers); and
 Android ticked, if the [Android signing key](#android-signing-key) is not set up
 (`publish-release.sh` itself also refuses a debug-signed APK). Publish from a run with
 all seven platforms: the release only holds the installers of the platforms the run built.
+
+## Tests
+
+With **Run the ctest suite** ticked, each desktop job runs the whole ctest suite before
+packaging (`scripts/build.sh` / `scripts\build.ps1`, a failure stops the job). The suite
+makes its DV/HDV test recordings at test time with the ffmpeg command-line tool
+([tests/data/README.md](../tests/data/README.md)), so the dependency step installs it
+then, and only then: apt's `ffmpeg` on Linux, Homebrew's `ffmpeg` on macOS, and on Windows
+MSYS2's `mingw-w64-ucrt-x86_64-ffmpeg` (x64) or `mingw-w64-clang-aarch64-ffmpeg` (arm64)
+into the toolchain's `bin` folder, which `build.ps1` puts on PATH, so configure and ctest
+find `ffmpeg.exe` there. The DLLs that come with it cannot stand in for anything the build
+uses: the core links its own FFmpeg statically (no `avcodec-*.dll` is loaded), and the
+toolchain DLLs it does load (libusb, winpthread) come from the same MSYS2 installation and
+pacman transaction either way.
+
+GitHub sets `CI=true`, and with `CI` set a test whose recording is missing fails instead of
+skipping, so a run cannot pass with those tests skipped (should ffmpeg be missing).
 
 ## Runners
 
@@ -94,7 +111,7 @@ compile itself is under a minute.
 |---|---|---|
 | FFmpeg static build, `third_party/ffmpeg-<platform>` | platform + hash of `scripts/build-ffmpeg.sh` | the FFmpeg build (the slowest step; several minutes on Windows) |
 | FFmpeg source tarball | FFmpeg version, shared by all platforms | the download, only needed when a platform's build cache misses |
-| MSYS2 packages (pacman's download cache) | platform + hash of `scripts/install-deps.ps1` | the pacman downloads |
+| MSYS2 packages (pacman's download cache) | platform + hash of `scripts/install-deps.ps1`, `-tests` added when the tests run (ffmpeg and its dependencies); falls back to either | the pacman downloads |
 | NuGet packages | hash of the csproj/props/nuget.config + architecture; falls back to the other Windows architecture's | the package restore (the Windows App SDK packages hold both architectures) |
 | libwdi `wdi-simple.exe` (both Windows jobs) | hash of `scripts/package-windows.ps1` | the libwdi MSBuild build and the WDK download |
 | Android FFmpeg, `third_party/ffmpeg-android-arm64` | hash of `scripts/build-ffmpeg.sh` and `scripts/android-ndk.sh` (what its stamp covers) | the NDK build of FFmpeg |

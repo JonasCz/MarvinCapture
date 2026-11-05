@@ -459,13 +459,15 @@ bricked by the stop sequence when it had not.
 
 ## Testing without hardware
 
-Set `PIN_REPLAY=<file>` (a `.dv`, `.ts`, or a raw EP 0x88 dump such as the
-`tests/data/ep88-*.bin` fixtures) to
+Set `PIN_REPLAY=<file>` (a `.dv`, an MPEG-2 TS such as a `.ts` / `.m2t` HDV capture, or a
+raw EP 0x88 dump such as the `ep88-*.bin` files the ctest suite makes in
+`build/<os>-<arch>/core/tests/data/`) to
 get a virtual "replay" device that plays a recording back through the full
 pipeline:
 
 ```
-MarvinCaptureCLI -d tests\data\ep88-pal.bin --capture out.dv --wait idle
+MarvinCaptureCLI -d build\windows-x86_64\core\tests\data\ep88-pal.bin --capture out.dv --wait idle
 ```
 
-The ctest suite is built on this; see [building.md](building.md).
+The ctest suite is built on this; see [building.md](building.md) and
+[../tests/data/README.md](../tests/data/README.md).

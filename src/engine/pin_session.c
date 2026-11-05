@@ -2913,6 +2913,18 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     return 0;
 }
 
+/* A plain MPEG-2 TS: the sync byte 0x47 at the start of each of its first (up to) four
+ * 188-byte packets, whatever the file is called (a .dv file starts with a DIF header
+ * block, 0x1F; an EP 0x88 dump has no such 188-byte pattern). */
+static int replay_looks_like_ts(const uint8_t *head, size_t n)
+{
+    size_t packets = 0;
+    for (size_t off = 0; off < n && packets < 4; off += HDV_TS_PACKET_SIZE, packets++)
+        if (head[off] != HDV_TS_SYNC_BYTE)
+            return 0;
+    return packets > 0;
+}
+
 static int replay_run(pin_session_t *s)
 {
     const char *path = s->device_id + 7; /* "replay:<file>" */
@@ -2921,14 +2933,17 @@ static int replay_run(pin_session_t *s)
         set_error(s, PIN_ERR_NOT_FOUND, "replay file not found");
         return -1;
     }
-    fseek(f, 0, SEEK_END);
-    long total = ftell(f);
+    uint8_t head[4 * HDV_TS_PACKET_SIZE];
+    size_t head_len = fread(head, 1, sizeof(head), f);
     fseek(f, 0, SEEK_SET);
     double next_t = 0; /* pace_frame() deadline */
 
+    /* What the file is: an HDV transport stream (by its content, or a .ts / .m2t name),
+     * whole DV frames (.dv), or else a raw EP 0x88 dump for the reassembler. */
     const char *ext = strrchr(path, '.');
-    int is_dv_frames = ext && (strcmp(ext, ".dv") == 0);
-    int is_ts = ext && (strcmp(ext, ".ts") == 0);
+    int is_dv_frames = ext && strcasecmp(ext, ".dv") == 0;
+    int is_ts = replay_looks_like_ts(head, head_len) ||
+                (ext && (strcasecmp(ext, ".ts") == 0 || strcasecmp(ext, ".m2t") == 0));
     if (is_ts)
         return replay_run_ts(s, f); /* closes f itself */
 
@@ -2942,11 +2957,12 @@ static int replay_run(pin_session_t *s)
     dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = &ctx };
     dv_reassembler_init(&reasm, &out);
 
+    /* DV frames: PAL (144,000 bytes) or NTSC (120,000) by the DSF bit of the first frame's
+     * header block (byte 3, bit 7), not by the file size: a whole number of NTSC frames can
+     * be a whole number of PAL frames too (any multiple of 6). */
     long frame_size = 0;
-    if (is_dv_frames && total > 0) {
-        if (total % 144000 == 0) frame_size = 144000;
-        else if (total % 120000 == 0) frame_size = 120000;
-    }
+    if (is_dv_frames && head_len >= 4 && (head[0] & 0xE0) == 0 && head[2] == 0) /* SCT 0, DBN 0 */
+        frame_size = (head[3] & 0x80) ? DV_SEQ_COUNT_PAL * DV_SEQ_SIZE : DV_SEQ_COUNT_NTSC * DV_SEQ_SIZE;
 
     uint8_t *chunk = malloc(frame_size ? (size_t)frame_size : 65536);
     unsigned units_paced = 0;

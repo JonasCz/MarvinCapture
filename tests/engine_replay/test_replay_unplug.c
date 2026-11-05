@@ -24,7 +24,8 @@
  * packets), the stop reason must be PIN_STOP_DEVICE_LOST (abnormal), the session
  * ends in ERROR, the stop text names the file, and a new session opens afterwards.
  *
- * Usage: test_replay_unplug <dv_frames_file.dv> <hdv.ts>
+ * Usage: test_replay_unplug <dv_frames_file.dv> <hdv.ts> (both made at test time, see
+ * tests/data/README.md)
  */
 
 #include "replay_test_util.h"
@@ -99,9 +100,9 @@ static void run_case(const char *trace, const char *base, const char *ext, int d
     snprintf(path, sizeof(path), "%s.%s", base, ext);
     long n = file_size(path);
     CHECK(n > 0);
-    if (strcmp(ext, "dv") == 0)
-        CHECK(n % 120000 == 0);
-    else if (strcmp(ext, "ts") == 0)
+    if (strcmp(ext, "dv") == 0) /* NTSC: whole 120,000-byte frames, as many as were counted */
+        CHECK(n % 120000 == 0 && (unsigned long long)n == snap.frames * 120000ULL);
+    else if (strcmp(ext, "m2t") == 0)
         CHECK(n % 188 == 0);
     else if (strcmp(ext, "avi") == 0)
         CHECK(file_contains(path, "idx1")); /* index written: playable up to the cut */
@@ -117,13 +118,10 @@ static void run_case(const char *trace, const char *base, const char *ext, int d
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);
-    if (!pin_test_file_exists(argv[1])) {
-        printf("SKIP: %s not present (see tests/data/README.md)\n", argv[1]);
-        return 0;
-    }
+    pin_test_require_fixture(argv[1]);
+    pin_test_require_fixture(argv[2]);
     run_case(argv[1], "unplug_raw", "dv", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS);
     run_case(argv[1], "unplug_avi", "avi", PIN_FMT_DV_AVI, PIN_FMT_HDV_TS);
-    if (pin_test_file_exists(argv[2]))
-        run_case(argv[2], "unplug_hdv", "ts", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS);
+    run_case(argv[2], "unplug_hdv", "m2t", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS); /* the raw TS's default extension */
     return 0;
 }

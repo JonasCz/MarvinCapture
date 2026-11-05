@@ -171,9 +171,11 @@ jobs:
           enableCrossOsArchive: true
 
       # --- macOS / Linux ---------------------------------------------------------------
+      # With the tests on, also the ffmpeg command-line tool (--tests): the ctest suite makes its
+      # test recordings with it, and fails rather than skips without it (CI is set).
       - name: Install dependencies
         if: matrix.os == 'macos' || matrix.os == 'linux'
-        run: scripts/install-deps.sh
+        run: scripts/install-deps.sh $([[ "$SKIP_TESTS" == true ]] || echo --tests)
 
       - name: Build and package
         if: matrix.os == 'macos' || matrix.os == 'linux'
@@ -244,12 +246,13 @@ jobs:
           update: false
           cache: false
 
+      # a separate entry with the tests on: it holds ffmpeg and its dependencies as well
       - name: Cache MSYS2 packages
         if: matrix.os == 'windows'
         uses: actions/cache@v5
         with:
           path: ${{ steps.msys2.outputs.msys2-location }}\var\cache\pacman\pkg
-          key: msys2-${{ matrix.platform }}-${{ hashFiles('scripts/install-deps.ps1') }}
+          key: msys2-${{ matrix.platform }}-${{ hashFiles('scripts/install-deps.ps1') }}${{ inputs.run_tests && '-tests' || '' }}
           restore-keys: msys2-${{ matrix.platform }}-
 
       - name: Set up .NET
@@ -281,10 +284,12 @@ jobs:
             !build/windows-libwdi/work
           key: libwdi-msvc-${{ hashFiles('scripts/package-windows.ps1') }}
 
+      # -Tests (with the tests on): also MSYS2's ffmpeg, next to the toolchain that build.ps1
+      # puts on PATH, where ctest finds ffmpeg.exe
       - name: Install dependencies
         if: matrix.os == 'windows'
         shell: pwsh
-        run: scripts/install-deps.ps1 -Arch ${{ matrix.arch }} -Msys2 '${{ steps.msys2.outputs.msys2-location }}' -Refresh
+        run: scripts/install-deps.ps1 -Arch ${{ matrix.arch }} -Msys2 '${{ steps.msys2.outputs.msys2-location }}' -Refresh -Tests:$($env:SKIP_TESTS -ne 'true')
 
       - name: Build and package
         if: matrix.os == 'windows'

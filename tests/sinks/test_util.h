@@ -40,4 +40,6 @@
         } \
     } while (0)
 
+#include "../test_fixture.h" /* pin_test_have_fixture() */
+
 #endif

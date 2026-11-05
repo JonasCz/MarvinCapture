@@ -33,6 +33,7 @@
 #define PIN_REPLAY_TEST_UTIL_H
 
 #include "pin_api.h"
+#include "../test_fixture.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -84,6 +85,15 @@ static inline int pin_test_file_exists(const char *path)
         return 0;
     fclose(f);
     return 1;
+}
+
+/* For a fixture the suite makes at test time (tests/data/README.md): when it is missing
+ * (no ffmpeg) the test prints SKIP and exits 0, but fails when the environment variable CI
+ * is set (see ../test_fixture.h). */
+static inline void pin_test_require_fixture(const char *path)
+{
+    if (!pin_test_have_fixture(path))
+        exit(0);
 }
 
 /* Points PIN_REPLAY at `trace_path` and opens a session on it (pin_open with

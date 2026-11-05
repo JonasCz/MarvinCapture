@@ -18,11 +18,12 @@
 
 /*
  * ctest: validates dv_audio.c's real SMPTE 314M/IEC 61834 deshuffle
- * sample-for-sample against FFmpeg's own "dv" demuxer, on real captures
- * from tests/data/ -- not synthetic data. This is the actual correctness
- * check for the shuffle/expansion dv_audio.h documents as "transcribed
- * from FFmpeg, validated against real captures"; tests/engine/test_dv_audio.c
- * only checks the algorithm is *wired up* correctly (synthetic data at
+ * sample-for-sample against FFmpeg's own "dv" demuxer, on whole DV files
+ * (made by FFmpeg's DV muxer at test time, and a camera's recording when
+ * one is there). This is the actual correctness check for the
+ * shuffle/expansion dv_audio.h documents as "transcribed from FFmpeg,
+ * validated against real captures"; tests/engine/test_dv_audio.c only
+ * checks the algorithm is *wired up* correctly (synthetic data at
  * hand-picked shuffle-table positions).
  *
  * Method, per real DV frame in the file: run it through dv_audio_extract()
@@ -41,16 +42,19 @@
  * fraction of skipped frames is asserted small so this still validates
  * virtually the whole file.
  *
- * Traces are the developer's own recordings (tests/data/, .gitignore'd);
- * this test exits 0 doing nothing if none are present, like the other
- * trace-dependent tests (test_replay_hdv etc).
+ * Files (tests/data/README.md): dv-ntsc.dv (NTSC, 48 kHz 16-bit) and
+ * dv-pal-32k.dv (PAL, 32 kHz 16-bit), made with ffmpeg at test time (no
+ * ffmpeg: skipped, failed when CI is set); and, after --optional, a camera's
+ * recording that is only checked when present: tests/data/dv-ntsc-32k.dv
+ * (NTSC, 32 kHz 12-bit nonlinear, 4 channels), the only coverage of
+ * dv_audio_12to16() against FFmpeg, as FFmpeg's DV muxer writes 16-bit
+ * audio only.
  *
- * Coverage today: NTSC only (see tests/data/README.md), 48 kHz/16-bit
- * (dv-ntsc.dv) and 32 kHz/12-bit nonlinear (dv-ntsc-32k.dv, which covers
- * dv_audio_12to16()). No PAL audio.
+ * Usage: test_dv_audio_vs_libavformat <file.dv>... [--optional <file.dv>...]
  */
 
 #include "dv_audio.h"
+#include "../test_fixture.h"
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -174,25 +178,25 @@ static int check_file(const AVInputFormat *dv_fmt, const candidate_t *cand)
 {
     FILE *f = fopen(cand->path, "rb");
     if (!f) {
-        printf("SKIP %s: not present\n", cand->path);
+        printf("%s: not present (an optional recording), not checked\n", cand->path);
         return 0;
     }
     fseek(f, 0, SEEK_END);
     long total = ftell(f);
     fseek(f, 0, SEEK_SET);
 
-    /* Every .dv file in tests/data/ is NTSC (see tests/data/README.md) --
-     * unlike pin_session.c's replay_run() (which checks 144000/PAL first
-     * and has no other way to tell), try 120000/NTSC first here since a
-     * file size that happens to be divisible by both (e.g.
-     * 20260922-clean-3s.dv: 90 NTSC frames, coincidentally also 75*144000)
-     * must not be misread as PAL -- that misaligns every "frame" this test
-     * reads and makes both extractors fail to find audio at all, which
-     * would otherwise show up as a false 100%-skipped result. */
+    /* The frame size from the DSF bit of the first header block (byte 3,
+     * bit 7: 625/50), not from the file size: one divisible by both (e.g.
+     * 30 NTSC frames, 25 * 144000) must not be misread as PAL -- that
+     * misaligns every "frame" this test reads and makes both extractors fail
+     * to find audio at all, which would otherwise show up as a false
+     * 100%-skipped result. */
+    uint8_t hdr[4] = { 0 };
     long frame_size = 0;
-    if (total % 120000 == 0) frame_size = 120000;
-    else if (total % 144000 == 0) frame_size = 144000;
-    if (!frame_size) {
+    if (fread(hdr, 1, sizeof(hdr), f) == sizeof(hdr) && hdr[0] == 0x1F && hdr[2] == 0x00)
+        frame_size = (hdr[3] & 0x80) ? 144000 : 120000;
+    fseek(f, 0, SEEK_SET);
+    if (!frame_size || total % frame_size != 0) {
         printf("SKIP %s: size %ld isn't a whole number of DV frames\n", cand->path, total);
         fclose(f);
         return 0;
@@ -277,7 +281,7 @@ static int check_file(const AVInputFormat *dv_fmt, const candidate_t *cand)
     return 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
     av_log_set_level(AV_LOG_QUIET); /* the per-frame isolated demux logs noise on purpose */
 
@@ -287,20 +291,22 @@ int main(void)
         return 1;
     }
 
-    candidate_t candidates[] = {
-        { "tests/data/dv-ntsc.dv", 0, 1 },
-        { "tests/data/dv-ntsc-32k.dv", 0, 1 },
-    };
-    int any_present = 0;
-    for (size_t i = 0; i < sizeof(candidates) / sizeof(candidates[0]); i++) {
-        FILE *probe = fopen(candidates[i].path, "rb");
-        if (probe) { fclose(probe); any_present = 1; }
-        check_file(dv_fmt, &candidates[i]);
+    /* The files made at test time must be there (no ffmpeg: skip, or fail
+     * when CI is set); the ones after --optional only when present. */
+    int optional = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--optional") == 0) {
+            optional = 1;
+            continue;
+        }
+        if (!optional && !pin_test_have_fixture(argv[i]))
+            return 0;
     }
-
-    if (!any_present) {
-        printf("test_dv_audio_vs_libavformat: no tests/data/dv-ntsc.dv present, nothing to validate\n");
-        return 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--optional") == 0)
+            continue;
+        candidate_t cand = { argv[i], 0, 1 };
+        check_file(dv_fmt, &cand);
     }
     if (g_failures == 0) {
         printf("test_dv_audio_vs_libavformat: all tests passed\n");

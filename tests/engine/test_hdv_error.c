@@ -22,6 +22,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../test_fixture.h"
+
 static int g_failures = 0;
 #define CHECK(cond, msg)                                                     \
     do {                                                                     \
@@ -143,7 +145,7 @@ static void test_fixture(void)
     char path[512];
     snprintf(path, sizeof(path), "%s/hdv.ts", TEST_DATA_DIR);
     FILE *fp = fopen(path, "rb");
-    if (!fp) { printf("skip hdv.ts (not present)\n"); return; }
+    if (!fp) { pin_test_have_fixture(path); return; } /* made at test time: SKIP, or fail in CI */
     fseek(fp, 0, SEEK_END);
     long sz = ftell(fp);
     fseek(fp, 0, SEEK_SET);
@@ -181,8 +183,8 @@ static void test_fixture(void)
                 start = i;
             }
         }
-        if (pass == 0) CHECK(bad == 0, "real HDV stream is error-free");
-        else CHECK(bad >= 1, "dropped packet in the real stream is detected");
+        if (pass == 0) CHECK(bad == 0, "the HDV stream is error-free");
+        else CHECK(bad >= 1, "dropped packet in the stream is detected");
     }
     free(d);
 }

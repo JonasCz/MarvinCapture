@@ -17,8 +17,8 @@
  */
 
 /*
- * ctest: feeds a real HDV capture (tests/data/hdv.ts, see
- * tests/data/README.md) through sink_rewrap's HDV path (PIN_FMT_HDV_MOV,
+ * ctest: feeds an HDV capture (hdv.ts, HDV-like TS made with ffmpeg at test
+ * time, see tests/data/README.md) through sink_rewrap's HDV path (PIN_FMT_HDV_MOV,
  * which for HDV always takes the plan's documented raw-then-remux-at-close
  * fallback -- see sink_rewrap.c's header comment) and checks the result
  * with libavformat: stream codecs, dimensions, field order, SAR, title.
@@ -37,9 +37,8 @@
  * elsewhere in the tree); the byte-for-byte content reaching sink_rewrap is
  * unaffected either way.
  *
- * Skips (prints a message, exits 0) if the capture file isn't present --
- * it's the user's own recording, gitignored, not guaranteed to exist on
- * every machine that builds this project (see tests/data/README.md).
+ * Skips (prints a message, exits 0) if the capture file isn't present (no
+ * ffmpeg to make it), except when CI is set: then it fails.
  */
 
 #include "test_util.h"
@@ -113,8 +112,9 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
             aidx = (int)i;
     }
     CHECK(vidx >= 0);
-    /* the capture's own clock starts at ~834 s; the rewrapped file starts at 0 (a B-frame
-     * lead-in or an audio/video offset of a fraction of a second is fine) */
+    /* the capture's own clock starts at ~834 s (as a camera's did; the generated file's
+     * does too); the rewrapped file starts at 0 (a B-frame lead-in or an audio/video
+     * offset of a fraction of a second is fine) */
     printf("%s: start_time %.3f s, duration %.3f s\n", out_path, (double)fc->start_time / AV_TIME_BASE,
            (double)fc->duration / AV_TIME_BASE);
     CHECK(fc->start_time != AV_NOPTS_VALUE && fc->start_time > -AV_TIME_BASE && fc->start_time < AV_TIME_BASE);
@@ -150,12 +150,8 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
-    FILE *probe = fopen(argv[1], "rb");
-    if (!probe) {
-        printf("SKIP: %s not present (see tests/data/README.md) -- HDV rewrap test skipped\n", argv[1]);
+    if (!pin_test_have_fixture(argv[1]))
         return 0;
-    }
-    fclose(probe);
     run(argv[1], PIN_FMT_HDV_MOV, "test_hdv.mov");
     run(argv[1], PIN_FMT_HDV_MKV, "test_hdv.mkv");
     return 0;

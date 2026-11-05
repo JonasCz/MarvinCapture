@@ -1,20 +1,51 @@
 # Test fixtures
 
-Small recordings the replay tests run against. They are **not committed**
-(`.gitignore`); without them the tests that need them skip themselves, and the
-rest of the suite runs as normal.
+The recordings the replay, reassembler and sink tests run on are **made at test time**,
+not committed. The ctest fixture-setup test `pin_test_data` runs
+[`tests/make_fixtures.cmake`](../make_fixtures.cmake), which makes them with the `ffmpeg`
+command-line tool and [`tests/make_ep88.c`](../make_ep88.c) into the build tree,
+`build/<os>-<arch>/core/tests/data/` (not this folder). ctest runs it before any test that
+needs the files; it makes them again only when the script, `make_ep88` or the ffmpeg path
+changed. It takes about a second.
 
 | File | What it is | Used by |
 |---|---|---|
-| `ep88-pal.bin` | First 2 MiB of a raw EP 0x88 dump, PAL DV (colour bars) | reassembler baseline, `test_replay_*`, `test_pin_check_output`, `test_dv_rewrap`, `test_hwenc_sink` |
-| `ep88-ntsc.bin` | First 2 MiB of a raw EP 0x88 dump, NTSC DV, 32 kHz 12-bit audio | reassembler baseline, `test_dv_rewrap`, `test_hwenc_sink` |
-| `dv-ntsc.dv` | 20 frames of a reassembled NTSC DV file, 48 kHz 16-bit audio | `test_dv_audio_vs_libavformat`, `test_replay_unplug`, `test_hwenc_sink` |
-| `dv-pal.dv` | 50 frames of a PAL DV file, 48 kHz 16-bit audio (`ffmpeg -f lavfi -i testsrc2=size=720x576:rate=25 -f lavfi -i sine -frames:v 50 -c:v dvvideo -c:a pcm_s16le -ar 48000 -f dv dv-pal.dv` makes one) | `test_hwenc_sink`, `test_replay_hwenc` |
-| `dv-ntsc-32k.dv` | 150 frames of a camera's NTSC DV, 32 kHz 12-bit audio, 4 channels | `test_dv_audio_vs_libavformat` |
-| `hdv.ts` | First 16,000 TS packets of an HDV capture (1440x1080 25p MPEG-2 + MP2) | `test_replay_hdv`, `test_hdv_rewrap` |
+| `dv-pal.dv` | PAL DV, 50 frames (2 s), 48 kHz 16-bit audio | `test_replay_hwenc` |
+| `dv-ntsc.dv` | NTSC DV, 30 frames (1 s), 48 kHz 16-bit audio; 3,600,000 bytes, also a whole number of PAL frames, so only the DSF bit tells it is NTSC | `test_dv_audio_vs_libavformat`, `test_replay_unplug`, `test_hwenc_sink`, `test_dv_error`, the source of `ep88-ntsc.bin` |
+| `dv-pal-32k.dv` | PAL DV, 14 frames (0.56 s), 32 kHz 16-bit audio | `test_dv_audio_vs_libavformat`, the source of `ep88-pal.bin` |
+| `hdv.ts` | HDV-like MPEG-2 TS, 2 s: 1440x1080 interlaced (top field first), 25 fps, 12-picture GOPs with a GOP timecode from 00:10:00:00, BT.709, MP2 audio; the PIDs of a real camera (PMT 0x81, video 0x810, audio 0x814) and a clock that starts at 834 s | `test_replay_hdv`, `test_replay_unplug`, `test_hdv_rewrap`, `test_hdv_error`, `test_pin_vidfmt` |
+| `ep88-pal.bin` | Raw EP 0x88 dump of `dv-pal-32k.dv` (2 MiB, short like a cut-down dump of a real camera: the replay tests count on it ending within a second) | `reassembler_ep88_pal`, the PAL replay tests (`test_replay_*`, `test_pin_script_run`, `test_pin_check_output`), `test_dv_rewrap`, `test_hwenc_sink` |
+| `ep88-ntsc.bin` | Raw EP 0x88 dump of `dv-ntsc.dv` | `reassembler_ep88_ntsc`, `test_dv_rewrap` |
 
-Make your own with `MarvinCaptureCLI --capture file.dv` (or `.ts`). The raw
-`ep88-*.bin` dumps came from the raw endpoint dump that is now disabled
-(`#if 0` in `src/core/pinnacle_stream.c`, see docs/usage.md). Cut them short: a couple of
-MiB is plenty. If you replace the `ep88-*.bin` files, regenerate the hashes in
-`tests/baseline_sha256.txt` (see its header).
+The DV and TS files are ffmpeg's `testsrc2` pattern and a tone (the exact commands are in
+`make_fixtures.cmake`). The `ep88-*.bin` dumps are what the device would send for those
+DV files: `make_ep88` wraps each DV frame into IEC 61883 packets, OHCI isochronous-receive
+records and type-9 messages, with a few hundred bytes of junk in front as when a read joins
+a running stream (its header comment has the details). Reassembled, a dump gives back its
+`.dv` file byte for byte, which is what the `reassembler_ep88_*` tests check.
+
+`make_ep88 [--no-junk] <out.bin> <in.dv|in.ts>...` takes several inputs, wrapped one after
+the other into one stream, each detected by its content: whole DV frames (PAL or NTSC per
+frame, from the DSF bit) or an MPEG-2 TS (as IEC 61883-4 source packets).
+
+**Without ffmpeg** (configure says so with a warning; `-DPIN_TEST_FFMPEG=OFF` configures as
+if there were none) the tests that need these files print `SKIP` and pass, except when the
+environment variable `CI` is set (GitHub Actions sets `CI=true`): then they fail, so a CI
+run cannot pass by skipping. Install ffmpeg (docs/building.md, or `scripts/install-deps.sh
+--tests`, `scripts\install-deps.ps1 -Tests`) and configure again.
+
+## What ffmpeg cannot make: optional recordings in this folder
+
+This folder (`tests/data/`, not committed apart from this file) can hold a recording that
+the generated files cannot stand in for. Tests use it when it is there and say
+"not present ... not checked" otherwise:
+
+| File | What it is | Used by |
+|---|---|---|
+| `dv-ntsc-32k.dv` | A camera's NTSC DV with 32 kHz **12-bit nonlinear** audio, 4 channels (ffmpeg's DV muxer writes 16-bit stereo only, and 32 kHz only at 25 fps) | `test_dv_audio_vs_libavformat` (the only check of `dv_audio_12to16()` against FFmpeg), `test_dv_error` |
+
+Also not covered by any generated file, so only by a real HDV camera: the aux stream on
+PID 0x811 (recording date/time, `hdv_aux_scan_datetime()`), which no test checks yet.
+
+Make a recording with `MarvinCaptureCLI --capture file.dv`; cut it short, a couple of
+MiB is plenty.

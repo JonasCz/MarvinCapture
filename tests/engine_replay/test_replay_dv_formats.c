@@ -86,10 +86,7 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     const char *trace_path = argv[1];
-    if (!pin_test_file_exists(trace_path)) {
-        printf("SKIP: %s not present\n", trace_path);
-        return 0;
-    }
+    pin_test_require_fixture(trace_path);
 
     capture_one(trace_path, PIN_FMT_DV_AVI, "dv_fmt_test_avi", "marvin-core replay AVI test");
     check_with_libavformat("dv_fmt_test_avi.avi", "marvin-core replay AVI test");

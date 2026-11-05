@@ -162,10 +162,7 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     const char *trace = argv[1];
-    if (!pin_test_file_exists(trace)) {
-        printf("SKIP: %s not present\n", trace);
-        return 0;
-    }
+    pin_test_require_fixture(trace);
     remove("script_a.dv");
     remove("script_b.dv");
     remove("script_c.dv");

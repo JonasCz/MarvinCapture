@@ -241,7 +241,7 @@ const char *pin_script_help_text(void)
         "Transport actions (--rew --ff --play --pause --stop) return as soon as the deck has accepted the command, not when it has finished. Use a wait to wait for it to complete (for example --rew --wait).\n"
         "\n"
         "Settings:\n"
-        "  -d, --device ID          device id (usb:2-1), 16-hex serial, or a .dv/.ts file to replay (default: first device). See the device list at the end of this text. Only before the first action.\n"
+        "  -d, --device ID          device id (usb:2-1), 16-hex serial, or a .dv/.ts/.m2t file to replay (default: first device). See the device list at the end of this text. Only before the first action.\n"
         "                           fd:N: the USB device behind open file descriptor N, for Android, where programs cannot list USB devices (Termux: termux-usb passes the descriptor; see docs/cli.md). Linux and Android only.\n"
         "  -i, --input dv|svideo|composite\n"
         "                           dv = DV and HDV over FireWire (default)\n"

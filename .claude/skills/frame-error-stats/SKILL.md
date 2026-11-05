@@ -20,11 +20,12 @@ Traps (all learned the hard way):
   even for block 0 of sequence 0. STA is the HIGH nibble of byte 3 of a video
   block (the low nibble is QNO, not an error).
 - All-zero audio blocks are normal (silence, unused second channel pair of
-  32 kHz/4-channel recordings: 34-40 of 45 blocks in the fixtures). Only a
+  32 kHz/4-channel recordings: 34-40 of 45 blocks in a camera's recording). Only a
   PARTIAL zero pattern in the first half of the sequences counts (Sony mute).
-- `tests/data/ep88-*.bin` replays contain real losses (shifted blocks): all
-  their frames are "with error"; do not assert zero errors on them. The
-  `dv-ntsc*.dv` and `hdv.ts` fixtures are clean and are asserted to be.
+- A raw EP 0x88 dump of a real camera contains real losses (shifted blocks): all
+  its frames are "with error"; do not assert zero errors on one. The fixtures the
+  suite generates (tests/data/README.md: the `.dv` files, `hdv.ts`, and the
+  `ep88-*.bin` dumps `make_ep88` wraps around them) are clean and are asserted to be.
 - HDV: one unit = one picture (video PES start to the next). A continuity gap on
   the first packet of a unit is charged to that unit (the loss is between two
   pictures). PES_packet_length is 0 for HDV video; only checked if non-zero.

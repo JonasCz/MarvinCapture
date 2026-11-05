@@ -14,42 +14,49 @@
 # You should have received a copy of the GNU Affero General Public License
 # along with this program. If not, see <https://www.gnu.org/licenses/>.
 
+# --- Test fixtures ---------------------------------------------------------------------
+# The recordings the replay and sink tests run on are made at test time, not committed:
+# synthetic DV and HDV files from the ffmpeg command-line tool, and raw EP 0x88 dumps that
+# make_ep88 wraps around two of the DV files. The fixture-setup test pin_test_data writes
+# them into <build>/tests/data (make_fixtures.cmake, tests/data/README.md); every test that
+# reads them has FIXTURES_REQUIRED pin_test_data and gets their paths from PIN_TEST_DATA.
+# Without ffmpeg those tests print SKIP and pass, except when the environment variable CI
+# is set: then they fail. -DPIN_TEST_FFMPEG=OFF configures as if there were no ffmpeg.
+add_executable(make_ep88 make_ep88.c)
+
+find_program(PIN_TEST_FFMPEG ffmpeg DOC "ffmpeg command-line tool that makes the test fixtures")
+if(PIN_TEST_FFMPEG)
+    message(STATUS "Test fixtures: made with ${PIN_TEST_FFMPEG}")
+    set(_pin_test_ffmpeg "${PIN_TEST_FFMPEG}")
+else()
+    message(WARNING "ffmpeg (the command-line tool) not found: the tests that need generated "
+                    "DV/HDV fixtures will skip, or fail when the environment variable CI is set. "
+                    "Install ffmpeg (docs/building.md) and configure again.")
+    set(_pin_test_ffmpeg "")
+endif()
+set(PIN_TEST_DATA "${CMAKE_BINARY_DIR}/tests/data")
+set(PIN_TEST_DATA "${PIN_TEST_DATA}" PARENT_SCOPE)
+add_test(NAME pin_test_data
+    COMMAND "${CMAKE_COMMAND}" "-DFFMPEG=${_pin_test_ffmpeg}" "-DMAKE_EP88=$<TARGET_FILE:make_ep88>"
+            "-DOUT=${PIN_TEST_DATA}" -P "${CMAKE_CURRENT_SOURCE_DIR}/make_fixtures.cmake")
+set_tests_properties(pin_test_data PROPERTIES FIXTURES_SETUP pin_test_data TIMEOUT 120)
+
 add_executable(replay_reassembler replay_reassembler.c)
 target_link_libraries(replay_reassembler PRIVATE pinnacle_core)
 
-# One ctest per trace sample in tests/baseline_sha256.txt, each running
-# replay_reassembler over that sample and checking the output's sha256
-# against the frozen Phase-1 baseline (see check_baseline.cmake). This is
-# the regression net for the dv_reassembler refactor: whatever changes
-# around it, this output must stay byte-identical.
-file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/baseline_sha256.txt" baseline_lines)
-foreach(line IN LISTS baseline_lines)
-    string(STRIP "${line}" line)
-    if(line STREQUAL "" OR line MATCHES "^#")
-        continue()
-    endif()
-    separate_arguments(fields UNIX_COMMAND "${line}")
-    list(GET fields 0 sample_name)
-    list(GET fields 1 sample_hash)
-
-    set(sample_path "${PROJECT_SOURCE_DIR}/tests/data/${sample_name}")
-    # tests/data/ holds small local fixtures that aren't committed
-    # (.gitignore); without them there's nothing to compare against.
-    if(NOT EXISTS "${sample_path}")
-        message(STATUS "tests/data/${sample_name} not present: skipping its baseline test")
-        continue()
-    endif()
-    set(out_path "${CMAKE_CURRENT_BINARY_DIR}/${sample_name}.out")
-
-    add_test(
-        NAME "reassembler_baseline_${sample_name}"
+# dv_reassembler end to end: each generated EP 0x88 dump, reassembled, must give back the
+# .dv file it was made from, byte for byte (check_reassembler.cmake).
+foreach(_pair "pal;dv-pal-32k.dv" "ntsc;dv-ntsc.dv")
+    list(GET _pair 0 _std)
+    list(GET _pair 1 _src)
+    add_test(NAME reassembler_ep88_${_std}
         COMMAND "${CMAKE_COMMAND}"
                 -DEXE=$<TARGET_FILE:replay_reassembler>
-                -DINPUT=${sample_path}
-                -DOUTPUT=${out_path}
-                -DEXPECTED=${sample_hash}
-                -P "${CMAKE_CURRENT_SOURCE_DIR}/check_baseline.cmake"
-    )
+                -DINPUT=${PIN_TEST_DATA}/ep88-${_std}.bin
+                -DSOURCE=${PIN_TEST_DATA}/${_src}
+                -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/ep88-${_std}.out
+                -P "${CMAKE_CURRENT_SOURCE_DIR}/check_reassembler.cmake")
+    set_tests_properties(reassembler_ep88_${_std} PROPERTIES FIXTURES_REQUIRED pin_test_data)
 endforeach()
 
 # pinnacle_lock: hardware-free (see tests/test_lock.c), but it does spawn a

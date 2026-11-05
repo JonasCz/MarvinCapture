@@ -17,8 +17,9 @@
  */
 
 /*
- * ctest: feeds a raw EP 0x88 DV trace (tests/data/ep88-pal.bin = PAL,
- * tests/data/ep88-ntsc.bin = NTSC with 32 kHz 12-bit audio) through
+ * ctest: feeds a raw EP 0x88 DV trace (ep88-pal.bin = PAL with 32 kHz audio,
+ * ep88-ntsc.bin = NTSC with 48 kHz audio, made at test time, see
+ * tests/data/README.md) through
  * dv_reassembler, then through sink_rewrap's DV_AVI and DV_MOV paths, and
  * checks the results by reopening them with libavformat:
  *   - stream count/codec/dimensions/field order/SAR/title
@@ -355,7 +356,7 @@ static void run_one(const char *trace_path, const char *tag)
         int64_t off_by = avi_asamples - want_total;
         CHECK(off_by <= one_frame / 2 && -off_by <= one_frame / 2);
         if (arate != 48000 && arate != 44100)
-            printf("  32 kHz nonlinear mode: %lld samples, exactly %lld valid frames' worth\n",
+            printf("  32 kHz mode: %lld samples, exactly %lld valid frames' worth\n",
                    (long long)avi_asamples, (long long)valid_frames);
 
         /* non-silent check on the AVI's audio */
@@ -480,6 +481,8 @@ static void run_one(const char *trace_path, const char *tag)
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);   /* <pal-trace> <ntsc-trace> */
+    if (!pin_test_have_fixture(argv[1]) || !pin_test_have_fixture(argv[2]))
+        return 0;
     run_one(argv[1], "pal");
     run_one(argv[2], "ntsc");
     printf("OK\n");

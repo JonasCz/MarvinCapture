@@ -83,9 +83,15 @@ if(PIN_BUILD_TESTS)
     pinnacle_engine_test(test_pin_pace)
     pinnacle_engine_test(test_pin_ui_text)
     pinnacle_engine_test(test_pin_update)
+    # also check the recordings the fixture-setup test pin_test_data makes at test time
+    # (tests/CMakeLists.txt, tests/data/README.md), and test_dv_error a camera's recording
+    # in tests/data when there
     foreach(t test_dv_error test_hdv_error test_pin_vidfmt)
-        target_compile_definitions(${t} PRIVATE TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/data")
+        target_compile_definitions(${t} PRIVATE TEST_DATA_DIR="${PIN_TEST_DATA}")
+        set_tests_properties(${t} PROPERTIES FIXTURES_REQUIRED pin_test_data)
     endforeach()
+    target_compile_definitions(test_dv_error PRIVATE
+        TEST_SOURCE_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../tests/data")
 endif()
 
 # pinnacle_engine itself (pin_session/pin_deck/pin_preview) is defined in the

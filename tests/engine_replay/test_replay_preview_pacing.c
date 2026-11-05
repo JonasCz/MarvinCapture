@@ -45,10 +45,7 @@ int main(int argc, char **argv)
 {
     CHECK(argc == 2);
     const char *trace_path = argv[1];
-    if (!pin_test_file_exists(trace_path)) {
-        printf("SKIP: %s not present\n", trace_path);
-        return 0;
-    }
+    pin_test_require_fixture(trace_path);
 
     pin_session_t *s = pin_test_open_replay(trace_path);
     pin_test_prepare_dv(s);

@@ -278,11 +278,8 @@ static void test_formats(void)
         f[i].size = sizeof(f[i]);
     }
     int n = pin_formats(PIN_KIND_HDV, f, PIN_FMT_COUNT);
-#if defined(__ANDROID__)
-    CHECK(n == 1 && f[0].format == PIN_FMT_HDV_TS && f[0].is_default, "Android: HDV raw TS only");
-#else
-    CHECK(n == 3 && f[0].format == PIN_FMT_HDV_TS && f[0].is_default, "desktop: all HDV formats");
-#endif
+    /* HDV MOV / MKV are disabled on every platform for now (pin_session.c, format_offered) */
+    CHECK(n == 1 && f[0].format == PIN_FMT_HDV_TS && f[0].is_default, "every platform: HDV raw TS only");
     pin_format_info_t fi;
     memset(&fi, 0, sizeof(fi));
     fi.size = sizeof(fi);

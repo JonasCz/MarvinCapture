@@ -28,8 +28,9 @@
  * are checked pixel for pixel (chroma subsampled per field when the fields are kept). Where a
  * real encoder answers (macOS, Windows, Android) it is used, and the pixel check is skipped.
  *
- * Arguments: DV recordings (tests/data/README.md), raw .dv files or EP 0x88 dumps (.bin),
- * each written keeping the fields and deinterlaced. None given: the DV part is skipped.
+ * Arguments: DV recordings (made at test time, tests/data/README.md), raw .dv files or EP
+ * 0x88 dumps (.bin), each written keeping the fields and deinterlaced. One missing (no ffmpeg
+ * to make it): skipped, or failed when CI is set.
  */
 
 #include "test_util.h"
@@ -600,12 +601,8 @@ int main(int argc, char **argv)
     ffv1_levels();
 
     for (int i = 1; i < argc; i++) {
-        FILE *f = fopen(argv[i], "rb");
-        if (!f) {
-            printf("  %s: not present, skipped (see tests/data/README.md)\n", argv[i]);
+        if (!pin_test_have_fixture(argv[i]))
             continue;
-        }
-        fclose(f);
         frames_t fr;
         load_dv(argv[i], &fr);
         CHECK(fr.n > 5);

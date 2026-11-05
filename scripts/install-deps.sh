@@ -23,11 +23,22 @@
 # counterpart is scripts/install-deps.ps1. See docs/building.md.
 #
 # Usage:
-#   scripts/install-deps.sh
+#   scripts/install-deps.sh [--tests]
+#
+#   --tests   also the ffmpeg command-line tool: the ctest suite makes its test recordings
+#             with it (tests/data/README.md); without it those tests skip
 
 set -euo pipefail
 
 die() { echo "install-deps.sh: $*" >&2; exit 1; }
+
+tests=0
+for arg in "$@"; do
+    case "${arg}" in
+        --tests) tests=1 ;;
+        *) die "unknown option '${arg}' (usage: scripts/install-deps.sh [--tests])" ;;
+    esac
+done
 
 case "$(uname -s)" in
     Linux)
@@ -39,6 +50,7 @@ case "$(uname -s)" in
         pkgs=(build-essential:cc build-essential:make cmake:cmake ninja-build:ninja pkg-config:pkg-config
               libusb-1.0-0-dev:pc:libusb-1.0 nasm:nasm dpkg-dev:dpkg-architecture binutils:objdump
               curl:curl xz-utils:xz)
+        [[ ${tests} -eq 0 ]] || pkgs+=(ffmpeg:ffmpeg)
         missing=()
         for entry in "${pkgs[@]}"; do
             p="${entry%%:*}"; check="${entry#*:}"
@@ -64,8 +76,10 @@ case "$(uname -s)" in
         export HOMEBREW_NO_AUTO_UPDATE="${HOMEBREW_NO_AUTO_UPDATE:-1}"
         export HOMEBREW_NO_INSTALL_CLEANUP=1
         export HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK=1
-        # nasm is only used for x86_64 FFmpeg builds
-        for f in cmake ninja nasm libusb pkgconf; do
+        # nasm is only used for x86_64 FFmpeg builds; ffmpeg (the command-line tool) for the tests
+        formulae=(cmake ninja nasm libusb pkgconf)
+        [[ ${tests} -eq 0 ]] || formulae+=(ffmpeg)
+        for f in "${formulae[@]}"; do
             brew list --formula "${f}" >/dev/null 2>&1 || brew install --formula "${f}"
         done
         ;;
