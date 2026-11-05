@@ -23,6 +23,12 @@
   registers, clocks and A/V sync; also the vendor driver, the other Marvin
   models and the three bitstreams.
 
+**Testing**
+
+- [testing-required.md](testing-required.md): what is untested or likely broken
+  (HDV 720p, 24p, other cameras/decks, mixed-format tapes), tagged by whether it
+  needs hardware, a FireWire PC as a source, or only code.
+
 **Handoff notes**
 
 - [handoff/linux-testing.md](handoff/linux-testing.md): what to test on the Linux host, and how.
