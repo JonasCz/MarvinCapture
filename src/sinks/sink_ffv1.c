@@ -348,7 +348,7 @@ static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_pa
     {
         int is_pal = params->fps_num * 1 == params->fps_den * 25; /* 25/1 vs 30000/1001 */
         int sn, sd;
-        pin_sink_sar_for(PIN_KIND_ANALOG, is_pal, params->aspect, params->width, &sn, &sd);
+        pin_sink_sar_for(PIN_KIND_ANALOG, is_pal, params->aspect, params->width, params->height, &sn, &sd);
         p->venc->sample_aspect_ratio = (AVRational){ sn, sd };
     }
     p->venc->color_range = AVCOL_RANGE_MPEG;

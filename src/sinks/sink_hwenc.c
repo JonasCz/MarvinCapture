@@ -1169,7 +1169,8 @@ static pin_status_t hwenc_open(pin_sink_t *s, const char *path, const pin_sink_p
     /* Test seam, like PIN_REPLAY_UNPLUG_AFTER: an encoder that fails during the capture. */
     const char *fail = getenv("PIN_HWENC_FAIL_AFTER");
     p->fail_after = fail && fail[0] ? strtoll(fail, NULL, 10) : 0;
-    pin_sink_sar_for(params->kind, p->is_625, params->aspect, params->width, &p->sar_num, &p->sar_den);
+    pin_sink_sar_for(params->kind, p->is_625, params->aspect, params->width, params->height,
+                     &p->sar_num, &p->sar_den);
 
     int rc = avformat_alloc_output_context2(&p->fmt, NULL, "matroska", path);
     if (rc < 0 || !p->fmt) {

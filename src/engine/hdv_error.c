@@ -39,7 +39,7 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
     /* ES start code scanner, runs across packet boundaries */
     uint32_t win = 0;
     int need = 0, need_kind = 0;
-    uint8_t cap[4];
+    uint8_t cap[6];
     int capn = 0, pics = 0;
 
     for (size_t i = 0; i < n; i++) {
@@ -95,12 +95,30 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
                         out->seq_found = 1;
                         out->seq_width = (cap[0] << 4) | (cap[1] >> 4);
                         out->seq_height = ((cap[1] & 15) << 8) | cap[2];
+                        out->seq_aspect = cap[3] >> 4;
                         out->seq_frame_rate_code = cap[3] & 15;
                     } else if (need_kind == 0 && pics == 0) {  /* picture: tr(10) type(3) */
                         out->pic_type = (cap[1] >> 3) & 7;
                         if (out->pic_type > 3) out->pic_type = 0;
                     } else if (need_kind == 1) {        /* GOP: ... closed_gop */
                         if (cap[3] & 0x40) out->closed_gop = 1;
+                    } else if (need_kind == 3 && (cap[0] >> 4) == 1 && !out->seqext_found) {
+                        /* sequence extension: id(4) profile_level(8) progressive_sequence(1)
+                         * chroma(2) h_ext(2) v_ext(2) bit_rate_ext(12) marker(1) vbv_ext(8)
+                         * low_delay(1) frame_rate_extension_n(2) frame_rate_extension_d(5) */
+                        out->seqext_found = 1;
+                        out->seq_progressive = (cap[1] >> 3) & 1;
+                        out->seq_fr_ext_n = (cap[5] >> 5) & 3;
+                        out->seq_fr_ext_d = cap[5] & 31;
+                    } else if (need_kind == 3 && (cap[0] >> 4) == 8 && pics == 1 &&
+                               !out->picext_found) {
+                        /* picture coding extension of the unit's picture: id(4) f_codes(16)
+                         * intra_dc(2) picture_structure(2) top_field_first(1) 5 flags
+                         * repeat_first_field(1) chroma_420(1) progressive_frame(1) */
+                        out->picext_found = 1;
+                        out->pic_structure = cap[2] & 3;
+                        out->pic_tff = cap[3] >> 7;
+                        out->pic_progressive = cap[4] >> 7;
                     }
                     if (need_kind == 0) pics++;
                 }
@@ -112,6 +130,10 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
                 if ((win & 0xFF) == 0x00) { need = 2; need_kind = 0; capn = 0; }
                 else if ((win & 0xFF) == 0xB8) { need = 4; need_kind = 1; capn = 0; }
                 else if ((win & 0xFF) == 0xB3) { need = 4; need_kind = 2; capn = 0; }
+                /* extension: 6 bytes cover both kinds read; a picture coding extension
+                 * has only 5, but captured bytes pass through win too, so a start code
+                 * right after it is still found */
+                else if ((win & 0xFF) == 0xB5) { need = 6; need_kind = 3; capn = 0; }
             }
         }
     }

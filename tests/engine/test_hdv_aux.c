@@ -223,6 +223,20 @@ static void test_aux_datetime_scan(void)
     CHECK(info.rec_time.hour == 14 && info.rec_time.minute == 5 && info.rec_time.second == 59,
           "aux rec time fields");
     CHECK(!info.timecode.valid, "no TC pack present -> invalid");
+
+    /* timecode pack 0x13, 01:02:03;04: colour frame is bit 7, drop frame bit 6 */
+    payload[50] = 0x13;
+    payload[51] = 0x80 | 0x04; /* colour frame set, drop frame clear, frame 04 */
+    payload[52] = 0x03;
+    payload[53] = 0x02;
+    payload[54] = 0x01;
+    hdv_aux_scan_datetime(pkt, 1, 0x0811, &info);
+    CHECK(info.timecode.valid && info.timecode.hour == 1 && info.timecode.minute == 2 &&
+          info.timecode.second == 3 && info.timecode.frame == 4, "aux timecode fields");
+    CHECK(!info.timecode.drop_frame, "colour frame flag is not drop frame");
+    payload[51] = 0x40 | 0x04; /* drop frame */
+    hdv_aux_scan_datetime(pkt, 1, 0x0811, &info);
+    CHECK(info.timecode.drop_frame && info.timecode.frame == 4, "drop frame flag (bit 6)");
 }
 
 static void test_gop_time_nonzero(void)

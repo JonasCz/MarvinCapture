@@ -82,7 +82,7 @@ static pin_status_t nut_open(pin_sink_t *s, const char *path, const pin_sink_par
 
     int is_pal = params->fps_num * 1 == params->fps_den * 25;
     int sn, sd;
-    pin_sink_sar_for(PIN_KIND_ANALOG, is_pal, params->aspect, params->width, &sn, &sd);
+    pin_sink_sar_for(PIN_KIND_ANALOG, is_pal, params->aspect, params->width, params->height, &sn, &sd);
 
     p->vst = avformat_new_stream(p->fmt, NULL);
     p->ast = avformat_new_stream(p->fmt, NULL);

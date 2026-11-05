@@ -52,6 +52,25 @@ first, so the file is decodable from its first packet. On stop, the trailing
 partial picture is cut, so the file ends on a whole one. (A non-seekable
 output, e.g. a pipe, cannot be cut and keeps the tail.)
 
+## Format: what the stream says
+
+The format is read from the video stream itself, picture by picture (`hdv_error.c`):
+the size, `aspect_ratio_information` and `frame_rate_code` from the sequence header,
+`progressive_sequence` (and the frame rate extension, 0 for HDV) from the sequence
+extension, and the field order from the picture coding extension (`top_field_first` of
+interlaced pictures). The status shows it (`video_label` "1080i25", "1080i29.97",
+"720p59.94"; `video_interlaced`, the frame rate and the display aspect), the sinks get it
+(size, rate, interlaced or progressive, field order, and the SAR from the real raster:
+4:3 at 1440x1080 16:9, 1:1 at 1280x720), the scene split counts the GOP timecode at that
+rate, and the replay device plays a `.ts` / `.m2t` at it. Until the first sequence
+header, 1080i29.97 16:9 top field first is assumed. A raw `.ts` / `.m2t` is the stream
+itself, so the format only matters to the MOV / MKV remux, which is disabled for HDV.
+
+Not handled: progressive material inside an interlaced stream shows as the stream says
+it is coded: 24p with pulldown flags (`repeat_first_field`) as 1080i29.97, frame modes
+such as 25F / 30F as 1080i. Only 1080i25 has been seen from a camera; 720p59.94 is tested
+with an ffmpeg-made file, 1080i29.97 with hand-built headers only.
+
 ## Verifying integrity — read this before trusting the DBC line
 
 The capture tracks two independent checks, but **they are not equally strong for
@@ -109,4 +128,5 @@ reads, with timecode-driven starts and stops (`--wait timecode=HH:MM:SS:FF`).
   and only counted (TS has no fixed-size unit to zero-pad, unlike DV).
 - **Live mode only.** As with DV, this receives whatever the camera transmits.
   Tape transport control is separate: see [deck-control.md](deck-control.md).
-- Not tested: 720p HDV, S400 cameras, PAL/NTSC variants (only 1080i/25).
+- Not tested on hardware: 720p HDV, S400 cameras, 1080i/29.97 (only 1080i/25). The
+  format detection is tested with ffmpeg-made 1080i25 and 720p59.94 streams.

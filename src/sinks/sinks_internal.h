@@ -40,9 +40,10 @@ void sink_ffv1_test_set_start(pin_sink_t *s, int64_t video_frame, int64_t audio_
 pin_sink_t *sink_rewrap_create(pin_format_t format); /* DV_AVI, DV_MOV, HDV_MOV, HDV_MKV */
 pin_sink_t *sink_hwenc_create(pin_format_t format);  /* ANALOG_ / DV_ H264_MKV, HEVC_MKV */
 
-/* Shared by sink_ffv1.c and sink_rewrap.c: PAL/NTSC DV sample aspect ratios
- * per the FFmpeg dv profile tables (documented at their point of use). */
-void pin_sink_sar_for(pin_kind_t kind, int is_pal, pin_aspect_t aspect, int width,
+/* Shared by the sinks and the engine: PAL/NTSC DV sample aspect ratios per the
+ * FFmpeg dv profile tables (documented at their point of use), and HDV's from its
+ * raster. height is used for HDV (SD takes 576 / 480 lines from is_pal). */
+void pin_sink_sar_for(pin_kind_t kind, int is_pal, pin_aspect_t aspect, int width, int height,
                       int *sar_num, int *sar_den);
 
 /* sink_rewrap.c's per-frame DV audio rule, shared with its test. A track

@@ -854,6 +854,27 @@ static void split_ensure(pin_session_t *s)
         pin_split_init(&s->split, writer_commit, split_do, s);
 }
 
+/* HDV: the frame rate the stream's sequence header (and extension) gives,
+ * 29.97 until one has been seen. Caller holds the lock. */
+static void hdv_frame_rate(const pin_session_t *s, int *num, int *den)
+{
+    if (s->hdv_fps_num > 0 && s->hdv_fps_den > 0) {
+        *num = s->hdv_fps_num;
+        *den = s->hdv_fps_den;
+    } else {
+        *num = 30000;
+        *den = 1001;
+    }
+}
+
+/* HDV: interlaced or not, from the sequence extension (by the height until
+ * one has been seen). Caller holds the lock. */
+static int hdv_interlaced(const pin_session_t *s)
+{
+    return pin_vidfmt_hdv_interlaced(s->hdv_seq_h ? s->hdv_seq_h : 1080,
+                                     s->hdv_seqext_seen ? s->hdv_progressive : -1);
+}
+
 /* Seconds one new frame_index adds to a pending segment: a DV frame, or an
  * HDV GOP (nominally 15 pictures at 60i, 12 at 50i: ~0.5 s). */
 static double unit_seconds(const pin_session_t *s)
@@ -1198,11 +1219,12 @@ static void open_sink_for_scene(pin_session_t *s)
     params.kind = s->stream_kind;
     strncpy(params.title, s->capture_opts.title, sizeof(params.title) - 1);
     /* AUTO resolves to the stream's own detected aspect (DV: VAUX 16:9
-     * flag via dv_on_unit(); analog: fixed 4:3; HDV: fixed 16:9) -- see
-     * the coordinator's "Default AUTO = stream's own". */
+     * flag via dv_on_unit(); analog: fixed 4:3; HDV: the sequence header's
+     * aspect_ratio_information, 16:9 until one was seen) -- see the
+     * coordinator's "Default AUTO = stream's own". Wider than 4:3 is 16:9. */
     pin_aspect_t effective_aspect = s->capture_opts.aspect;
     if (effective_aspect == PIN_ASPECT_AUTO)
-        effective_aspect = s->dar_num == 16 ? PIN_ASPECT_16_9 : PIN_ASPECT_4_3;
+        effective_aspect = s->dar_num * 3 > s->dar_den * 4 ? PIN_ASPECT_16_9 : PIN_ASPECT_4_3;
     params.aspect = effective_aspect;
 
     int is_pal = s->detected_std != PIN_STD_NTSC && s->detected_std != PIN_STD_NTSC_443 &&
@@ -1228,17 +1250,16 @@ static void open_sink_for_scene(pin_session_t *s)
         params.top_field_first = 0; /* DV: BFF, per the plan */
         params.audio_rate = 48000;
         params.audio_channels = 2;
-    } else { /* HDV */
-        params.width = 1440;
-        params.height = 1080;
-        params.fps_num = is_pal ? 25 : 30000;
-        params.fps_den = is_pal ? 1 : 1001;
-        params.interlaced = 1;
-        params.top_field_first = 1;
+    } else { /* HDV: what the stream says (dv_on_unit()); 1080i29.97 TFF until it is known */
+        params.width = s->hdv_seq_w ? s->hdv_seq_w : 1440;
+        params.height = s->hdv_seq_h ? s->hdv_seq_h : 1080;
+        hdv_frame_rate(s, &params.fps_num, &params.fps_den);
+        params.interlaced = hdv_interlaced(s);
+        params.top_field_first = params.interlaced && !s->hdv_bff;
         params.audio_rate = 48000;
         params.audio_channels = 2;
     }
-    pin_sink_sar_for(s->stream_kind, is_pal, params.aspect, params.width,
+    pin_sink_sar_for(s->stream_kind, is_pal, params.aspect, params.width, params.height,
                       &params.sample_aspect_num, &params.sample_aspect_den);
     params.colour_matrix = s->stream_kind == PIN_KIND_HDV ? PIN_MATRIX_BT709 : PIN_MATRIX_BT601;
     params.deinterlace = pin_fmt_clamp_deinterlace(s->capture_opts.deinterlace);
@@ -1569,6 +1590,13 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             ctx->hdv_map_init = 1;
         }
         hdv_pid_map_t *map_p = &ctx->hdv_map;
+        if (map_p->video_pid < 0 && ctx->reasm) {
+            /* The reassembler hands the PAT/PMT it has seen to the file only (dv_write_cb()),
+             * not in a picture: start from them, or the first pictures (before the next
+             * PAT/PMT rides in one) go without a video PID: no format, preview or error stats. */
+            if (ctx->reasm->ts_pat_valid) hdv_scan_pat_pmt(ctx->reasm->ts_pat, 1, map_p);
+            if (ctx->reasm->ts_pmt_valid) hdv_scan_pat_pmt(ctx->reasm->ts_pmt, 1, map_p);
+        }
         hdv_scan_pat_pmt(data, len / 188, map_p);
         hdv_pid_map_t map = *map_p;
         int vpid = map.video_pid > 0 ? map.video_pid : -1;
@@ -1605,14 +1633,30 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             s->err_video_blocks += herr.video_damaged || herr.tainted;
             s->err_missing_blocks += herr.cc_errors + herr.tei + herr.sync_lost;
         }
+        /* the format, as the stream says it (open_sink_for_scene() hands it to the sinks) */
         if (herr.seq_found && herr.seq_width > 0 && herr.seq_height > 0) {
             s->hdv_seq_w = herr.seq_width;
             s->hdv_seq_h = herr.seq_height;
-            pin_vidfmt_rate_from_code(herr.seq_frame_rate_code, &s->hdv_fps_num, &s->hdv_fps_den);
+            if (pin_vidfmt_rate_from_code(herr.seq_frame_rate_code, &s->hdv_fps_num, &s->hdv_fps_den) &&
+                herr.seqext_found) {
+                s->hdv_fps_num *= herr.seq_fr_ext_n + 1;
+                s->hdv_fps_den *= herr.seq_fr_ext_d + 1;
+            }
+            pin_vidfmt_mpeg2_dar(herr.seq_aspect, herr.seq_width, herr.seq_height,
+                                 &s->hdv_dar_num, &s->hdv_dar_den);
         }
+        if (herr.seqext_found) {
+            s->hdv_seqext_seen = 1;
+            s->hdv_progressive = herr.seq_progressive;
+        }
+        /* field order: from interlaced pictures only (a progressive frame's top_field_first
+         * belongs to its repeat_first_field); a field picture's first field is its structure */
+        if (herr.picext_found && !herr.pic_progressive)
+            s->hdv_bff = herr.pic_structure == 3 ? !herr.pic_tff : herr.pic_structure == 2;
         s->width = s->hdv_seq_w ? s->hdv_seq_w : 1440;
         s->height = s->hdv_seq_h ? s->hdv_seq_h : 1080;
-        s->dar_num = 16; s->dar_den = 9;
+        s->dar_num = s->hdv_dar_num ? s->hdv_dar_num : 16;
+        s->dar_den = s->hdv_dar_num ? s->hdv_dar_den : 9;
         s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
 
         /* Scene split for HDV: fed one GOP (picture unit) at a time, using
@@ -1622,7 +1666,9 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         if (s->sink && s->capture_opts.scene_split) {
             if (!s->scene_det_ready) {
                 pin_scene_config_t cfg;
-                pin_scene_config_defaults(&cfg, 29.97); /* HDV: 1080i/60 nominal; no field to say 25p/i here */
+                int fn, fd;
+                hdv_frame_rate(s, &fn, &fd); /* the GOP timecode counts pictures at this rate */
+                pin_scene_config_defaults(&cfg, (double)fn / fd);
                 pin_scene_init(&s->scene_det, &cfg);
                 s->opts_scene_split_window = pin_scene_debounce_window(&s->scene_det);
                 s->scene_det_ready = 1;
@@ -1715,8 +1761,11 @@ static double captured_seconds(const pin_session_t *s)
     if (!s->capture_began)
         return 0;
     double fps = s->is_60hz ? 30000.0 / 1001.0 : 25.0;
-    if (s->stream_kind == PIN_KIND_HDV && s->hdv_fps_num > 0 && s->hdv_fps_den > 0)
-        fps = (double)s->hdv_fps_num / s->hdv_fps_den;
+    if (s->stream_kind == PIN_KIND_HDV) {
+        int num, den;
+        hdv_frame_rate(s, &num, &den);
+        fps = (double)num / den;
+    }
     return (double)s->frames / fps;
 }
 
@@ -2889,7 +2938,12 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
             dv_write_cb(pic, pic_len, &ctx);
             dv_on_unit(DV_FORMAT_HDV, pic, pic_len, &ctx);
             pic_len = 0;
-            pace_frame(&next_t, 1001.0 / 30000.0); /* one picture emitted */
+            /* one picture emitted: real time at the stream's own rate (its sequence header) */
+            int fn, fd;
+            pin_session_lock(s);
+            hdv_frame_rate(s, &fn, &fd);
+            pin_session_unlock(s);
+            pace_frame(&next_t, (double)fd / fn);
         }
         if (pic_len + sizeof(pkt) > pic_cap) {
             pic_cap = (pic_len + sizeof(pkt)) * 2 + 4096;
@@ -3657,7 +3711,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     if (s->stream_kind == PIN_KIND_HDV) {
         out->video_fps_num = s->hdv_fps_num;
         out->video_fps_den = s->hdv_fps_den;
-        out->video_interlaced = pin_vidfmt_hdv_interlaced(s->height);
+        out->video_interlaced = hdv_interlaced(s);
     } else if (s->height > 0) {
         out->video_fps_num = s->is_60hz ? 30000 : 25;
         out->video_fps_den = s->is_60hz ? 1001 : 1;

@@ -243,8 +243,9 @@ void hdv_aux_scan_datetime(const uint8_t *ts_packets, size_t n_packets, int aux_
                 out->rec_time.hour = bcd2(d[2], 0x3, 4);
                 out->rec_time.valid = 1;
             } else if (pc0 == 0x13 && !out->timecode.valid) {
+                /* as the DV pack (dv_subcode.c): colour frame bit 7, drop frame bit 6 */
                 out->timecode.frame = bcd2(d[0], 0x3, 4);
-                out->timecode.drop_frame = (d[0] >> 7) & 1;
+                out->timecode.drop_frame = (d[0] >> 6) & 1;
                 out->timecode.second = bcd2(d[1], 0x7, 4);
                 out->timecode.minute = bcd2(d[2], 0x7, 4);
                 out->timecode.hour = bcd2(d[3], 0x3, 4);

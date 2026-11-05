@@ -310,7 +310,7 @@ static void run_one(const char *trace_path, const char *tag)
     pin_aspect_t aspect = (info.aspect.valid && info.aspect.is_16_9) ? PIN_ASPECT_16_9 : PIN_ASPECT_4_3;
 
     int sar_num, sar_den;
-    pin_sink_sar_for(PIN_KIND_DV, is_pal, aspect, 720, &sar_num, &sar_den);
+    pin_sink_sar_for(PIN_KIND_DV, is_pal, aspect, 720, is_pal ? 576 : 480, &sar_num, &sar_den);
 
     pin_sink_params_t params = {
         .kind = PIN_KIND_DV,

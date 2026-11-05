@@ -35,7 +35,7 @@ if(NOT FFMPEG)
     return()
 endif()
 
-set(files dv-pal.dv dv-ntsc.dv dv-pal-32k.dv hdv.ts ep88-pal.bin ep88-ntsc.bin)
+set(files dv-pal.dv dv-ntsc.dv dv-pal-32k.dv hdv.ts hdv-720p.ts ep88-pal.bin ep88-ntsc.bin)
 
 file(SHA256 "${CMAKE_CURRENT_LIST_FILE}" script_hash)
 file(SHA256 "${MAKE_EP88}" tool_hash)
@@ -117,11 +117,20 @@ ffmpeg(hdv.ts -f lavfi -i testsrc2=size=1440x1080:rate=25:duration=1.98
        -color_primaries bt709 -color_trc bt709 -colorspace bt709 -timecode 00:10:00:00
        -c:a mp2 -b:a 384k -ac 2
        -mpegts_pmt_start_pid 0x81 -streamid 0:0x810 -streamid 1:0x814 -output_ts_offset 834 -f mpegts)
-file(SIZE "${OUT}/hdv.ts" ts_size)
-math(EXPR ts_rest "${ts_size} % 188")
-if(ts_size EQUAL 0 OR NOT ts_rest EQUAL 0)
-    message(FATAL_ERROR "${OUT}/hdv.ts is ${ts_size} bytes, not whole TS packets")
-endif()
+# HDV 720p-like MPEG-2 TS, 0.3 s: 1280x720 progressive, 59.94 fps, 16:9 (square samples),
+# 6-picture GOPs, MP2 audio; ffmpeg's own PIDs (PMT 0x1000, video 0x100, audio 0x101).
+ffmpeg(hdv-720p.ts -f lavfi -i testsrc2=size=1280x720:rate=60000/1001:duration=0.3
+       -f lavfi -i sine=frequency=1000:sample_rate=48000:duration=0.35
+       -pix_fmt yuv420p -c:v mpeg2video -b:v 6M -maxrate 6M -bufsize 2000000 -g 6 -bf 2 -aspect 16:9
+       -color_primaries bt709 -color_trc bt709 -colorspace bt709 -timecode 00:10:00:00
+       -c:a mp2 -b:a 384k -ac 2 -f mpegts)
+foreach(ts hdv.ts hdv-720p.ts)
+    file(SIZE "${OUT}/${ts}" ts_size)
+    math(EXPR ts_rest "${ts_size} % 188")
+    if(ts_size EQUAL 0 OR NOT ts_rest EQUAL 0)
+        message(FATAL_ERROR "${OUT}/${ts} is ${ts_size} bytes, not whole TS packets")
+    endif()
+endforeach()
 
 # Raw EP 0x88 dumps of two of the DV files, as the device would deliver them
 make_ep88(ep88-pal.bin dv-pal-32k.dv)

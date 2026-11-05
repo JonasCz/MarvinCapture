@@ -14,6 +14,7 @@ changed. It takes about a second.
 | `dv-ntsc.dv` | NTSC DV, 30 frames (1 s), 48 kHz 16-bit audio; 3,600,000 bytes, also a whole number of PAL frames, so only the DSF bit tells it is NTSC | `test_dv_audio_vs_libavformat`, `test_replay_unplug`, `test_hwenc_sink`, `test_dv_error`, the source of `ep88-ntsc.bin` |
 | `dv-pal-32k.dv` | PAL DV, 14 frames (0.56 s), 32 kHz 16-bit audio | `test_dv_audio_vs_libavformat`, the source of `ep88-pal.bin` |
 | `hdv.ts` | HDV-like MPEG-2 TS, 2 s: 1440x1080 interlaced (top field first), 25 fps, 12-picture GOPs with a GOP timecode from 00:10:00:00, BT.709, MP2 audio; the PIDs of a real camera (PMT 0x81, video 0x810, audio 0x814) and a clock that starts at 834 s | `test_replay_hdv`, `test_replay_unplug`, `test_hdv_rewrap`, `test_hdv_error`, `test_pin_vidfmt` |
+| `hdv-720p.ts` | HDV 720p-like MPEG-2 TS, 0.3 s: 1280x720 progressive, 59.94 fps, 16:9 (square samples), 6-picture GOPs, MP2 audio; ffmpeg's own PIDs (PMT 0x1000, video 0x100, audio 0x101) | `test_replay_hdv`, `test_hdv_rewrap` |
 | `ep88-pal.bin` | Raw EP 0x88 dump of `dv-pal-32k.dv` (2 MiB, short like a cut-down dump of a real camera: the replay tests count on it ending within a second) | `reassembler_ep88_pal`, the PAL replay tests (`test_replay_*`, `test_pin_script_run`, `test_pin_check_output`), `test_dv_rewrap`, `test_hwenc_sink` |
 | `ep88-ntsc.bin` | Raw EP 0x88 dump of `dv-ntsc.dv` | `reassembler_ep88_ntsc`, `test_dv_rewrap` |
 

@@ -83,7 +83,7 @@ set_tests_properties(test_pin_script_run PROPERTIES TIMEOUT 120)
 pin_engine_replay_test(test_pin_check_output "${PIN_TRACE_PAL}")
 
 # Task 3/4: HDV .ts replay and HDV scene split (no spurious cuts).
-pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}")
+pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}" "${PIN_TEST_DATA}/hdv-720p.ts")
 
 # Unplug during a capture (replay fakes the USB NO_DEVICE failure): files finalised,
 # stop reason DEVICE_LOST, session in ERROR, a new session opens afterwards.

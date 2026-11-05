@@ -253,7 +253,7 @@ static void test_writer_overflow_fatal(void)
 static void nut_case(const char *tmp, int fn, int fd, pin_aspect_t aspect)
 {
     int sar_n, sar_d;
-    pin_sink_sar_for(PIN_KIND_ANALOG, fn == 25, aspect, NW, &sar_n, &sar_d);
+    pin_sink_sar_for(PIN_KIND_ANALOG, fn == 25, aspect, NW, NH, &sar_n, &sar_d);
     const int frames = 12;
     const int spf = (int)(48000LL * fd / fn);   /* audio samples per frame, 1601.6 for NTSC: use the rounded block */
     uint8_t vid[NW * NH * 2];

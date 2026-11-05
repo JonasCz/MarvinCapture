@@ -17,9 +17,9 @@
  */
 
 /*
- * Video format helpers shared by every GUI: the MPEG-2 frame_rate_code of an
- * HDV sequence header as a rational, and the short label shown in the status
- * bar ("PAL", "NTSC", "1080i25", "720p59.94").
+ * Video format helpers shared by every GUI: the MPEG-2 frame_rate_code and
+ * aspect_ratio_information of an HDV sequence header as rationals, and the
+ * short label shown in the status bar ("PAL", "NTSC", "1080i25", "720p59.94").
  */
 
 #ifndef PIN_VIDFMT_H
@@ -35,8 +35,16 @@ extern "C" {
  * Returns 0 for a reserved / unknown code (num = den = 0). */
 int pin_vidfmt_rate_from_code(int code, int *num, int *den);
 
-/* HDV: 720 lines are progressive (720p), 1080 lines interlaced (1080i). */
-int pin_vidfmt_hdv_interlaced(int height);
+/* HDV: interlaced or not, from the sequence extension's progressive_sequence
+ * (1 = progressive, so 720p and 1080p read as progressive). progressive_sequence
+ * < 0 = no sequence extension seen yet: by height (720 lines are always
+ * progressive, 1080 assumed interlaced). */
+int pin_vidfmt_hdv_interlaced(int height, int progressive_sequence);
+
+/* MPEG-2 aspect_ratio_information -> display aspect ratio: 2 = 4:3, 3 = 16:9,
+ * 4 = 2.21:1, 1 (square samples) = width:height reduced. Returns 0 for a
+ * reserved code or code 1 without a size (num = den = 0). */
+int pin_vidfmt_mpeg2_dar(int aspect_code, int width, int height, int *num, int *den);
 
 /* Short label. 576 lines at 25 fps = "PAL", 480 lines at 29.97 = "NTSC",
  * otherwise "<height><i|p><frame rate>" with the frame (not field) rate, e.g.

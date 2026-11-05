@@ -282,7 +282,7 @@ static void analog(pin_format_t fmt, int pal, int deint, const char *path)
     CHECK(r.naudio == 1 && r.arate[0] == 48000);
     CHECK_EQ_I(r.asamples[0], fed);                                 /* FLAC is lossless */
     int sn, sd;
-    pin_sink_sar_for(PIN_KIND_ANALOG, pal, PIN_ASPECT_4_3, 720, &sn, &sd);
+    pin_sink_sar_for(PIN_KIND_ANALOG, pal, PIN_ASPECT_4_3, 720, pal ? 576 : 480, &sn, &sd);
     CHECK(av_cmp_q(r.sar, (AVRational){ sn, sd }) == 0);
     CHECK(strcmp(r.title, prm.title) == 0);
     if (g_standin && !deint)
@@ -547,7 +547,7 @@ static void dv(const char *src, const frames_t *fr, pin_format_t fmt, int deint,
     check_file(&r, good, deint ? 2 : 1, fps, fmt);
     CHECK(r.width == 720 && r.height == prm.height);
     int sn, sd;
-    pin_sink_sar_for(PIN_KIND_DV, pal, PIN_ASPECT_4_3, 720, &sn, &sd);
+    pin_sink_sar_for(PIN_KIND_DV, pal, PIN_ASPECT_4_3, 720, pal ? 576 : 480, &sn, &sd);
     CHECK(av_cmp_q(r.sar, (AVRational){ sn, sd }) == 0);
     CHECK(strcmp(r.title, prm.title) == 0);
     /* every track as long as the video, give or take a frame (padded where a frame had none) */

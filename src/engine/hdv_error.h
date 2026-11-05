@@ -70,13 +70,23 @@ typedef struct {
     int frame_error;        /* video_damaged || tainted || any other error */
     int seq_found;          /* an MPEG-2 sequence header was in the unit: */
     int seq_width, seq_height;  /* its horizontal_size / vertical_size */
+    int seq_aspect;             /* its aspect_ratio_information (2 = 4:3, 3 = 16:9, see pin_vidfmt.h) */
     int seq_frame_rate_code;    /* its frame_rate_code (1..8, see pin_vidfmt.h) */
+    int seqext_found;       /* a sequence extension (extension id 1) was in the unit: */
+    int seq_progressive;        /* its progressive_sequence */
+    int seq_fr_ext_n, seq_fr_ext_d; /* its frame_rate_extension_n / _d (0 for HDV) */
+    int picext_found;       /* the first picture's coding extension (id 8) was in the unit: */
+    int pic_structure;          /* picture_structure: 1 top field, 2 bottom field, 3 frame */
+    int pic_tff;                /* top_field_first */
+    int pic_progressive;        /* progressive_frame */
 } hdv_unit_errors_t;
 
 void hdv_error_init(hdv_err_state_t *st);
 
 /* Call once per unit, in stream order. video_pid < 0 = not known yet (video
- * checks are skipped). */
+ * checks are skipped). Also reports what the video headers in the unit say
+ * (seq_*, pic_*: the stream's format), read by the same start code scanner,
+ * which runs across TS packet boundaries. */
 void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n_packets,
                        int video_pid, hdv_unit_errors_t *out);
 

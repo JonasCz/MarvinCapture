@@ -32,9 +32,32 @@ int pin_vidfmt_rate_from_code(int code, int *num, int *den)
     return 1;
 }
 
-int pin_vidfmt_hdv_interlaced(int height)
+int pin_vidfmt_hdv_interlaced(int height, int progressive_sequence)
 {
+    if (progressive_sequence >= 0)
+        return !progressive_sequence;
     return height != 720;
+}
+
+int pin_vidfmt_mpeg2_dar(int aspect_code, int width, int height, int *num, int *den)
+{
+    *num = *den = 0;
+    switch (aspect_code) {
+    case 2: *num = 4; *den = 3; return 1;
+    case 3: *num = 16; *den = 9; return 1;
+    case 4: *num = 221; *den = 100; return 1;
+    case 1: {
+        if (width <= 0 || height <= 0)
+            return 0;
+        int a = width, b = height;
+        while (b) { int t = a % b; a = b; b = t; }
+        *num = width / a;
+        *den = height / a;
+        return 1;
+    }
+    default:
+        return 0;
+    }
 }
 
 void pin_vidfmt_label(int height, int fps_num, int fps_den, int interlaced,

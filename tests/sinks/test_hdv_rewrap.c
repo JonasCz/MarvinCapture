@@ -21,7 +21,9 @@
  * time, see tests/data/README.md) through sink_rewrap's HDV path (PIN_FMT_HDV_MOV,
  * which for HDV always takes the plan's documented raw-then-remux-at-close
  * fallback -- see sink_rewrap.c's header comment) and checks the result
- * with libavformat: stream codecs, dimensions, field order, SAR, title.
+ * with libavformat: stream codecs, dimensions, field order, SAR, title. Also
+ * a 720p capture (hdv-720p.ts, progressive, given as the second argument) and
+ * pin_sink_sar_for()'s HDV values.
  *
  * Only the first ~48 MB of the capture is used (a live 5-minute HDV run is
  * ~1 GB; a few seconds of video is enough to exercise the remux path and
@@ -55,8 +57,10 @@
 #define CHUNK_PACKETS 200                 /* ~37.6 KB per write_unit push */
 #define MAX_BYTES (48u * 1024 * 1024)     /* first ~48 MB is plenty for a smoke test */
 
-/* Rewraps the capture into one container and checks it. */
-static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
+/* Rewraps the capture into one container and checks it. w, h, fps and interlaced are the
+ * capture's format, handed over as the engine would (what the stream says). */
+static void run(const char *cap_path, pin_format_t fmt, const char *out_path, int w, int h,
+                int fps_num, int fps_den, int interlaced)
 {
     FILE *in = fopen(cap_path, "rb");
     CHECK(in);
@@ -64,12 +68,12 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
     pin_sink_params_t params;
     memset(&params, 0, sizeof(params));
     params.kind = PIN_KIND_HDV;
-    params.width = 1440;
-    params.height = 1080;
-    params.fps_num = 25;
-    params.fps_den = 1;
-    params.interlaced = 1;
-    params.top_field_first = 1;
+    params.width = w;
+    params.height = h;
+    params.fps_num = fps_num;
+    params.fps_den = fps_den;
+    params.interlaced = interlaced;
+    params.top_field_first = interlaced;
     params.aspect = PIN_ASPECT_16_9;
     params.colour_matrix = PIN_MATRIX_BT709;
     snprintf(params.title, sizeof(params.title), "marvin-core HDV rewrap test");
@@ -121,10 +125,15 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
     CHECK(fc->duration > 0 && fc->duration < 3 * AV_TIME_BASE);
     AVStream *vs = fc->streams[vidx];
     CHECK_EQ_I(vs->codecpar->codec_id, AV_CODEC_ID_MPEG2VIDEO);
-    CHECK_EQ_I(vs->codecpar->width, 1440);
-    CHECK_EQ_I(vs->codecpar->height, 1080);
-    CHECK_EQ_I(vs->codecpar->field_order, AV_FIELD_TT);
+    CHECK_EQ_I(vs->codecpar->width, w);
+    CHECK_EQ_I(vs->codecpar->height, h);
+    /* the field order follows the params: 1080i top field first, 720p progressive */
+    CHECK_EQ_I(vs->codecpar->field_order, interlaced ? AV_FIELD_TT : AV_FIELD_PROGRESSIVE);
     CHECK_EQ_I(vs->codecpar->color_primaries, AVCOL_PRI_BT709);
+    /* 16:9 on either raster: SAR 4:3 at 1440x1080, 1:1 at 1280x720 */
+    AVRational sar = av_guess_sample_aspect_ratio(fc, vs, NULL);
+    printf("%s: SAR %d:%d\n", out_path, sar.num, sar.den);
+    CHECK(sar.num * w * 9 == sar.den * h * 16);   /* DAR = SAR * w / h = 16:9 */
 
     if (aidx >= 0)
         CHECK_EQ_I(fc->streams[aidx]->codecpar->codec_id, AV_CODEC_ID_MP2);
@@ -142,17 +151,31 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path)
     av_packet_free(&pkt);
     avformat_close_input(&fc);
 
-    printf("OK: %lld MPEG-2 pictures, %s, 1440x1080 TT, BT.709%s\n", (long long)vframes,
-           "codec-copy", aidx >= 0 ? " + MP2 audio" : " (no audio in this slice)");
+    printf("OK: %lld MPEG-2 pictures, %s, %dx%d %s, BT.709%s\n", (long long)vframes,
+           "codec-copy", w, h, interlaced ? "TT" : "progressive",
+           aidx >= 0 ? " + MP2 audio" : " (no audio in this slice)");
     CHECK(vframes > 0);
 }
 
 int main(int argc, char **argv)
 {
-    CHECK(argc == 2);
+    CHECK(argc == 2 || argc == 3);
+
+    /* the HDV SAR comes from the raster: 1440x1080 16:9 is anamorphic, 1280x720 square */
+    int sn, sd;
+    pin_sink_sar_for(PIN_KIND_HDV, 1, PIN_ASPECT_16_9, 1440, 1080, &sn, &sd);
+    CHECK(sn == 4 && sd == 3);
+    pin_sink_sar_for(PIN_KIND_HDV, 0, PIN_ASPECT_16_9, 1280, 720, &sn, &sd);
+    CHECK(sn == 1 && sd == 1);
+    pin_sink_sar_for(PIN_KIND_HDV, 1, PIN_ASPECT_4_3, 1440, 1080, &sn, &sd);
+    CHECK(sn == 1 && sd == 1);
+
     if (!pin_test_have_fixture(argv[1]))
         return 0;
-    run(argv[1], PIN_FMT_HDV_MOV, "test_hdv.mov");
-    run(argv[1], PIN_FMT_HDV_MKV, "test_hdv.mkv");
+    run(argv[1], PIN_FMT_HDV_MOV, "test_hdv.mov", 1440, 1080, 25, 1, 1);
+    run(argv[1], PIN_FMT_HDV_MKV, "test_hdv.mkv", 1440, 1080, 25, 1, 1);
+    /* 720p59.94: progressive, square samples */
+    if (argc == 3 && pin_test_have_fixture(argv[2]))
+        run(argv[2], PIN_FMT_HDV_MKV, "test_hdv_720p.mkv", 1280, 720, 60000, 1001, 0);
     return 0;
 }

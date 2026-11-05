@@ -57,7 +57,15 @@ static void test_labels(void)
     CHECK(pin_vidfmt_rate_from_code(7, &n, &d) && n == 60000 && d == 1001, "code 7 = 59.94");
     CHECK(!pin_vidfmt_rate_from_code(0, &n, &d) && !n, "code 0 unknown");
     CHECK(!pin_vidfmt_rate_from_code(9, &n, &d), "code 9 unknown");
-    CHECK(pin_vidfmt_hdv_interlaced(1080) && !pin_vidfmt_hdv_interlaced(720), "interlace by height");
+    CHECK(pin_vidfmt_hdv_interlaced(1080, -1) && !pin_vidfmt_hdv_interlaced(720, -1),
+          "no sequence extension yet: interlace by height");
+    CHECK(pin_vidfmt_hdv_interlaced(1080, 0) && !pin_vidfmt_hdv_interlaced(1080, 1) &&
+          !pin_vidfmt_hdv_interlaced(720, 1), "progressive_sequence decides (1080p is progressive)");
+    CHECK(pin_vidfmt_mpeg2_dar(3, 1440, 1080, &n, &d) && n == 16 && d == 9, "aspect 3 = 16:9");
+    CHECK(pin_vidfmt_mpeg2_dar(2, 1440, 1080, &n, &d) && n == 4 && d == 3, "aspect 2 = 4:3");
+    CHECK(pin_vidfmt_mpeg2_dar(1, 1280, 720, &n, &d) && n == 16 && d == 9, "square 1280x720 = 16:9");
+    CHECK(!pin_vidfmt_mpeg2_dar(0, 1440, 1080, &n, &d) && !n && !d, "aspect 0 forbidden");
+    CHECK(!pin_vidfmt_mpeg2_dar(7, 1440, 1080, &n, &d) && !n, "aspect 7 reserved");
 }
 
 #define VPID 0x1011
@@ -79,6 +87,43 @@ static void seq_unit(uint8_t *p, int w, int h, int code)
     q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0; q[4] = 0; q[5] = 1 << 3;
 }
 
+/* Two video packets: a PES start, a sequence header, a sequence extension whose start code
+ * is cut by the packet boundary, a picture header and a picture coding extension. */
+static void ext_unit(uint8_t *p, int w, int h, int code, int progressive_seq, int tff, int progressive_frame)
+{
+    memset(p, 0xFF, 2 * 188);
+    for (int k = 0; k < 2; k++) {
+        p[k * 188] = 0x47;
+        p[k * 188 + 1] = (uint8_t)((k ? 0 : 0x40) | (VPID >> 8));
+        p[k * 188 + 2] = VPID & 0xFF;
+        p[k * 188 + 3] = (uint8_t)(0x10 | k);
+    }
+    uint8_t *q = p + 4;
+    q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0xE0; q[4] = 0; q[5] = 0; q[6] = 0x80; q[7] = 0; q[8] = 0;
+    q += 9;
+    q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0xB3;
+    q[4] = (uint8_t)(w >> 4);
+    q[5] = (uint8_t)(((w & 15) << 4) | (h >> 8));
+    q[6] = (uint8_t)h;
+    q[7] = (uint8_t)(0x30 | code);
+    p[186] = 0; p[187] = 0;                 /* 00 00 | 01 B5: the start code spans the packets */
+    q = p + 188 + 4;
+    q[0] = 1; q[1] = 0xB5;
+    /* id 1, Main@High-1440 (0x48), progressive_sequence, 4:2:0, marker; frame_rate_ext 0 */
+    q[2] = 0x14; q[3] = (uint8_t)(0x82 | (progressive_seq << 3)); q[4] = 0; q[5] = 1; q[6] = 0; q[7] = 0;
+    q += 8;
+    q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0; q[4] = 0; q[5] = 1 << 3;  /* picture, I */
+    q += 6;
+    /* picture coding extension: id 8, f_codes 15, frame picture (3), top_field_first,
+     * frame_pred_frame_dct and chroma_420_type = progressive_frame, progressive_frame */
+    q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0xB5;
+    q[4] = 0x8F; q[5] = 0xFF; q[6] = 0xF3;
+    q[7] = (uint8_t)((tff << 7) | (progressive_frame ? 0x41 : 0));
+    q[8] = (uint8_t)(progressive_frame << 7);
+    q += 9;
+    q[0] = 0; q[1] = 0; q[2] = 1; q[3] = 0x01;   /* the first slice */
+}
+
 static void test_sequence_header(void)
 {
     hdv_err_state_t st;
@@ -93,9 +138,40 @@ static void test_sequence_header(void)
     hdv_error_analyze(&st, u, 1, VPID, &e);
     CHECK(e.seq_found && e.seq_width == 1280 && e.seq_height == 720 && e.seq_frame_rate_code == 7,
           "1280x720 59.94");
+    CHECK(!e.seqext_found && !e.picext_found, "no extensions");
     u[4 + 9 + 3] = 0xB8; /* not a sequence header any more */
     hdv_error_analyze(&st, u, 1, VPID, &e);
     CHECK(!e.seq_found, "no sequence header");
+
+    /* the extensions: 720p59.94 progressive, then 1080i29.97 top field first */
+    uint8_t u2[2 * 188];
+    char lab[24];
+    int num, den;
+    hdv_error_init(&st);
+    ext_unit(u2, 1280, 720, 7, 1, 0, 1);
+    hdv_error_analyze(&st, u2, 2, VPID, &e);
+    CHECK(!e.frame_error && e.pic_type == 1, "a clean I picture");
+    CHECK(e.seq_found && e.seq_width == 1280 && e.seq_height == 720 && e.seq_aspect == 3, "720p header");
+    CHECK(e.seqext_found && e.seq_progressive == 1 && e.seq_fr_ext_n == 0 && e.seq_fr_ext_d == 0,
+          "720p sequence extension across the packet boundary");
+    CHECK(e.picext_found && e.pic_structure == 3 && e.pic_progressive == 1 && e.pic_tff == 0,
+          "720p picture coding extension");
+    pin_vidfmt_rate_from_code(e.seq_frame_rate_code, &num, &den);
+    pin_vidfmt_label(e.seq_height, num, den, pin_vidfmt_hdv_interlaced(e.seq_height, e.seq_progressive),
+                     lab, sizeof(lab));
+    CHECK(!strcmp(lab, "720p59.94"), "720p59.94 label");
+
+    ext_unit(u2, 1440, 1080, 4, 0, 1, 0);
+    u2[188 + 4 + 7] = 0x2A;      /* frame_rate_extension_n 1, _d 10 */
+    hdv_error_analyze(&st, u2, 2, VPID, &e);
+    CHECK(e.seqext_found && e.seq_progressive == 0 && e.seq_fr_ext_n == 1 && e.seq_fr_ext_d == 10,
+          "1080i sequence extension");
+    CHECK(e.picext_found && e.pic_structure == 3 && e.pic_progressive == 0 && e.pic_tff == 1,
+          "1080i picture coding extension: top field first");
+    pin_vidfmt_rate_from_code(e.seq_frame_rate_code, &num, &den);
+    pin_vidfmt_label(e.seq_height, num, den, pin_vidfmt_hdv_interlaced(e.seq_height, e.seq_progressive),
+                     lab, sizeof(lab));
+    CHECK(!strcmp(lab, "1080i29.97"), "1080i29.97 label");
 }
 
 #ifdef TEST_DATA_DIR
@@ -120,13 +196,16 @@ static void test_fixture(void)
     hdv_unit_errors_t e;
     hdv_error_analyze(&st, d, n, map.video_pid, &e);
     CHECK(e.seq_found, "fixture has a sequence header");
-    CHECK(e.seq_width == 1440 && e.seq_height == 1080, "fixture is 1440x1080");
+    CHECK(e.seq_width == 1440 && e.seq_height == 1080 && e.seq_aspect == 3, "fixture is 1440x1080 16:9");
+    CHECK(e.seqext_found && !e.seq_progressive, "fixture is interlaced");
+    CHECK(e.picext_found && e.pic_tff && !e.pic_progressive, "fixture is top field first");
     int num, den;
     char lab[24];
     pin_vidfmt_rate_from_code(e.seq_frame_rate_code, &num, &den);
-    pin_vidfmt_label(e.seq_height, num, den, pin_vidfmt_hdv_interlaced(e.seq_height), lab, sizeof(lab));
+    pin_vidfmt_label(e.seq_height, num, den, pin_vidfmt_hdv_interlaced(e.seq_height, e.seq_progressive),
+                     lab, sizeof(lab));
     printf("hdv.ts: %s\n", lab);
-    CHECK(lab[0] == '1', "fixture label");
+    CHECK(!strcmp(lab, "1080i25"), "fixture label");
     free(d);
 }
 #endif

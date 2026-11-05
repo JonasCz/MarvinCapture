@@ -33,7 +33,8 @@
  * For any other capture width (a future analog geometry) this falls back to
  * dar/width:height reduced by gcd, which is the general definition SAR is
  * derived from (SAR = DAR * height / width) and matches the 720-wide cases
- * above exactly when plugged in with 4:3/16:9 and 576/480 lines.
+ * above exactly when plugged in with 4:3/16:9 and 576/480 lines. SD takes the
+ * line count from is_pal; HDV takes the frame's own width and height.
  */
 
 static int gcd_i(int a, int b)
@@ -46,7 +47,7 @@ static int gcd_i(int a, int b)
     return a < 0 ? -a : a;
 }
 
-void pin_sink_sar_for(pin_kind_t kind, int is_pal, pin_aspect_t aspect, int width,
+void pin_sink_sar_for(pin_kind_t kind, int is_pal, pin_aspect_t aspect, int width, int height,
                       int *sar_num, int *sar_den)
 {
     int dar_num = (aspect == PIN_ASPECT_16_9) ? 16 : 4;
@@ -63,23 +64,13 @@ void pin_sink_sar_for(pin_kind_t kind, int is_pal, pin_aspect_t aspect, int widt
         return;
     }
 
-    if (kind == PIN_KIND_HDV) {
-        /* 1440x1080 HDV: the well-known 4:3 SAR that makes 1440 samples
-         * display as 1920 (i.e. 1440 * 4/3), same idea for 16:9 anamorphic
-         * full-raster HDV -- but our capture is always the half-horizontal
-         * 1440-wide variant, so this is effectively constant in practice. */
-        int height = 1080;
-        *sar_num = dar_num * height;
-        *sar_den = dar_den * width;
-        int g = gcd_i(*sar_num, *sar_den);
-        if (g) {
-            *sar_num /= g;
-            *sar_den /= g;
-        }
-        return;
-    }
-
-    int height = is_pal ? 576 : 480;
+    /* HDV: the frame's own raster. 1440x1080 16:9 (HDV 1080i/p) is the well-known
+     * anamorphic 4:3 that makes 1440 samples display as 1920; 1280x720 16:9 (HDV
+     * 720p) is square, 1:1. 1080 lines if the height is not known. */
+    if (kind != PIN_KIND_HDV)
+        height = is_pal ? 576 : 480;
+    else if (height <= 0)
+        height = 1080;
     *sar_num = dar_num * height;
     *sar_den = dar_den * width;
     int g = gcd_i(*sar_num, *sar_den);

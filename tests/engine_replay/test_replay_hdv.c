@@ -24,17 +24,20 @@
  *   - the stream is recognised as HDV and frames are counted;
  *   - --split produces no spurious cuts (HDV scene split only has the GOP
  *     timecode to go on -- see pin_session.c's HDV branch of dv_on_unit()
- *     -- so a single, uninterrupted recording must stay one file).
+ *     -- so a single, uninterrupted recording must stay one file);
+ *   - the format the status reports is the stream's own (sequence header and
+ *     extensions): 1080i25 for hdv.ts and, given hdv-720p.ts as the second
+ *     argument, 1280x720 progressive at 59.94 ("720p59.94").
  *
  * The capture is hdv.ts, 2 s of HDV-like TS made with ffmpeg at test time
  * (continuous GOP timecode; see tests/data/README.md). Given a longer
  * recording (a live capture is ~1 GB), only the first ~30 MB (a few
  * seconds of 1080i/25 HDV, comfortably under this test's time budget at
- * replay_run_ts()'s ~33 ms-per-picture pacing) is copied into a scratch
- * file and replayed, so this checks "no spurious split over the available
- * slice" rather than literally the plan's "first minute".
+ * replay_run_ts()'s real-time pacing at the stream's own frame rate) is
+ * copied into a scratch file and replayed, so this checks "no spurious split
+ * over the available slice" rather than literally the plan's "first minute".
  *
- * Usage: test_replay_hdv <capture_ts_file>
+ * Usage: test_replay_hdv <capture_ts_file> [<720p_ts_file>]
  */
 
 #include "replay_test_util.h"
@@ -64,9 +67,34 @@ static void make_slice(const char *src_path, const char *dst_path)
     printf("slice: %zu bytes copied from %s\n", total, src_path);
 }
 
+/* Waits until the session reports the stream's format, then checks it against the
+ * stream's sequence header and extensions (as the GUIs show it). */
+static void check_format(pin_session_t *s, int w, int h, int fps_num, int fps_den, int interlaced,
+                         const char *label)
+{
+    pin_status_snapshot_t snap;
+    for (int i = 0; i < 100; i++) {
+        pin_get_status(s, &snap);
+        if (snap.stream_kind == PIN_KIND_HDV && snap.video_label[0])
+            break;
+        pin_test_sleep_ms(50);
+    }
+    printf("format: %dx%d, %d/%d fps, %s, DAR %d:%d, \"%s\"\n", snap.width, snap.height,
+           snap.video_fps_num, snap.video_fps_den, snap.video_interlaced ? "interlaced" : "progressive",
+           snap.dar_num, snap.dar_den, snap.video_label);
+    CHECK_EQ_I(snap.stream_kind, PIN_KIND_HDV);
+    CHECK_EQ_I(snap.width, w);
+    CHECK_EQ_I(snap.height, h);
+    CHECK_EQ_I(snap.video_fps_num, fps_num);
+    CHECK_EQ_I(snap.video_fps_den, fps_den);
+    CHECK_EQ_I(snap.video_interlaced, interlaced);
+    CHECK(snap.dar_num == 16 && snap.dar_den == 9);
+    CHECK(strcmp(snap.video_label, label) == 0);
+}
+
 int main(int argc, char **argv)
 {
-    CHECK(argc == 2);
+    CHECK(argc == 2 || argc == 3);
     const char *cap_path = argv[1];
     pin_test_require_fixture(cap_path);
 
@@ -87,6 +115,7 @@ int main(int argc, char **argv)
     }
     CHECK(is_hdv);
     printf("OK: stream recognised as HDV (%dx%d)\n", snap.width, snap.height);
+    check_format(s, 1440, 1080, 25, 1, 1, "1080i25");
 
     pin_capture_opts_t opts;
     pin_capture_opts_defaults(&opts);
@@ -139,5 +168,15 @@ int main(int argc, char **argv)
     CHECK(pin_test_file_exists("hdv_replay_ts.ts"));
     CHECK(!pin_test_file_exists("hdv_replay_ts.m2t"));
     printf("OK: .ts extension kept\n");
+
+    /* 720p: progressive, 59.94 fps, square samples (the format only; no capture) */
+    if (argc == 3) {
+        pin_test_require_fixture(argv[2]);
+        s = pin_test_open_replay(argv[2]);
+        pin_test_prepare_dv(s);
+        check_format(s, 1280, 720, 60000, 1001, 0, "720p59.94");
+        pin_close(s);
+        printf("OK: 720p59.94 detected\n");
+    }
     return 0;
 }

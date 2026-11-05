@@ -738,7 +738,8 @@ typedef struct {
      * every kind (width / height above): the frame rate as a fraction
      * (analog and DV: 25/1 or 30000/1001; HDV: from the stream's sequence
      * header, 0/0 until the first one is seen), whether it is interlaced
-     * (everything but 720p HDV), and video_label, a short ready-made name so
+     * (analog and DV always; HDV as its sequence extension says, so 720p and
+     * 1080p are progressive), and video_label, a short ready-made name so
      * every GUI shows the same: "PAL", "NTSC", "1080i25", "1080i29.97",
      * "720p50", "720p59.94" (HDV 720p is untested, no hardware). Empty while
      * there is no signal or the format is not known yet. */

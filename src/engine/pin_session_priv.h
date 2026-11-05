@@ -147,8 +147,14 @@ struct pin_session {
     double ffv1_learned_bph;    /* core.ffv1_bytes_per_hour, 0 = none */
     int ffv1_learned_loaded;
     int hdv_err_reset;          /* restart the HDV continuity tracking at the next unit */
+    /* HDV format, from what the stream says (hdv_error_analyze()); the sinks get these,
+     * 1080i 16:9 top field first is assumed only until they are known */
     int hdv_seq_w, hdv_seq_h;   /* last HDV sequence header seen (0 = none yet) */
-    int hdv_fps_num, hdv_fps_den;
+    int hdv_fps_num, hdv_fps_den;   /* its frame rate (with the sequence extension's) */
+    int hdv_dar_num, hdv_dar_den;   /* its display aspect ratio (0 = none or reserved code) */
+    int hdv_seqext_seen;        /* a sequence extension was seen: */
+    int hdv_progressive;        /* its progressive_sequence */
+    int hdv_bff;                /* the last interlaced picture was bottom field first */
     float audio_peak_db[2], audio_rms_db[2];
     float audio_peak_acc[2]; /* linear peak since the last status read (valid if audio_peak_acc_n) */
     int audio_peak_acc_n;    /* blocks metered since the last status read */

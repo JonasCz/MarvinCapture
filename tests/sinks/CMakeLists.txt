@@ -43,7 +43,7 @@ add_test(NAME test_analog_sinks COMMAND test_analog_sinks)
 
 add_executable(test_hdv_rewrap test_hdv_rewrap.c)
 target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
-add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts")
+add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts" "${PIN_TEST_DATA}/hdv-720p.ts")
 set_tests_properties(test_hdv_rewrap PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 add_executable(test_stdout_sinks test_stdout_sinks.c)

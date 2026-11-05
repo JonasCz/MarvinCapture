@@ -110,7 +110,7 @@ static void common_params(pin_sink_params_t *p, const char *title)
     p->interlaced = 1;
     p->top_field_first = 1;
     p->aspect = PIN_ASPECT_4_3;
-    pin_sink_sar_for(PIN_KIND_ANALOG, 1, p->aspect, W, &p->sample_aspect_num, &p->sample_aspect_den);
+    pin_sink_sar_for(PIN_KIND_ANALOG, 1, p->aspect, W, H, &p->sample_aspect_num, &p->sample_aspect_den);
     p->colour_matrix = PIN_MATRIX_BT601;
     p->audio_rate = ARATE;
     p->audio_channels = ACHAN;
@@ -187,7 +187,7 @@ static void test_aspect_override(void)
     common_params(&p, "aspect override test");
     p.aspect = PIN_ASPECT_16_9;
     int want_num, want_den;
-    pin_sink_sar_for(PIN_KIND_ANALOG, 1, PIN_ASPECT_16_9, W, &want_num, &want_den);
+    pin_sink_sar_for(PIN_KIND_ANALOG, 1, PIN_ASPECT_16_9, W, H, &want_num, &want_den);
     CHECK_EQ_I(want_num, 64);   /* PAL 16:9, 720-wide: the documented 64:45 */
     CHECK_EQ_I(want_den, 45);
     /* sample_aspect_num/den intentionally left at whatever common_params()

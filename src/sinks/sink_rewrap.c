@@ -432,7 +432,7 @@ static pin_status_t dv_open(pin_sink_t *s, const char *path, const pin_sink_para
     {
         int is_pal = params->height == 576;
         int sn, sd;
-        pin_sink_sar_for(PIN_KIND_DV, is_pal, params->aspect, params->width, &sn, &sd);
+        pin_sink_sar_for(PIN_KIND_DV, is_pal, params->aspect, params->width, params->height, &sn, &sd);
         p->vst->codecpar->sample_aspect_ratio = (AVRational){ sn, sd };
         /* Both the avi and mov muxers read SAR from AVStream, not
          * AVCodecParameters (see libavformat/avienc.c mov/avi vprp/tkhd
@@ -607,15 +607,18 @@ static pin_status_t hdv_remux(rewrap_priv_t *p, const char *final_path)
         o->time_base = in->streams[i]->time_base;
         if (cp->codec_type == AVMEDIA_TYPE_VIDEO) {
             vidx = (int)i;
-            o->codecpar->field_order = AV_FIELD_TT;
+            /* what the engine read from the stream (sequence and picture coding
+             * extensions): 1080i top field first, 720p / 1080p progressive */
+            o->codecpar->field_order = !p->params.interlaced ? AV_FIELD_PROGRESSIVE
+                                       : p->params.top_field_first ? AV_FIELD_TT : AV_FIELD_BB;
             o->codecpar->color_primaries = AVCOL_PRI_BT709;
             o->codecpar->color_trc = AVCOL_TRC_BT709;
             o->codecpar->color_space = AVCOL_SPC_BT709;
             o->codecpar->color_range = AVCOL_RANGE_MPEG;
-            /* 1440x1080 HDV anamorphic: SAR so DAR comes out 4:3 (the usual
-             * HDV1 raster) -- see pin_sink_sar_for's PIN_KIND_HDV branch. */
+            /* SAR from the stream's raster and the display aspect: 1440x1080 16:9
+             * is 4:3 (anamorphic), 1280x720 16:9 is 1:1 -- see pin_sink_sar_for. */
             int sn, sd;
-            pin_sink_sar_for(PIN_KIND_HDV, 1, p->params.aspect, cp->width, &sn, &sd);
+            pin_sink_sar_for(PIN_KIND_HDV, 1, p->params.aspect, cp->width, cp->height, &sn, &sd);
             o->codecpar->sample_aspect_ratio = (AVRational){ sn, sd };
             o->sample_aspect_ratio = (AVRational){ sn, sd };  /* see dv_open()'s comment */
         }

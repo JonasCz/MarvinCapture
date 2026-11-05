@@ -44,9 +44,10 @@ extern "C" {
 typedef struct {
     pin_kind_t kind;             /* PIN_KIND_ANALOG / _DV / _HDV */
     int width, height;
-    int fps_num, fps_den;        /* PAL 25/1, NTSC 30000/1001 */
-    int interlaced;              /* analog/HDV: 1; DV: field order still applies (BB) */
-    int top_field_first;         /* analog/HDV 1080i: 1 (TFF); DV: 0 (BFF) */
+    int fps_num, fps_den;        /* PAL 25/1, NTSC 30000/1001; HDV: the stream's */
+    int interlaced;              /* analog: 1; DV: field order still applies (BB);
+                                    HDV: from the stream, 0 for 720p / 1080p */
+    int top_field_first;         /* analog, HDV 1080i: 1 (TFF); DV: 0 (BFF) */
     pin_aspect_t aspect;         /* display aspect; PIN_ASPECT_AUTO resolved by the caller
                                     before this point -- a sink never guesses */
     int sample_aspect_num, sample_aspect_den;  /* derived from aspect + geometry, see sink_ffv1.c */
