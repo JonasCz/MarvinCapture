@@ -88,8 +88,11 @@ final class SplashExit {
             float e = 1 - (1 - f) * (1 - f) * (1 - f);   // decelerating flight
             // the target is read every frame: the card's text can still change the size of Marvin
             marvin.getLocationOnScreen(b);
-            float tx = b[0] + marvin.getWidth() / 2f - iconCx, ty = b[1] + marvin.getHeight() / 2f - iconCy;
-            float ts = MarvinIdleView.unit(marvin.getWidth(), marvin.getHeight()) / iconUnit;
+            float u = MarvinIdleView.unit(marvin.getWidth(), marvin.getHeight());
+            // the icon's picture is 53 units high; the live view reserves more below it (MarvinIdleView.SPAN_H)
+            float tx = b[0] + marvin.getWidth() / 2f - iconCx,
+                    ty = b[1] + marvin.getHeight() / 2f - (MarvinIdleView.SPAN_H - 53) / 2f * u - iconCy;
+            float ts = u / iconUnit;
             icon.setTranslationX(tx * e);
             icon.setTranslationY(ty * e);
             float sc = 1 + (ts - 1) * e;

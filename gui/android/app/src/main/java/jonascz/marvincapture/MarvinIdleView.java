@@ -43,6 +43,9 @@ public final class MarvinIdleView extends View {
             CORAL_DK = 0xffd43a48, CHEEK = 0xffff7a6e, WHITE = 0xffffffff;
     private static final int[] BARS = { 0xffddd8c6, 0xffdcc050, 0xff62b9bf, 0xff6fb57c, 0xffb76fab, 0xffd2604f, 0xff5069b5 };
     private static final float DROP = 2.5f;
+    /** Logo units from the body top (y 5) to the lowest the tongue tip can get: it is 58 when still, plus the
+     *  drop, the bob, the tilt, the overshoot of the pop-out and the bend of the spine. */
+    static final float SPAN_H = 61f;
 
     private final float dp;
     private final Paint fill = new Paint(Paint.ANTI_ALIAS_FLAG);
@@ -65,16 +68,16 @@ public final class MarvinIdleView extends View {
 
     @Override
     protected void onMeasure(int w, int h) {
-        // 150 x 125 dp, smaller where the card is short (the picture of a 16:9 phone in portrait): the
-        // animation gives way so that the sentence below it is never cut off
-        int want = (int) (125 * dp);
+        // 150 x 140 dp, smaller where the card is short (the picture of a 16:9 phone in portrait): the
+        // whole drawing scales down (unit) so that neither the tongue nor the sentence below is cut off
+        int want = (int) (140 * dp);
         int height = MeasureSpec.getMode(h) == MeasureSpec.UNSPECIFIED ? want : Math.min(want, MeasureSpec.getSize(h));
         setMeasuredDimension(resolveSize((int) (150 * dp), w), height);
     }
 
     /** The size of one logo unit in pixels in a view of this size (onDraw, and the splash flight). */
     static float unit(float w, float h) {
-        return Math.min(w / 64f, h / 53f);
+        return Math.min(w / 64f, h / SPAN_H);
     }
 
     private boolean animated() {
@@ -87,11 +90,11 @@ public final class MarvinIdleView extends View {
     protected void onDraw(Canvas c) {
         Pose p = animated() ? idle.pose(SystemClock.uptimeMillis() / 1000.0) : Pose.STILL;
         float w = getWidth(), h = getHeight();
-        // The logo's x 0..64 and y 5..58 (body top to tongue tip) scaled into the view, the body
+        // The logo's x 0..64 and y 5..66 (body top to the lowest tongue tip) scaled into the view, the body
         // bobbing and tilting about (32, 28).
         float s = unit(w, h);
         c.save();
-        c.translate((w - 64 * s) / 2, (h - 53 * s) / 2 - 5 * s);
+        c.translate((w - 64 * s) / 2, (h - SPAN_H * s) / 2 - 5 * s);
         c.scale(s, s);
         c.translate(0, DROP + (float) p.y);
         c.rotate((float) p.rot, 32, 28);
