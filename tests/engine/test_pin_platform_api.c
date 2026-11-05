@@ -515,6 +515,47 @@ static void test_update_state(void)
     CHECK(pin_update_check_json(NULL, 0, t0, &u) == PIN_ERR_ARG, "no json");
     u.size = 4;
     CHECK(pin_update_check_json(file, strlen(file), t0, &u) == PIN_ERR_ABI, "small struct");
+
+    /* pin_update_refresh(): downloads (here: reads a local file) only when due, else uses what is remembered */
+    char vf[700];
+    snprintf(vf, sizeof(vf), "%s/VERSION", base);
+    FILE *f = fopen(vf, "wb");
+    CHECK(f != NULL, "update: write VERSION file");
+    if (f) {
+        fprintf(f, "{\"version\": \"%s\", \"release_notes\": \"Notes.\", \"download_url\": \"https://example.com/x\"}", newer);
+        fclose(f);
+    }
+    char envs[800];
+    snprintf(envs, sizeof(envs), "MARVIN_UPDATE_URL=%s", vf);
+    putenv(envs);
+    pin_set_app_dirs(cfg, NULL, NULL);
+    pin_settings_set("update.last_check", "");
+    pin_settings_set("update.latest", "");
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+    CHECK(pin_update_refresh(&u, 1000) == 1 && u.available == 1, "refresh: downloads when due");
+    CHECK(strcmp(u.latest, newer) == 0 && strcmp(u.notes, "Notes.") == 0, "refresh: fresh notes");
+    CHECK(pin_update_due((int64_t)time(NULL)) == 0, "refresh: counted as checked");
+    f = fopen(vf, "wb");
+    if (f) {
+        fputs("garbage", f);
+        fclose(f);
+    }
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+    CHECK(pin_update_refresh(&u, 1000) == 1 && strcmp(u.latest, newer) == 0 && u.notes[0] == '\0',
+          "refresh: not due, uses the remembered result");
+    pin_settings_set("update.last_check", "1");   /* long ago: due, but the file is now invalid */
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+    CHECK(pin_update_refresh(&u, 1000) == 1 && strcmp(u.latest, newer) == 0, "refresh: failed download keeps the old result");
+    CHECK(pin_update_due((int64_t)time(NULL)) == 1, "refresh: a failed download is retried");
+    putenv("MARVIN_UPDATE_URL=");
+    CHECK(pin_update_due((int64_t)time(NULL)) == 0, "turned off: never due");
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+    CHECK(pin_update_refresh(&u, 1000) == 1, "turned off: still shows the remembered one");
+
     CHECK(pin_set_app_dirs(NULL, "", NULL) == PIN_OK, "update: restore app dirs");
 }
 

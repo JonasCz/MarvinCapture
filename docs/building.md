@@ -251,15 +251,15 @@ section for what users see).
 `pin_app_version()`), `"release_notes"` (plain text) and `"download_url"` (the
 download page). The CLI (`--help`, before the device list) and both GUIs (a
 banner at startup) fetch the copy on the `main` branch from
-raw.githubusercontent.com and announce a newer `"version"`; offline or on any
-error they show nothing. So to release: bump `VERSION`, build and package, publish
+raw.githubusercontent.com at most once a week (the time of the last successful check is the
+setting `update.last_check`, the answer is kept too) and announce a newer `"version"` until
+the app is updated; offline or on any error they show nothing and try again at the next start. So to release: bump `VERSION`, build and package, publish
 the installers, then push `VERSION` to `main`. `MARVIN_UPDATE_URL` replaces the
 address (an http(s) URL or a local file, for testing; empty turns the check off).
 On macOS and Linux the core loads libcurl at run time for the check (the `.deb`
 only recommends it); Windows uses WinHTTP.
-On Android the app downloads the file itself and hands it to the core (`pin_update_check_json`);
-that check runs at most once a week (the time of the last one is the setting `update.last_check`)
-and the result stays visible in the options panel until the app is updated.
+On Android the app downloads the file itself and hands it to the core (`pin_update_check_json`),
+and the result is shown in the options panel until the app is updated.
 
 | Script | Output | Notes |
 |---|---|---|

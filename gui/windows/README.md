@@ -152,15 +152,20 @@ environment variable.
 
 ## Update check
 
-Right after start the GUI asks the core (`pin_update_check`, 5 s timeout, on a
-background thread) whether a newer release exists. If so, a closable
-informational banner shows `pin_format_update`'s text, the release notes and a
+Right after start the GUI asks the core (`pin_update_refresh`, 5 s timeout, on a
+background thread) whether a newer release is known. The core downloads the version file at
+most once a week (`update.last_check` in the settings; a failed download is retried at the next
+start) and remembers the answer, so the notice comes back at every start until the app is
+updated, without a request. If a newer one is known, a closable
+informational banner shows `pin_format_update`'s text, the release notes (only right after a
+download) and a
 "Download" button that opens the release page in the default browser. Any
 failure (offline, bad answer, no newer version) shows nothing. The banner has
 its own InfoBar, so an error banner does not replace it. `MARVIN_UPDATE_URL`
 overrides where the core fetches the release info from (a URL or a local JSON
 file path; for testing:
-`{"version":"9.9","release_notes":"...","download_url":"..."}`).
+`{"version":"9.9","release_notes":"...","download_url":"..."}`; to check again before the week is
+up, delete the `[update]` section of settings.ini).
 
 Each window runs as its own process. "..." > "New window" starts a second one,
 for example to use a second device.

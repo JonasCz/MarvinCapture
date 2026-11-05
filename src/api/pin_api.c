@@ -49,6 +49,7 @@
 #include <stdio.h>
 #include <unistd.h> /* getpid (MinGW provides it too) */
 #include <stdlib.h>
+#include <time.h>
 #include <string.h>
 #include <strings.h> /* strcasecmp */
 
@@ -90,6 +91,17 @@ int pin_update_due(int64_t now)
     return pin_update_interval_elapsed((int64_t)strtoll(v, NULL, 10), now);
 }
 
+/* Remembers a successful check: the result first, the time last (a check counts only once its
+ * result is kept). */
+static void update_remember(const pin_update_info_t *info, int64_t now)
+{
+    char v[32];
+    snprintf(v, sizeof(v), "%lld", (long long)now);
+    pin_settings_set(UPDATE_KEY_LATEST, info->latest);
+    pin_settings_set(UPDATE_KEY_URL, info->download_url);
+    pin_settings_set(UPDATE_KEY_LAST, v);
+}
+
 pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now, pin_update_info_t *info)
 {
     if (!json || !info)
@@ -98,12 +110,28 @@ pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now, pi
         return PIN_ERR_ABI;
     if (pin_update_from_json(json, len, PIN_APP_VERSION, info) != 0)
         return PIN_ERR_IO;
-    char v[32];
-    snprintf(v, sizeof(v), "%lld", (long long)now);
-    pin_settings_set(UPDATE_KEY_LATEST, info->latest);
-    pin_settings_set(UPDATE_KEY_URL, info->download_url);
-    pin_settings_set(UPDATE_KEY_LAST, v);   /* last: a check counts only once its result is kept */
+    update_remember(info, now);
     return PIN_OK;
+}
+
+int pin_update_refresh(pin_update_info_t *info, uint32_t timeout_ms)
+{
+    if (!info || info->size < sizeof(*info))
+        return 0;
+    int64_t now = (int64_t)time(NULL);
+    if (pin_update_due(now)) {
+        pin_update_info_t fresh;
+        memset(&fresh, 0, sizeof(fresh));
+        fresh.size = sizeof(fresh);
+        if (pin_update_net_check(&fresh, timeout_ms) == PIN_OK) {
+            update_remember(&fresh, now);
+            uint32_t size = info->size;
+            memcpy(info, &fresh, sizeof(fresh));
+            info->size = size;
+            return info->available;
+        }
+    }
+    return pin_update_known(info);
 }
 
 int pin_update_known(pin_update_info_t *info)

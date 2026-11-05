@@ -499,16 +499,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public bool UpdateHasUrl => UpdateUrl.Length > 0;
     partial void OnUpdateUrlChanged(string value) => OnPropertyChanged(nameof(UpdateHasUrl));
 
-    /// <summary>Asks the core whether a newer release exists (blocking network call: runs on a
-    /// worker thread) and shows the notice on the UI thread. Fail-soft: anything but a clean
-    /// "newer version available" shows nothing.</summary>
+    /// <summary>Asks the core whether a newer release is known (it downloads the version file at most
+    /// once a week and remembers the answer; blocking, so it runs on a worker thread) and shows the
+    /// notice on the UI thread. Fail-soft: anything but a clean "newer version available" shows nothing.</summary>
     public void CheckForUpdate(Microsoft.UI.Dispatching.DispatcherQueue ui)
     {
         _ = System.Threading.Tasks.Task.Run(() =>
         {
             try
             {
-                if (Native.UpdateCheck(out var info, 5000) != PinStatus.Ok || info.Available == 0)
+                if (!Native.UpdateRefresh(out var info, 5000))
                 {
                     return;
                 }

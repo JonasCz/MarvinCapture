@@ -51,17 +51,18 @@ public static unsafe partial class Native
     // ---- update check ---------------------------------------------------
 
     [LibraryImport(Lib)]
-    private static partial PinStatus pin_update_check(ref PinUpdateInfo info, uint timeoutMs);
+    private static partial int pin_update_refresh(ref PinUpdateInfo info, uint timeoutMs);
 
     [LibraryImport(Lib)]
     private static partial void pin_format_update(in PinUpdateInfo info, byte* out_, nuint cap);
 
-    /// <summary>Blocking network call (run it off the UI thread). Ok = the check completed;
-    /// <paramref name="info"/>.Available says whether a newer version exists.</summary>
-    public static PinStatus UpdateCheck(out PinUpdateInfo info, uint timeoutMs)
+    /// <summary>Blocking (network, at most once a week: otherwise the last result is used), so run it
+    /// off the UI thread. True = a newer version is known, <paramref name="info"/> describes it
+    /// (release notes only right after a download).</summary>
+    public static bool UpdateRefresh(out PinUpdateInfo info, uint timeoutMs)
     {
         info = PinUpdateInfo.Create();
-        return pin_update_check(ref info, timeoutMs);
+        return pin_update_refresh(ref info, timeoutMs) != 0 && info.Available != 0;
     }
 
     /// <summary>"MarvinCapture 1.1 is available (you have 1.0)."</summary>

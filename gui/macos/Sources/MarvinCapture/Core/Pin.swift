@@ -57,7 +57,7 @@ enum Pin {
 
     // MARK: update check
 
-    /// A newer release, as reported by pin_update_check().
+    /// A newer release, as reported by pin_update_refresh().
     struct UpdateInfo: Sendable {
         let current: String
         let latest: String
@@ -70,11 +70,13 @@ enum Pin {
     /// The app version the core reports (e.g. "1.0").
     static var appVersion: String { String(cString: pin_app_version()) }
 
-    /// Blocking network call: run it off the main thread. nil = check failed / disabled, or no newer version.
+    /// Blocking (network, at most once a week: otherwise the core answers from its last check), so run it
+    /// off the main thread. nil = no newer version known (or the check is disabled / failed and none was
+    /// remembered). `notes` are only filled right after a download.
     static func checkForUpdate(timeoutMs: UInt32) -> UpdateInfo? {
         var info = pin_update_info_t()
         info.size = UInt32(MemoryLayout<pin_update_info_t>.size)
-        guard pin_update_check(&info, timeoutMs) == PIN_OK, info.available != 0 else { return nil }
+        guard pin_update_refresh(&info, timeoutMs) != 0, info.available != 0 else { return nil }
         let summary = format { out, cap in pin_format_update(&info, out, cap) }
         return UpdateInfo(current: cString(info.current), latest: cString(info.latest),
                           downloadURL: cString(info.download_url), notes: cString(info.notes),

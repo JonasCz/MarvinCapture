@@ -299,14 +299,15 @@ static void print_performance_recommendations(FILE *f, int behind_hub)
     }
 }
 
-/* "Update available" block (pin_update_check). Prints nothing when this is the newest
- * version or the check could not be done (offline, ...). */
+/* "Update available" block (pin_update_refresh: downloads at most once a week, else uses the
+ * result of the last check). Prints nothing when this is the newest version or nothing is
+ * known (offline, ...). */
 static void print_update_notice(FILE *f)
 {
     pin_update_info_t u;
     memset(&u, 0, sizeof(u));
     u.size = sizeof(u);
-    if (pin_update_check(&u, 3000) != PIN_OK || !u.available)
+    if (!pin_update_refresh(&u, 3000))
         return;
     char text[256];
     pin_format_update(&u, text, sizeof(text));

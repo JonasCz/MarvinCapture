@@ -1247,6 +1247,15 @@ PIN_API int pin_update_due(int64_t now);
 PIN_API pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now,
                                            pin_update_info_t *info);
 
+/* The same, for platforms where the core downloads the file itself (Windows, macOS, Linux; the
+ * CLI): blocking (network), call it off the UI thread. When pin_update_due() it fetches the file
+ * (timeout_ms bounds the fetch, 0 = 5000), evaluates it and remembers the result like
+ * pin_update_check_json(); otherwise, or when the fetch fails (silently; tried again at the next
+ * start), it uses what was remembered, like pin_update_known(). Returns 1 and fills *info
+ * (size set by the caller) when a newer version is known, else 0. `notes` are filled only
+ * right after a fresh download. */
+PIN_API int pin_update_refresh(pin_update_info_t *info, uint32_t timeout_ms);
+
 /* 1 and *info filled (current, latest, download_url, available = 1; notes are not kept) when the
  * last check found a version newer than this one, else 0. Compared against the running version
  * each time, so the notice goes away by itself after the app was updated. No network. */

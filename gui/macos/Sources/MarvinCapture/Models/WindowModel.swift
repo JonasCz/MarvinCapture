@@ -491,8 +491,10 @@ final class WindowModel {
         infoOpen = false
     }
 
-    /// Looks for a newer release once, in the background (first instance only). Fail-soft: nothing is
-    /// shown when the check fails, is disabled (MARVIN_UPDATE_URL empty) or there is no newer version.
+    /// Shows the update notice once, in the background (first instance only). The core downloads the version
+    /// file at most once a week and remembers the answer (pin_update_refresh), so the notice comes back at every
+    /// start until the app is updated. Fail-soft: nothing is shown when the check fails with nothing remembered,
+    /// is disabled (MARVIN_UPDATE_URL empty) or there is no newer version.
     private func checkForUpdate() {
         guard Instance.isPrimary else { return }
         Task.detached(priority: .utility) {
