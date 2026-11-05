@@ -11,7 +11,7 @@ Every item is tagged with what it takes to test it:
 | Tag | Meaning |
 |---|---|
 | **HW** | Needs a real camera, deck, tape or Pinnacle unit. |
-| **FW-PC** | Can be done with a computer that has its own FireWire port acting as the "camera": it transmits a synthetic DV/HDV stream (or answers AV/C commands) into the MovieBox. See [FireWire PC as a test source](#a-firewire-pc-as-a-test-source). |
+| **FW-PC** | Can be done with a computer that has its own FireWire port, or possibly a second Marvin, acting as the "camera": it transmits a synthetic DV/HDV stream (or answers AV/C commands) into the MovieBox. See [FireWire PC as a test source](#a-firewire-pc-as-a-test-source). |
 | **CODE** | Can be tested in code only: unit tests in `tests/engine`, synthetic DV frames / TS packets, or the replay device. No hardware. |
 
 Many items carry two tags: a synthetic test gives the logic, the real device
@@ -543,6 +543,77 @@ checked against the input byte for byte, which a real tape never allows.
 sender's timing is a PC's, not a camera's. Use it for formats, switches and protocol
 logic; use real cameras and tapes for compatibility and error behaviour.
 
+### A second Marvin as the source
+
+Instead of a FireWire PC, a second Pinnacle unit could do the sending: two
+MovieBoxes joined by a FireWire cable. Everything marked **FW-PC** above would then
+apply. None of this has been tried.
+
+**Why it should be possible:**
+- The FPGA design is a standard OHCI-1394 controller ([hardware.md](hardware.md)).
+  OHCI has isochronous transmit (IT) contexts as well as receive contexts.
+- The USB interface has an OUT endpoint for this. EP 0x06 OUT is in alt 1, the
+  DV/HDV setting, and alt 2 is "output to the camera (not used)".
+- The vendor driver exposes the unit to Windows as an ordinary 1394 bus
+  (`MarvinBus64.sys`, [windows-driver.md](windows-driver.md)), so the
+  standard Windows DV stack can send through it. The analog "Render" bitstream is
+  output to a TV, not 1394, and is not involved.
+
+**Why it would beat a FireWire PC:**
+- The whole rig is two USB devices on one host. It could run unattended on the
+  Linux host, from a script, as a hardware regression test.
+- The sender would be our own C code, so it could send exactly what the tests
+  need: generated DV and TS, format switches, gaps, and other channels.
+- Our link layer already receives and answers incoming async requests (the AR
+  request context, `p1394_answer_owed`). So the sending unit could also answer
+  oMPR/oPCR reads (plug emulation) and AV/C commands from a script. That is the
+  fake deck for section 4 (NOT_IMPLEMENTED, INTERIM, odd transport states, slow
+  replies), with no other software.
+- Transmit is also what a future "write back to tape" feature would need.
+
+**What is unknown, and how to find out, cheapest first:**
+
+1. **Does the bitstream implement IT contexts at all?** OHCI lets software count
+   them: write all ones to `IsoXmitIntMaskSet`, then read the mask back. One
+   register poke on the Linux host, with no trace needed.
+2. **How do the data and descriptors get into the device?**
+   - On receive, descriptors in device RAM point at a buffer, and address bit 23
+     routes it to EP 0x88 ([startup.md](startup.md)).
+   - Transmit presumably mirrors that, with the host writing packet data on
+     EP 0x06 and OUTPUT_MORE/OUTPUT_LAST descriptors reading it. This is a guess.
+   - Read it in the Ghidra output of `MarvinBus64.sys` (IT register writes around
+     OHCI offset 0x200, and the EP 0x06 pipe), or capture a USB trace of the vendor
+     driver sending.
+3. **A trace of the vendor driver sending.** On Windows with the Pinnacle driver,
+   any DV-out program (an editor's "export to tape", WinDV-style tools) sends
+   through the Marvin, recorded with USBPcap. A catch: Windows' DV stack only
+   offers output to a DV device it has found on the bus. So the trace needs a real
+   camera on that unit, recorded once.
+4. **Then the sender itself:** a transmit loop in `src/core` and a `--transmit
+   file.dv|file.ts` (or test-only) mode, with the receiving unit selected by
+   `--device`.
+
+The vendor-driver route also gives a no-code shortcut. With a camera attached, a
+Windows PC with the Pinnacle driver is itself a "FireWire PC". But it can only send
+DV to a camera it has found, not to another Marvin, so it does not replace step 4.
+
+**Bus and topology notes:**
+- Each 500-USB wires only PHY port 0, so two units take the one cable between them.
+  A camera on the same bus as well needs a FireWire hub or repeater (a 700-USB may
+  have more ports; untested).
+- Both units set themselves cycle master in link init (`pinnacle_1394.c:991`). That
+  takes effect only on the root node, so one of the two will be the cycle master.
+  Check that this is stable.
+- Bus reset handling then sees a second node with no camera behind it (4.8,
+  camera discovery).
+- Two DV streams use about 7 MB/s of USB, well within USB 2.0. Separate host
+  controllers are still safer.
+
+**Limits:** both ends are the same FPGA and PHY. A fault common to both, such as a
+framing or timing assumption, could cancel out, and nothing about other makers'
+1394 chips is learned. It is S100 only. Real cameras and tapes stay necessary for
+compatibility and tape-error behaviour.
+
 ## Suggested order
 
 1. **CODE, cheap, finds real bugs:**
@@ -552,7 +623,7 @@ logic; use real cameras and tapes for compatibility and error behaviour.
    - CI with generated fixtures and sanitizers.
 2. **Decide policies:** what a format, standard, aspect or audio change does to the
    open file (3.1-3.7), and what NOT_IMPLEMENTED means (4.1).
-3. **FW-PC:**
+3. **FW-PC** (first check whether a second Marvin can transmit, step 1 of that section):
    - check stream-only capture on channel 63;
    - then 720p, 24p and mixed DV/HDV and PAL/NTSC streams;
    - then a scripted fake deck, if available.
