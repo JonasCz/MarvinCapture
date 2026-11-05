@@ -58,11 +58,13 @@ final class Glyphs {
                 c.drawPath(path, p);
                 break;
             case GEAR: {
-                p.setStyle(Paint.Style.FILL);
+                // Material-style gear: 8 short, chunky teeth; the round stroke join softens all corners.
+                p.setStyle(Paint.Style.FILL_AND_STROKE);
+                p.setStrokeWidth(1.6f);
                 int n = 8;
                 double per = 2 * Math.PI / n;
-                double[] off = { -0.20, -0.09, 0.09, 0.20 };
-                float[] rad = { 7.6f, 10.2f, 10.2f, 7.6f };
+                double[] off = { -0.25, -0.15, 0.15, 0.25 };
+                float[] rad = { 7.6f, 9.2f, 9.2f, 7.6f };
                 for (int i = 0; i < n; i++) {
                     for (int k = 0; k < 4; k++) {
                         double a = (i + off[k]) * per;
@@ -71,7 +73,7 @@ final class Glyphs {
                     }
                 }
                 path.close();
-                path.addCircle(12, 12, 3.4f, Path.Direction.CW);
+                path.addCircle(12, 12, 4.4f, Path.Direction.CW);   // 3.6 after the stroke eats 0.8
                 path.setFillType(Path.FillType.EVEN_ODD);
                 c.drawPath(path, p);
                 break;
