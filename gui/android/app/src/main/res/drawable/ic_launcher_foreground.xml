@@ -4,7 +4,9 @@
   VectorDrawable, minus the dark-blue body shell: that is the adaptive icon's background colour
   (ic_launcher_background), so the face, cheeks and tongue sit directly on it. Everything is kept
   inside the 66 dp safe zone (a 33 dp radius circle around the centre of the 108 x 108 grid), so
-  any launcher mask (circle, squircle, rounded square) leaves it intact. Keep it in step with the SVG.
+  any launcher mask (circle, squircle, rounded square) leaves it intact. The rounded cream panel is
+  deliberately larger and runs past the safe zone; only the dark face pill and the cheeks must
+  stay inside it (the tongue may be trimmed by tight masks). Keep it in step with the SVG.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -12,17 +14,22 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:translateX="22"
-        android:translateY="20">
+        android:scaleX="1.45"
+        android:scaleY="1.45"
+        android:translateX="7.6"
+        android:translateY="13">
         <group android:translateY="2.5">
-            <path android:fillColor="#FBF3DC" android:pathData="M8,7.5h48v24h-48z" />
-            <path android:fillColor="#DDD8C6" android:pathData="M8,26.2h7.67v5.3h-7.67z" />
-            <path android:fillColor="#DCC050" android:pathData="M15.57,26.2h6.67v5.3h-6.67z" />
-            <path android:fillColor="#62B9BF" android:pathData="M22.14,26.2h6.67v5.3h-6.67z" />
-            <path android:fillColor="#6FB57C" android:pathData="M28.71,26.2h6.67v5.3h-6.67z" />
-            <path android:fillColor="#B76FAB" android:pathData="M35.29,26.2h6.67v5.3h-6.67z" />
-            <path android:fillColor="#D2604F" android:pathData="M41.86,26.2h6.67v5.3h-6.67z" />
-            <path android:fillColor="#5069B5" android:pathData="M48.43,26.2h7.57v5.3h-7.57z" />
+            <group>
+                <clip-path android:pathData="M14,7.5H50A6,6 0,0 1,56 13.5V25.5A6,6 0,0 1,50 31.5H14A6,6 0,0 1,8 25.5V13.5A6,6 0,0 1,14 7.5Z" />
+                <path android:fillColor="#FBF3DC" android:pathData="M14,7.5H50A6,6 0,0 1,56 13.5V25.5A6,6 0,0 1,50 31.5H14A6,6 0,0 1,8 25.5V13.5A6,6 0,0 1,14 7.5Z" />
+                <path android:fillColor="#DDD8C6" android:pathData="M8,26.2h7.67v5.3h-7.67z" />
+                <path android:fillColor="#DCC050" android:pathData="M15.57,26.2h6.67v5.3h-6.67z" />
+                <path android:fillColor="#62B9BF" android:pathData="M22.14,26.2h6.67v5.3h-6.67z" />
+                <path android:fillColor="#6FB57C" android:pathData="M28.71,26.2h6.67v5.3h-6.67z" />
+                <path android:fillColor="#B76FAB" android:pathData="M35.29,26.2h6.67v5.3h-6.67z" />
+                <path android:fillColor="#D2604F" android:pathData="M41.86,26.2h6.67v5.3h-6.67z" />
+                <path android:fillColor="#5069B5" android:pathData="M48.43,26.2h7.57v5.3h-7.57z" />
+            </group>
             <path
                 android:fillColor="#1A1D42"
                 android:pathData="M20.5,11.5H43.5A6.5,6.5 0,0 1,43.5 24.5H20.5A6.5,6.5 0,0 1,20.5 11.5Z" />
