@@ -58,9 +58,10 @@ final class Glyphs {
                 c.drawPath(path, p);
                 break;
             case GEAR: {
-                // Material-style gear: 8 short, chunky teeth; the round stroke join softens all corners.
-                p.setStyle(Paint.Style.FILL_AND_STROKE);
-                p.setStrokeWidth(1.6f);
+                // Outlined gear: 8 short, chunky teeth, stroked only (the round join softens all corners),
+                // with a solid hub dot in the middle.
+                p.setStyle(Paint.Style.STROKE);
+                p.setStrokeWidth(1.9f);
                 int n = 8;
                 double per = 2 * Math.PI / n;
                 double[] off = { -0.25, -0.15, 0.15, 0.25 };
@@ -73,9 +74,9 @@ final class Glyphs {
                     }
                 }
                 path.close();
-                path.addCircle(12, 12, 4.4f, Path.Direction.CW);   // 3.6 after the stroke eats 0.8
-                path.setFillType(Path.FillType.EVEN_ODD);
                 c.drawPath(path, p);
+                p.setStyle(Paint.Style.FILL);
+                c.drawCircle(12, 12, 3f, p);
                 break;
             }
             case SPEAKER_ON:
