@@ -134,6 +134,9 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         Ui.applyTheme(this);
         buildViews();
         setContentView(frame);
+        // Android 12+: the system splash screen shows the whole Marvin in the middle; instead of
+        // cutting to the layout, he flies to his place on the card (SplashExit)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) SplashExit.install(this, marvin);
         replayPath = replayExtra(getIntent());
         applyInputExtra(getIntent());
         applyLibraryExtra(getIntent());

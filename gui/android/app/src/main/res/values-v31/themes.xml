@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinnacle Studio 500-USB open driver
+  Copyright (C) 2026 Jonas Cz.
+  SPDX-License-Identifier: AGPL-3.0-or-later
+-->
+<resources>
+    <!-- The system splash screen (cold starts): the whole Marvin, on the colour of the no-video card
+         (values-night makes it dark in a dark system). MainActivity.playSplashExit flies the icon
+         onto the live Marvin instead of the system's plain cut. -->
+    <style name="Theme.Marvin" parent="Theme.Marvin.Base">
+        <item name="android:windowSplashScreenBackground">@color/ui_card</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_splash_marvin</item>
+    </style>
+</resources>

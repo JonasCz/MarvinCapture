@@ -72,6 +72,11 @@ public final class MarvinIdleView extends View {
         setMeasuredDimension(resolveSize((int) (150 * dp), w), height);
     }
 
+    /** The size of one logo unit in pixels in a view of this size (onDraw, and the splash flight). */
+    static float unit(float w, float h) {
+        return Math.min(w / 64f, h / 53f);
+    }
+
     private boolean animated() {
         return ValueAnimator.areAnimatorsEnabled();
     }
@@ -84,7 +89,7 @@ public final class MarvinIdleView extends View {
         float w = getWidth(), h = getHeight();
         // The logo's x 0..64 and y 5..58 (body top to tongue tip) scaled into the view, the body
         // bobbing and tilting about (32, 28).
-        float s = Math.min(w / 64f, h / 53f);
+        float s = unit(w, h);
         c.save();
         c.translate((w - 64 * s) / 2, (h - 53 * s) / 2 - 5 * s);
         c.scale(s, s);
