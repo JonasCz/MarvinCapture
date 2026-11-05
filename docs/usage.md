@@ -97,7 +97,9 @@ held frames are appended to the previous file instead, so a few odd frames
 with a weird timecode at the end of a scene or tape don't leave a tiny file
 behind (the very first file is always created). Only content-triggered splits
 are deferred this way; a hard size limit would not be. Details:
-`src/engine/pin_split.h`.
+`src/engine/pin_split.h`. HDV has only the GOP timecode: a break counts after three
+GOPs, and the new file starts with PAT, PMT and the picture that opens the GOP where
+the new timecode begins ([hdv.md](hdv.md#scene-split---split)).
 
 **Timing.** Bring-up takes about **5.5 s** before the first byte arrives:
 bitstream upload, a 1.5 s FPGA settle, the 1394 link start-up, finding the
@@ -211,8 +213,8 @@ error" when:
 Verified against the repo's fixtures only (clean camera frames report zero
 errors, injected damage is detected); the live-camera behaviour of the quirk
 heuristics is untested here. The clip counters count a unit when it arrives, so
-frames held back by a pending split lookahead (about a second) land in the
-previous clip.
+frames held back by a pending scene cut (the split lookahead and, until the cut is
+confirmed, the hold-back FIFO: about a second) land in the previous clip.
 
 ### Sizes and time left (live)
 

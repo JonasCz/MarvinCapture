@@ -27,6 +27,14 @@ void pin_scene_config_defaults(pin_scene_config_t *cfg, double fps)
     cfg->date_gap_seconds = 1.0;
     cfg->tc_jump_seconds = 1.0;
     cfg->fps = fps;
+    cfg->sparse_tc = 0;
+}
+
+void pin_scene_config_hdv(pin_scene_config_t *cfg, double fps)
+{
+    pin_scene_config_defaults(cfg, fps);
+    cfg->debounce_frames = 3;
+    cfg->sparse_tc = 1;
 }
 
 void pin_scene_init(pin_scene_detector_t *d, const pin_scene_config_t *cfg)
@@ -40,6 +48,15 @@ unsigned pin_scene_debounce_window(const pin_scene_detector_t *d)
     return d->cfg.debounce_frames;
 }
 
+int pin_scene_pending(const pin_scene_detector_t *d, long *start_index)
+{
+    if (!d->pending_active)
+        return 0;
+    if (start_index)
+        *start_index = d->pending_start_index;
+    return 1;
+}
+
 static void state_from_record(pin_scene_state_t *s, const pin_scene_record_t *r)
 {
     memset(s, 0, sizeof(*s));
@@ -50,6 +67,7 @@ static void state_from_record(pin_scene_state_t *s, const pin_scene_record_t *r)
         s->tc_second = r->tc_second;
         s->tc_frame = r->tc_frame;
         s->tc_drop_frame = r->tc_drop_frame;
+        s->tc_index = r->frame_index;
     }
     if (r->date_valid) {
         s->date_valid = 1;
@@ -77,6 +95,7 @@ static void state_advance(pin_scene_state_t *state, const pin_scene_record_t *r)
         state->tc_second = r->tc_second;
         state->tc_frame = r->tc_frame;
         state->tc_drop_frame = r->tc_drop_frame;
+        state->tc_index = r->frame_index;
     }
     if (r->date_valid) {
         state->date_valid = 1;
@@ -161,6 +180,9 @@ static cont_t classify(const pin_scene_state_t *base, const pin_scene_record_t *
         if (delta < -day / 2)
             delta += day; /* midnight wrap: forward, not backward */
         long jump_frames = (long)(cfg->tc_jump_seconds * cfg->fps + 0.5);
+        /* sparse records: the frames fed since base's timecode may have moved it on */
+        if (cfg->sparse_tc && r->frame_index > base->tc_index)
+            jump_frames += r->frame_index - base->tc_index;
         if (delta < 0)
             tc_result = CONT_BREAK;
         else if (delta > jump_frames)

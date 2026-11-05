@@ -35,7 +35,8 @@ if(NOT FFMPEG)
     return()
 endif()
 
-set(files dv-pal.dv dv-ntsc.dv dv-pal-32k.dv hdv.ts hdv-720p.ts ep88-pal.bin ep88-ntsc.bin)
+set(files dv-pal.dv dv-ntsc.dv dv-pal-32k.dv hdv.ts hdv-720p.ts hdv-split-a1.ts hdv-split-x.ts
+          hdv-split-a2.ts hdv-split-b.ts ep88-pal.bin ep88-ntsc.bin)
 
 file(SHA256 "${CMAKE_CURRENT_LIST_FILE}" script_hash)
 file(SHA256 "${MAKE_EP88}" tool_hash)
@@ -124,7 +125,27 @@ ffmpeg(hdv-720p.ts -f lavfi -i testsrc2=size=1280x720:rate=60000/1001:duration=0
        -pix_fmt yuv420p -c:v mpeg2video -b:v 6M -maxrate 6M -bufsize 2000000 -g 6 -bf 2 -aspect 16:9
        -color_primaries bt709 -color_trc bt709 -colorspace bt709 -timecode 00:10:00:00
        -c:a mp2 -b:a 384k -ac 2 -f mpegts)
-foreach(ts hdv.ts hdv-720p.ts)
+# HDV scene split (test_replay_hdv_split puts them back to back, one tape): pieces encoded as
+# hdv.ts, each with its own GOP timecode, the clock running on from one to the next.
+#   a1  34 pictures from 01:00:00:00 (12-picture GOPs)
+#   x   one 12-picture GOP with a stray timecode, 03:00:00:00 (must not split)
+#   a2  36 pictures from 01:00:01:21, where a1's timecode would be after a1 and x
+#   b   48 pictures from 05:00:00:00: the next scene, a new file from its first picture
+function(hdv_split_piece out video_s audio_s timecode offset gop)
+    ffmpeg(${out} -f lavfi -i testsrc2=size=1440x1080:rate=25:duration=${video_s}
+           -f lavfi -i sine=frequency=1000:sample_rate=48000:duration=${audio_s}
+           -vf setfield=tff -pix_fmt yuv420p -c:v mpeg2video -b:v 25M -maxrate 25M -bufsize 7340032
+           -g ${gop} -bf 2 -flags +ilme+ildct -aspect 16:9
+           -color_primaries bt709 -color_trc bt709 -colorspace bt709 -timecode ${timecode}
+           -c:a mp2 -b:a 384k -ac 2
+           -mpegts_pmt_start_pid 0x81 -streamid 0:0x810 -streamid 1:0x814
+           -output_ts_offset ${offset} -f mpegts)
+endfunction()
+hdv_split_piece(hdv-split-a1.ts 1.34 1.36 01:00:00:00 834 12)
+hdv_split_piece(hdv-split-x.ts 0.46 0.48 03:00:00:00 835.36 100)
+hdv_split_piece(hdv-split-a2.ts 1.42 1.44 01:00:01:21 835.84 12)
+hdv_split_piece(hdv-split-b.ts 1.90 1.92 05:00:00:00 837.28 12)
+foreach(ts hdv.ts hdv-720p.ts hdv-split-a1.ts hdv-split-x.ts hdv-split-a2.ts hdv-split-b.ts)
     file(SIZE "${OUT}/${ts}" ts_size)
     math(EXPR ts_rest "${ts_size} % 188")
     if(ts_size EQUAL 0 OR NOT ts_rest EQUAL 0)

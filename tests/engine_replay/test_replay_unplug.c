@@ -60,9 +60,10 @@ static int file_contains(const char *path, const char *needle)
     return found;
 }
 
-static void run_case(const char *trace, const char *base, const char *ext, int dv_fmt, int hdv_fmt)
+static void run_case(const char *trace, const char *base, const char *ext, int dv_fmt, int hdv_fmt,
+                     const char *unplug_after)
 {
-    pin_test_setenv("PIN_REPLAY_UNPLUG_AFTER", "5");
+    pin_test_setenv("PIN_REPLAY_UNPLUG_AFTER", unplug_after);
     pin_session_t *s = pin_test_open_replay(trace);
     pin_test_prepare_dv(s);
 
@@ -120,8 +121,10 @@ int main(int argc, char **argv)
     CHECK(argc == 3);
     pin_test_require_fixture(argv[1]);
     pin_test_require_fixture(argv[2]);
-    run_case(argv[1], "unplug_raw", "dv", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS);
-    run_case(argv[1], "unplug_avi", "avi", PIN_FMT_DV_AVI, PIN_FMT_HDV_TS);
-    run_case(argv[2], "unplug_hdv", "m2t", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS); /* the raw TS's default extension */
+    run_case(argv[1], "unplug_raw", "dv", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, "5");
+    run_case(argv[1], "unplug_avi", "avi", PIN_FMT_DV_AVI, PIN_FMT_HDV_TS, "5");
+    /* the raw TS's default extension; an HDV file starts at the first GOP after the capture
+     * starts (hdv.ts: every 12 pictures), so the unplug comes after 20 */
+    run_case(argv[2], "unplug_hdv", "m2t", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, "20");
     return 0;
 }

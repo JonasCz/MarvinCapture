@@ -85,6 +85,16 @@ pin_engine_replay_test(test_pin_check_output "${PIN_TRACE_PAL}")
 # Task 3/4: HDV .ts replay and HDV scene split (no spurious cuts).
 pin_engine_replay_test(test_replay_hdv "${PIN_HDV_CAPTURE}" "${PIN_TEST_DATA}/hdv-720p.ts")
 
+# HDV scene split: a GOP timecode jump starts a new file at the jump's first picture (PAT,
+# PMT, sequence header), a stray GOP does not, no picture lost or doubled; both files decode.
+add_executable(test_replay_hdv_split test_replay_hdv_split.c)
+target_link_libraries(test_replay_hdv_split PRIVATE marvin-core pinnacle_sinks)
+add_test(NAME test_replay_hdv_split COMMAND test_replay_hdv_split
+    "${PIN_TEST_DATA}/hdv-split-a1.ts" "${PIN_TEST_DATA}/hdv-split-x.ts"
+    "${PIN_TEST_DATA}/hdv-split-a2.ts" "${PIN_TEST_DATA}/hdv-split-b.ts")
+pin_engine_replay_test_env(test_replay_hdv_split)
+set_tests_properties(test_replay_hdv_split PROPERTIES TIMEOUT 60)
+
 # Unplug during a capture (replay fakes the USB NO_DEVICE failure): files finalised,
 # stop reason DEVICE_LOST, session in ERROR, a new session opens afterwards.
 pin_engine_replay_test(test_replay_unplug "${PIN_TEST_DATA}/dv-ntsc.dv" "${PIN_HDV_CAPTURE}")
@@ -102,7 +112,7 @@ set_tests_properties(test_replay_hwenc PROPERTIES TIMEOUT 60)
 # All of the above replay the generated recordings.
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
-    test_replay_hdv test_replay_unplug test_replay_hwenc
+    test_replay_hdv test_replay_hdv_split test_replay_unplug test_replay_hwenc
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

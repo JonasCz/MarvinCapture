@@ -48,9 +48,10 @@ video picture that carries an MPEG-2 sequence header (the start of a GOP) is
 seen — the ring is already running when we join, so what precedes that is a
 partial picture and possibly stale ring contents. This mirrors DV waiting for
 `Dseq 0`. When the gate opens, the most recently seen PAT and PMT are written
-first, so the file is decodable from its first packet. On stop, the trailing
-partial picture is cut, so the file ends on a whole one. (A non-seekable
-output, e.g. a pipe, cannot be cut and keeps the tail.)
+first, so the file is decodable from its first packet. Every file starts this
+way: the next pass's, a scene split's (below), and one from the replay device.
+On stop, the trailing partial picture is cut, so the file ends on a whole one.
+(A non-seekable output, e.g. a pipe, cannot be cut and keeps the tail.)
 
 ## Format: what the stream says
 
@@ -70,6 +71,26 @@ Not handled: progressive material inside an interlaced stream shows as the strea
 it is coded: 24p with pulldown flags (`repeat_first_field`) as 1080i29.97, frame modes
 such as 25F / 30F as 1080i. Only 1080i25 has been seen from a camera; 720p59.94 is tested
 with an ffmpeg-made file, 1080i29.97 with hand-built headers only.
+
+## Scene split (`--split`)
+
+HDV carries a timecode only in the GOP header, in the picture that opens each GOP (12
+pictures at 1080i25, 15 at 1080i29.97, 6 at 720p); the recording date/time of the aux
+stream is not read. A timecode break counts once **three GOPs** in a row agree on the
+new timecode (about 1 s at 1080i). One or two GOPs with a wrong timecode, or GOP headers
+lost in a dropout, never split: the next good GOP is compared with where the timecode
+should be by then. Until a break is settled, the pictures since its first GOP are held in
+memory (`src/engine/pin_holdback.h`), so the cut is back-dated exactly: the new file
+starts with the PAT, the PMT and then the picture that opens the GOP where the new
+timecode begins (with its sequence header), and decodes from its first packet; the
+previous file ends with the picture before it. The 1 s / 1 MB minimum for a new file
+([usage.md](usage.md)) counts pictures at the stream's frame rate. A camera that writes
+00:00:00:00 in every GOP header gives no scene split.
+
+Tested with an ffmpeg-made tape (a timecode jump, and a stray GOP that must not split;
+`test_replay_hdv_split`), not with a camera's tape yet. Unverified: whether a camera
+starts a recording with a closed GOP (or sets `broken_link`); an open GOP's leading B
+pictures would not decode at the start of the new file.
 
 ## Verifying integrity — read this before trusting the DBC line
 

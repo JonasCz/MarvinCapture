@@ -688,18 +688,8 @@ static int resolve_device_id(const char *want, char *out, size_t out_size)
 }
 
 /* ========================================================================
- * scene-split debounce FIFO
+ * scene-split hold-back FIFO (pin_holdback.h) and split lookahead (pin_split.h)
  * ==================================================================== */
-
-static void scene_fifo_clear(pin_session_t *s)
-{
-    for (unsigned i = 0; i < s->scene_fifo_count; i++) {
-        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        free(s->scene_fifo[idx].data);
-        s->scene_fifo[idx].data = NULL;
-    }
-    s->scene_fifo_head = s->scene_fifo_count = 0;
-}
 
 static void writer_commit(void *user, const uint8_t *data, size_t len)
 {
@@ -876,11 +866,14 @@ static int hdv_interlaced(const pin_session_t *s)
 }
 
 /* Seconds one new frame_index adds to a pending segment: a DV frame, or an
- * HDV GOP (nominally 15 pictures at 60i, 12 at 50i: ~0.5 s). */
+ * HDV picture (frame_index counts pictures) at the stream's own rate. */
 static double unit_seconds(const pin_session_t *s)
 {
-    if (s->stream_kind == PIN_KIND_HDV)
-        return 0.5;
+    if (s->stream_kind == PIN_KIND_HDV) {
+        int num, den;
+        hdv_frame_rate(s, &num, &den);
+        return (double)den / num;
+    }
     return s->is_60hz ? 1001.0 / 30000.0 : 0.04;
 }
 
@@ -897,66 +890,53 @@ static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len)
     commit_unit_fi(s, data, len, -1);
 }
 
-/* Pushes one unit into the FIFO, evicting (and committing) the oldest once
- * it exceeds the detector's debounce window. */
-static void scene_fifo_push(pin_session_t *s, const uint8_t *data, size_t len, long frame_index)
+static void hold_commit(void *user, const uint8_t *data, size_t len, long frame_index)
 {
-    unsigned window = s->opts_scene_split_window;
-    if (s->scene_fifo_count == PIN_SCENE_FIFO_CAP ||
-        (window && s->scene_fifo_count > window)) {
-        pin_scene_fifo_item_t *oldest = &s->scene_fifo[s->scene_fifo_head];
-        commit_unit_fi(s, oldest->data, oldest->len, oldest->frame_index);
-        free(oldest->data);
-        oldest->data = NULL;
-        s->scene_fifo_head = (s->scene_fifo_head + 1) % PIN_SCENE_FIFO_CAP;
-        s->scene_fifo_count--;
-    }
-    unsigned tail = (s->scene_fifo_head + s->scene_fifo_count) % PIN_SCENE_FIFO_CAP;
-    pin_scene_fifo_item_t *it = &s->scene_fifo[tail];
-    it->data = malloc(len);
-    if (it->data) {
-        memcpy(it->data, data, len);
-        it->len = len;
-        it->frame_index = frame_index;
-        s->scene_fifo_count++;
-    }
+    commit_unit_fi(user, data, len, frame_index);
+}
+
+/* Holds one unit back (pin_holdback.h); what the caller releases goes to
+ * commit_unit_fi(). */
+static void hold_push(pin_session_t *s, const uint8_t *data, size_t len, long frame_index,
+                      unsigned flags)
+{
+    if (!s->hold.commit)
+        pin_holdback_init(&s->hold, hold_commit, s);
+    pin_holdback_push(&s->hold, data, len, frame_index, flags);
+}
+
+/* HDV: the latest PAT and PMT, so what follows decodes from its first packet. */
+static void hdv_emit_psi(pin_session_t *s, void (*emit)(pin_session_t *, const uint8_t *, size_t))
+{
+    if (s->hdv_psi.pat_valid) emit(s, s->hdv_psi.pat, HDV_TS_PACKET_SIZE);
+    if (s->hdv_psi.pmt_valid) emit(s, s->hdv_psi.pmt, HDV_TS_PACKET_SIZE);
+}
+
+static void emit_commit(pin_session_t *s, const uint8_t *d, size_t n) { commit_unit(s, d, n); }
+
+/* The new segment of a scene cut begins here (pin_holdback_cut()): the units
+ * before it went to the current file. HDV: a new file starts with the PAT and
+ * PMT, then the cut picture (which opens a GOP). */
+static void scene_cut_begin(void *user, long index)
+{
+    pin_session_t *s = user;
+    (void)index;
+    if (pin_split_begin(&s->split) && s->stream_kind == PIN_KIND_HDV)
+        hdv_emit_psi(s, emit_commit);
 }
 
 /* A scene cut was confirmed at cut_frame_index. Units before it belong to
  * the old scene; the cut itself only becomes a new file once the new segment
  * is real (pin_split.h): until then its units are held, and a second cut or
- * the end of the capture merges them back into the current file. */
+ * the end of the capture merges them back into the current file (the PAT/PMT
+ * in front of the cut picture then just sit in the middle of it, as a stream's
+ * periodic PAT/PMT do). */
 static void scene_cut(pin_session_t *s, long cut_frame_index)
 {
     split_ensure(s);
     /* a still-pending earlier split never made it: its units stay in the old file */
     pin_split_cancel(&s->split);
-    unsigned n = s->scene_fifo_count;
-    unsigned split_at = n;
-    for (unsigned i = 0; i < n; i++) {
-        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        if (s->scene_fifo[idx].frame_index >= cut_frame_index) { split_at = i; break; }
-    }
-    for (unsigned i = 0; i < split_at; i++) {
-        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        commit_unit_fi(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len,
-                       s->scene_fifo[idx].frame_index);
-    }
-    pin_split_begin(&s->split);
-    for (unsigned i = split_at; i < n; i++) {
-        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        commit_unit_fi(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len,
-                       s->scene_fifo[idx].frame_index);
-        free(s->scene_fifo[idx].data);
-        s->scene_fifo[idx].data = NULL;
-    }
-    /* the pre-cut items were freed by neither loop above */
-    for (unsigned i = 0; i < split_at; i++) {
-        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        free(s->scene_fifo[idx].data);
-        s->scene_fifo[idx].data = NULL;
-    }
-    s->scene_fifo_head = s->scene_fifo_count = 0;
+    pin_holdback_cut(&s->hold, cut_frame_index, scene_cut_begin, s);
 }
 
 /* ========================================================================
@@ -1410,19 +1390,20 @@ typedef struct {
     double bus_poll_s;
     uint32_t bus_sig;
     int bus_sig_valid;
-    const dv_reassembler_t *reasm; /* live reassembler: latest PAT/PMT for the write gate */
     hdv_err_state_t hdv_err;       /* continuity / reference tracking for the error stats */
     unsigned units_out;            /* frames / pictures handed to dv_on_unit() (replay pacing) */
 } dv_ctx_t;
 
 /* HDV capture gate: a session's sink opens at an arbitrary picture, but a
  * transport stream must start on a GOP (sequence header) or decoders reject
- * the first pictures. Returns 1 if the unit may be written; on the first
- * pass it also emits the latest PAT/PMT via emit(). */
-static int hdv_write_gate(pin_session_t *s, const dv_ctx_t *ctx, const uint8_t *data, size_t len,
+ * the first pictures. Returns 1 if the unit may be written; when it opens, it
+ * first emits the latest PAT/PMT via emit(), so the file decodes from its
+ * first packet. Live and replay alike (a replay's capture starts wherever the
+ * file is playing, too). */
+static int hdv_write_gate(pin_session_t *s, const uint8_t *data, size_t len,
                           void (*emit)(pin_session_t *, const uint8_t *, size_t))
 {
-    if (!s->hdv_await_gop || !ctx->reasm) /* replays are already cut on GOPs */
+    if (!s->hdv_await_gop)
         return 1;
     static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
     int found = 0;
@@ -1431,18 +1412,13 @@ static int hdv_write_gate(pin_session_t *s, const dv_ctx_t *ctx, const uint8_t *
     if (!found)
         return 0;
     s->hdv_await_gop = 0;
-    if (ctx->reasm) {
-        if (ctx->reasm->ts_pat_valid) emit(s, ctx->reasm->ts_pat, 188);
-        if (ctx->reasm->ts_pmt_valid) emit(s, ctx->reasm->ts_pmt, 188);
-    }
+    hdv_emit_psi(s, emit);
     return 1;
 }
 
-static void emit_commit(pin_session_t *s, const uint8_t *d, size_t n) { commit_unit(s, d, n); }
-static void emit_fifo(pin_session_t *s, const uint8_t *d, size_t n)
-{
-    scene_fifo_push(s, d, n, s->scene_frame_counter);
-}
+/* HDV scene split: the gate's PAT/PMT go through the hold-back FIFO, ahead of
+ * the first picture (no time of their own). */
+static void emit_hold(pin_session_t *s, const uint8_t *d, size_t n) { hold_push(s, d, n, -1, 0); }
 
 /* Forward decls: defined further down (near handle_inline_commands()), but
  * dv_on_unit()/analog_video_cb() above them need to call in when the
@@ -1453,18 +1429,22 @@ static int dv_write_cb(const uint8_t *data, size_t len, void *user)
 {
     dv_ctx_t *ctx = user;
     pin_session_t *s = ctx->s;
+    /* HDV: the latest PAT/PMT, to start a file with (hdv_write_gate(), scene_cut()); every unit,
+     * captured or not, including the reassembler's own PAT/PMT unit at its gate, which only
+     * comes through here. A DV frame is no whole number of TS packets. */
+    if (len && len % HDV_TS_PACKET_SIZE == 0 && data[0] == HDV_TS_SYNC_BYTE)
+        hdv_psi_scan(&s->hdv_psi, data, len / HDV_TS_PACKET_SIZE);
     if (!s->sink) /* not capturing: nothing to write, still fully reassembled for preview */
         return 0;
-    /* Scene-split buffering (the debounce FIFO) is implemented for both DV
-     * (per-frame subcode) and HDV (per-GOP timecode); see dv_on_unit()'s two
-     * branches. s->stream_kind is only known once the first unit has gone
-     * through dv_on_unit(), which runs right after this on the very first
-     * unit, so the one-unit-late kind on that first call only ever affects
-     * whether that single first unit is buffered or committed immediately --
-     * never a correctness issue, just which file it lands in. */
+    /* With scene split, dv_on_unit()'s two branches write instead, through the hold-back
+     * FIFO (DV per-frame subcode, HDV per-GOP timecode). s->stream_kind is only known once
+     * the first unit has gone through dv_on_unit(), which runs right after this on the very
+     * first unit, so the one-unit-late kind on that first call only ever affects whether
+     * that single first unit is buffered or committed immediately -- never a correctness
+     * issue, just which file it lands in. */
     int scene_split_active = s->capture_opts.scene_split;
     if (!scene_split_active) {
-        if (s->stream_kind == PIN_KIND_HDV && !hdv_write_gate(s, ctx, data, len, emit_commit))
+        if (s->stream_kind == PIN_KIND_HDV && !hdv_write_gate(s, data, len, emit_commit))
             return 0;
         commit_unit(s, data, len);
     }
@@ -1570,7 +1550,10 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 rec.rec_start_valid = info.rec_start_valid;
                 rec.rec_start = info.rec_start;
 
-                scene_fifo_push(s, data, len, s->scene_frame_counter);
+                /* the detector confirms within debounce_frames records, each a frame:
+                 * hold the last debounce_frames + 1 frames, so the cut can be back-dated */
+                pin_holdback_keep_last(&s->hold, s->opts_scene_split_window);
+                hold_push(s, data, len, s->scene_frame_counter, PIN_HOLD_CUT_OK);
                 long cut_idx = 0;
                 if (pin_scene_feed(&s->scene_det, &rec, &cut_idx))
                     scene_cut(s, cut_idx);
@@ -1590,12 +1573,13 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             ctx->hdv_map_init = 1;
         }
         hdv_pid_map_t *map_p = &ctx->hdv_map;
-        if (map_p->video_pid < 0 && ctx->reasm) {
-            /* The reassembler hands the PAT/PMT it has seen to the file only (dv_write_cb()),
-             * not in a picture: start from them, or the first pictures (before the next
-             * PAT/PMT rides in one) go without a video PID: no format, preview or error stats. */
-            if (ctx->reasm->ts_pat_valid) hdv_scan_pat_pmt(ctx->reasm->ts_pat, 1, map_p);
-            if (ctx->reasm->ts_pmt_valid) hdv_scan_pat_pmt(ctx->reasm->ts_pmt, 1, map_p);
+        if (map_p->video_pid < 0) {
+            /* The reassembler hands the PAT/PMT it has seen to the file only (dv_write_cb(),
+             * which keeps them in hdv_psi), not in a picture: start from them, or the first
+             * pictures (before the next PAT/PMT rides in one) go without a video PID: no
+             * format, preview or error stats. */
+            if (s->hdv_psi.pat_valid) hdv_scan_pat_pmt(s->hdv_psi.pat, 1, map_p);
+            if (s->hdv_psi.pmt_valid) hdv_scan_pat_pmt(s->hdv_psi.pmt, 1, map_p);
         }
         hdv_scan_pat_pmt(data, len / 188, map_p);
         hdv_pid_map_t map = *map_p;
@@ -1659,16 +1643,22 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         s->dar_den = s->hdv_dar_num ? s->hdv_dar_den : 9;
         s->detected_std = PIN_STD_AUTO; /* HDV: not from the SAA7113, leave detected_std unset */
 
-        /* Scene split for HDV: fed one GOP (picture unit) at a time, using
-         * the GOP header timecode as the only signal (HDV has no per-frame
-         * recording date/time here -- see hdv_aux.h's file header comment).
-         * Same debounce-FIFO scheme as the DV branch above. */
+        /* Scene split for HDV: fed one picture at a time (frame_index counts pictures), with
+         * the GOP header's timecode on the picture that carries it as the only signal (HDV
+         * has no per-frame recording date/time here -- see hdv_aux.h's file header comment);
+         * the others are neutral. The detector debounces over GOPs (pin_scene_config_hdv()),
+         * so a pending break can span a few hundred pictures: the hold-back FIFO keeps
+         * everything from the pending run's first picture (none while nothing is pending),
+         * and the cut lands on that picture, which opens the GOP where the new timecode
+         * starts. HDV puts a sequence header in front of every GOP; a GOP without one is cut
+         * at its first picture all the same (the new file then decodes from the next
+         * sequence header). */
         if (s->sink && s->capture_opts.scene_split) {
             if (!s->scene_det_ready) {
                 pin_scene_config_t cfg;
                 int fn, fd;
                 hdv_frame_rate(s, &fn, &fd); /* the GOP timecode counts pictures at this rate */
-                pin_scene_config_defaults(&cfg, (double)fn / fd);
+                pin_scene_config_hdv(&cfg, (double)fn / fd);
                 pin_scene_init(&s->scene_det, &cfg);
                 s->opts_scene_split_window = pin_scene_debounce_window(&s->scene_det);
                 s->scene_det_ready = 1;
@@ -1683,12 +1673,18 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 rec.tc_second = gop.seconds; rec.tc_frame = gop.pictures;
                 rec.tc_drop_frame = gop.drop_frame;
             }
-            if (hdv_write_gate(s, ctx, data, len, emit_fifo)) {
-                scene_fifo_push(s, data, len, s->scene_frame_counter);
+            if (hdv_write_gate(s, data, len, emit_hold)) {
+                /* a file may start on a picture that opens a GOP */
+                unsigned flags = gop.found || herr.seq_found ? PIN_HOLD_CUT_OK : 0;
+                hold_push(s, data, len, s->scene_frame_counter, flags);
                 long cut_idx = 0;
                 if (pin_scene_feed(&s->scene_det, &rec, &cut_idx))
                     scene_cut(s, cut_idx);
                 s->scene_frame_counter++;
+                long keep_from;
+                if (!pin_scene_pending(&s->scene_det, &keep_from))
+                    keep_from = s->scene_frame_counter;
+                pin_holdback_release_before(&s->hold, keep_from);
             }
         }
         /* else: already committed directly in dv_write_cb() */
@@ -1704,12 +1700,7 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
 
 static void dv_flush_pending(pin_session_t *s)
 {
-    for (unsigned i = 0; i < s->scene_fifo_count; i++) {
-        unsigned idx = (s->scene_fifo_head + i) % PIN_SCENE_FIFO_CAP;
-        commit_unit_fi(s, s->scene_fifo[idx].data, s->scene_fifo[idx].len,
-                       s->scene_fifo[idx].frame_index);
-    }
-    scene_fifo_clear(s);
+    pin_holdback_flush(&s->hold);
     /* a split that never became a real segment: its units go to the current file */
     pin_split_flush(&s->split);
 }
@@ -2428,8 +2419,9 @@ static void do_run_dv(pin_session_t *s)
 
         dv_reassembler_t reasm;
         dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = NULL };
-        dv_ctx_t ctx = { .s = s, .reasm = &reasm };
+        dv_ctx_t ctx = { .s = s };
         out.user = &ctx;
+        memset(&s->hdv_psi, 0, sizeof(s->hdv_psi)); /* a new stream: its own PAT/PMT */
         dv_reassembler_init(&reasm, &out);
         s->reasm = reasm; /* kept for status/inspection only */
 
@@ -2809,6 +2801,10 @@ static void replay_handle_eot(pin_session_t *s)
         open_sink_for_scene(s);
         s->deck = PIN_DECK_PLAYING;
         s->capture_start_s = pin_session_now();
+        /* as a live pass change (dv_tick()): the tape starts over, so does the scene
+         * detector, and an HDV file starts on a GOP */
+        s->scene_det_ready = 0;
+        s->hdv_await_gop = s->stream_kind == PIN_KIND_HDV;
         pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
     } else if (s->sink) {
         /* last pass: stop */
@@ -2878,6 +2874,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     s->deck = PIN_DECK_PLAYING;
 
     dv_ctx_t ctx = { .s = s };
+    memset(&s->hdv_psi, 0, sizeof(s->hdv_psi));
     double next_t = 0; /* pace_frame() deadline */
     hdv_pid_map_t map;
     memset(&map, 0, sizeof(map));
@@ -2885,6 +2882,8 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
 
     uint8_t *pic = NULL;
     size_t pic_len = 0, pic_cap = 0;
+    int pic_is_video = 0; /* pic starts with a video PES start; else it is what precedes the
+                             first picture (SDT, PAT, PMT, audio) */
     uint8_t pkt[HDV_TS_PACKET_SIZE];
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
@@ -2936,15 +2935,22 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
 
         if (is_video_start && pic_len > 0) {
             dv_write_cb(pic, pic_len, &ctx);
-            dv_on_unit(DV_FORMAT_HDV, pic, pic_len, &ctx);
+            /* What precedes the first picture is no picture: like the reassembler's PAT/PMT
+             * unit, it goes to the write callback only (which keeps its PAT/PMT for the
+             * file starts), not counted as a picture. */
+            if (pic_is_video) {
+                dv_on_unit(DV_FORMAT_HDV, pic, pic_len, &ctx);
+                /* one picture emitted: real time at the stream's own rate (its sequence header) */
+                int fn, fd;
+                pin_session_lock(s);
+                hdv_frame_rate(s, &fn, &fd);
+                pin_session_unlock(s);
+                pace_frame(&next_t, (double)fd / fn);
+            }
             pic_len = 0;
-            /* one picture emitted: real time at the stream's own rate (its sequence header) */
-            int fn, fd;
-            pin_session_lock(s);
-            hdv_frame_rate(s, &fn, &fd);
-            pin_session_unlock(s);
-            pace_frame(&next_t, (double)fd / fn);
         }
+        if (pic_len == 0)
+            pic_is_video = is_video_start;
         if (pic_len + sizeof(pkt) > pic_cap) {
             pic_cap = (pic_len + sizeof(pkt)) * 2 + 4096;
             uint8_t *grown = realloc(pic, pic_cap);
@@ -3010,6 +3016,7 @@ static int replay_run(pin_session_t *s)
     dv_ctx_t ctx = { .s = s };
     dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = &ctx };
     dv_reassembler_init(&reasm, &out);
+    memset(&s->hdv_psi, 0, sizeof(s->hdv_psi));
 
     /* DV frames: PAL (144,000 bytes) or NTSC (120,000) by the DSF bit of the first frame's
      * header block (byte 3, bit 7), not by the file size: a whole number of NTSC frames can
@@ -3319,7 +3326,7 @@ void pin_session_close(pin_session_t *s)
 
     hand_over_file(s);
     pin_closer_destroy(s->closer); /* before the event queue it reports to goes */
-    scene_fifo_clear(s);
+    pin_holdback_free(&s->hold);
     pin_split_free(&s->split);
     pinnacle_lock_release(s->lock);
     if (!s->is_replay)

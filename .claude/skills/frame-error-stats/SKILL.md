@@ -32,7 +32,11 @@ Traps (all learned the hard way):
   Continuity tracking must restart after a stream break (`hdv_err_reset`, >1 s
   without data) or every rewind/pause shows a false loss.
 - Clip counters count at arrival, not at commit, so units held by the split
-  lookahead are charged to the previous clip.
+  lookahead (and by the scene cut's hold-back FIFO, `pin_holdback.h`) are
+  charged to the previous clip.
+- The HDV replay (`replay_run_ts()`) hands what precedes the first video PES
+  (SDT, PAT, PMT) to the write callback only, like the reassembler's PAT/PMT
+  unit: on `dv_on_unit()` it would count as a picture with a PES error.
 - The only shipped views of these counters are the status line / snapshot fields
   of `MarvinCaptureCLI` and the GUI; the old CIP/DBC continuity line of `pincli` is
   gone (`dbc_gaps` / `dbc_joins` still live in `dv_reassembler.h` and the replay

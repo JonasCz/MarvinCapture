@@ -40,6 +40,8 @@
 #include "pin_deck.h"
 #include "pin_scene.h"
 #include "pin_split.h"
+#include "pin_holdback.h"
+#include "hdv_aux.h"
 #include "pin_estimate.h"
 #include "pin_naming.h"
 #include "pin_preview.h"
@@ -79,19 +81,6 @@ typedef struct {
     pin_stop_deck_t stop_deck;    /* CAPTURE_STOP: who stops the deck */
     int pending;
 } pin_cmd_t;
-
-/* Small FIFO of not-yet-committed raw units (DV frames / HDV pictures) so a
- * confirmed scene cut can be back-dated to its true first frame -- see
- * pin_scene.h and the plan's "debounce FIFO (hold back debounce_frames
- * units before committing to a file so the cut can be back-dated)". Sized
- * generously (32) since even at HDV's largest picture this is a few MB. */
-#define PIN_SCENE_FIFO_CAP 32
-
-typedef struct {
-    uint8_t *data;
-    size_t len;
-    long frame_index;
-} pin_scene_fifo_item_t;
 
 struct pin_session {
     /* PIN_PATH_MAX, not PIN_NAME_MAX: a "replay:<file>" id embeds a whole
@@ -213,8 +202,11 @@ struct pin_session {
     char free_cache_dir[PIN_PATH_MAX]; /* pin_session_get_status(): free-space lookup, kept ~1 s */
     uint64_t free_cache_bytes;
     double free_cache_t;
-    pin_scene_fifo_item_t scene_fifo[PIN_SCENE_FIFO_CAP];
-    unsigned scene_fifo_head, scene_fifo_count; /* ring, oldest at head */
+    /* not yet committed raw units (DV frames, HDV pictures, PAT/PMT), so a confirmed scene cut
+     * can be back-dated to its first frame (pin_holdback.h; zeroed = not initialised) */
+    pin_holdback_t hold;
+    hdv_psi_t hdv_psi;       /* HDV: the latest PAT/PMT the stream sent (dv_write_cb()), to start
+                                a file with (capture start, scene cut) */
     pin_split_t split;       /* content-split lookahead (zeroed = not initialised) */
     double capture_start_s, last_data_s;
     int capture_began;       /* start_capture_now() opened the first file of this capture */

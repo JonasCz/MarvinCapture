@@ -290,6 +290,142 @@ static void test_invalid_tc_stretch_is_neutral(void)
     feed_and_expect_no_cut(&d, &resume, "resuming after an invalid stretch is continuous");
 }
 
+/* ---- HDV: one record per picture, a timecode only on the GOP's first one ---- */
+
+/* Feeds n pictures of 12-picture GOPs at 25 fps, starting at picture *idx with
+ * the timecode tc0 (in frames) on the first; gop_tc(g) can override GOP g's
+ * timecode in frames (-1 = no GOP header found, -2 = the run's own). Returns
+ * 1 on a cut (its index in *cut). */
+static long tc_frames_of(int h, int m, int s, int f) { return ((h * 60L + m) * 60 + s) * 25 + f; }
+
+static pin_scene_record_t mk_frames(long idx, long frames)
+{
+    return mk_tc(idx, (int)(frames / 90000), (int)(frames / 1500 % 60), (int)(frames / 25 % 60),
+                 (int)(frames % 25), 0);
+}
+
+static int feed_gops(pin_scene_detector_t *d, long *idx, long tc0, int gops, const long *gop_tc,
+                     long *cut)
+{
+    for (int g = 0; g < gops; g++) {
+        for (int p = 0; p < 12; p++) {
+            pin_scene_record_t r;
+            memset(&r, 0, sizeof(r));
+            r.frame_index = *idx;
+            long tc = gop_tc && gop_tc[g] != -2 ? gop_tc[g] : tc0 + g * 12;
+            if (p == 0 && tc >= 0)
+                r = mk_frames(*idx, tc);
+            (*idx)++;
+            if (pin_scene_feed(d, &r, cut))
+                return 1;
+        }
+    }
+    return 0;
+}
+
+static void test_hdv_config(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_hdv(&cfg, 25.0);
+    CHECK(cfg.debounce_frames == 3 && cfg.sparse_tc == 1, "HDV: 3 GOPs, sparse timecode");
+    CHECK(cfg.tc_jump_seconds == 1.0 && cfg.fps == 25.0, "HDV: the defaults otherwise");
+    pin_scene_config_defaults(&cfg, 25.0);
+    CHECK(cfg.debounce_frames == 5 && cfg.sparse_tc == 0, "DV defaults unchanged");
+}
+
+static void test_hdv_clean_run(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_hdv(&cfg, 25.0);
+    pin_scene_detector_t d;
+    pin_scene_init(&d, &cfg);
+    long idx = 0, cut;
+    CHECK(!feed_gops(&d, &idx, tc_frames_of(1, 0, 0, 0), 20, NULL, &cut), "HDV: clean run, no cut");
+    CHECK(!pin_scene_pending(&d, NULL), "HDV: nothing pending in a clean run");
+}
+
+/* the user's cool-down: one GOP with a wrong timecode never splits */
+static void test_hdv_stray_gops_absorbed(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_hdv(&cfg, 25.0);
+    long t0 = tc_frames_of(1, 0, 0, 0), bad = tc_frames_of(5, 0, 0, 0), cut;
+
+    /* one stray GOP */
+    pin_scene_detector_t d;
+    pin_scene_init(&d, &cfg);
+    long idx = 0;
+    long one[8] = { -2, -2, -2, bad, -2, -2, -2, -2 };
+    CHECK(!feed_gops(&d, &idx, t0, 8, one, &cut), "HDV: one stray GOP never splits");
+    CHECK(!pin_scene_pending(&d, NULL), "HDV: absorbed, nothing pending");
+
+    /* two stray GOPs, each wrong in its own way */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    long two[8] = { -2, -2, -2, bad, tc_frames_of(9, 9, 9, 9), -2, -2, -2 };
+    CHECK(!feed_gops(&d, &idx, t0, 8, two, &cut), "HDV: two stray GOPs never split");
+
+    /* GOP headers lost for 3 GOPs (1.4 s): the next one is where the timecode should be */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    long lost[8] = { -2, -2, -1, -1, -1, -2, -2, -2 };
+    CHECK(!feed_gops(&d, &idx, t0, 8, lost, &cut), "HDV: lost GOP headers never split");
+
+    /* without sparse_tc the same loss would have split (the next GOP is 48 frames on) */
+    pin_scene_config_t plain = cfg;
+    plain.sparse_tc = 0;
+    pin_scene_init(&d, &plain);
+    idx = 0;
+    CHECK(feed_gops(&d, &idx, t0, 8, lost, &cut), "plain: the same loss reads as a jump");
+}
+
+/* a real jump: confirmed at the third GOP, back-dated to the first */
+static void test_hdv_jump_confirms(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_hdv(&cfg, 25.0);
+    pin_scene_detector_t d;
+    pin_scene_init(&d, &cfg);
+    long idx = 0, cut = -1, start = -1;
+    CHECK(!feed_gops(&d, &idx, tc_frames_of(1, 0, 0, 0), 4, NULL, &cut), "HDV: first scene");
+    long first_new = idx; /* 48 */
+    long tc = tc_frames_of(5, 0, 0, 0);
+    int confirmed = 0;
+    for (int g = 0; g < 3 && !confirmed; g++) {
+        confirmed = feed_gops(&d, &idx, tc + g * 12, 1, NULL, &cut);
+        if (g < 2)
+            CHECK(!confirmed && pin_scene_pending(&d, &start) && start == first_new,
+                  "HDV: pending from the first new GOP until confirmed");
+    }
+    CHECK(confirmed, "HDV: a real jump confirms within 3 GOPs");
+    CHECK(cut == first_new, "HDV: cut at the first picture of the first new GOP");
+    CHECK(idx == first_new + 24 + 1, "HDV: confirmed at the third GOP's first picture");
+    CHECK(!pin_scene_pending(&d, NULL), "HDV: nothing pending after the cut");
+
+    /* backward, even by less than a second: a break too */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    CHECK(!feed_gops(&d, &idx, tc_frames_of(1, 0, 10, 0), 4, NULL, &cut), "HDV: first scene");
+    first_new = idx;
+    CHECK(feed_gops(&d, &idx, tc_frames_of(1, 0, 10, 0) + 48 - 20, 4, NULL, &cut) && cut == first_new,
+          "HDV: a timecode 20 frames back splits at the GOP");
+}
+
+/* a camera that writes 00:00:00:00 in every GOP header (3.9): never a cut, as before,
+ * even after a stretch without GOP headers */
+static void test_hdv_zero_tc_never_cuts(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_hdv(&cfg, 25.0);
+    pin_scene_detector_t d;
+    pin_scene_init(&d, &cfg);
+    long idx = 0, cut;
+    long zeros[12];
+    for (int g = 0; g < 12; g++)
+        zeros[g] = g >= 4 && g < 8 ? -1 : 0;
+    CHECK(!feed_gops(&d, &idx, 0, 12, zeros, &cut), "HDV: zero timecode never cuts");
+}
+
 int main(void)
 {
     test_clean_run();
@@ -301,6 +437,11 @@ int main(void)
     test_ntsc_drop_frame_continuity_no_cut();
     test_date_gap_with_continuous_tc_confirms();
     test_invalid_tc_stretch_is_neutral();
+    test_hdv_config();
+    test_hdv_clean_run();
+    test_hdv_stray_gops_absorbed();
+    test_hdv_jump_confirms();
+    test_hdv_zero_tc_never_cuts();
 
     if (g_failures == 0) {
         printf("test_pin_scene: all tests passed\n");

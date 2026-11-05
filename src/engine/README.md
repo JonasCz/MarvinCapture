@@ -13,7 +13,8 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   research trail and its confidence level.
 
 - **`hdv_aux.[ch]`** — minimal MPEG2-TS parsing for HDV: PAT/PMT PID
-  discovery, MPEG-2 GOP header time_code decoding (solid, spec-derived),
+  discovery, the latest PAT/PMT packets to start a file with (`hdv_psi_scan()`),
+  MPEG-2 GOP header time_code decoding (solid, spec-derived),
   TS discontinuity_indicator detection, and a best-effort scan of the HDV
   AUX private stream for DV-style date/time/timecode packs.
 
@@ -30,11 +31,19 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
   (`core.ffv1_bytes_per_hour` in the core settings) and the rolling window that
   measures the live rate. Test: `test_pin_estimate`.
 
-- **`pin_scene.[ch]`** — dvgrab-style scene-split detector: feeds one
-  frame/GOP of metadata at a time, debounces a break over N consecutive
-  frames before confirming it, and reports the true first anomalous frame
-  so the caller can back-date the cut. Also tells the caller how many
-  trailing frames it must hold back before finalising a file.
+- **`pin_scene.[ch]`** — dvgrab-style scene-split detector: fed one DV
+  frame or HDV picture of metadata at a time (HDV: a timecode only on the
+  picture with the GOP header), debounces a break over N consecutive
+  timecoded records (DV 5 frames, HDV 3 GOPs) before confirming it, and
+  reports the true first anomalous frame so the caller can back-date the cut.
+  Also tells the caller what it must hold back before finalising a file (a
+  window of frames, or from the pending break's first frame).
+
+- **`pin_holdback.[ch]`** — the hold-back FIFO in front of the split
+  lookahead: units not written yet, released by a fixed window or from the
+  earliest index a pending cut may still land on, and a cut that lands on a
+  unit a file may start with (an HDV picture that opens a GOP). Pure
+  (callbacks), unit tested in `tests/engine/test_pin_holdback.c`.
 
 - **`pin_split.[ch]`** — split lookahead: a scene cut only becomes a new
   file once the new segment has >= 1 MB and >= 1 s; until then its units are
@@ -65,7 +74,7 @@ executables in `tests/engine/` (no framework, nonzero exit = failure).
 `pin_session.c`/`pin_deck.c`/`pin_preview.c` (built into `pinnacle_engine`,
 one level up in `CMakeLists.txt`) are the actual worker-thread state machine
 behind `pin_api.h`: device open/prepare, capture start/stop, deck control,
-scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
+scene splitting (feeding `pin_scene.c` per DV frame or HDV picture -- see
 `dv_on_unit()`'s two branches) and preview decode.
 
 - **Script sequencer** (`pin_script_run.c`, `pin_script_run()` / `pin_script_cancel()`):
@@ -102,10 +111,13 @@ scene splitting (feeding `pin_scene.c` per DV frame or per HDV GOP -- see
     the real async transport-state poll would on hardware (see
     `replay_handle_eot()`).
 - **HDV scene split**: unlike DV (which has per-frame timecode/date/time),
-  HDV scene splitting has only the MPEG-2 GOP header's `time_code` per
-  picture to go on (`hdv_parse_picture()`); it uses the same debounce FIFO
-  and `pin_scene_feed()` as DV, just fed once per GOP instead of once per
-  frame.
+  HDV scene splitting has only the MPEG-2 GOP header's `time_code` to go on
+  (`hdv_parse_picture()`), in the picture that opens each GOP. It feeds
+  `pin_scene_feed()` once per picture (the others without a timecode) with
+  `pin_scene_config_hdv()` (3 GOPs, `sparse_tc`), holds every picture from a
+  pending break's first one in the hold-back FIFO (`pin_holdback.h`) and
+  cuts on that GOP's first picture; the new file starts with the latest
+  PAT/PMT (`hdv_psi_scan()` in `dv_write_cb()`). See [docs/hdv.md](../../docs/hdv.md).
 - Hardware-free regression tests for all of the above live in
   `tests/engine_replay/` (driven only through `pin_api.h` against the
   replay device -- see that directory's own comments), not here.

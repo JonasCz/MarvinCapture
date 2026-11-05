@@ -104,6 +104,22 @@ typedef struct {
                           * float mp2 decoder either way. */
 } hdv_pid_map_t;
 
+/* The latest PAT and PMT of a stream, one TS packet each (as HDV sends them),
+ * kept to start a file with: a transport stream needs both in front of its
+ * first picture to decode from its first packet. Zeroed = none seen yet. */
+typedef struct {
+    uint8_t pat[HDV_TS_PACKET_SIZE];
+    uint8_t pmt[HDV_TS_PACKET_SIZE];
+    int pat_valid, pmt_valid;
+    int pmt_pid; /* from the PAT's first program; 0 = none yet */
+} hdv_psi_t;
+
+/* Takes the PAT (PID 0, table_id 0) and the PMT (the PAT's PMT PID, table_id
+ * 2) from a run of TS packets, keeping the latest of each: only a section
+ * that starts in its packet (payload_unit_start) and fits in it. A PAT that
+ * points to another PMT PID drops the PMT held until one on that PID comes. */
+void hdv_psi_scan(hdv_psi_t *psi, const uint8_t *ts_packets, size_t n_packets);
+
 /* Scans PAT (PID 0) and, once found, the PMT, across as many TS packets as
  * given. Safe to call repeatedly with more packets as they arrive; fields
  * already found are left alone (pass a *map already zeroed with pid -1 the

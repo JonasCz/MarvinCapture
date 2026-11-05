@@ -264,9 +264,55 @@ static void test_find_sequence_header(void)
     CHECK(hdv_find_sequence_header(mid, 0) == (size_t)-1, "empty");
 }
 
+/* the latest PAT and PMT, as a file is started with them */
+static void test_psi_tracking(void)
+{
+    hdv_psi_t psi;
+    memset(&psi, 0, sizeof(psi));
+    uint8_t pkts[5 * HDV_TS_PACKET_SIZE];
+    build_video_picture_packet(pkts, 0x0810, 0, 0, 0, 0, 0, 0, 0);
+    build_pmt(pkts + 1 * HDV_TS_PACKET_SIZE, 0x0081, 0x0810, 0x0811, 0x0814); /* PAT not yet seen */
+    build_pat(pkts + 2 * HDV_TS_PACKET_SIZE, 0x0081);
+    build_pmt(pkts + 3 * HDV_TS_PACKET_SIZE, 0x0081, 0x0810, 0x0811, 0x0814);
+    build_video_picture_packet(pkts + 4 * HDV_TS_PACKET_SIZE, 0x0810, 0, 0, 0, 0, 0, 0, 0);
+    hdv_psi_scan(&psi, pkts, 2);
+    CHECK(!psi.pat_valid && !psi.pmt_valid, "a PMT before any PAT is not taken");
+    hdv_psi_scan(&psi, pkts, 5);
+    CHECK(psi.pat_valid && psi.pmt_pid == 0x0081, "PAT kept, its PMT PID");
+    CHECK(psi.pmt_valid, "PMT kept");
+    CHECK(!memcmp(psi.pat, pkts + 2 * HDV_TS_PACKET_SIZE, HDV_TS_PACKET_SIZE), "PAT packet as sent");
+    CHECK(!memcmp(psi.pmt, pkts + 3 * HDV_TS_PACKET_SIZE, HDV_TS_PACKET_SIZE), "PMT packet as sent");
+
+    /* a newer PMT replaces it */
+    uint8_t pmt2[HDV_TS_PACKET_SIZE];
+    build_pmt(pmt2, 0x0081, 0x0810, 0x0811, 0x0815);
+    hdv_psi_scan(&psi, pmt2, 1);
+    CHECK(!memcmp(psi.pmt, pmt2, HDV_TS_PACKET_SIZE), "the latest PMT");
+
+    /* a PAT pointing elsewhere drops the PMT until one on the new PID */
+    uint8_t pat2[HDV_TS_PACKET_SIZE];
+    build_pat(pat2, 0x0100);
+    hdv_psi_scan(&psi, pat2, 1);
+    CHECK(psi.pat_valid && psi.pmt_pid == 0x0100 && !psi.pmt_valid, "PMT PID changed: none held");
+    hdv_psi_scan(&psi, pkts + 3 * HDV_TS_PACKET_SIZE, 1);
+    CHECK(!psi.pmt_valid, "a PMT on the old PID is not taken");
+
+    /* a continuation packet (no payload_unit_start) or another table is not a PAT */
+    uint8_t odd[HDV_TS_PACKET_SIZE];
+    build_pat(odd, 0x0200);
+    odd[1] &= (uint8_t)~0x40;
+    hdv_psi_scan(&psi, odd, 1);
+    CHECK(psi.pmt_pid == 0x0100, "no payload_unit_start: ignored");
+    build_pat(odd, 0x0200);
+    odd[5] = 0x42; /* table_id: SDT */
+    hdv_psi_scan(&psi, odd, 1);
+    CHECK(psi.pmt_pid == 0x0100, "another table on PID 0: ignored");
+}
+
 int main(void)
 {
     test_find_sequence_header();
+    test_psi_tracking();
     test_gop_time_nonzero();
     test_pat_pmt_discovery();
     test_gop_header_decode();

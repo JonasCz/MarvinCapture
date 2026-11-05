@@ -117,6 +117,58 @@ static void pat_pmt_scan_one(const uint8_t *pkt, hdv_pid_map_t *map)
     }
 }
 
+/* A PSI section of table_id that starts in pkt and ends in it (pointer_field,
+ * section_length): 1, and *pmt_pid for a PAT (its first program's PMT PID). */
+static int psi_section(const uint8_t *pkt, int table_id, int *pmt_pid)
+{
+    size_t plen;
+    int off = ts_payload(pkt, &plen, NULL);
+    if (off < 0 || !(pkt[1] & 0x40) || plen < 1)
+        return 0;
+    const uint8_t *p = pkt + off;
+    size_t sec = 1 + (size_t)p[0]; /* skip pointer_field */
+    if (sec + 3 > plen || p[sec] != table_id)
+        return 0;
+    size_t section_length = ((size_t)(p[sec + 1] & 0x0F) << 8) | p[sec + 2];
+    if (sec + 3 + section_length > plen || section_length < 9)
+        return 0;
+    if (pmt_pid) {
+        *pmt_pid = 0;
+        const uint8_t *prog = p + sec + 8, *end = p + sec + 3 + section_length - 4 /* CRC */;
+        for (; prog + 4 <= end; prog += 4) {
+            if (((prog[0] << 8) | prog[1]) != 0) { /* program 0 is the NIT */
+                *pmt_pid = ((prog[2] & 0x1F) << 8) | prog[3];
+                break;
+            }
+        }
+        if (*pmt_pid == 0)
+            return 0;
+    }
+    return 1;
+}
+
+void hdv_psi_scan(hdv_psi_t *psi, const uint8_t *ts_packets, size_t n_packets)
+{
+    if (!psi || !ts_packets)
+        return;
+    for (size_t i = 0; i < n_packets; i++) {
+        const uint8_t *pkt = ts_packets + i * HDV_TS_PACKET_SIZE;
+        if (pkt[0] != HDV_TS_SYNC_BYTE || !(pkt[1] & 0x40))
+            continue;
+        int pid = ts_pid(pkt), pmt_pid;
+        if (pid == 0 && psi_section(pkt, 0x00, &pmt_pid)) {
+            memcpy(psi->pat, pkt, HDV_TS_PACKET_SIZE);
+            psi->pat_valid = 1;
+            if (pmt_pid != psi->pmt_pid)
+                psi->pmt_valid = 0;
+            psi->pmt_pid = pmt_pid;
+        } else if (psi->pmt_pid && pid == psi->pmt_pid && psi_section(pkt, 0x02, NULL)) {
+            memcpy(psi->pmt, pkt, HDV_TS_PACKET_SIZE);
+            psi->pmt_valid = 1;
+        }
+    }
+}
+
 void hdv_scan_pat_pmt(const uint8_t *ts_packets, size_t n_packets, hdv_pid_map_t *map)
 {
     if (!ts_packets || !map)
