@@ -9,10 +9,10 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="1.45"
-        android:scaleY="1.45"
-        android:translateX="7.6"
-        android:translateY="7.4">
+        android:scaleX="1.33"
+        android:scaleY="1.33"
+        android:translateX="11.44"
+        android:translateY="8.78">
         <group android:translateY="2.5">
             <!-- Panel with the face pill cut out of it -->
             <path

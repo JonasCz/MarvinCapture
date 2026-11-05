@@ -22,6 +22,8 @@ import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.graphics.Bitmap;
+import android.graphics.Canvas;
 import android.graphics.drawable.Drawable;
 import android.os.Handler;
 import android.os.Looper;
@@ -65,6 +67,31 @@ final class SplashExit {
         marvin.setAlpha(1);
     }
 
+    /** The box {left, top, right, bottom} (view pixels) of what the view draws, or null when nothing. */
+    private static float[] drawnBox(View v) {
+        int w = v.getWidth(), h = v.getHeight();
+        if (w <= 0 || h <= 0 || w > 2048 || h > 2048) return null;
+        try {
+            Bitmap bm = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888);
+            v.draw(new Canvas(bm));
+            int[] px = new int[w * h];
+            bm.getPixels(px, 0, w, 0, 0, w, h);
+            bm.recycle();
+            int x0 = w, y0 = h, x1 = -1, y1 = -1;
+            for (int y = 0; y < h; y++)
+                for (int x = 0; x < w; x++)
+                    if ((px[y * w + x] >>> 24) > 40) {
+                        if (x < x0) x0 = x;
+                        if (x > x1) x1 = x;
+                        if (y < y0) y0 = y;
+                        if (y > y1) y1 = y;
+                    }
+            return x1 - x0 < w / 8 ? null : new float[] { x0, y0, x1 + 1, y1 + 1 };
+        } catch (RuntimeException | OutOfMemoryError e) {
+            return null;
+        }
+    }
+
     private void run(SplashScreenView splash) {
         View icon = splash.getIconView();
         if (done || icon == null || icon.getWidth() == 0 || !ValueAnimator.areAnimatorsEnabled()
@@ -78,7 +105,19 @@ final class SplashExit {
         int[] a = new int[2], b = new int[2];
         icon.getLocationOnScreen(a);
         float iconCx = a[0] + icon.getWidth() / 2f, iconCy = a[1] + icon.getHeight() / 2f;
-        float iconUnit = ICON_UNITS_DP * icon.getWidth() / ICON_DP;   // px per logo unit in the splash icon
+        // Where Marvin really is in the splash icon, measured on what the view draws (the system may
+        // size or scale the icon differently from its 288 dp): his body's outer box is logo x 4..60,
+        // its top is logo y 4 (+ the drop). k = px per logo unit; (px0, py0) = screen position of the
+        // logo point (32, 28), which stays put while the body bobs and which the flight pins down.
+        float kk = icon.getWidth() / ICON_DP, k = ICON_UNITS_DP * kk;
+        float left = a[0] + (64 + 4 * ICON_UNITS_DP) * kk, top = a[1] + (71.5f + 6.5f * ICON_UNITS_DP) * kk;
+        float[] box = drawnBox(icon);
+        if (box != null) {
+            k = (box[2] - box[0]) / 56f;
+            left = a[0] + box[0];
+            top = a[1] + box[1];
+        }
+        final float iconUnit = k, px0 = left + 28 * k, py0 = top + 24 * k;
 
         ValueAnimator v = ValueAnimator.ofFloat(0, 1);
         v.setDuration(FLIGHT_MS);
@@ -89,13 +128,13 @@ final class SplashExit {
             // the target is read every frame: the card's text can still change the size of Marvin
             marvin.getLocationOnScreen(b);
             float u = MarvinIdleView.unit(marvin.getWidth(), marvin.getHeight());
-            // the icon's picture is 53 units high; the live view reserves more below it (MarvinIdleView.SPAN_H)
-            float tx = b[0] + marvin.getWidth() / 2f - iconCx,
-                    ty = b[1] + marvin.getHeight() / 2f - (MarvinIdleView.SPAN_H - 53) / 2f * u - iconCy;
-            float ts = u / iconUnit;
-            icon.setTranslationX(tx * e);
-            icon.setTranslationY(ty * e);
-            float sc = 1 + (ts - 1) * e;
+            // where the live view draws logo point (32, 28): see MarvinIdleView.onDraw
+            float lx = b[0] + marvin.getWidth() / 2f, ly = b[1] + marvin.getHeight() / 2f - 5 * u;
+            float sc = 1 + (u / iconUnit - 1) * e;
+            // the icon scales about its centre; translate so that the point lands on the path A -> live
+            float cx = px0 + (lx - px0) * e, cy = py0 + (ly - py0) * e;
+            icon.setTranslationX(cx - iconCx - sc * (px0 - iconCx));
+            icon.setTranslationY(cy - iconCy - sc * (py0 - iconCy));
             icon.setScaleX(sc);
             icon.setScaleY(sc);
             if (bg != null) bg.setAlpha(Math.round(bgAlpha * (1 - e)));

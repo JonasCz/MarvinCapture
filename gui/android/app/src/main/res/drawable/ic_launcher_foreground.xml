@@ -2,11 +2,10 @@
 <!--
   The launcher icon's foreground: docs/images/logo.svg (the still pose of docs/logo.html) as a
   VectorDrawable, minus the dark-blue body shell: that is the adaptive icon's background colour
-  (ic_launcher_background), so the face, cheeks and tongue sit directly on it. Everything is kept
-  inside the 66 dp safe zone (a 33 dp radius circle around the centre of the 108 x 108 grid), so
-  any launcher mask (circle, squircle, rounded square) leaves it intact. The rounded cream panel is
-  deliberately larger and runs past the safe zone; only the dark face pill and the cheeks must
-  stay inside it (the tongue may be trimmed by tight masks). Keep it in step with the SVG.
+  (ic_launcher_background), so the face, cheeks and tongue sit directly on it. Marvin is scaled so that everything but the
+  cream panel, tongue tip included, sits inside the 66 dp safe zone (a 33 dp radius circle around
+  the centre of the 108 x 108 grid), so any launcher mask (circle, squircle, rounded square) leaves
+  him intact. The rounded cream panel is deliberately larger and runs past the safe zone. Keep it in step with the SVG.
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
@@ -14,10 +13,10 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
     <group
-        android:scaleX="1.45"
-        android:scaleY="1.45"
-        android:translateX="7.6"
-        android:translateY="7.4">
+        android:scaleX="1.33"
+        android:scaleY="1.33"
+        android:translateX="11.44"
+        android:translateY="8.78">
         <group android:translateY="2.5">
             <group>
                 <clip-path android:pathData="M14,7.5H50A6,6 0,0 1,56 13.5V25.5A6,6 0,0 1,50 31.5H14A6,6 0,0 1,8 25.5V13.5A6,6 0,0 1,14 7.5Z" />
