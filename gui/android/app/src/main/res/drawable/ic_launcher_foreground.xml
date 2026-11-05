@@ -17,7 +17,7 @@
         android:scaleX="1.45"
         android:scaleY="1.45"
         android:translateX="7.6"
-        android:translateY="13">
+        android:translateY="1.85">
         <group android:translateY="2.5">
             <group>
                 <clip-path android:pathData="M14,7.5H50A6,6 0,0 1,56 13.5V25.5A6,6 0,0 1,50 31.5H14A6,6 0,0 1,8 25.5V13.5A6,6 0,0 1,14 7.5Z" />
