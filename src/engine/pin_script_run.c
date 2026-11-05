@@ -117,7 +117,7 @@ static const char *kind_name(int kind)
 
 static const char *kind_default_ext(int kind)
 {
-    return kind == PIN_KIND_HDV ? "ts" : kind == PIN_KIND_DV ? "dv" : "avi";
+    return kind == PIN_KIND_HDV ? "m2t" : kind == PIN_KIND_DV ? "dv" : "avi";
 }
 
 /* The capture of this script ended (by itself or on our stop): consumes it and

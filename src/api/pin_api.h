@@ -340,7 +340,7 @@ typedef enum {
     PIN_FMT_DV_RAW,             /* .dv */
     PIN_FMT_DV_AVI,             /* DV type-2 AVI */
     PIN_FMT_DV_MOV,             /* DV in QuickTime */
-    PIN_FMT_HDV_TS,             /* .ts (m2t) */
+    PIN_FMT_HDV_TS,             /* .m2t (default) or .ts */
     PIN_FMT_HDV_MOV,
     PIN_FMT_HDV_MKV,
     /* Appended. Lossy, with the operating system's own (normally hardware) encoder: Android
@@ -507,7 +507,7 @@ typedef struct {
                                     next pass, or end of the capture in the last pass).
                                     Appended field, ABI-compatible. */
     char ts_extension[8];       /* extension of a raw HDV transport stream file (PIN_FMT_HDV_TS),
-                                    without the dot: "" = "ts", or "m2t" to keep the name the user
+                                    without the dot: "" = "m2t", or "ts" to keep the name the user
                                     gave. Appended field, ABI-compatible. */
     /* Appended fields, ABI-compatible: the format settings (pin_format_options() says which
      * apply to which format; the others are ignored). A caller compiled before them passes the

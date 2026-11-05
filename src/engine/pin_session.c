@@ -994,7 +994,7 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
         .label = "DV in QuickTime", .extension = "mov",
         .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
     [PIN_FMT_HDV_TS] = { .format = PIN_FMT_HDV_TS, .kind = PIN_KIND_HDV,
-        .label = "Raw transport stream", .extension = "ts",
+        .label = "Raw transport stream", .extension = "m2t",
         .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1 },
     [PIN_FMT_HDV_MOV] = { .format = PIN_FMT_HDV_MOV, .kind = PIN_KIND_HDV,
         .label = "HDV in QuickTime", .extension = "mov",
@@ -1091,7 +1091,7 @@ pin_status_t pin_session_format_info(pin_format_t f, pin_format_info_t *out)
 }
 
 /* The file name extension of format f for these options: the format's own, except
- * that a raw HDV transport stream keeps the user's .m2t when they asked for it. */
+ * that a raw HDV transport stream keeps the user's .ts when they asked for it (default .m2t). */
 static void format_ext(const pin_capture_opts_t *o, pin_format_t f, char *out, size_t out_size)
 {
     pin_format_info_t fi;

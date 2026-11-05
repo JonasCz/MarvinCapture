@@ -119,17 +119,17 @@ int main(int argc, char **argv)
     CHECK(snap.clip_frames > 0 && snap.clip_frames <= snap.frames);
     pin_close(s);
 
-    CHECK(pin_test_file_exists("hdv_replay_out-0001.ts"));
-    CHECK(!pin_test_file_exists("hdv_replay_out-0002.ts"));
+    CHECK(pin_test_file_exists("hdv_replay_out-0001.m2t"));
+    CHECK(!pin_test_file_exists("hdv_replay_out-0002.m2t"));
     printf("OK: %llu HDV picture(s) captured, no spurious scene split\n",
            (unsigned long long)snap.frames);
 
-    /* a user path ending in .m2t keeps that extension for the raw transport stream */
+    /* a user who asked for .ts keeps that extension for the raw transport stream (default .m2t) */
     s = pin_test_open_replay(slice_path);
     pin_test_prepare_dv(s);
     pin_capture_opts_defaults(&opts);
-    strncpy(opts.path, "hdv_replay_m2t", sizeof(opts.path) - 1);
-    strncpy(opts.ts_extension, "m2t", sizeof(opts.ts_extension) - 1);
+    strncpy(opts.path, "hdv_replay_ts", sizeof(opts.path) - 1);
+    strncpy(opts.ts_extension, "ts", sizeof(opts.ts_extension) - 1);
     opts.format_hdv = PIN_FMT_HDV_TS;
     CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
     pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 3000, &snap);
@@ -139,8 +139,8 @@ int main(int argc, char **argv)
         pin_test_wait_state(s, PIN_STATE_READY, -1, 3000, &snap);
     }
     pin_close(s);
-    CHECK(pin_test_file_exists("hdv_replay_m2t.m2t"));
-    CHECK(!pin_test_file_exists("hdv_replay_m2t.ts"));
-    printf("OK: .m2t extension kept\n");
+    CHECK(pin_test_file_exists("hdv_replay_ts.ts"));
+    CHECK(!pin_test_file_exists("hdv_replay_ts.m2t"));
+    printf("OK: .ts extension kept\n");
     return 0;
 }
