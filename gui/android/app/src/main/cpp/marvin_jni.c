@@ -211,6 +211,62 @@ MJ_FN(jboolean, settingsSet)(JNIEnv *env, jclass c, jstring key, jstring value)
     return pin_settings_set(k, v) == PIN_OK;
 }
 
+/* ---- update check: the app downloads the VERSION file, the core decides ---------------- */
+
+#define UPDATE_MAX_BYTES (64 * 1024)
+
+MJ_FN(jstring, updateUrl)(JNIEnv *env, jclass c) { (void)c; return mj_string(env, pin_update_url()); }
+
+MJ_FN(jboolean, updateDue)(JNIEnv *env, jclass c, jlong now)
+{
+    (void)env; (void)c;
+    return pin_update_due((int64_t)now) ? JNI_TRUE : JNI_FALSE;
+}
+
+/* The downloaded file and the current time (seconds since 1970); true when the file was a valid
+ * VERSION file and the check is recorded (pin_update_check_json). */
+MJ_FN(jboolean, updateCheck)(JNIEnv *env, jclass c, jbyteArray json, jlong now)
+{
+    (void)c;
+    jsize n = json ? (*env)->GetArrayLength(env, json) : 0;
+    if (n <= 0 || n > UPDATE_MAX_BYTES)
+        return JNI_FALSE;
+    char *buf = malloc((size_t)n);
+    if (!buf)
+        return JNI_FALSE;
+    (*env)->GetByteArrayRegion(env, json, 0, n, (jbyte *)buf);
+    pin_update_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.size = sizeof(info);
+    pin_status_t st = pin_update_check_json(buf, (size_t)n, (int64_t)now, &info);
+    free(buf);
+    return st == PIN_OK ? JNI_TRUE : JNI_FALSE;
+}
+
+/* {the notice ("MarvinCapture 1.1 is available (you have 1.0)."), latest version, download
+ * address or ""} when the last check found a newer version, else null. */
+MJ_FN(jobjectArray, updateKnown)(JNIEnv *env, jclass c)
+{
+    (void)c;
+    pin_update_info_t info;
+    memset(&info, 0, sizeof(info));
+    info.size = sizeof(info);
+    if (!pin_update_known(&info))
+        return NULL;
+    char text[PIN_TEXT_MAX];
+    pin_format_update(&info, text, sizeof(text));
+    jobjectArray r = (*env)->NewObjectArray(env, 3, (*env)->FindClass(env, "java/lang/String"), NULL);
+    if (!r)
+        return NULL;
+    const char *v[3] = { text, info.latest, info.download_url };
+    for (int i = 0; i < 3; i++) {
+        jstring js = mj_string(env, v[i]);
+        (*env)->SetObjectArrayElement(env, r, i, js);
+        (*env)->DeleteLocalRef(env, js);
+    }
+    return r;
+}
+
 MJ_FN(jstring, stdName)(JNIEnv *env, jclass c, jint std) { (void)c; return mj_string(env, pin_std_name((pin_std_t)std)); }
 
 /* ---- formats -------------------------------------------------------------------------- */

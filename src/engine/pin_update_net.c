@@ -46,7 +46,6 @@
 #define PIN_WIDEN_(s) L##s
 #define PIN_WIDEN(s) PIN_WIDEN_(s)
 
-#define UPDATE_URL "https://raw.githubusercontent.com/JonasCz/MarvinCapture/main/VERSION"
 #define UPDATE_MAX_BYTES (64 * 1024)
 
 typedef struct {
@@ -230,9 +229,7 @@ pin_status_t pin_update_net_check(pin_update_info_t *info, uint32_t timeout_ms)
     if (timeout_ms == 0)
         timeout_ms = 5000;
 
-    const char *url = getenv("MARVIN_UPDATE_URL");
-    if (!url)
-        url = UPDATE_URL;
+    const char *url = pin_update_address();
     if (!url[0])
         return PIN_ERR_STATE;   /* turned off */
 
@@ -243,8 +240,7 @@ pin_status_t pin_update_net_check(pin_update_info_t *info, uint32_t timeout_ms)
     int rc = http ? fetch_http(url, timeout_ms, &b) : fetch_file(url, &b);
     pin_status_t st = PIN_ERR_IO;
     if (rc == 0) {
-        if (pin_update_parse(b.data, b.len, info) == 0) {
-            info->available = pin_update_compare(info->latest, info->current) > 0;
+        if (pin_update_from_json(b.data, b.len, PIN_APP_VERSION, info) == 0) {
             st = PIN_OK;
             pin_logf(PIN_LOG_DEBUG, "update check: published %s, this is %s\n", info->latest, info->current);
         } else {

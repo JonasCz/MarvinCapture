@@ -93,8 +93,38 @@ static void test_format(void)
     CHECK(strcmp(out, "MarvinCapture 1.1 is available (you have 1.0).") == 0, "notice text");
 }
 
+static void test_from_json(void)
+{
+    pin_update_info_t i;
+    memset(&i, 0, sizeof(i));
+    i.size = sizeof(i);
+    const char *newer = "{\"version\": \"1.1\", \"download_url\": \"https://example.com/dl\"}";
+    CHECK(pin_update_from_json(newer, strlen(newer), "1.0", &i) == 0, "newer parses");
+    CHECK(i.available == 1 && strcmp(i.current, "1.0") == 0 && strcmp(i.latest, "1.1") == 0, "newer is available");
+    CHECK(i.size == sizeof(i), "size kept");
+    CHECK(pin_update_from_json(newer, strlen(newer), "1.1", &i) == 0 && i.available == 0, "same version: not available");
+    CHECK(pin_update_from_json(newer, strlen(newer), "1.2", &i) == 0 && i.available == 0, "older published: not available");
+    CHECK(pin_update_from_json("not json", 8, "1.0", &i) != 0 && i.available == 0 && i.latest[0] == '\0',
+          "invalid file");
+    CHECK(i.size == sizeof(i), "size kept on failure");
+    CHECK(pin_update_from_json(newer, strlen(newer), "1.0", NULL) != 0, "no info");
+}
+
+static void test_interval(void)
+{
+    const int64_t week = 7 * 24 * 60 * 60, t = 1800000000;
+    CHECK(pin_update_interval_elapsed(0, t) == 1, "never checked: due");
+    CHECK(pin_update_interval_elapsed(t - 60, t) == 0, "a minute ago: not due");
+    CHECK(pin_update_interval_elapsed(t - week + 1, t) == 0, "just under a week: not due");
+    CHECK(pin_update_interval_elapsed(t - week, t) == 1, "a week: due");
+    CHECK(pin_update_interval_elapsed(t - 30 * 24 * 3600, t) == 1, "a month: due");
+    CHECK(pin_update_interval_elapsed(t + 3600, t) == 1, "clock set back: due");
+}
+
 int main(void)
 {
+    test_from_json();
+    test_interval();
     test_parse();
     test_compare();
     test_format();

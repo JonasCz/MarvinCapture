@@ -145,6 +145,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         f.addAction(UsbManager.ACTION_USB_DEVICE_ATTACHED);
         registerReceiver(usbReceiver, f, Context.RECEIVER_NOT_EXPORTED);
         bindService(new Intent(this, CaptureService.class), connection, Context.BIND_AUTO_CREATE);
+        UpdateCheck.startIfDue();
     }
 
     /** The system theme changed (the activity handles uiMode itself, see the manifest): rebuilds the

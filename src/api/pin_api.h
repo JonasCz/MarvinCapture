@@ -1220,6 +1220,38 @@ PIN_API pin_status_t pin_update_check(pin_update_info_t *info, uint32_t timeout_
  * have 1.0)." "" when info->available is 0. */
 PIN_API void pin_format_update(const pin_update_info_t *info, char *out, size_t cap);
 
+/* The same check driven by the front end, for platforms where the core cannot download the file
+ * (Android: no libcurl; the app fetches it with the platform's own HTTP client). All of the
+ * decisions stay here: when to look, what the file says, what to remember.
+ *
+ *   1. if (pin_update_due(now)) { url = pin_update_url(); download it, give up silently on any
+ *      failure; then pin_update_check_json(...) }.
+ *   2. whenever the user can see the notice (options panel): pin_update_known().
+ *
+ * `now` is the current time in seconds since 1970 (UTC). The check runs at most once a week:
+ * the time of the last successful one is kept in the settings (key update.last_check), so a
+ * failed download is tried again at the next start. */
+
+/* The address of the published VERSION file (http(s) URL). "" = the check is turned off
+ * (MARVIN_UPDATE_URL set empty). Static string, never NULL. */
+PIN_API const char *pin_update_url(void);
+
+/* 1 when the check is on and none succeeded in the last 7 days (or ever). */
+PIN_API int pin_update_due(int64_t now);
+
+/* Takes the downloaded VERSION file (len bytes), compares it with pin_app_version() and fills
+ * *info (size set by the caller). On PIN_OK it remembers `now` as the last check and the
+ * published version and download address (for pin_update_known(), so the notice stays up between
+ * checks). PIN_ERR_IO when the file is not a valid VERSION file: nothing is remembered, so the
+ * next start tries again. */
+PIN_API pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now,
+                                           pin_update_info_t *info);
+
+/* 1 and *info filled (current, latest, download_url, available = 1; notes are not kept) when the
+ * last check found a version newer than this one, else 0. Compared against the running version
+ * each time, so the notice goes away by itself after the app was updated. No network. */
+PIN_API int pin_update_known(pin_update_info_t *info);
+
 #ifdef __cplusplus
 }
 #endif

@@ -213,6 +213,23 @@ about and licences. The options slide up over the controls (a quarter of a secon
 animation setting) and stay open when a setting changes the picture's shape (the layout may then switch between docked and overlay). Everything but the picture controls is locked while
 `pin_state_is_capturing`.
 
+### Update check
+
+The one thing the app uses the network for (the `INTERNET` permission). The core cannot download
+the published `VERSION` file on Android (it loads libcurl, which Android lacks), so
+`UpdateCheck.java` does only the HTTP request and the core decides everything else, the same code
+the desktop apps use: `pin_update_url()` (the address; `MARVIN_UPDATE_URL` has no effect here),
+`pin_update_due(now)` (at most one check a week), `pin_update_check_json()` (parse, compare with
+`pin_app_version()`, remember). It starts from `MainActivity.onCreate`, once per process, the
+download runs on a worker thread and the result goes back to the main thread. A failed download
+shows nothing and is tried again at the next start (only a successful check counts as "checked").
+
+The options panel shows "Update available" with the core's notice (`pin_update_known()`, the same
+text as the desktop banner) and a Download button (opens the release page) at the top for as long as
+the remembered version is newer than the running one. It is remembered in the core's settings:
+`update.last_check` (unix seconds), `update.latest`, `update.download_url`. These belong to the core, not
+to `Settings.java`. Release notes are not kept, so the panel does not show them.
+
 ### Performance options
 
 Android apps cannot open `/dev/cpu_dma_latency`, the remedy for analog frame drops on
@@ -261,6 +278,7 @@ app/src/main/java/jonascz/marvincapture/
     MarvinIdleView.java        the no-video animation
     LevelMeterView.java, Glyphs.java (icons, record button), Ui.java (view helpers)
     Settings.java, Formats.java (format lists after the probe), Status.java, About.java
+    UpdateCheck.java           the weekly update check: the download only, the core decides
 app/src/main/res/              theme, launcher icon (the logo as a vector), notification
                                icon, device_filter.xml (vendor 0x2304 only)
 ```

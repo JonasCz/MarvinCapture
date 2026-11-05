@@ -17,6 +17,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- The update check: one small request to GitHub for the VERSION file, at most once a week
+         (UpdateCheck). Nothing else uses the network. -->
+    <uses-permission android:name="android.permission.INTERNET" />
     <!-- Capturing with the screen off (partial wake lock while capturing or finalising). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <!-- Output goes to Movies/MarvinCapture by file path, which needs no permission on API 30+. -->

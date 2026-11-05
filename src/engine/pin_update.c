@@ -22,6 +22,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ---- a minimal JSON reader: one object; the string values we know are kept ---- */
@@ -302,6 +303,35 @@ int pin_update_compare(const char *a, const char *b)
             b++;
     }
     return 0;
+}
+
+int pin_update_from_json(const char *json, size_t len, const char *current, pin_update_info_t *info)
+{
+    if (!info)
+        return -1;
+    uint32_t size = info->size;
+    memset(info, 0, sizeof(*info));
+    info->size = size;
+    snprintf(info->current, sizeof(info->current), "%s", current ? current : "");
+    if (pin_update_parse(json, len, info) != 0)
+        return -1;
+    info->available = pin_update_compare(info->latest, info->current) > 0;
+    return 0;
+}
+
+#define UPDATE_URL "https://raw.githubusercontent.com/JonasCz/MarvinCapture/main/VERSION"
+
+const char *pin_update_address(void)
+{
+    const char *url = getenv("MARVIN_UPDATE_URL");
+    return url ? url : UPDATE_URL;
+}
+
+int pin_update_interval_elapsed(int64_t last, int64_t now)
+{
+    if (last <= 0 || last > now)
+        return 1;
+    return now - last >= PIN_UPDATE_INTERVAL_S;
 }
 
 void pin_update_format(const pin_update_info_t *info, char *out, size_t cap)

@@ -75,6 +75,51 @@ void pin_format_update(const pin_update_info_t *info, char *out, size_t cap)
     pin_update_format(info, out, cap);
 }
 
+#define UPDATE_KEY_LAST "update.last_check"
+#define UPDATE_KEY_LATEST "update.latest"
+#define UPDATE_KEY_URL "update.download_url"
+
+const char *pin_update_url(void) { return pin_update_address(); }
+
+int pin_update_due(int64_t now)
+{
+    if (!pin_update_address()[0])
+        return 0;
+    char v[64] = "";
+    pin_settings_get(UPDATE_KEY_LAST, v, sizeof(v));
+    return pin_update_interval_elapsed((int64_t)strtoll(v, NULL, 10), now);
+}
+
+pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now, pin_update_info_t *info)
+{
+    if (!json || !info)
+        return PIN_ERR_ARG;
+    if (info->size < sizeof(*info))
+        return PIN_ERR_ABI;
+    if (pin_update_from_json(json, len, PIN_APP_VERSION, info) != 0)
+        return PIN_ERR_IO;
+    char v[32];
+    snprintf(v, sizeof(v), "%lld", (long long)now);
+    pin_settings_set(UPDATE_KEY_LATEST, info->latest);
+    pin_settings_set(UPDATE_KEY_URL, info->download_url);
+    pin_settings_set(UPDATE_KEY_LAST, v);   /* last: a check counts only once its result is kept */
+    return PIN_OK;
+}
+
+int pin_update_known(pin_update_info_t *info)
+{
+    if (!info || info->size < sizeof(*info))
+        return 0;
+    uint32_t size = info->size;
+    memset(info, 0, sizeof(*info));
+    info->size = size;
+    snprintf(info->current, sizeof(info->current), "%s", PIN_APP_VERSION);
+    pin_settings_get(UPDATE_KEY_LATEST, info->latest, sizeof(info->latest));
+    pin_settings_get(UPDATE_KEY_URL, info->download_url, sizeof(info->download_url));
+    info->available = info->latest[0] && pin_update_compare(info->latest, info->current) > 0;
+    return info->available;
+}
+
 const char *pin_strerror(pin_status_t s)
 {
     switch (s) {

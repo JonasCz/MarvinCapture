@@ -257,6 +257,9 @@ the installers, then push `VERSION` to `main`. `MARVIN_UPDATE_URL` replaces the
 address (an http(s) URL or a local file, for testing; empty turns the check off).
 On macOS and Linux the core loads libcurl at run time for the check (the `.deb`
 only recommends it); Windows uses WinHTTP.
+On Android the app downloads the file itself and hands it to the core (`pin_update_check_json`);
+that check runs at most once a week (the time of the last one is the setting `update.last_check`)
+and the result stays visible in the options panel until the app is updated.
 
 | Script | Output | Notes |
 |---|---|---|

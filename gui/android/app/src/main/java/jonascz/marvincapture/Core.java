@@ -124,6 +124,14 @@ final class Core {
     static native String[] usbModel(int vid, int pid);
     static native String settingsGet(String key);
     static native boolean settingsSet(String key, String value);
+    /** The address of the published VERSION file ("" = the update check is off). */
+    static native String updateUrl();
+    /** True when a check is on and none succeeded in the last week (now: seconds since 1970). */
+    static native boolean updateDue(long now);
+    /** Hands the downloaded VERSION file to the core; true if it was valid (the check is then recorded). */
+    static native boolean updateCheck(byte[] json, long now);
+    /** {notice, latest version, download address or ""} if the last check found a newer version, else null. */
+    static native String[] updateKnown();
     static native String stdName(int std);
     static native int[] formats(int kind);
     static native String formatLabel(int format);

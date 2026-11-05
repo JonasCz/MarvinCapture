@@ -71,7 +71,7 @@ final class OptionsPanel extends LinearLayout {
     private final ArrayList<View> lockable = new ArrayList<>();
     private final ArrayList<BooleanSupplier> lockableCond = new ArrayList<>();
     private final ArrayList<Slider> sliders = new ArrayList<>();
-    private LinearLayout analogBlock, dvBlock, pictureRows, perfBlock;
+    private LinearLayout analogBlock, dvBlock, pictureRows, perfBlock, updateBox;
     private TextView pictureNote;
     private Glyphs.Button closeButton;
     private Ui.Segmented inputSeg;
@@ -107,6 +107,7 @@ final class OptionsPanel extends LinearLayout {
         scroll.addView(content);
         addView(scroll, new LayoutParams(LayoutParams.MATCH_PARENT, 0, 1));
         build();
+        UpdateCheck.onChange = this::showUpdate;   // a check finishing while the panel exists
         Formats.whenReady(this::build);   // the format lists exist once the encoder probe finished
     }
 
@@ -151,6 +152,11 @@ final class OptionsPanel extends LinearLayout {
         lockable.clear();
         lockableCond.clear();
         sliders.clear();
+
+        // "update available": the core's last check found a newer version (UpdateCheck); at most one check a week
+        updateBox = Ui.column(c);
+        content.addView(updateBox, Ui.fillWidth());
+        showUpdate();
 
         // the input: DV / HDV, S-Video or composite (locked while capturing)
         content.addView(Ui.header(c, "Input"));
@@ -257,6 +263,25 @@ final class OptionsPanel extends LinearLayout {
         updateInputVisibility();
         refreshControls();
         applyEnables();
+    }
+
+    /** The notice at the top while the core knows of a newer version; nothing otherwise. */
+    private void showUpdate() {
+        if (updateBox == null) return;
+        Context c = getContext();
+        updateBox.removeAllViews();
+        String[] u = UpdateCheck.known();
+        if (u == null) return;
+        updateBox.addView(Ui.header(c, "Update available"));
+        updateBox.addView(Ui.text(c, u[0], 15, Ui.TEXT));
+        if (!u[2].isEmpty()) {
+            Button download = new Button(c);
+            download.setText("Download");
+            download.setOnClickListener(v -> UpdateCheck.openDownload(c, u[2]));
+            LinearLayout.LayoutParams lp = Ui.wrap();
+            lp.topMargin = Ui.dp(c, 6);
+            updateBox.addView(download, lp);
+        }
     }
 
     /** "Save to": the phone's storage, an SD card, a USB drive (Storage). */

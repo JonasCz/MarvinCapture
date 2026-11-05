@@ -25,6 +25,7 @@
 
 #include "../api/pin_api.h"
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -39,6 +40,23 @@ int pin_update_parse(const char *json, size_t len, pin_update_info_t *info);
 /* Compares dotted numeric versions ("1.0" == "1.0.0" < "1.0.1" < "1.10"):
  * <0, 0, >0. Non-digits inside a part are ignored. */
 int pin_update_compare(const char *a, const char *b);
+
+/* Parses `json` as above and fills *info completely (info->size set by the caller): `current`
+ * from the argument, latest / notes / download_url, available = latest is newer than current.
+ * Returns 0, or -1 when the file is not a valid VERSION file (info is then zeroed except size).
+ * This is the whole "what does this file say" step; whoever downloaded it (pin_update_net.c, or
+ * the Android app through JNI) hands it over. */
+int pin_update_from_json(const char *json, size_t len, const char *current, pin_update_info_t *info);
+
+/* The address of the published VERSION file: the environment variable MARVIN_UPDATE_URL if
+ * set, else the project's GitHub repository. "" = the check is turned off. Static string. */
+const char *pin_update_address(void);
+
+/* The check runs at most once a week: 1 when the last check (unix seconds, 0 = never) is at
+ * least PIN_UPDATE_INTERVAL_S before now. A last check in the future (clock set back) counts as
+ * due, so a wrong clock cannot switch the check off for good. */
+#define PIN_UPDATE_INTERVAL_S (7 * 24 * 60 * 60)
+int pin_update_interval_elapsed(int64_t last, int64_t now);
 
 /* pin_update_check(), in pin_update_net.c (part of pinnacle_engine, not the pure
  * library). */

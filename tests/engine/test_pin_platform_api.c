@@ -462,8 +462,65 @@ static void test_keep_busy(void)
 #endif
 }
 
+/* The front-end driven update check: weekly rule, what is remembered (needs its own config dir). */
+static void test_update_state(void)
+{
+    char base[512], cfg[600];
+    const char *tmp = getenv("TMPDIR");
+#if defined(_WIN32)
+    if (!tmp || !tmp[0])
+        tmp = getenv("TEMP");
+#endif
+    snprintf(base, sizeof(base), "%s/marvin-update-%ld", tmp && tmp[0] ? tmp : "/tmp", (long)time(NULL));
+    snprintf(cfg, sizeof(cfg), "%s/config", base);
+    CHECK(pin_set_app_dirs(cfg, NULL, NULL) == PIN_OK, "update: app dirs");
+
+    const char *ver = pin_app_version();
+    char newer[64], same[64], file[256];
+    snprintf(newer, sizeof(newer), "%s.1", ver);   /* "1.0" -> "1.0.1": newer */
+    snprintf(same, sizeof(same), "%s", ver);
+    const int64_t t0 = 1800000000, week = 7 * 24 * 60 * 60;
+    pin_update_info_t u;
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+
+    CHECK(strncmp(pin_update_url(), "https://", 8) == 0 || getenv("MARVIN_UPDATE_URL"), "default address");
+    CHECK(pin_update_due(t0) == 1, "never checked: due");
+    CHECK(pin_update_known(&u) == 0 && u.available == 0, "nothing known yet");
+
+    snprintf(file, sizeof(file), "{\"version\": \"%s\", \"download_url\": \"https://example.com/get\"}", newer);
+    CHECK(pin_update_check_json("junk", 4, t0, &u) == PIN_ERR_IO, "invalid file rejected");
+    CHECK(pin_update_due(t0) == 1 && pin_update_known(&u) == 0, "invalid file remembers nothing");
+    CHECK(pin_update_check_json(file, strlen(file), t0, &u) == PIN_OK && u.available == 1, "newer found");
+    CHECK(pin_update_due(t0 + 60) == 0, "not due right after");
+    CHECK(pin_update_due(t0 + week - 1) == 0, "not due within the week");
+    CHECK(pin_update_due(t0 + week) == 1, "due after a week");
+    CHECK(pin_update_due(t0 - 3600) == 1, "due when the clock went back");
+
+    memset(&u, 0, sizeof(u));
+    u.size = sizeof(u);
+    CHECK(pin_update_known(&u) == 1 && u.available == 1, "remembered");
+    CHECK(strcmp(u.latest, newer) == 0 && strcmp(u.current, ver) == 0, "remembered versions");
+    CHECK(strcmp(u.download_url, "https://example.com/get") == 0, "remembered address");
+    char text[256];
+    pin_format_update(&u, text, sizeof(text));
+    CHECK(strstr(text, newer) != NULL && strstr(text, "is available") != NULL, "notice text");
+
+    /* a later check finds nothing newer (the app was updated, or the release was withdrawn) */
+    snprintf(file, sizeof(file), "{\"version\": \"%s\"}", same);
+    CHECK(pin_update_check_json(file, strlen(file), t0 + week, &u) == PIN_OK && u.available == 0, "same: not available");
+    CHECK(pin_update_known(&u) == 0, "notice gone");
+    CHECK(pin_update_due(t0 + week + 60) == 0, "the second check counted too");
+
+    CHECK(pin_update_check_json(NULL, 0, t0, &u) == PIN_ERR_ARG, "no json");
+    u.size = 4;
+    CHECK(pin_update_check_json(file, strlen(file), t0, &u) == PIN_ERR_ABI, "small struct");
+    CHECK(pin_set_app_dirs(NULL, "", NULL) == PIN_OK, "update: restore app dirs");
+}
+
 int main(void)
 {
+    test_update_state();
     test_usb_model();
     test_open_fd();
     test_app_dirs();
