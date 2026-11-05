@@ -46,6 +46,8 @@ third_party/libusb-android-*/
 # --- Local / editor --------------------------------------------------------
 .claude/*
 !.claude/skills/
+!.claude/hooks/
+!.claude/settings.json
 __pycache__/
 *.pyc
 .DS_Store
