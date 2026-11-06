@@ -53,7 +53,8 @@ the generated files cannot stand in for. Tests use it when it is there and say
 | `dv-ntsc-32k.dv` | A camera's NTSC DV with 32 kHz **12-bit nonlinear** audio, 4 channels (ffmpeg's DV muxer writes 16-bit stereo only, and 32 kHz only at 25 fps) | `test_dv_audio_vs_libavformat` (the only check of `dv_audio_12to16()` against FFmpeg), `test_dv_error` |
 
 Also not covered by any generated file, so only by a real HDV camera: the aux stream on
-PID 0x811 (recording date/time, `hdv_aux_scan_datetime()`), which no test checks yet.
+PID 0x811 (recording date/time). `test_hdv_aux` checks `hdv_aux_scan_datetime()` on a
+hand-built pack only; no test reads a camera's real aux data.
 
 Make a recording with `MarvinCaptureCLI --capture file.dv`; cut it short, a couple of
 MiB is plenty.
