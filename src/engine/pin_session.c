@@ -907,11 +907,32 @@ static int hdv_picture_pid(const uint8_t *d, size_t len)
 
 static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len);
 
-/* HDV: the latest PAT and PMT, so what follows decodes from its first packet. */
+static void commit_push(pin_session_t *s, const uint8_t *data, size_t len, long frame_index);
+
+/* A raw HDV transport stream (.m2t / .ts, or HDV on standard output) with a title: it gets the
+ * title as its own DVB SDT (hdv_emit_psi()), and the SDT packets the stream may send itself are
+ * left out (commit_unit_fi()), so the title is the file's only service name. Without a title the
+ * stream is written as it came. HDV MOV / MKV store the title themselves. */
+static int hdv_ts_titled(const pin_session_t *s)
+{
+    return s->file_kind == PIN_KIND_HDV && s->active_format == PIN_FMT_HDV_TS &&
+           s->capture_opts.title[0];
+}
+
+/* HDV: the latest PAT and PMT, so what follows decodes from its first packet. A titled raw
+ * transport stream (hdv_ts_titled()) then gets its title as a DVB SDT packet (hdv_sdt_packet()),
+ * the TS's own place for one: ffprobe shows it as the program's service_name, MediaInfo as
+ * "Service name". Behind the PAT, where MediaInfo looks for it; once per file is enough for both. */
 static void hdv_emit_psi(pin_session_t *s)
 {
     if (s->hdv_psi.pat_valid) commit_unit(s, s->hdv_psi.pat, HDV_TS_PACKET_SIZE);
     if (s->hdv_psi.pmt_valid) commit_unit(s, s->hdv_psi.pmt, HDV_TS_PACKET_SIZE);
+    uint8_t sdt[HDV_TS_PACKET_SIZE];
+    if (s->sink && hdv_ts_titled(s) &&
+        hdv_sdt_packet(&s->hdv_psi, "MarvinCapture", s->capture_opts.title, s->hdv_sdt_cc, sdt)) {
+        s->hdv_sdt_cc = (s->hdv_sdt_cc + 1) & 0x0F;
+        commit_push(s, sdt, sizeof(sdt), -1); /* not commit_unit(), which leaves SDTs out */
+    }
 }
 
 /* HDV file gate: a file opens at an arbitrary picture (a capture start, a pass, a format
@@ -943,6 +964,31 @@ static void commit_unit_fi(pin_session_t *s, const uint8_t *data, size_t len, lo
         return;
     if (s->file_kind == PIN_KIND_HDV && !hdv_write_gate(s, data, len))
         return;
+    size_t n = len / HDV_TS_PACKET_SIZE;
+    if (hdv_ts_titled(s) && hdv_ts_count_pid(data, n, HDV_SDT_PID)) {
+        /* the stream's own SDT: the title's replaces it (hdv_emit_psi()); out of memory, the
+         * unit goes as it came */
+        if (s->hdv_unit_cap < len) {
+            uint8_t *b = realloc(s->hdv_unit_buf, len);
+            if (b) {
+                s->hdv_unit_buf = b;
+                s->hdv_unit_cap = len;
+            }
+        }
+        if (s->hdv_unit_cap >= len) {
+            len = hdv_ts_drop_pid(data, n, HDV_SDT_PID, s->hdv_unit_buf) * HDV_TS_PACKET_SIZE;
+            data = s->hdv_unit_buf;
+            if (!len)
+                return;
+        }
+    }
+    commit_push(s, data, len, frame_index);
+}
+
+/* commit_unit_fi() past its checks: to the split lookahead (pin_split_push() writes or copies
+ * it before it returns), then the file. */
+static void commit_push(pin_session_t *s, const uint8_t *data, size_t len, long frame_index)
+{
     split_ensure(s);
     pin_split_push(&s->split, data, len, frame_index, unit_seconds(s));
 }
@@ -1102,10 +1148,13 @@ static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *d
 #endif
 
 /* supports_title / supports_aspect: what each sink writes. sink_raw (raw .dv, raw .m2t / .ts, and
- * DV / HDV on standard output) writes the stream as it came: no title, no aspect flag of its own
- * (the DV frames carry the camera's, the MPEG-2 sequence headers the stream's). sink_avi (OpenDML
- * vprp), sink_ffv1, sink_rewrap (DV AVI / MOV, HDV MOV / MKV) and sink_hwenc store both the title
- * and the aspect (the sample aspect ratio); so does sink_nut (analog on standard output). */
+ * DV / HDV on standard output) writes the stream as it came: no aspect flag of its own (the DV
+ * frames carry the camera's, the MPEG-2 sequence headers the stream's) and no title in a raw .dv
+ * (DV has no field for one that players or MediaInfo read). A raw .m2t / .ts has its title in a
+ * DVB SDT packet the session puts behind the PAT/PMT at each file start (hdv_emit_psi(),
+ * hdv_ts_titled()). sink_avi (OpenDML vprp), sink_ffv1, sink_rewrap (DV AVI / MOV, HDV MOV / MKV)
+ * and sink_hwenc store both the title and the aspect (the sample aspect ratio); so does sink_nut
+ * (analog on standard output). */
 static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_ANALOG_AVI] = { .format = PIN_FMT_ANALOG_AVI, .kind = PIN_KIND_ANALOG,
         .label = "Uncompressed AVI (YUY2)", .extension = "avi",
@@ -1129,7 +1178,7 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
         .supports_aspect = 1 },
     [PIN_FMT_HDV_TS] = { .format = PIN_FMT_HDV_TS, .kind = PIN_KIND_HDV,
         .label = "Raw transport stream", .extension = "m2t",
-        .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1,
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1,
         .supports_aspect = 0 },
     [PIN_FMT_HDV_MOV] = { .format = PIN_FMT_HDV_MOV, .kind = PIN_KIND_HDV,
         .label = "HDV in QuickTime", .extension = "mov",
@@ -3910,6 +3959,7 @@ void pin_session_close(pin_session_t *s)
     pin_previewer_destroy(s->preview);
     pin_hdv_audio_destroy(s->hdv_audio);
     free(s->mon_buf);
+    free(s->hdv_unit_buf);
     pthread_mutex_destroy(&s->mtx);
     pthread_cond_destroy(&s->cmd_posted);
     pthread_cond_destroy(&s->cmd_idle);

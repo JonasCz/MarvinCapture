@@ -54,6 +54,25 @@ way: the next pass's, a scene split's (below), and one from the replay device.
 On stop, the trailing partial picture is cut, so the file ends on a whole one.
 (A non-seekable output, e.g. a pipe, cannot be cut and keeps the tail.)
 
+**The title is the stream's DVB service name.** With a title (`--title`, the
+GUIs' name field), each raw `.m2t` / `.ts` file, and HDV on standard output,
+gets one more packet right behind the PAT and PMT: a DVB SDT (Service
+Description Table, ETSI EN 300 468, PID 0x11) that names the PAT's program with
+the title as `service_name` and "MarvinCapture" as `service_provider`
+(`hdv_sdt_packet()` in `src/engine/hdv_aux.c`). It is how a transport stream
+carries a title: ffmpeg's own TS muxer puts `-metadata title` there. ffprobe
+shows it as the program's `service_name` tag (`ffprobe -show_programs`), not as
+a format-level `title`; MediaInfo shows "Service name" in its Menu section. One
+SDT per file is enough for both, but MediaInfo reads it only after a PAT, hence
+its place. The text is UTF-8 behind the 0x15 selector (EN 300 468 Annex A), cut
+at a character boundary after about 140 bytes so the table fits one packet. An
+SDT the stream sends itself (the test camera sends none; ffmpeg's TS muxer,
+which makes the test fixtures, always does) is left out of a titled file, so the
+title is its only service name. Without a title the file is the stream as it
+came, as before. A remux with `ffmpeg -c copy` does not turn the service name
+into the new file's title; HDV MOV / MKV store the title themselves. Raw `.dv`
+has no title: DV has no field for one that players or MediaInfo read.
+
 ## Format: what the stream says
 
 The format is read from the video stream itself, picture by picture (`hdv_error.c`):
@@ -82,11 +101,11 @@ new timecode (about 1 s at 1080i). One or two GOPs with a wrong timecode, or GOP
 lost in a dropout, never split: the next good GOP is compared with where the timecode
 should be by then. Until a break is settled, the pictures since its first GOP are held in
 memory (`src/engine/pin_holdback.h`), so the cut is back-dated exactly: the new file
-starts with the PAT, the PMT and then the picture that opens the GOP where the new
-timecode begins (with its sequence header), and decodes from its first packet; the
-previous file ends with the picture before it. The 1 s / 1 MB minimum for a new file
-([usage.md](usage.md)) counts pictures at the stream's frame rate. A camera that writes
-00:00:00:00 in every GOP header gives no timecode split.
+starts with the PAT, the PMT (and the title's SDT, see above), then the picture that
+opens the GOP where the new timecode begins (with its sequence header), and decodes from
+its first packet; the previous file ends with the picture before it. The 1 s / 1 MB
+minimum for a new file ([usage.md](usage.md)) counts pictures at the stream's frame
+rate. A camera that writes 00:00:00:00 in every GOP header gives no timecode split.
 
 The camera's clock is a break too: the DTS of the video PES that opens each GOP
 (`hdv_error.c`, `pin_scene.c`) must be where the pictures fed since put it, within 1 s

@@ -18,8 +18,10 @@
 
 /*
  * .dv / .ts passthrough: byte-identical to what pincli has always written
- * (dv_output_file() before this refactor). No metadata is possible in a raw
- * elementary/transport stream, hence supports_title = 0.
+ * (dv_output_file() before this refactor). The sink itself adds nothing, hence
+ * supports_title = 0: a raw .dv has no place for a title, and a raw .m2t / .ts
+ * gets its title as a DVB SDT packet the session puts among the units
+ * (hdv_emit_psi() in pin_session.c).
  */
 
 #include "pin_sink.h"

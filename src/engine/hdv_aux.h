@@ -120,6 +120,39 @@ typedef struct {
  * points to another PMT PID drops the PMT held until one on that PID comes. */
 void hdv_psi_scan(hdv_psi_t *psi, const uint8_t *ts_packets, size_t n_packets);
 
+/* MPEG-2 CRC-32, the one a PSI section ends with (ISO/IEC 13818-1 Annex A: polynomial
+ * 0x04C11DB7, initial value 0xFFFFFFFF, MSB first, no final XOR). A section followed by its own
+ * CRC gives 0. */
+uint32_t hdv_crc32_mpeg(const uint8_t *data, size_t len);
+
+#define HDV_SDT_PID 0x0011
+/* original_network_id of the SDT: 0xFF01, in the private range (ETSI TS 101 162), as ffmpeg's
+ * TS muxer uses. */
+#define HDV_SDT_NETWORK_ID 0xFF01
+/* Bytes of service provider and service name together that fit in one TS packet: the payload
+ * (184) less the pointer_field and the SDT's own 25 bytes. Each name counts its 0x15 prefix. */
+#define HDV_SDT_TEXT_ROOM (HDV_TS_PACKET_SIZE - 4 - 1 - 25)
+
+/* The title of a raw HDV transport stream, the way TS files carry one: a DVB SDT (Service
+ * Description Table, ETSI EN 300 468 5.2.3) in one TS packet on PID 0x11, describing the first
+ * program of psi's PAT (service_id = its program_number, transport_stream_id = the PAT's) with a
+ * service descriptor (0x48; service_type 0x01, digital television) of provider and name. Both are
+ * UTF-8, written with the 0x15 "UTF-8" selector of EN 300 468 Annex A; the name is cut at a
+ * character boundary to fit HDV_SDT_TEXT_ROOM. Version 0, running. ffprobe shows them as the
+ * program's service_provider / service_name tags, MediaInfo as "Service provider" / "Service
+ * name" in its Menu section (MediaInfo reads an SDT only after a PAT: put it behind the PAT/PMT).
+ * cc: the packet's continuity counter (only its low 4 bits count). Fills out and returns 1, or
+ * returns 0 when psi has no PAT with a program or name is empty. */
+int hdv_sdt_packet(const hdv_psi_t *psi, const char *provider, const char *name, unsigned cc,
+                   uint8_t out[HDV_TS_PACKET_SIZE]);
+
+/* How many of n_packets TS packets are on pid. */
+size_t hdv_ts_count_pid(const uint8_t *ts_packets, size_t n_packets, int pid);
+
+/* Copies the TS packets that are not on pid to out (room for n_packets), in their order;
+ * returns how many. A titled raw TS leaves the stream's own SDT out this way (pin_session.c). */
+size_t hdv_ts_drop_pid(const uint8_t *ts_packets, size_t n_packets, int pid, uint8_t *out);
+
 /* Scans PAT (PID 0) and, once found, the PMT, across as many TS packets as
  * given. Safe to call repeatedly with more packets as they arrive; fields
  * already found are left alone (pass a *map already zeroed with pid -1 the

@@ -309,8 +309,119 @@ static void test_psi_tracking(void)
     CHECK(psi.pmt_pid == 0x0100, "another table on PID 0: ignored");
 }
 
+/* MPEG-2 CRC-32: the CRC catalogue's check value for "123456789", and nothing at all. */
+static void test_crc32_mpeg(void)
+{
+    CHECK(hdv_crc32_mpeg((const uint8_t *)"123456789", 9) == 0x0376E6E7u, "CRC-32/MPEG-2 check value");
+    CHECK(hdv_crc32_mpeg(NULL, 0) == 0xFFFFFFFFu, "no data: the initial value");
+}
+
+/* The SDT's service name of a packet hdv_sdt_packet() made: its length and where it starts (the
+ * 0x15 selector included), after checking everything around it. NULL if the layout is wrong. */
+static const uint8_t *sdt_name(const uint8_t *pkt, size_t *len)
+{
+    const uint8_t *s = pkt + 5;
+    size_t sl = ((size_t)(s[1] & 0x0F) << 8) | s[2];
+    if (5 + 3 + sl > HDV_TS_PACKET_SIZE || hdv_crc32_mpeg(s, 3 + sl) != 0)
+        return NULL;
+    const uint8_t *d = s + 16, *n = d + 4 + d[3];
+    if (n + 1 + n[0] + 4 != s + 3 + sl)
+        return NULL;
+    for (const uint8_t *q = s + 3 + sl; q < pkt + HDV_TS_PACKET_SIZE; q++)
+        if (*q != 0xFF)
+            return NULL;
+    *len = n[0];
+    return n + 1;
+}
+
+static void test_sdt_packet(void)
+{
+    hdv_psi_t psi;
+    memset(&psi, 0, sizeof(psi));
+    uint8_t pkt[HDV_TS_PACKET_SIZE];
+    CHECK(!hdv_sdt_packet(&psi, "MarvinCapture", "Tape", 0, pkt), "no PAT: no SDT");
+
+    /* a PAT with the NIT (program 0) first, then program 7; transport_stream_id 0x1234 */
+    uint8_t pat[HDV_TS_PACKET_SIZE];
+    build_pat(pat, 0x0081);
+    uint8_t *ps = pat + 5;
+    ps[2] = 9 + 2 * 4;
+    put16(ps + 3, 0x1234);
+    put16(ps + 8, 0);
+    put16(ps + 10, 0xE010);
+    put16(ps + 12, 7);
+    put16(ps + 14, 0xE081);
+    hdv_psi_scan(&psi, pat, 1);
+    CHECK(psi.pat_valid && psi.pmt_pid == 0x0081, "PAT with the NIT first");
+    CHECK(!hdv_sdt_packet(&psi, "MarvinCapture", "", 0, pkt), "empty title: no SDT");
+    CHECK(!hdv_sdt_packet(&psi, "MarvinCapture", NULL, 0, pkt), "no title: no SDT");
+
+    const char *title = "Tape 3 \xE2\x80\x93 \xC3\x96sterreich $#"; /* en dash, O umlaut, UTF-8 */
+    CHECK(hdv_sdt_packet(&psi, "MarvinCapture", title, 17, pkt), "SDT made");
+    CHECK(pkt[0] == 0x47 && pkt[1] == 0x40 && pkt[2] == 0x11 && pkt[3] == 0x11 && pkt[4] == 0,
+          "TS header: PID 0x11, section start, payload only, cc 17 & 15, pointer_field 0");
+    const uint8_t *s = pkt + 5;
+    CHECK(s[0] == 0x42 && (s[1] & 0xF0) == 0xF0, "table_id: SDT actual, section syntax");
+    CHECK(s[3] == 0x12 && s[4] == 0x34, "transport_stream_id: the PAT's");
+    CHECK(s[5] == 0xC1 && s[6] == 0 && s[7] == 0, "version 0, current, one section");
+    CHECK(s[8] == 0xFF && s[9] == 0x01 && s[10] == 0xFF, "original_network_id 0xFF01");
+    CHECK(s[11] == 0 && s[12] == 7, "service_id: the PAT's program, not the NIT");
+    CHECK(s[13] == 0xFC && (s[14] >> 5) == 4 && !(s[14] & 0x10), "no EIT, running, not scrambled");
+    const uint8_t *d = s + 16;
+    CHECK(((size_t)(s[14] & 0x0F) << 8 | s[15]) == 2u + d[1], "one descriptor in the loop");
+    CHECK(d[0] == 0x48 && d[2] == 0x01, "service_descriptor, digital television");
+    CHECK(d[3] == 14 && d[4] == 0x15 && !memcmp(d + 5, "MarvinCapture", 13), "provider, 0x15 UTF-8");
+    size_t nl = 0;
+    const uint8_t *n = sdt_name(pkt, &nl);
+    CHECK(n && nl == 1 + strlen(title) && n[0] == 0x15 && !memcmp(n + 1, title, strlen(title)),
+          "service name: 0x15 then the title as it is (CRC, lengths and stuffing right)");
+
+    /* too long for one packet: cut, never inside a character */
+    char lng[256];
+    size_t k = 0;
+    while (k + 2 < sizeof(lng)) {
+        lng[k++] = (char)0xC3;
+        lng[k++] = (char)0x96;
+    }
+    lng[k] = 0;
+    CHECK(hdv_sdt_packet(&psi, "MarvinCapture", lng, 0, pkt), "long title: SDT made");
+    n = sdt_name(pkt, &nl);
+    CHECK(n && nl == 1 + 142 && !memcmp(n + 1, lng, 142),
+          "two-byte characters: 71 whole ones (143 bytes of room after the 0x15)");
+    memset(lng, 'A', sizeof(lng) - 1);
+    lng[sizeof(lng) - 1] = 0;
+    CHECK(hdv_sdt_packet(&psi, "MarvinCapture", lng, 0, pkt), "long ASCII title: SDT made");
+    n = sdt_name(pkt, &nl);
+    CHECK(n && nl == 1 + 143, "ASCII: the room filled");
+    CHECK(HDV_SDT_TEXT_ROOM == 14 + 1 + 143, "the room: provider and name with their selectors");
+}
+
+/* The stream's own SDT left out of a unit: the other packets, in their order. */
+static void test_drop_pid(void)
+{
+    uint8_t pkts[5 * HDV_TS_PACKET_SIZE], out[5 * HDV_TS_PACKET_SIZE];
+    const int pids[5] = { 0x11, 0x0810, 0x0011, 0x0814, 0x0011 };
+    for (int i = 0; i < 5; i++) {
+        ts_header(pkts + i * HDV_TS_PACKET_SIZE, pids[i], 0, i);
+        pkts[i * HDV_TS_PACKET_SIZE + 4] = (uint8_t)i; /* which one it was */
+    }
+    CHECK(hdv_ts_count_pid(pkts, 5, 0x11) == 3 && hdv_ts_count_pid(pkts, 5, 0x0810) == 1, "count");
+    CHECK(hdv_ts_count_pid(pkts, 0, 0x11) == 0, "count: none");
+    CHECK(hdv_ts_drop_pid(pkts, 5, 0x11, out) == 2, "two left");
+    CHECK(!memcmp(out, pkts + 1 * HDV_TS_PACKET_SIZE, HDV_TS_PACKET_SIZE) &&
+          !memcmp(out + HDV_TS_PACKET_SIZE, pkts + 3 * HDV_TS_PACKET_SIZE, HDV_TS_PACKET_SIZE),
+          "video, then audio, as they came");
+    CHECK(hdv_ts_drop_pid(pkts, 5, 0x0812, out) == 5 && !memcmp(out, pkts, sizeof(pkts)),
+          "no packet on the PID: all of them");
+    CHECK(hdv_ts_drop_pid(pkts, 5, 0x11, pkts) == 2 && pkts[4] == 1 &&
+          pkts[HDV_TS_PACKET_SIZE + 4] == 3, "in place");
+}
+
 int main(void)
 {
+    test_crc32_mpeg();
+    test_drop_pid();
+    test_sdt_packet();
     test_find_sequence_header();
     test_psi_tracking();
     test_gop_time_nonzero();

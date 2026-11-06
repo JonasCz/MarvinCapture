@@ -340,10 +340,10 @@ static void test_format_help(void)
     char b[512];
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_AVI, PIN_FMT_HDV_TS, b, sizeof(b));
     CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
-                 "title in DV AVI files; raw .m2t (HDV) files have no title.", "title: DV AVI, raw HDV");
+                 "title in DV AVI and raw .m2t (HDV) files.", "title: DV AVI, raw HDV");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, b, sizeof(b));
-    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Raw .dv and raw .m2t "
-                 "(HDV) files have no title.", "title: both raw");
+    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+                 "title in raw .m2t (HDV) files; raw .dv files have no title.", "title: both raw");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_MOV, PIN_FMT_HDV_MKV, b, sizeof(b));
     CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
                  "title in DV MOV and HDV MKV files.", "title: both store it");

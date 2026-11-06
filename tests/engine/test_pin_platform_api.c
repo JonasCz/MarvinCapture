@@ -312,7 +312,8 @@ static void test_formats(void)
         CHECK(pin_format_info((pin_format_t)i, &fi) == PIN_OK && fi.size == sizeof(fi), "format info");
         int raw = i == PIN_FMT_DV_RAW || i == PIN_FMT_HDV_TS;
         CHECK(fi.supports_aspect == !raw, "supports_aspect: every format but raw .dv and .m2t");
-        CHECK(fi.supports_title == !raw, "supports_title: every format but raw .dv and .m2t");
+        CHECK(fi.supports_title == (i != PIN_FMT_DV_RAW),
+              "supports_title: every format but raw .dv (raw .m2t: its DVB service name)");
     }
     /* a caller from before supports_aspect: its own entry size, nothing written past it */
     const size_t old_fi = offsetof(pin_format_info_t, supports_aspect);

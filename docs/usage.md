@@ -39,7 +39,8 @@ Two ways in, both on the same core library:
   `--passes 2` without `--idle-min` / a duration limit also captures once.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
   The "Name and title" field is the files' name and also their title, stored in each file
-  whose format has one (AVI, MOV, MKV; raw `.dv` and HDV `.m2t` have none); its tooltip
+  whose format has one (AVI, MOV, MKV, and HDV `.m2t` as its DVB service name; raw `.dv`
+  has none); its tooltip
   names which of the selected formats store it. The aspect drop-down next to each
   format (analog, DV, HDV) is greyed out, with a tooltip saying why, when that format
   stores no aspect: raw `.dv` and `.m2t` files carry no aspect flag of their own, players

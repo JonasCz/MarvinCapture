@@ -169,6 +169,131 @@ void hdv_psi_scan(hdv_psi_t *psi, const uint8_t *ts_packets, size_t n_packets)
     }
 }
 
+size_t hdv_ts_count_pid(const uint8_t *ts_packets, size_t n_packets, int pid)
+{
+    size_t n = 0;
+    for (size_t i = 0; ts_packets && i < n_packets; i++)
+        n += ts_pid(ts_packets + i * HDV_TS_PACKET_SIZE) == pid;
+    return n;
+}
+
+size_t hdv_ts_drop_pid(const uint8_t *ts_packets, size_t n_packets, int pid, uint8_t *out)
+{
+    size_t n = 0;
+    for (size_t i = 0; ts_packets && out && i < n_packets; i++) {
+        const uint8_t *pkt = ts_packets + i * HDV_TS_PACKET_SIZE;
+        if (ts_pid(pkt) != pid)
+            memmove(out + n++ * HDV_TS_PACKET_SIZE, pkt, HDV_TS_PACKET_SIZE);
+    }
+    return n;
+}
+
+uint32_t hdv_crc32_mpeg(const uint8_t *data, size_t len)
+{
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t i = 0; data && i < len; i++) {
+        crc ^= (uint32_t)data[i] << 24;
+        for (int b = 0; b < 8; b++)
+            crc = (crc & 0x80000000u) ? (crc << 1) ^ 0x04C11DB7u : crc << 1;
+    }
+    return crc;
+}
+
+/* The transport_stream_id and the first program's number (not 0, the NIT) of a PAT packet. */
+static int pat_first_program(const uint8_t *pkt, int *tsid, int *program)
+{
+    size_t plen;
+    int off = ts_payload(pkt, &plen, NULL);
+    if (off < 0 || !psi_section(pkt, 0x00, NULL))
+        return 0;
+    const uint8_t *sec = pkt + off + 1 + pkt[off]; /* behind the pointer_field */
+    size_t section_length = ((size_t)(sec[1] & 0x0F) << 8) | sec[2];
+    const uint8_t *prog = sec + 8, *end = sec + 3 + section_length - 4 /* CRC */;
+    for (; prog + 4 <= end; prog += 4) {
+        int n = (prog[0] << 8) | prog[1];
+        if (n) {
+            *tsid = (sec[3] << 8) | sec[4];
+            *program = n;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* s as a DVB string (EN 300 468 Annex A) of at most cap bytes: the 0x15 selector (UTF-8), then
+ * as much of s as fits, cut before a character, not inside one. Always the selector, also for
+ * plain ASCII: the default table (ISO/IEC 6937) differs from ASCII in places ('$', '#'). Returns
+ * the length, 0 for an empty s. */
+static size_t dvb_utf8_text(const char *s, uint8_t *out, size_t cap)
+{
+    size_t len = s ? strlen(s) : 0;
+    if (!len || cap < 2)
+        return 0;
+    size_t n = len < cap - 1 ? len : cap - 1;
+    while (n > 0 && n < len && ((unsigned char)s[n] & 0xC0) == 0x80) /* s[n] continues a character */
+        n--;
+    if (!n)
+        return 0;
+    out[0] = 0x15;
+    memcpy(out + 1, s, n);
+    return 1 + n;
+}
+
+int hdv_sdt_packet(const hdv_psi_t *psi, const char *provider, const char *name, unsigned cc,
+                   uint8_t out[HDV_TS_PACKET_SIZE])
+{
+    int tsid, program;
+    if (!psi || !out || !psi->pat_valid || !pat_first_program(psi->pat, &tsid, &program))
+        return 0;
+    uint8_t prov[HDV_SDT_TEXT_ROOM], text[HDV_SDT_TEXT_ROOM];
+    size_t pl = dvb_utf8_text(provider, prov, HDV_SDT_TEXT_ROOM / 2);
+    size_t nl = dvb_utf8_text(name, text, HDV_SDT_TEXT_ROOM - pl);
+    if (!nl)
+        return 0;
+
+    memset(out, 0xFF, HDV_TS_PACKET_SIZE); /* stuffing behind the section */
+    uint8_t *p = out;
+    *p++ = HDV_TS_SYNC_BYTE;
+    *p++ = 0x40 | (HDV_SDT_PID >> 8); /* payload_unit_start */
+    *p++ = HDV_SDT_PID & 0xFF;
+    *p++ = (uint8_t)(0x10 | (cc & 0x0F)); /* payload only */
+    *p++ = 0x00;                          /* pointer_field */
+    uint8_t *sec = p;
+    size_t desc_len = 3 + pl + nl;        /* service_type, two length bytes, the texts */
+    size_t section_length = 5 + 3 + 5 + 2 + desc_len + 4;
+    *p++ = 0x42; /* table_id: SDT of the actual transport stream */
+    *p++ = (uint8_t)(0xF0 | (section_length >> 8)); /* section_syntax_indicator, reserved bits */
+    *p++ = (uint8_t)(section_length & 0xFF);
+    *p++ = (uint8_t)(tsid >> 8);
+    *p++ = (uint8_t)(tsid & 0xFF);
+    *p++ = 0xC1; /* reserved, version_number 0, current_next_indicator */
+    *p++ = 0x00; /* section_number */
+    *p++ = 0x00; /* last_section_number */
+    *p++ = HDV_SDT_NETWORK_ID >> 8;
+    *p++ = HDV_SDT_NETWORK_ID & 0xFF;
+    *p++ = 0xFF; /* reserved_future_use */
+    *p++ = (uint8_t)(program >> 8); /* service_id */
+    *p++ = (uint8_t)(program & 0xFF);
+    *p++ = 0xFC; /* reserved_future_use, no EIT schedule, no EIT present/following */
+    *p++ = (uint8_t)(0x80 | ((2 + desc_len) >> 8)); /* running_status 4 (running), not scrambled */
+    *p++ = (uint8_t)((2 + desc_len) & 0xFF);         /* descriptors_loop_length */
+    *p++ = 0x48;                                     /* service_descriptor */
+    *p++ = (uint8_t)desc_len;
+    *p++ = 0x01; /* service_type: digital television */
+    *p++ = (uint8_t)pl;
+    memcpy(p, prov, pl);
+    p += pl;
+    *p++ = (uint8_t)nl;
+    memcpy(p, text, nl);
+    p += nl;
+    uint32_t crc = hdv_crc32_mpeg(sec, (size_t)(p - sec));
+    *p++ = (uint8_t)(crc >> 24);
+    *p++ = (uint8_t)(crc >> 16);
+    *p++ = (uint8_t)(crc >> 8);
+    *p++ = (uint8_t)crc;
+    return 1;
+}
+
 void hdv_scan_pat_pmt(const uint8_t *ts_packets, size_t n_packets, hdv_pid_map_t *map)
 {
     if (!ts_packets || !map)

@@ -28,10 +28,11 @@
  *     change with PIN_STOP_ERROR and says why; what went out is every PAL frame;
  *   - as DV AVI with aspect 16:9, aspect_hdv 4:3 and a title: each file gets its own kind's
  *     aspect and the title where its format has one, so both AVIs (the one opened after the HDV
- *     file too) read back (libavformat) as 16:9 with the title.
+ *     file too) read back (libavformat) as 16:9 with the title, and the raw .m2t has it as its
+ *     DVB service name (an SDT packet behind the PAT and PMT, before the first GOP).
  * And a tape that starts on HDV (ep88-hdv-dv.bin: HDV 1080i 50 pictures, then PAL DV 50 frames),
- * the same options: the raw .m2t, then a DV AVI that is 16:9 (aspect, not aspect_hdv) with the
- * title. (No HDV format that stores an aspect can be captured yet: HDV MOV / MKV are disabled.)
+ * the same options: the raw .m2t with the title as its service name, then a DV AVI that is 16:9
+ * (aspect, not aspect_hdv) with the title. Without a title (1.) nothing is added: PAT, PMT, GOP.
  *
  * Usage: test_replay_mixed_kind <data dir>
  */
@@ -157,6 +158,33 @@ static probed_t probe(const char *path)
     return r;
 }
 
+/* A raw HDV file with a title: PAT, PMT, the title's SDT (PID 0x11, table_id 0x42), then the
+ * first GOP; libavformat reads the title back as the program's service_name, as ffprobe shows it. */
+static void check_ts_title(const char *path, const char *title)
+{
+    file_t m = read_file(path);
+    CHECK(m.len > 4 * TS && m.len % TS == 0);
+    CHECK(pkt_pid(m.data) == 0 && pkt_pid(m.data + TS) == 0x81);                     /* PAT, PMT */
+    CHECK(pkt_pid(m.data + 2 * TS) == 0x11 && m.data[2 * TS + 5] == 0x42);            /* the SDT */
+    CHECK(pkt_pid(m.data + 3 * TS) == 0x810 && gop_start(m.data + 3 * TS));          /* a GOP */
+    int sdts = 0;
+    for (long i = 0; i < m.len; i += TS)
+        sdts += pkt_pid(m.data + i) == 0x11;
+    CHECK_EQ_I(sdts, 1);
+    free(m.data);
+    AVFormatContext *fc = NULL;
+    CHECK(avformat_open_input(&fc, path, NULL, NULL) >= 0);
+    CHECK(avformat_find_stream_info(fc, NULL) >= 0);
+    CHECK(fc->nb_programs >= 1);
+    AVDictionaryEntry *n = av_dict_get(fc->programs[0]->metadata, "service_name", NULL, 0);
+    AVDictionaryEntry *p = av_dict_get(fc->programs[0]->metadata, "service_provider", NULL, 0);
+    printf("%s: service_name \"%s\", service_provider \"%s\"\n", path, n ? n->value : "",
+           p ? p->value : "");
+    CHECK(n && strcmp(n->value, title) == 0);
+    CHECK(p && strcmp(p->value, "MarvinCapture") == 0);
+    avformat_close_input(&fc);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -196,7 +224,7 @@ int main(int argc, char **argv)
     for (long i = 0; i < f2.len; i += TS)
         CHECK(f2.data[i] == 0x47);
     CHECK(f3.len == ntsc.len - 120000 && !memcmp(f3.data, ntsc.data, (size_t)f3.len));
-    printf("OK: DV -> HDV -> DV gives .dv, .m2t (PAT, PMT, GOP first), .dv\n");
+    printf("OK: DV -> HDV -> DV gives .dv, .m2t (PAT, PMT, GOP first: no title, nothing added), .dv\n");
 
     /* 2. to standard output: the capture ends at the change, with the reason */
     int fd = OPEN_NEW("mixed_kind_pipe.out");
@@ -220,7 +248,7 @@ int main(int argc, char **argv)
     printf("OK: a pipe stops at DV -> HDV, after every DV frame\n");
 
     /* 3. DV AVI, aspect 16:9 for DV and 4:3 for HDV, a title: DV -> HDV -> DV, each file its own
-     * kind's aspect, the title where the format has one (not the raw .m2t) */
+     * kind's aspect, the title in each (the raw .m2t's as its DVB service name) */
     const char *avi_names[] = { "mixed_kind_avi.avi", "mixed_kind_avi-0002.m2t", "mixed_kind_avi-0003.avi",
                                 "mixed_kind_avi-0004.avi", "mixed_kind_avi-0004.m2t" };
     for (size_t i = 0; i < sizeof(avi_names) / sizeof(avi_names[0]); i++)
@@ -243,10 +271,8 @@ int main(int argc, char **argv)
     CHECK(a3.height == 480 && a3.frames == ntsc.len / 120000 - 1);
     CHECK(a1.dar_num == 16 && a1.dar_den == 9 && a3.dar_num == 16 && a3.dar_den == 9);
     CHECK(strcmp(a1.title, "Mixed tape") == 0 && strcmp(a3.title, "Mixed tape") == 0);
-    file_t m2 = read_file(avi_names[1]);
-    CHECK(m2.len > 3 * TS && m2.len % TS == 0 && pkt_pid(m2.data) == 0);   /* the raw HDV file as before */
-    free(m2.data);
-    printf("OK: DV -> HDV -> DV as DV AVI: both AVIs 16:9 with the title, the HDV file raw\n");
+    check_ts_title(avi_names[1], "Mixed tape");
+    printf("OK: DV -> HDV -> DV as DV AVI: both AVIs 16:9 with the title, the raw HDV file's in its SDT\n");
 
     /* 4. a tape that starts on HDV: raw .m2t, then DV AVI with aspect 16:9 (not aspect_hdv's 4:3) */
     char hdv_dv[4096];
@@ -263,13 +289,12 @@ int main(int argc, char **argv)
     CHECK(pin_test_file_exists(hd_names[0]) && pin_test_file_exists(hd_names[1]));
     for (size_t i = 2; i < sizeof(hd_names) / sizeof(hd_names[0]); i++)
         CHECK(!pin_test_file_exists(hd_names[i]));
-    file_t h1 = read_file(hd_names[0]);
-    CHECK(h1.len > 3 * TS && h1.len % TS == 0 && pkt_pid(h1.data) == 0 && pkt_pid(h1.data + TS) == 0x81);
-    free(h1.data);
+    check_ts_title(hd_names[0], "Mixed tape");
     probed_t h2 = probe(hd_names[1]);
     CHECK(h2.height == 576 && h2.frames == 49 && h2.dar_num == 16 && h2.dar_den == 9);
     CHECK(strcmp(h2.title, "Mixed tape") == 0);
-    printf("OK: HDV -> DV: the DV AVI after the raw HDV file is 16:9 (aspect) with the title\n");
+    printf("OK: HDV -> DV: the raw HDV file has the title in its SDT, the DV AVI after it is 16:9 "
+           "(aspect) with the title\n");
 
     free(pal.data);
     free(ntsc.data);

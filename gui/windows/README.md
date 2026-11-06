@@ -310,8 +310,8 @@ MarvinCaptureGUI/
   preview panel itself is sized to `pin_fit_rect`, so the window background
   forms the letterbox instead of drawn black bars.
 - The name field (analog, and the DV / HDV one) is also the files' title: it always goes
-  into `Title`, and the core stores it in each file whose format has one (not raw `.dv`
-  or `.m2t`), so a tape that switches between DV and HDV gets it where it fits. Its
+  into `Title`, and the core stores it in each file whose format has one (not raw `.dv`;
+  a raw `.m2t` gets it as its DVB service name), so a tape that switches between DV and HDV gets it where it fits. Its
   tooltip comes from the core (`Native.FormatTitleHelp`) and names which of the
   selected formats store it.
 - Whenever the output path or format changes, the app calls

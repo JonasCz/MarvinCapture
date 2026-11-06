@@ -367,8 +367,9 @@ typedef struct {
     pin_kind_t kind;
     char label[PIN_NAME_MAX];   /* "DV in AVI (type 2)" */
     char extension[16];         /* "avi" (no dot) */
-    int supports_title;         /* the file stores pin_capture_opts_t.title (raw .dv and .m2t / .ts
-                                   do not; the capture ignores it there) */
+    int supports_title;         /* the file stores pin_capture_opts_t.title (a raw .m2t / .ts as
+                                   its DVB service name; raw .dv does not, the capture ignores it
+                                   there) */
     int supports_scene_split;
     int supports_multi_pass;
     int is_default;             /* the default format for its kind */
@@ -427,7 +428,7 @@ PIN_API void pin_format_warning(pin_format_t f, char *out, size_t cap);
  * format_hdv the HDV format. An analog input: the analog field; format is the analog format
  * (format_hdv is ignored). Names the formats that store the title and those that have none:
  * "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the title
- * in DV AVI files; raw .m2t (HDV) files have no title." A format that is not of the kind
+ * in raw .m2t (HDV) files; raw .dv files have no title." A format that is not of the kind
  * expected there (PIN_FMT_COUNT, say, while a GUI's list is still empty) is left out.
  *
  * pin_format_aspect_help(): the aspect drop-down of format f's kind. If f stores an aspect

@@ -211,6 +211,10 @@ struct pin_session {
     pin_holdback_t hold;
     hdv_psi_t hdv_psi;       /* HDV: the latest PAT/PMT the stream sent (dv_write_cb()), to start
                                 a file with (capture start, scene cut) */
+    unsigned hdv_sdt_cc;     /* titled raw HDV TS: continuity counter of the title's SDT packets
+                                (PID 0x11, hdv_emit_psi()) */
+    uint8_t *hdv_unit_buf;   /* titled raw HDV TS: a unit without the stream's own SDT packets */
+    size_t hdv_unit_cap;     /* (commit_unit_fi()); bytes allocated */
     pin_split_t split;       /* content-split lookahead (zeroed = not initialised) */
     /* DV / HDV: the stream's format with its cool-down (pin_fmtwatch.h); the status fields
      * (stream_kind, detected_std, width, height, dar, hdv_*) follow its confirmed format */
