@@ -503,6 +503,11 @@ void pin_format_title_help(pin_input_t input, pin_format_t format, pin_format_t 
     pin_session_format_title_help(input, format, format_hdv, out, cap);
 }
 
+void pin_format_kind_help(pin_kind_t kind, char *out, size_t cap)
+{
+    pin_session_format_kind_help(kind, out, cap);
+}
+
 void pin_format_scene_split_help(pin_format_t f, char *out, size_t cap)
 {
     pin_session_format_scene_split_help(f, out, cap);

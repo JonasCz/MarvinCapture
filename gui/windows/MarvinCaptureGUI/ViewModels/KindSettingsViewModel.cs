@@ -139,6 +139,17 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     /// <summary>The check box is enabled for a format with scene split that does not force it.</summary>
     public bool SplitEnabled => (SelectedFormat?.SupportsSceneSplit ?? false) && !SplitForced;
 
+    /// <summary>The format drop-down's tooltip, from the core (HDV: MOV / MKV are not truly lossless);
+    /// null for none, so no empty tooltip shows.</summary>
+    public object? FormatHelp
+    {
+        get
+        {
+            var t = Native.FormatKindHelp(Kind);
+            return string.IsNullOrEmpty(t) ? null : t;
+        }
+    }
+
     /// <summary>The check box's tooltip, from the core: what it does, or why it is always on.</summary>
     public string SplitHelp => SelectedFormat is null ? "" : Native.FormatSceneSplitHelp(SelectedFormat.Format);
     public bool PassesEnabled => SelectedFormat?.SupportsMultiPass ?? false;

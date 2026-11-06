@@ -347,6 +347,15 @@ MJ_FN(jstring, formatAspectHelp)(JNIEnv *env, jclass c, jint f)
     return mj_string(env, w);
 }
 
+/* The format setting's help for a kind (Core.KIND_*): HDV says MOV / MKV are not truly lossless; "" none. */
+MJ_FN(jstring, formatKindHelp)(JNIEnv *env, jclass c, jint kind)
+{
+    (void)c;
+    char w[1024];
+    pin_format_kind_help((pin_kind_t)kind, w, sizeof(w));
+    return mj_string(env, w);
+}
+
 /* The scene split setting's help for format f: what it does, or why it is always on. */
 MJ_FN(jstring, formatSceneSplitHelp)(JNIEnv *env, jclass c, jint f)
 {

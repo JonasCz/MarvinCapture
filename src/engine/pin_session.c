@@ -1303,6 +1303,21 @@ void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_f
         append_text(out, cap, ".");
 }
 
+void pin_session_format_kind_help(pin_kind_t kind, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    if (kind == PIN_KIND_HDV)
+        snprintf(out, cap, "Note the MOV and MKV for capturing HDV are not truly lossless: undamaged "
+                 "frames are passed through as is, and MarvinCapture re-encodes broken frames with "
+                 "the damage concealed (by ffmpeg's decoder). This improves compatibility with "
+                 "applications such as DaVinci Resolve, preventing clip import failure / rendering "
+                 "failure. However, applications will no longer be able to know where the damage / "
+                 "concealment happened. If you need truly lossless, use the .m2t raw HDV stream "
+                 "instead.");
+}
+
 void pin_session_format_scene_split_help(pin_format_t f, char *out, size_t cap)
 {
     if (!out || cap == 0)

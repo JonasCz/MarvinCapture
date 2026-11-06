@@ -85,6 +85,8 @@ final class KindSettingsModel: Identifiable {
     }
     /// The toggle is enabled for a format with scene split that does not force it.
     var splitEnabled: Bool { (selectedFormat?.supportsSceneSplit ?? false) && !splitForced }
+    /// The format picker's tooltip, from the core (HDV: MOV / MKV are not truly lossless); "" for none.
+    var formatHelp: String { Pin.formatKindHelp(kind) }
     /// The toggle's tooltip, from the core: what it does, or why it is always on.
     var splitHelp: String { selectedFormat.map { Pin.formatSceneSplitHelp($0.format) } ?? "" }
     var passesEnabled: Bool { selectedFormat?.supportsMultiPass ?? false }

@@ -296,6 +296,26 @@ public static unsafe partial class Native
     }
 
     [LibraryImport(Lib)]
+    private static partial void pin_format_kind_help(PinKind kind, byte* out_, nuint cap);
+
+    /// <summary>Tooltip of a kind's format drop-down (HDV: MOV / MKV are not truly lossless), or "".</summary>
+    public static string FormatKindHelp(PinKind kind)
+    {
+        const int cap = 1024;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_kind_help(kind, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
     private static partial void pin_format_scene_split_help(PinFormat f, byte* out_, nuint cap);
 
     /// <summary>Help text of the "split into scenes" option for format f: what it does, or why it is

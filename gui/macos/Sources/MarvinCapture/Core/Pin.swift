@@ -229,6 +229,9 @@ enum Pin {
     /// disabled and which formats store one.
     static func formatAspectHelp(_ f: pin_format_t) -> String { format { pin_format_aspect_help(f, $0, $1) } }
 
+    /// Tooltip of a kind's format picker (HDV: MOV / MKV are not truly lossless), or "".
+    static func formatKindHelp(_ kind: pin_kind_t) -> String { format(capacity: 1024) { pin_format_kind_help(kind, $0, $1) } }
+
     /// Help text of the "split into scenes" toggle for format `f`: what it does, or why it is always on.
     static func formatSceneSplitHelp(_ f: pin_format_t) -> String { format { pin_format_scene_split_help(f, $0, $1) } }
 

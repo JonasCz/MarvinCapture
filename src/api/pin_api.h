@@ -444,6 +444,12 @@ PIN_API void pin_format_aspect_help(pin_format_t f, char *out, size_t cap);
  * format. 512 bytes are enough. */
 PIN_API void pin_format_scene_split_help(pin_format_t f, char *out, size_t cap);
 
+/* The help text (tooltip) of a GUI's format drop-down for a kind, whatever is selected in it, or
+ * "" for none. HDV: that MOV and MKV are not truly lossless (damaged GOPs are re-encoded with the
+ * damage concealed, which editors take better, but the damage can no longer be seen as such)
+ * and that the raw .m2t is. 1024 bytes are enough. */
+PIN_API void pin_format_kind_help(pin_kind_t kind, char *out, size_t cap);
+
 /* The format settings of pin_capture_opts_t and which format each applies to. */
 typedef enum {
     PIN_DEINTERLACE_KEEP_FIELDS = 0,    /* each interlaced frame is encoded as one progressive picture */

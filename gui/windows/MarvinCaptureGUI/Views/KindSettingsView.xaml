@@ -23,6 +23,7 @@
                     ItemsSource="{x:Bind ViewModel.Formats}"
                     SelectedItem="{x:Bind ViewModel.SelectedFormat, Mode=TwoWay}"
                     IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
+                    ToolTipService.ToolTip="{x:Bind ViewModel.FormatHelp}"
                     AutomationProperties.Name="{x:Bind FormatAutomationName}">
                     <ComboBox.ItemTemplate>
                         <DataTemplate x:DataType="vm:FormatItem">

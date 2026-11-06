@@ -118,6 +118,7 @@ void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_f
                                    char *out, size_t cap);
 void pin_session_format_aspect_help(pin_format_t f, char *out, size_t cap);
 void pin_session_format_scene_split_help(pin_format_t f, char *out, size_t cap);
+void pin_session_format_kind_help(pin_kind_t kind, char *out, size_t cap);
 /* 1 if this machine can write format f: every format but the H.264 / HEVC ones, which need
  * their encoder (pin_hwenc_available(), probing on the first call). */
 int pin_session_format_available(pin_format_t f);

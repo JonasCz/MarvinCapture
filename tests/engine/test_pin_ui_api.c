@@ -398,6 +398,19 @@ static void test_format_help(void)
     CHECK_STR(b, "Uncompressed AVI files are not split into scenes.", "scene split help: analog");
     pin_format_scene_split_help(PIN_FMT_COUNT, b, sizeof(b));
     CHECK_STR(b, "", "scene split help: unknown format");
+    /* the format drop-down's note per kind: HDV says MOV / MKV are not truly lossless */
+    char kb[1024];
+    pin_format_kind_help(PIN_KIND_HDV, kb, sizeof(kb));
+    CHECK(strncmp(kb, "Note the MOV and MKV for capturing HDV are not truly lossless", 61) == 0 &&
+          strstr(kb, "DaVinci Resolve") != NULL && strstr(kb, ".m2t raw HDV stream") != NULL,
+          "format help: HDV");
+    pin_format_kind_help(PIN_KIND_DV, kb, sizeof(kb));
+    CHECK_STR(kb, "", "format help: DV has none");
+    pin_format_kind_help(PIN_KIND_ANALOG, kb, sizeof(kb));
+    CHECK_STR(kb, "", "format help: analog has none");
+    pin_format_kind_help(PIN_KIND_HDV, kb, 40);
+    CHECK(strlen(kb) == 39, "format help: cut to the buffer");
+
     /* the format table and the rule the script and the session use agree */
     for (int f = 0; f < PIN_FMT_COUNT; f++) {
         memset(&sfi, 0, sizeof(sfi));

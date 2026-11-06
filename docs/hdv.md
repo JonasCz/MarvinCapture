@@ -110,7 +110,10 @@ pictures would not decode at the start of the new file.
 remuxed when the capture stops, and there is no temporary file. The aim is a file an
 editor such as DaVinci Resolve takes without complaint even from a tape with dropouts:
 before this, the way to get one was to re-encode the whole capture (to ProRes, say);
-this re-encodes only the damaged parts. Offered everywhere, Android too: a machine that cannot
+this re-encodes only the damaged parts. So these files are not truly lossless: an editor takes
+them better, but can no longer tell where the damage and its concealment were. The GUIs say so
+on the HDV format drop-down (`pin_format_kind_help()`); for a truly lossless copy, use the raw
+`.m2t`. Offered everywhere, Android too: a machine that cannot
 keep up ends the capture with an error (below).
 
 **Stages.** Three, the first two shared with any HDV output that decodes (a future HDV to

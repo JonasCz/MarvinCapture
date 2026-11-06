@@ -34,6 +34,7 @@ struct KindSettingsView: View {
                         }
                         .labelsHidden()
                         .accessibilityLabel("\(settings.tabHeader) format")
+                        .help(settings.formatHelp)
                         // the selected format's settings (deinterlace, quality, FFV1 compression), if it has any
                         FormatOptionsButton(options: settings.formatOptions,
                                             accessibilityName: "\(settings.tabHeader) format settings")

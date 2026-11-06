@@ -142,6 +142,8 @@ final class Core {
     static native String formatTitleHelp(int input, int format, int formatHdv);
     /** The aspect setting's help for a format: what it does, or why it is off (FMT_ASPECT not set). */
     static native String formatAspectHelp(int format);
+    /** The format setting's help for a kind (HDV: MOV / MKV are not truly lossless), or "". */
+    static native String formatKindHelp(int kind);
     /** The scene split setting's help for a format: what it does, or why it is always on (FMT_SPLIT_FORCED). */
     static native String formatSceneSplitHelp(int format);
     static native int[] formatOptionInts(int format);
