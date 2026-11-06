@@ -283,6 +283,7 @@ final class WindowModel {
         didSet {
             analogFormatOptions.format = analogFormat?.format
             if let f = analogFormat { saveSetting("gui.format_analog", String(f.format.rawValue)) }
+            applyPreviewAspect()
             pushOutputHint()
         }
     }
@@ -297,7 +298,7 @@ final class WindowModel {
         [analogFormatOptions, dvSettings.formatOptions, hdvSettings.formatOptions]
     }
 
-    /// File base name; also embedded as the title when the format supports one.
+    /// File base name; also passed as the title (the core stores it where the format has one).
     var analogName = "analog" { didSet { analogOutputChanged("gui.name_analog", analogName) } }
     var analogOutputDir = WindowModel.defaultOutputDir() { didSet { analogOutputChanged("gui.dir_analog", analogOutputDir) } }
     var analogOutputPath: String { Self.combinePath(analogOutputDir, analogName) }
@@ -311,17 +312,27 @@ final class WindowModel {
     var analogIdleStopMinutes = 5 { didSet { saveSetting("gui.idle_analog", String(analogIdleStopMinutes)) } }
     /// Stop after this long of capture time (minutes), signal or not; 0 = never.
     var analogMaxDurationMinutes = 0 { didSet { saveSetting("gui.duration_analog", String(analogMaxDurationMinutes)) } }
-    /// Aspect override for analog sources (pin_aspect_t order: Auto, 4:3, 16:9).
+    /// Aspect override for analog sources (pin_aspect_t order: Auto, 4:3, 16:9): the user's choice, kept
+    /// while the picker is disabled.
     var analogAspectIndex = 0 {
         didSet {
             saveSetting("gui.aspect_analog", String(analogAspectIndex))
             applyPreviewAspect()
         }
     }
+    /// The analog aspect picker is enabled only for a format that stores an aspect (every analog format does today).
+    var analogAspectEnabled: Bool { analogFormat?.supportsAspect ?? false }
+    /// The analog aspect the file and the preview use: the choice, or Auto while the picker is disabled.
+    var analogEffectiveAspectIndex: Int { analogAspectEnabled ? analogAspectIndex : 0 }
+    /// Tooltip of the analog aspect picker, from the core.
+    var analogAspectHelp: String { analogFormat.map { Pin.formatAspectHelp($0.format) } ?? "" }
+    /// Tooltip of the analog name field, from the core: whether the selected format stores the title.
+    var analogNameHelp: String { Pin.formatTitleHelp(input: PIN_INPUT_SVIDEO, analogFormat?.format, hdv: nil) }
 
     // MARK: DV / HDV
 
-    /// File base name for DV and HDV; also embedded as the title when the format supports it.
+    /// File base name for DV and HDV; also passed as the title (the core stores it in each file whose format
+    /// has one).
     var dvName = "tape" { didSet { dvOutputChanged("gui.name_dv", dvName) } }
     var dvOutputDir = WindowModel.defaultOutputDir() { didSet { dvOutputChanged("gui.dir_dv", dvOutputDir) } }
     var dvOutputPath: String { Self.combinePath(dvOutputDir, dvName) }
@@ -334,6 +345,10 @@ final class WindowModel {
     let dvSettings: KindSettingsModel
     let hdvSettings: KindSettingsModel
     var kindTabs: [KindSettingsModel] { [dvSettings, hdvSettings] }
+    /// Tooltip of the DV / HDV name field, from the core: which of the DV and HDV formats store the title.
+    var dvNameHelp: String {
+        Pin.formatTitleHelp(input: PIN_INPUT_DV, dvSettings.selectedFormat?.format, hdv: hdvSettings.selectedFormat?.format)
+    }
 
     /// DV / HDV file-options tab. Follows the detected stream; remembered for the next start.
     var selectedKindTabIndex = 0 {
@@ -404,9 +419,11 @@ final class WindowModel {
     private(set) var progressIndeterminate = true
     private(set) var progressValue = 0.0
 
-    /// The aspect override (pin_aspect_t index) that applies to what is arriving right now.
+    /// The aspect override (pin_aspect_t index) that applies to what is arriving right now; Auto where that
+    /// kind's format stores no aspect (its picker is disabled).
     var activeAspectIndex: Int {
-        !isDvInput ? analogAspectIndex : (lastStreamKind == PIN_KIND_HDV ? hdvSettings : dvSettings).aspectIndex
+        !isDvInput ? analogEffectiveAspectIndex
+                   : (lastStreamKind == PIN_KIND_HDV ? hdvSettings : dvSettings).effectiveAspectIndex
     }
     @ObservationIgnored private var appliedAspect: Int?
 
@@ -644,8 +661,10 @@ final class WindowModel {
 
     private func kindChanged(_ k: KindSettingsModel, _ field: KindSettingsModel.Field) {
         saveKindSettings(k)
-        if field == .aspect { applyPreviewAspect() }
-        if field == .format || field == .aspect { pushOutputHint() }
+        if field == .format || field == .aspect {
+            applyPreviewAspect()   // a format without an aspect makes it Auto
+            pushOutputHint()
+        }
     }
 
     /// Re-applies the last-used proc-amp / gain values to a freshly opened device.
@@ -911,12 +930,14 @@ final class WindowModel {
         if let f = dvSettings.selectedFormat { o.format_dv = f.format }
         if let f = hdvSettings.selectedFormat { o.format_hdv = f.format }
 
-        // The DV input auto-detects DV vs HDV; the per-kind scalar options come from the tab matching
-        // what is arriving right now.
+        // The DV input auto-detects DV vs HDV, and a tape can switch between them. Each file gets its own
+        // kind's aspect (aspect: analog or the DV tab, aspect_hdv: the HDV tab; Auto where the format stores
+        // none) and the name as its title (the core leaves it out of formats that have none). Scene split,
+        // the two stops and the passes come from the tab matching what is arriving right now.
         let kind = lastStreamKind == PIN_KIND_HDV ? hdvSettings : dvSettings
-        let title = analog ? (analogFormat?.supportsTitle == true ? analogName : "") : (kind.titleEnabled ? dvName : "")
-        setCString(&o.title, title)
-        o.aspect = pin_aspect_t(rawValue: UInt32(clamping: activeAspectIndex))
+        setCString(&o.title, analog ? analogName : dvName)
+        o.aspect = pin_aspect_t(rawValue: UInt32(clamping: analog ? analogEffectiveAspectIndex : dvSettings.effectiveAspectIndex))
+        o.aspect_hdv = pin_aspect_t(rawValue: UInt32(clamping: hdvSettings.effectiveAspectIndex))
         o.scene_split = !analog && kind.splitIntoScenes && kind.splitEnabled ? 1 : 0
         o.idle_stop_minutes = Int32(clamping: Swift.max(0, analog ? analogIdleStopMinutes : kind.idleStopMinutes))
         o.max_duration_minutes = Int32(clamping: Swift.max(0, analog ? analogMaxDurationMinutes : kind.maxDurationMinutes))

@@ -314,7 +314,8 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     o.format_hdv = c->format[PIN_KIND_HDV];
     snprintf(o.ts_extension, sizeof(o.ts_extension), "%s", c->ts_ext);
     snprintf(o.title, sizeof(o.title), "%s", c->title);
-    o.aspect = c->aspect;
+    o.aspect = c->aspect;          /* --aspect: DV, analog and HDV files alike */
+    o.aspect_hdv = c->aspect;
     o.scene_split = c->split;
     o.keep_raw = c->keep_raw;
     o.deinterlace = c->deinterlace;

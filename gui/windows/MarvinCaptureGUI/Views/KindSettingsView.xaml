@@ -4,7 +4,7 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:vm="using:PinnacleCapture.ViewModels">
 
-    <!-- One "Settings for: DV | HDV" page: format (its settings behind the gear), title, scene split,
+    <!-- One "Settings for: DV | HDV" page: format (its settings behind the gear), aspect, scene split,
          idle stop, passes. -->
     <StackPanel Spacing="10">
         <Grid ColumnSpacing="8">
@@ -52,15 +52,19 @@
                     </Button.Flyout>
                 </Button>
             </Grid>
-            <ComboBox Grid.Column="1" Header="Aspect" HorizontalAlignment="Stretch"
-                      SelectedIndex="{x:Bind ViewModel.AspectIndex, Mode=TwoWay}"
-                      IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
-                      AutomationProperties.Name="{x:Bind AspectAutomationName}"
-                      AutomationProperties.HelpText="Overrides the aspect ratio for the preview and the file. Auto uses what the tape reports.">
-                <ComboBoxItem Content="Auto" />
-                <ComboBoxItem Content="4:3" />
-                <ComboBoxItem Content="16:9" />
-            </ComboBox>
+            <!-- Disabled for a format that stores no aspect (raw .dv / .m2t; the choice is kept but Auto
+                 applies). A disabled control shows no tooltip, so the Grid around it carries the core's text. -->
+            <Grid Grid.Column="1" Background="Transparent" ToolTipService.ToolTip="{x:Bind ViewModel.AspectHelp, Mode=OneWay}">
+                <ComboBox Header="Aspect" HorizontalAlignment="Stretch"
+                          SelectedIndex="{x:Bind ViewModel.AspectIndex, Mode=TwoWay}"
+                          IsEnabled="{x:Bind Both(ViewModel.AspectEnabled, IsEditable), Mode=OneWay}"
+                          AutomationProperties.Name="{x:Bind AspectAutomationName}"
+                          AutomationProperties.HelpText="{x:Bind ViewModel.AspectHelp, Mode=OneWay}">
+                    <ComboBoxItem Content="Auto" />
+                    <ComboBoxItem Content="4:3" />
+                    <ComboBoxItem Content="16:9" />
+                </ComboBox>
+            </Grid>
         </Grid>
 
         <!-- the core's warning for the selected format (H.264 / HEVC: lossy) -->

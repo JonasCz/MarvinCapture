@@ -77,6 +77,13 @@ final class Settings {
     static int input() { return clamp(getInt("gui.last_input", Core.INPUT_DV), 0, 2); }
     static int standard() { return clamp(getInt("gui.std", 0), 0, Core.STD_COUNT - 1); }
     static int aspect(int kind) { return clamp(getInt("gui.aspect_" + kindKey(kind), 0), 0, 2); }
+    /** The kind's format stores an aspect (not raw .dv / .m2t): only then the aspect setting is enabled. */
+    static boolean aspectAllowed(int kind) {
+        int f = format(kind);
+        return f >= 0 && (Core.formatFlags(f) & Core.FMT_ASPECT) != 0;
+    }
+    /** The aspect the kind's files and the preview use: the setting, or Auto (0) while it is disabled. */
+    static int effectiveAspect(int kind) { return aspectAllowed(kind) ? aspect(kind) : 0; }
     static boolean split(int kind) { return getBool("gui.split_" + kindKey(kind), false); }
     static int idleStop(int kind) { return Math.max(0, getInt("gui.idle_" + kindKey(kind), 5)); }
     static int maxDuration(int kind) { return Math.max(0, getInt("gui.duration_" + kindKey(kind), 0)); }
@@ -87,7 +94,7 @@ final class Settings {
     static boolean cpuKeepBusy() { return getBool("gui.cpu_keep_busy", false); }
     static boolean audioKeepAlive() { return getBool("gui.audio_keepalive", false); }
 
-    /** File base name; also the embedded title. DV and HDV share one. */
+    /** File base name; also passed as the title (the core stores it where the format has one). DV and HDV share one. */
     static String name(boolean analog) {
         String n = get(analog ? "gui.name_analog" : "gui.name_dv", "").trim();
         return n.isEmpty() ? (analog ? "analog" : "tape") : n;

@@ -78,6 +78,8 @@ public unsafe struct PinFormatInfo
     public int SupportsSceneSplit;
     public int SupportsMultiPass;
     public int IsDefault;
+    // Appended (the core takes the old size too): the file stores a display aspect (raw .dv / .m2t do not).
+    public int SupportsAspect;
 
     public string Label { get { fixed (byte* p = LabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
     public string Extension { get { fixed (byte* p = ExtensionBuf) return Utf8Fixed.Get(p, 16); } }
@@ -114,6 +116,8 @@ public unsafe struct PinCaptureOpts
     public int Deinterlace;     // H.264 / HEVC: a PinDeinterlace (default DoubleRate)
     public int VideoQuality;    // H.264 / HEVC: 0 (best) .. 51 (smallest), like a CRF (default 18)
     public int Ffv1Compression; // FFV1: a PinFfv1Compression (default Fast)
+    // Appended later: the display aspect of HDV files (Aspect is that of analog and DV files).
+    public PinAspect AspectHdv;
 
     public string Path
     {

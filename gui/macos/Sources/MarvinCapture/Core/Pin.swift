@@ -218,6 +218,17 @@ enum Pin {
     /// The paragraph to show when format `f` is picked (the H.264 / HEVC formats are lossy), or "".
     static func formatWarning(_ f: pin_format_t) -> String { format { pin_format_warning(f, $0, $1) } }
 
+    /// Help text of a "name and title" field: which of the selected formats store the title and which have
+    /// none. `input` PIN_INPUT_DV: the DV input's field (`f` the DV format, `hdv` the HDV one); an analog
+    /// input: the analog field (`hdv` ignored). nil = a list that is still empty.
+    static func formatTitleHelp(input: pin_input_t, _ f: pin_format_t?, hdv: pin_format_t?) -> String {
+        format { pin_format_title_help(input, f ?? PIN_FMT_COUNT, hdv ?? PIN_FMT_COUNT, $0, $1) }
+    }
+
+    /// Help text of format `f`'s aspect picker: what it does, or (a format that stores no aspect) why it is
+    /// disabled and which formats store one.
+    static func formatAspectHelp(_ f: pin_format_t) -> String { format { pin_format_aspect_help(f, $0, $1) } }
+
     /// "About 2.9 GB per hour (6.4 Mbit/s)" for one quality setting of an H.264 / HEVC format, else "".
     static func formatQualityHint(_ f: pin_format_t, quality: Int, deinterlace: Int, is60Hz: Bool) -> String {
         format { pin_format_quality_hint(f, Int32(clamping: quality), Int32(clamping: deinterlace), is60Hz ? 1 : 0, $0, $1) }

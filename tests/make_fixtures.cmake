@@ -37,7 +37,7 @@ endif()
 
 set(files dv-pal.dv dv-ntsc.dv dv-pal-32k.dv hdv.ts hdv-720p.ts hdv-split-a1.ts hdv-split-x.ts
           hdv-split-a2.ts hdv-split-b.ts ep88-pal.bin ep88-ntsc.bin ep88-pal-ntsc.bin
-          ep88-dv-hdv-dv.bin ep88-dv-stray.bin ep88-hdv-pid.bin ep88-pal-48k-32k.bin)
+          ep88-dv-hdv-dv.bin ep88-dv-stray.bin ep88-hdv-pid.bin ep88-pal-48k-32k.bin ep88-hdv-dv.bin)
 
 file(SHA256 "${CMAKE_CURRENT_LIST_FILE}" script_hash)
 file(SHA256 "${MAKE_EP88}" tool_hash)
@@ -163,11 +163,13 @@ make_ep88(ep88-ntsc.bin dv-ntsc.dv)
 #   dv-stray      PAL DV, a burst of 300 HDV TS packets (too short to switch), PAL DV
 #   hdv-pid       HDV 1080i on video PID 0x810, then 720p on PID 0x100 (another PMT too)
 #   pal-48k-32k   PAL DV with 48 kHz audio (50 frames), then 32 kHz (14)
+#   hdv-dv        HDV 1080i (50 pictures), then PAL DV (50 frames): a capture that starts on HDV
 make_ep88(ep88-pal-ntsc.bin dv-pal.dv dv-ntsc.dv)
 make_ep88(ep88-dv-hdv-dv.bin dv-pal-32k.dv hdv.ts dv-ntsc.dv)
 make_ep88(ep88-dv-stray.bin dv-pal-32k.dv hdv.ts@300 dv-pal-32k.dv)
 make_ep88(ep88-hdv-pid.bin hdv.ts hdv-720p.ts)
 make_ep88(ep88-pal-48k-32k.bin dv-pal.dv dv-pal-32k.dv)
+make_ep88(ep88-hdv-dv.bin hdv.ts dv-pal.dv)
 
 file(WRITE "${stamp}" "${key}")
 message(STATUS "Test fixtures made in ${OUT}")

@@ -60,7 +60,7 @@ final class Core {
             EVT_ERROR = 8, EVT_INPUT_FORMAT = 6, EVT_CAPTURE_ENDED = 11, EVT_NO_VIDEO = 13;
 
     // formatFlags()
-    static final int FMT_TITLE = 1, FMT_SPLIT = 2, FMT_DEFAULT = 8;
+    static final int FMT_TITLE = 1, FMT_SPLIT = 2, FMT_DEFAULT = 8, FMT_ASPECT = 16;
 
     // formatOptionInts()
     static final int FO_HAS_QUALITY = 0, FO_HAS_DEINTERLACE = 1, FO_HAS_FFV1 = 2, FO_QUALITY_MIN = 3,
@@ -75,11 +75,11 @@ final class Core {
     // getControl()
     static final int CT_MIN = 0, CT_MAX = 1, CT_STEP = 2, CT_DEF = 3, CT_VALUE = 4, CT_ENABLED = 5;
 
-    // capture options (marvin_jni.c build_opts)
+    // capture options (marvin_jni.c build_opts); OPT_ASPECT: analog and DV files, OPT_ASPECT_HDV: HDV files
     static final int OPT_FORMAT_ANALOG = 0, OPT_FORMAT_DV = 1, OPT_FORMAT_HDV = 2, OPT_ASPECT = 3,
             OPT_SCENE_SPLIT = 4, OPT_IDLE_STOP = 5, OPT_MAX_DURATION = 6, OPT_FIRST_NUMBER = 7,
             OPT_DEINTERLACE = 8, OPT_VIDEO_QUALITY = 9, OPT_FFV1 = 10, OPT_START_DECK = 11,
-            OPT_REWIND_FIRST = 12, OPT_COUNT = 13;
+            OPT_REWIND_FIRST = 12, OPT_ASPECT_HDV = 13, OPT_COUNT = 14;
 
     // pin_deck_cmd_t, pin_deck_state_t
     static final int DECK_PLAY = 0, DECK_PAUSE = 1, DECK_STOP = 2, DECK_FF = 3, DECK_REW = 4;
@@ -137,6 +137,11 @@ final class Core {
     static native String formatLabel(int format);
     static native int formatFlags(int format);
     static native String formatWarning(int format);
+    /** The file name field's help: which formats store the title (input INPUT_DV: format = DV, formatHdv =
+     *  HDV; an analog input: format = analog). -1 = no list yet. */
+    static native String formatTitleHelp(int input, int format, int formatHdv);
+    /** The aspect setting's help for a format: what it does, or why it is off (FMT_ASPECT not set). */
+    static native String formatAspectHelp(int format);
     static native int[] formatOptionInts(int format);
     static native String[] formatOptionTexts(int format);
     static native String formatQualityHint(int format, int quality, int deinterlace, boolean is60hz);

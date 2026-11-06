@@ -99,6 +99,10 @@ int pin_hwenc_probe(void);
 /* 1 if codec's encoder opened in the probe (running it first if needed). */
 int pin_hwenc_available(pin_hwenc_codec_t c);
 
+/* 1 if a probe already ran and codec's encoder opened in it; never probes (for texts a GUI may
+ * ask for on its UI thread before the probe is done: 0 then). */
+int pin_hwenc_known_available(pin_hwenc_codec_t c);
+
 /* VideoToolbox's constant quality (0..100, higher = better) for a quality value (0..51,
  * lower = better): 100 - 1.9 q, at least 1. 18 -> 65.8, 23 -> 56.3, 51 -> 3.1. Picked so the
  * default lands where VideoToolbox's output looks like the source and its size is near the

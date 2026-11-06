@@ -28,9 +28,9 @@ Settings:
   --deinterlace yes|no     H.264 / HEVC: yes (default) turns every field into a frame (bwdif), 25i into 50p and 29.97i into 59.94p; no keeps the fields, storing each interlaced frame as one progressive picture, which loses quality on motion
   --ffv1-compression fast|smaller|smallest
                            ffv1-mkv: fast (default) is the quickest; smaller (range coder) and smallest (range coder, large context model) save a few percent for more CPU time. All are lossless.
-  --aspect auto|4:3|16:9   (default auto) sets the display aspect ratio flag in the output file, for containers that can carry it: avi, mkv, mov, and the NUT stream on stdout. Raw .dv and .ts/.m2t files have no such flag and are unchanged. auto = from the stream for DV, 16:9 for HDV, 4:3 for analog.
+  --aspect auto|4:3|16:9   (default auto) sets the display aspect ratio flag in the output file, for the formats that store one: avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, and the analog NUT stream on stdout. Raw .dv (dv) and .ts/.m2t (hdv-ts) files have no such flag and are unchanged: players take the aspect from the video itself. auto = from the stream for DV, 16:9 for HDV, 4:3 for analog.
   --split                  scene split (DV/HDV): a confirmed timecode or recording-date break starts a new file. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.
-  --title T                metadata title, where the format supports it
+  --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv and the analog NUT stream on stdout. Raw .dv (dv) and .ts/.m2t (hdv-ts) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.
   --keep-raw               keep the raw .dv/.ts next to a rewrapped file
   --overwrite              overwrite an existing target file (else an error)
   Analog picture and audio controls (svideo/composite only; with defaults):

@@ -215,11 +215,13 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
+                                        <!-- help text from the core: which format stores the title -->
                                         <TextBox Text="{x:Bind VM.AnalogName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  PlaceholderText="Name and title"
                                                  IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
                                                  AutomationProperties.Name="Analog name and title"
-                                                 AutomationProperties.HelpText="File name (the extension follows the format), also stored as the title metadata of the file" />
+                                                 AutomationProperties.HelpText="{x:Bind VM.AnalogNameHelp, Mode=OneWay}"
+                                                 ToolTipService.ToolTip="{x:Bind VM.AnalogNameHelp, Mode=OneWay}" />
                                         <Button Grid.Column="1" VerticalAlignment="Stretch" Width="40" Padding="0" Tag="analog" Click="Browse_Click"
                                                 IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
                                                 AutomationProperties.Name="Choose analog output folder" ToolTipService.ToolTip="{x:Bind VM.AnalogOutputDir, Mode=OneWay}">
@@ -259,15 +261,20 @@
                                                 </Button.Flyout>
                                             </Button>
                                         </Grid>
-                                        <ComboBox Grid.Column="1" Header="Aspect" HorizontalAlignment="Stretch"
-                                                  SelectedIndex="{x:Bind VM.AnalogAspectIndex, Mode=TwoWay}"
-                                                  IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
-                                                  AutomationProperties.Name="Analog aspect ratio"
-                                                  AutomationProperties.HelpText="4:3, or 16:9 for anamorphic widescreen tapes. Affects the preview and the file.">
-                                            <ComboBoxItem Content="Auto" />
-                                            <ComboBoxItem Content="4:3" />
-                                            <ComboBoxItem Content="16:9" />
-                                        </ComboBox>
+                                        <!-- disabled for a format that stores no aspect (none of the analog ones today); a disabled
+                                             control shows no tooltip, so the Grid around it carries the core's text -->
+                                        <Grid Grid.Column="1" Background="Transparent"
+                                              ToolTipService.ToolTip="{x:Bind VM.AnalogAspectHelp, Mode=OneWay}">
+                                            <ComboBox Header="Aspect" HorizontalAlignment="Stretch"
+                                                      SelectedIndex="{x:Bind VM.AnalogAspectIndex, Mode=TwoWay}"
+                                                      IsEnabled="{x:Bind local:MainWindow.Both(VM.AnalogAspectEnabled, VM.IsIdle), Mode=OneWay}"
+                                                      AutomationProperties.Name="Analog aspect ratio"
+                                                      AutomationProperties.HelpText="{x:Bind VM.AnalogAspectHelp, Mode=OneWay}">
+                                                <ComboBoxItem Content="Auto" />
+                                                <ComboBoxItem Content="4:3" />
+                                                <ComboBoxItem Content="16:9" />
+                                            </ComboBox>
+                                        </Grid>
                                     </Grid>
                                     <!-- the core's warning for the selected format (H.264 / HEVC: lossy) -->
                                     <InfoBar Severity="Warning" IsClosable="False"
@@ -444,11 +451,13 @@
                                             <ColumnDefinition Width="*" />
                                             <ColumnDefinition Width="Auto" />
                                         </Grid.ColumnDefinitions>
+                                        <!-- help text from the core: which of the DV and HDV formats store the title -->
                                         <TextBox Text="{x:Bind VM.DvName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                                  PlaceholderText="Name and title"
                                                  IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
                                                  AutomationProperties.Name="DV name and title"
-                                                 AutomationProperties.HelpText="File name for DV and HDV (scenes and passes get numbered suffixes), also stored as the title metadata of the file" />
+                                                 AutomationProperties.HelpText="{x:Bind VM.DvNameHelp, Mode=OneWay}"
+                                                 ToolTipService.ToolTip="{x:Bind VM.DvNameHelp, Mode=OneWay}" />
                                         <Button Grid.Column="1" VerticalAlignment="Stretch" Width="40" Padding="0" Tag="dv" Click="Browse_Click"
                                                 IsEnabled="{x:Bind VM.IsIdle, Mode=OneWay}"
                                                 AutomationProperties.Name="Choose DV output folder" ToolTipService.ToolTip="{x:Bind VM.DvOutputDir, Mode=OneWay}">

@@ -40,8 +40,10 @@ struct KindSettingsView: View {
                     }
                 }
                 Field("Aspect") {
+                    // disabled for a format that stores no aspect (raw .dv / .m2t): the choice is kept, Auto applies
                     AspectPicker(selection: $settings.aspectIndex, label: "\(settings.tabHeader) aspect ratio",
-                                 help: "Overrides the aspect ratio for the preview and the file. Auto uses what the tape reports.")
+                                 help: settings.aspectHelp)
+                        .disabled(!settings.aspectEnabled)
                 }
                 .frame(width: 104)
             }

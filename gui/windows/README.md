@@ -225,7 +225,7 @@ MarvinCaptureGUI/
                 KindSettingsViewModel (DV / HDV tab), FormatOptionsViewModel
                 (+ FormatChoices: the format settings), ControlSliderViewModel,
                 DeviceItemViewModel
-  Views/        KindSettingsView (format, title, split, idle, passes),
+  Views/        KindSettingsView (format, aspect, split, idle, passes),
                 FormatOptionsView (the format gear's Flyout)
   Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarButton + TaskbarIcons (ITaskbarList3), DbThumbConverter,
                 MarvinIdle (the animated logo on the no-signal screen, XAML shapes)
@@ -298,10 +298,22 @@ MarvinCaptureGUI/
   (`gui.window`, `gui.window_maximized`) and restored at start. A saved
   rectangle that no longer touches any monitor falls back to the centred
   default.
-- Aspect is set per kind (analog, DV, HDV) next to each format. The one for
-  what is currently arriving also drives the preview (`pin_set_aspect`). The
+- Aspect is set per kind (analog, DV, HDV) next to each format, and each file of a
+  capture gets its own kind's: `BuildCaptureOpts` puts the analog or DV tab's into
+  `Aspect` and the HDV tab's into `AspectHdv`, so after a DV <-> HDV change the new
+  file does not take the other tab's. The drop-down is disabled while its format
+  stores no aspect (`PinFormatInfo.SupportsAspect` 0: raw `.dv`, HDV `.m2t`), with the
+  core's reason as its tooltip (`Native.FormatAspectHelp`, on a Grid around it, since a
+  disabled control shows none); the choice is kept and saved, but Auto is what goes
+  into the capture options and the preview (`EffectiveAspect`, `AnalogEffectiveAspect`).
+  The one for what is currently arriving also drives the preview (`pin_set_aspect`). The
   preview panel itself is sized to `pin_fit_rect`, so the window background
   forms the letterbox instead of drawn black bars.
+- The name field (analog, and the DV / HDV one) is also the files' title: it always goes
+  into `Title`, and the core stores it in each file whose format has one (not raw `.dv`
+  or `.m2t`), so a tape that switches between DV and HDV gets it where it fits. Its
+  tooltip comes from the core (`Native.FormatTitleHelp`) and names which of the
+  selected formats store it.
 - Whenever the output path or format changes, the app calls
   `pin_set_output_hint`, so the status bar can show free space and capture
   time left before a capture starts. Both turn red when the core reports

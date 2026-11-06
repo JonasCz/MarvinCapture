@@ -51,7 +51,8 @@ final class KindSettingsModel: Identifiable {
     var maxDurationMinutes = 0 { didSet { onChanged?(self, .duration) } }
     /// The user's own pass count; kept (and saved) while the entry is greyed out, so it comes back.
     var passes = 1 { didSet { onChanged?(self, .passes) } }
-    /// Aspect override (pin_aspect_t order: Auto, 4:3, 16:9).
+    /// Aspect override (pin_aspect_t order: Auto, 4:3, 16:9): the user's choice, kept (and saved) while the
+    /// picker is disabled, so it comes back with a format that stores an aspect.
     var aspectIndex = 0 { didSet { onChanged?(self, .aspect) } }
 
     init(kind: pin_kind_t, tabHeader: String, choices: FormatChoices) {
@@ -68,7 +69,13 @@ final class KindSettingsModel: Identifiable {
         selectedFormat = formats.first { $0.format == keep } ?? formats.first(where: \.isDefault) ?? formats.first
     }
 
-    var titleEnabled: Bool { selectedFormat?.supportsTitle ?? false }
+    /// The aspect picker is enabled only for a format that stores an aspect (not raw .dv / .m2t).
+    var aspectEnabled: Bool { selectedFormat?.supportsAspect ?? false }
+    /// The aspect (pin_aspect_t index) this kind's files and its preview use: the choice, or Auto while the
+    /// picker is disabled (a disabled control never has an effect).
+    var effectiveAspectIndex: Int { aspectEnabled ? aspectIndex : 0 }
+    /// The aspect picker's tooltip, from the core: what it does for the selected format, or why it is disabled.
+    var aspectHelp: String { selectedFormat.map { Pin.formatAspectHelp($0.format) } ?? "" }
     var splitEnabled: Bool { selectedFormat?.supportsSceneSplit ?? false }
     var passesEnabled: Bool { selectedFormat?.supportsMultiPass ?? false }
 

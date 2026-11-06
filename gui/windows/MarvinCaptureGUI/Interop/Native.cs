@@ -249,6 +249,53 @@ public static unsafe partial class Native
     }
 
     [LibraryImport(Lib)]
+    private static partial void pin_format_title_help(PinInput input, PinFormat format, PinFormat formatHdv,
+                                                      byte* out_, nuint cap);
+
+    /// <summary>
+    /// Help text of a "name and title" field, naming the selected formats that store the title and
+    /// those that have none. input Dv: the DV input's field (format = the DV format, formatHdv = the
+    /// HDV format); an analog input: the analog field (formatHdv is ignored). PinFormat.Count for a
+    /// list that is still empty.
+    /// </summary>
+    public static string FormatTitleHelp(PinInput input, PinFormat format, PinFormat formatHdv)
+    {
+        const int cap = 512;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_title_help(input, format, formatHdv, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_aspect_help(PinFormat f, byte* out_, nuint cap);
+
+    /// <summary>Help text of format f's aspect drop-down: what it does, or (a format that stores no
+    /// aspect, PinFormatInfo.SupportsAspect 0) why it is disabled and which formats store one.</summary>
+    public static string FormatAspectHelp(PinFormat f)
+    {
+        const int cap = 512;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_aspect_help(f, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
     private static partial PinStatus pin_format_options(PinFormat f, ref PinFormatOptions out_);
 
     /// <summary>Which format settings apply to f, with the core's labels, ranges and help texts.</summary>

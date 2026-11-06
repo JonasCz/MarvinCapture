@@ -110,15 +110,20 @@ pin_engine_replay_test_env(test_replay_hwenc)
 set_tests_properties(test_replay_hwenc PROPERTIES TIMEOUT 60)
 
 # Tapes that mix formats: PAL -> NTSC as raw DV and 48 -> 32 kHz as DV AVI (two files each,
-# libavformat reads the AVIs); DV -> HDV -> DV to files (.dv, .m2t, .dv) and to a pipe (ends
-# at the change, with the reason).
+# libavformat reads the AVIs); DV -> HDV -> DV to files (.dv, .m2t, .dv; as DV AVI each file
+# with its own kind's aspect and the title) and to a pipe (ends at the change, with the reason);
+# HDV -> DV as HDV MKV and DV AVI.
 add_executable(test_replay_mixed_dv test_replay_mixed_dv.c)
 target_link_libraries(test_replay_mixed_dv PRIVATE marvin-core pinnacle_sinks)
 add_test(NAME test_replay_mixed_dv COMMAND test_replay_mixed_dv "${PIN_TEST_DATA}")
 pin_engine_replay_test_env(test_replay_mixed_dv)
 set_tests_properties(test_replay_mixed_dv PROPERTIES TIMEOUT 60)
-pin_engine_replay_test(test_replay_mixed_kind "${PIN_TEST_DATA}")
-set_tests_properties(test_replay_mixed_kind PROPERTIES TIMEOUT 60)
+# DV -> HDV -> DV (and HDV -> DV) with per-kind aspect and the title: libavformat reads the files.
+add_executable(test_replay_mixed_kind test_replay_mixed_kind.c)
+target_link_libraries(test_replay_mixed_kind PRIVATE marvin-core pinnacle_sinks)
+add_test(NAME test_replay_mixed_kind COMMAND test_replay_mixed_kind "${PIN_TEST_DATA}")
+pin_engine_replay_test_env(test_replay_mixed_kind)
+set_tests_properties(test_replay_mixed_kind PROPERTIES TIMEOUT 90)
 
 # The output drive gets full, fails or is slow (the test seams PIN_TEST_FREE_SPACE,
 # PIN_TEST_WRITE_FAIL_AFTER, PIN_TEST_SINK_DELAY_MS, PIN_TEST_WRITER_QUEUE): DISK_FULL,

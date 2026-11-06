@@ -23,6 +23,7 @@ changed. It takes about a second.
 | `ep88-dv-stray.bin` | `dv-pal-32k.dv`, the first 300 TS packets of `hdv.ts` (too short a burst to switch), `dv-pal-32k.dv` | `test_reassembler_mixed` |
 | `ep88-hdv-pid.bin` | `hdv.ts` then `hdv-720p.ts`: the video PID (0x810 to 0x100), PMT and format change | `test_reassembler_mixed` |
 | `ep88-pal-48k-32k.bin` | Audio mode change: `dv-pal.dv` (48 kHz) then `dv-pal-32k.dv` (32 kHz) | `test_replay_mixed_dv` |
+| `ep88-hdv-dv.bin` | A capture that starts on HDV: `hdv.ts` then `dv-pal.dv` | `test_replay_mixed_kind` |
 
 The DV and TS files are ffmpeg's `testsrc2` pattern and a tone (the exact commands are in
 `make_fixtures.cmake`). The `ep88-*.bin` dumps are what the device would send for those

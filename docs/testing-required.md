@@ -60,6 +60,7 @@ Code is referred to by file and function rather than by line number.
 | 3.3 PAL -> NTSC | every DV frame sized by its own evidence | `test_reassembler_mixed`, `test_replay_mixed_dv` | HW, FW-PC: a real mixed tape |
 | 3.4-3.6 format fixed at open | format watch with a cool-down; a new file where the output cannot carry a change | `test_pin_fmtwatch`, `test_replay_mixed_dv` | CODE: aspect end to end; HW: 16:9, 12-bit, 4-channel DV |
 | 3.7 HDV format / PID change | PID change followed; picture buffer capped; a format change starts a new file | `test_reassembler_mixed`, `test_pin_fmtwatch` | CODE: the session's cut end to end; HW |
+| 3.15 per-kind options | aspect (`aspect` / `aspect_hdv`) and title per kind after a DV <-> HDV change; aspect drop-down disabled for raw `.dv` / `.m2t`; core help texts | `test_replay_mixed_kind`, `test_pin_platform_api`, `test_pin_ui_api` | CODE: build and check the GUI side on Windows, macOS, Android (unbuilt) |
 | 3.8 HDV scene split | hold-back FIFO, debounce in GOPs, cut on the GOP, PAT/PMT in front | `test_replay_hdv_split`, `test_pin_holdback`, `test_pin_scene` | HW: a camera's tape |
 | 3.10 scene detector rate | restarts at every format cut | none of its own | CODE |
 | 5.3 disk full, slow, write error | test seams (no fix needed) | `test_replay_disk`, `test_cli_pipe` | HW: a real full or slow drive; CODE: HDV, analog |
@@ -447,12 +448,28 @@ lists "what happens at the moment the signal drops or returns mid-capture" as op
 
 **3.15 Open points in the format-change handling** (new this round, from `e5fa4ee`).
 Decisions first, then **CODE**:
-- **Per-kind options come from the first kind.** The GUIs fill title, aspect, scene
-  split, passes, idle stop and maximum duration from the DV or the HDV settings,
-  whichever kind was arriving when the capture started (`BuildCaptureOpts()` on Windows,
-  the same in the macOS and Android ports). After a DV <-> HDV change the new kind's
-  file uses the other kind's values; only the output format is per kind in the capture
-  options (`format_dv`, `format_hdv`).
+- **Per-kind options come from the first kind.** **Partly fixed:** aspect and title are
+  now per kind. `pin_capture_opts_t` has `aspect_hdv` next to `aspect` (analog and DV
+  files take `aspect`, HDV files `aspect_hdv`, at every file open: start, scene split,
+  format change, FAT32 cut, pass; an older caller's size gets `aspect_hdv = aspect`; the
+  CLI's `--aspect` sets both), and the GUIs fill them from the analog / DV and the HDV
+  settings, Auto where the format stores no aspect (`pin_format_info_t.supports_aspect`:
+  not raw `.dv` or `.m2t`; the aspect drop-down is then disabled, with the core's
+  reason, `pin_format_aspect_help`). The GUIs always pass the name as the title; the
+  core stores it in each file whose format has one (`supports_title`), so a DV AVI after
+  an HDV `.m2t` gets it too. The name field's tooltip names those formats
+  (`pin_format_title_help`). Tests: `test_replay_mixed_kind` (DV -> HDV -> DV as DV AVI
+  with 16:9 for DV, 4:3 for HDV and a title: both AVIs read back 16:9 with the title;
+  a tape that starts on HDV: the DV AVI after the `.m2t` is 16:9 with the title),
+  `test_pin_platform_api` (`supports_aspect`, the old sizes), `test_pin_ui_api` (the help
+  texts). Not testable yet: `aspect_hdv` in an HDV file, since no HDV format that stores
+  an aspect can be captured (HDV MOV / MKV are disabled). **Deliberately still from the
+  start kind:** scene split, idle stop, maximum duration and passes (per capture / tape).
+  **CODE, unbuilt:** the GUI side (Windows, macOS, Android: interop, enable rule,
+  tooltips, `BuildCaptureOpts` / `buildCaptureOpts` / `buildPlan`) was not built or run;
+  build each and check the aspect drop-downs (DV tab on raw DV: greyed with the
+  tooltip; DV AVI: enabled; the HDV tab: always greyed today) and that a DV <-> HDV
+  capture gives each file its tab's aspect.
 - **A bit-depth-only change splits non-raw DV.** 12-bit <-> 16-bit at the same rate and
   channels starts a new DV AVI/MOV/H.264/HEVC file, probably needlessly: those files
   hold 16-bit PCM either way.
@@ -893,8 +910,9 @@ For what is left after this round:
    - CI: a Linux push job with ctest, and sanitizer builds;
    - `pin_hdv_audio` tests (1.9), the PAL timecode range (2.4), the HDV remux under
      damage before enabling HDV MOV/MKV.
-3. **Decide:** the points in 3.15 (per-kind options after a DV/HDV change, a
-   bit-depth-only change), what NOT_IMPLEMENTED means (4.1), the zero GOP timecode
+3. **Decide:** the points in 3.15 (a bit-depth-only change; the per-kind options after
+   a DV/HDV change are decided: aspect and title per kind, the rest from the start kind),
+   what NOT_IMPLEMENTED means (4.1), the zero GOP timecode
    (3.9, after step 1), and when to take up 24p (1.4, 2.1, 2.2).
 4. **FW-PC** (first check whether a second Marvin can transmit, step 1 of that section):
    - check stream-only capture on channel 63;

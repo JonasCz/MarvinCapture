@@ -367,15 +367,23 @@ typedef struct {
     pin_kind_t kind;
     char label[PIN_NAME_MAX];   /* "DV in AVI (type 2)" */
     char extension[16];         /* "avi" (no dot) */
-    int supports_title;
+    int supports_title;         /* the file stores pin_capture_opts_t.title (raw .dv and .m2t / .ts
+                                   do not; the capture ignores it there) */
     int supports_scene_split;
     int supports_multi_pass;
     int is_default;             /* the default format for its kind */
+    /* Appended. A caller compiled before it sets size (of out[0] for pin_formats()) to its own
+     * sizeof and gets that layout. 1 if the file stores a display aspect: pin_capture_opts_t's
+     * aspect (analog, DV) or aspect_hdv (HDV) then applies. 0 for raw DV (.dv) and the raw
+     * transport stream (.m2t / .ts), which carry no aspect flag of their own: players take the
+     * aspect from the video itself (DV's 16:9 flag, the MPEG-2 sequence header), so a GUI
+     * disables its aspect control for them (pin_format_aspect_help() says why). */
+    int supports_aspect;
 } pin_format_info_t;
 
-/* Formats for a kind, in display order. Returns the count. Only the formats this platform
- * offers: every platform leaves out PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV for now (disabled, untested;
- * they remux the whole
+/* Formats for a kind, in display order. Returns the count. out[0].size sets the size of every
+ * entry (see supports_aspect). Only the formats this platform offers: every platform leaves out
+ * PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV for now (disabled, untested; they remux the whole
  * recording when it stops), and the H.264 / HEVC formats appear only where their encoder
  * opened in pin_encoders_probe() (which the first call runs if nobody did: see there).
  * pin_format_info() answers for every format. */
@@ -399,6 +407,26 @@ PIN_API int pin_encoders_probe(void);
  * already compressed), and on Android uncompressed analog AVI, whose data rate phone storage
  * may not sustain. "" for every other format. 512 bytes are enough. */
 PIN_API void pin_format_warning(pin_format_t f, char *out, size_t cap);
+
+/* Help texts (tooltips) for a GUI's "name and title" field and its aspect drop-downs, naming the
+ * formats they apply to; a GUI shows them and asks again when a format selection changes.
+ * Cheap, never runs the encoder probe. 512 bytes are enough.
+ *
+ * pin_format_title_help(): the name field, which is the files' name and also their title.
+ * input PIN_INPUT_DV: the DV input's field, which DV and HDV share; format is the DV format,
+ * format_hdv the HDV format. An analog input: the analog field; format is the analog format
+ * (format_hdv is ignored). Names the formats that store the title and those that have none:
+ * "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the title
+ * in DV AVI files; raw .m2t (HDV) files have no title." A format that is not of the kind
+ * expected there (PIN_FMT_COUNT, say, while a GUI's list is still empty) is left out.
+ *
+ * pin_format_aspect_help(): the aspect drop-down of format f's kind. If f stores an aspect
+ * (pin_format_info_t.supports_aspect): what the choice does, for which files. If not: why the
+ * drop-down is disabled (the file has no aspect flag; players take it from the video) and which
+ * formats of that kind offered here store one. "" for an unknown format. */
+PIN_API void pin_format_title_help(pin_input_t input, pin_format_t format, pin_format_t format_hdv,
+                                   char *out, size_t cap);
+PIN_API void pin_format_aspect_help(pin_format_t f, char *out, size_t cap);
 
 /* The format settings of pin_capture_opts_t and which format each applies to. */
 typedef enum {
@@ -486,8 +514,11 @@ typedef struct {
     pin_format_t format_analog; /* used when the input is analog */
     pin_format_t format_dv;     /* used when the stream turns out to be DV */
     pin_format_t format_hdv;    /* ... or HDV */
-    char title[PIN_TEXT_MAX];   /* metadata title; ignored if unsupported */
-    pin_aspect_t aspect;
+    char title[PIN_TEXT_MAX];   /* metadata title, in every file whose format stores one
+                                   (pin_format_info_t.supports_title); ignored by the others, so
+                                   a tape that switches between DV and HDV gets it where it fits */
+    pin_aspect_t aspect;        /* display aspect of analog and DV files (aspect_hdv: HDV files);
+                                   ignored by formats that store none (supports_aspect) */
     int scene_split;            /* DV/HDV: new numbered file per recording */
     int idle_stop_minutes;      /* stop (or end the pass) after this long without data / signal; 0 = never */
     int passes;                 /* DV/HDV: capture the tape this many times (>= 1) */
@@ -515,6 +546,11 @@ typedef struct {
     int deinterlace;            /* H.264 / HEVC: a pin_deinterlace_t (default DOUBLE_RATE) */
     int video_quality;          /* H.264 / HEVC: 0 (best) .. 51 (smallest), like a CRF (default 18) */
     int ffv1_compression;       /* PIN_FMT_ANALOG_FFV1_MKV: a pin_ffv1_compression_t (default FAST) */
+    /* Appended field, ABI-compatible: the display aspect of HDV files (default AUTO), as `aspect`
+     * is that of DV files, so each file of a tape that switches between DV and HDV gets its own
+     * kind's, whichever kind the capture started on. A caller compiled before it passes the old
+     * size and gets aspect_hdv = aspect. */
+    pin_aspect_t aspect_hdv;
 } pin_capture_opts_t;
 
 /* Fills *o with the defaults. A caller compiled against an older pin_api.h sets o->size to its
@@ -906,7 +942,8 @@ PIN_API double pin_clock_now(void);
 /* Stop decoding while the preview isn't visible (window minimised etc.). */
 PIN_API void pin_preview_enable(pin_session_t *s, int enabled);
 
-/* Aspect override for the preview and new captures. */
+/* Aspect override for the preview of whatever arrives (and what an analog capture's AUTO aspect
+ * resolves to). The files take theirs from pin_capture_opts_t (aspect, aspect_hdv). */
 PIN_API void pin_set_aspect(pin_session_t *s, pin_aspect_t aspect);
 
 /* Letterbox helper: the largest rectangle with display aspect dar inside a

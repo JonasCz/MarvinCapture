@@ -239,6 +239,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<FormatItem> AnalogFormats { get; } = new();
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AnalogAspectEnabled), nameof(AnalogEffectiveAspect), nameof(AnalogAspectHelp),
+                              nameof(AnalogNameHelp))]
     private FormatItem? _analogFormat;
 
     /// <summary>A saved or command-line analog format the list may not have yet (see <see cref="RefreshFormats"/>).</summary>
@@ -250,7 +252,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>The analog format's settings, behind the gear next to its drop-down.</summary>
     public FormatOptionsViewModel AnalogFormatOptions { get; }
 
-    /// <summary>File base name; also embedded as the title when the format supports one.</summary>
+    /// <summary>File base name; also passed as the title (the core stores it where the format has one).</summary>
     [ObservableProperty] private string _analogName = "";
     [ObservableProperty] private string _analogOutputDir = "";
 
@@ -295,11 +297,28 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         {
             SaveSetting("gui.format_analog", ((int)value.Format).ToString(CultureInfo.InvariantCulture));
         }
+        ApplyPreviewAspect();
         PushOutputHint();
     }
 
-    /// <summary>Aspect override for analog sources (PinAspect order: Auto, 4:3, 16:9).</summary>
-    [ObservableProperty] private int _analogAspectIndex;
+    /// <summary>Aspect override for analog sources (PinAspect order: Auto, 4:3, 16:9): the user's choice,
+    /// kept while the drop-down is disabled.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(AnalogEffectiveAspect))]
+    private int _analogAspectIndex;
+
+    /// <summary>The analog aspect drop-down is enabled only for a format that stores an aspect (every
+    /// analog format does today).</summary>
+    public bool AnalogAspectEnabled => AnalogFormat?.SupportsAspect ?? false;
+
+    /// <summary>The analog aspect the file and the preview use: the choice, or Auto while the drop-down is disabled.</summary>
+    public PinAspect AnalogEffectiveAspect => AnalogAspectEnabled ? (PinAspect)AnalogAspectIndex : PinAspect.Auto;
+
+    /// <summary>Tooltip of the analog aspect drop-down, from the core.</summary>
+    public string AnalogAspectHelp => AnalogFormat is null ? "" : Native.FormatAspectHelp(AnalogFormat.Format);
+
+    /// <summary>Tooltip of the analog name field, from the core: whether the selected format stores the title.</summary>
+    public string AnalogNameHelp => Native.FormatTitleHelp(PinInput.SVideo, AnalogFormat?.Format ?? PinFormat.Count, PinFormat.Count);
 
     partial void OnAnalogAspectIndexChanged(int value)
     {
@@ -309,7 +328,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     // ================================================================== DV / HDV
 
-    /// <summary>File base name for DV and HDV; also embedded as the title when the format supports one.</summary>
+    /// <summary>File base name for DV and HDV; also passed as the title (the core stores it in each file
+    /// whose format has one).</summary>
     [ObservableProperty] private string _dvName = "";
     [ObservableProperty] private string _dvOutputDir = "";
 
@@ -328,6 +348,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<KindSettingsViewModel> KindTabs { get; } = new();
     public KindSettingsViewModel DvSettings { get; }
     public KindSettingsViewModel HdvSettings { get; }
+
+    /// <summary>Tooltip of the DV / HDV name field, from the core: which of the DV and HDV formats store the title.</summary>
+    public string DvNameHelp => Native.FormatTitleHelp(PinInput.Dv, DvSettings.SelectedFormat?.Format ?? PinFormat.Count,
+                                                       HdvSettings.SelectedFormat?.Format ?? PinFormat.Count);
 
     /// <summary>DV / HDV file-options tab. Follows the detected stream; remembered for the next start.</summary>
     [ObservableProperty] private int _selectedKindTabIndex;
@@ -403,10 +427,11 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>The aspect override that applies to what is arriving right now: the analog one, or
-    /// the DV / HDV tab's, depending on the input and the detected stream. Drives the preview.</summary>
+    /// the DV / HDV tab's, depending on the input and the detected stream; Auto where that format
+    /// stores no aspect (its drop-down is disabled). Drives the preview.</summary>
     public PinAspect ActiveAspect => !IsDvInput
-        ? (PinAspect)AnalogAspectIndex
-        : (PinAspect)(_lastStreamKind == PinKind.Hdv ? HdvSettings : DvSettings).AspectIndex;
+        ? AnalogEffectiveAspect
+        : (_lastStreamKind == PinKind.Hdv ? HdvSettings : DvSettings).EffectiveAspect;
 
     private PinAspect? _appliedAspect;
 
@@ -570,13 +595,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             tab.PropertyChanged += (s, e) =>
             {
                 SaveKindSettings((KindSettingsViewModel)s!);
-                if (e.PropertyName == nameof(KindSettingsViewModel.AspectIndex))
-                {
-                    ApplyPreviewAspect();
-                }
                 if (e.PropertyName is nameof(KindSettingsViewModel.SelectedFormat) or nameof(KindSettingsViewModel.AspectIndex))
                 {
+                    ApplyPreviewAspect(); // a format without an aspect makes it Auto
                     PushOutputHint();
+                }
+                if (e.PropertyName == nameof(KindSettingsViewModel.SelectedFormat))
+                {
+                    OnPropertyChanged(nameof(DvNameHelp));
                 }
             };
         }
@@ -884,12 +910,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         if (DvSettings.SelectedFormat is not null) o.FormatDv = DvSettings.SelectedFormat.Format;
         if (HdvSettings.SelectedFormat is not null) o.FormatHdv = HdvSettings.SelectedFormat.Format;
 
-        // The DV input auto-detects DV vs HDV; the per-kind options that
-        // are scalar in pin_capture_opts_t come from the tab matching what is
-        // actually arriving right now.
+        // The DV input auto-detects DV vs HDV, and a tape can switch between them. Each file gets its
+        // own kind's aspect (Aspect: analog or the DV tab, AspectHdv: the HDV tab; Auto where the format
+        // stores none) and the name as its title (the core leaves it out of formats that have none).
+        // Scene split, the two stops and the passes come from the tab matching what is arriving now.
         var kind = _lastStreamKind == PinKind.Hdv ? HdvSettings : DvSettings;
-        o.Title = analog ? (AnalogFormat?.SupportsTitle == true ? AnalogName : "") : (kind.TitleEnabled ? DvName : "");
-        o.Aspect = ActiveAspect;
+        o.Title = analog ? AnalogName : DvName;
+        o.Aspect = analog ? AnalogEffectiveAspect : DvSettings.EffectiveAspect;
+        o.AspectHdv = HdvSettings.EffectiveAspect;
         o.SceneSplit = !analog && kind.SplitIntoScenes && kind.SplitEnabled ? 1 : 0;
         o.IdleStopMinutes = (int)Math.Max(0, analog ? AnalogIdleStopMinutes : kind.IdleStopMinutes);
         o.MaxDurationMinutes = (int)Math.Max(0, analog ? AnalogMaxDurationMinutes : kind.MaxDurationMinutes);

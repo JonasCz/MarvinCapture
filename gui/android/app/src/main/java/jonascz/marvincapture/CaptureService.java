@@ -357,10 +357,11 @@ public final class CaptureService extends Service {
         if (session != 0) Core.setControl(session, control, value);
     }
 
-    /** The aspect override of what is arriving now (analog, or the detected DV / HDV). */
+    /** The aspect override of what is arriving now (analog, or the detected DV / HDV); Auto where that
+     *  kind's format stores no aspect (the setting is disabled). Call again when a format changes. */
     void applyAspect() {
         if (session == 0) return;
-        int a = Settings.aspect(Settings.input() == Core.INPUT_DV ? lastStreamKind : Core.KIND_ANALOG);
+        int a = Settings.effectiveAspect(Settings.input() == Core.INPUT_DV ? lastStreamKind : Core.KIND_ANALOG);
         if (a != appliedAspect) {
             Core.setAspect(session, a);
             appliedAspect = a;
@@ -393,12 +394,16 @@ public final class CaptureService extends Service {
         int fa = Settings.format(Core.KIND_ANALOG), fd = Settings.format(Core.KIND_DV), fh = Settings.format(Core.KIND_HDV);
         int now = kind == Core.KIND_ANALOG ? fa : kind == Core.KIND_HDV ? fh : fd;
         int flags = now >= 0 ? Core.formatFlags(now) : 0;
-        p.title = (flags & Core.FMT_TITLE) != 0 ? name : "";
+        // A tape can switch between DV and HDV: each file gets its own kind's aspect (Auto where the format
+        // stores none) and the name as its title (the core leaves it out of formats that have none). Scene
+        // split and the two stops come from the kind arriving now.
+        p.title = name;
         int[] o = p.opts;
         o[Core.OPT_FORMAT_ANALOG] = fa;
         o[Core.OPT_FORMAT_DV] = fd;
         o[Core.OPT_FORMAT_HDV] = fh;
-        o[Core.OPT_ASPECT] = Settings.aspect(kind);
+        o[Core.OPT_ASPECT] = Settings.effectiveAspect(analog ? Core.KIND_ANALOG : Core.KIND_DV);
+        o[Core.OPT_ASPECT_HDV] = Settings.effectiveAspect(Core.KIND_HDV);
         o[Core.OPT_SCENE_SPLIT] = !analog && Settings.split(kind) && (flags & Core.FMT_SPLIT) != 0 ? 1 : 0;
         o[Core.OPT_IDLE_STOP] = Settings.idleStop(kind);
         o[Core.OPT_MAX_DURATION] = Settings.maxDuration(kind);

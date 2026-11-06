@@ -112,6 +112,11 @@ int pin_session_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 pin_status_t pin_session_format_info(pin_format_t f, pin_format_info_t *out);
 /* pin_format_warning(): the platform's warning for choosing f, "" if none. */
 void pin_session_format_warning(pin_format_t f, char *out, size_t cap);
+/* pin_format_title_help() / pin_format_aspect_help(): which formats store the title / an
+ * aspect, for the GUI's name field and aspect drop-downs. Never probe the encoders. */
+void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_format_t format_hdv,
+                                   char *out, size_t cap);
+void pin_session_format_aspect_help(pin_format_t f, char *out, size_t cap);
 /* 1 if this machine can write format f: every format but the H.264 / HEVC ones, which need
  * their encoder (pin_hwenc_available(), probing on the first call). */
 int pin_session_format_available(pin_format_t f);

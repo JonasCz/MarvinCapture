@@ -987,6 +987,14 @@ static void scene_cut(pin_session_t *s, long cut_frame_index)
 
 static void file_format_for_stream(pin_session_t *s);
 
+/* The aspect the user chose for files of this kind: aspect_hdv for HDV, aspect for DV and
+ * analog. Every file open (start, scene split, format change, FAT32 cut, pass) takes its own
+ * kind's, whichever kind the capture started on. */
+static pin_aspect_t file_aspect(const pin_capture_opts_t *o, pin_kind_t kind)
+{
+    return kind == PIN_KIND_HDV ? o->aspect_hdv : o->aspect;
+}
+
 /* A format change's new file begins here (pin_holdback_cut()): the units before it went
  * to the old one. It is a hard cut, never merged back like a scene split's: the old file
  * is finished and the next one opened with the new format (kind, format and extension,
@@ -1018,7 +1026,8 @@ static void capture_format_change(pin_session_t *s, const pin_stream_fmt_t *old,
     const pin_stream_fmt_t *nf = &s->fmtw.cur;
     int to_stdout = pin_path_is_stdout(s->capture_opts.path);
     pin_fmtchg_t act = pin_format_change_action(s->active_format, to_stdout,
-                                                s->capture_opts.aspect != PIN_ASPECT_AUTO, old, nf);
+                                                file_aspect(&s->capture_opts, s->file_kind) != PIN_ASPECT_AUTO,
+                                                old, nf);
     if (act == PIN_FMTCHG_KEEP)
         return; /* the open file carries it (a scene cut waiting for this goes ahead) */
     s->scene_cut_deferred = 0; /* this is the cut */
@@ -1083,43 +1092,60 @@ static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *d
 #define ANALOG_DEFAULT_IS_AVI 1
 #endif
 
+/* supports_title / supports_aspect: what each sink writes. sink_raw (raw .dv, raw .m2t / .ts, and
+ * DV / HDV on standard output) writes the stream as it came: no title, no aspect flag of its own
+ * (the DV frames carry the camera's, the MPEG-2 sequence headers the stream's). sink_avi (OpenDML
+ * vprp), sink_ffv1, sink_rewrap (DV AVI / MOV, HDV MOV / MKV) and sink_hwenc store both the title
+ * and the aspect (the sample aspect ratio); so does sink_nut (analog on standard output). */
 static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_ANALOG_AVI] = { .format = PIN_FMT_ANALOG_AVI, .kind = PIN_KIND_ANALOG,
         .label = "Uncompressed AVI (YUY2)", .extension = "avi",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = ANALOG_DEFAULT_IS_AVI },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = ANALOG_DEFAULT_IS_AVI,
+        .supports_aspect = 1 },
     [PIN_FMT_ANALOG_FFV1_MKV] = { .format = PIN_FMT_ANALOG_FFV1_MKV, .kind = PIN_KIND_ANALOG,
         .label = "FFV1 + FLAC lossless (MKV)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = !ANALOG_DEFAULT_IS_AVI },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = !ANALOG_DEFAULT_IS_AVI,
+        .supports_aspect = 1 },
     [PIN_FMT_DV_RAW] = { .format = PIN_FMT_DV_RAW, .kind = PIN_KIND_DV,
         .label = "Raw DV stream", .extension = "dv",
-        .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1 },
+        .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1,
+        .supports_aspect = 0 },
     [PIN_FMT_DV_AVI] = { .format = PIN_FMT_DV_AVI, .kind = PIN_KIND_DV,
         .label = "DV in AVI (type 2)", .extension = "avi",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_DV_MOV] = { .format = PIN_FMT_DV_MOV, .kind = PIN_KIND_DV,
         .label = "DV in QuickTime", .extension = "mov",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_HDV_TS] = { .format = PIN_FMT_HDV_TS, .kind = PIN_KIND_HDV,
         .label = "Raw transport stream", .extension = "m2t",
-        .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1 },
+        .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1,
+        .supports_aspect = 0 },
     [PIN_FMT_HDV_MOV] = { .format = PIN_FMT_HDV_MOV, .kind = PIN_KIND_HDV,
         .label = "HDV in QuickTime", .extension = "mov",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_HDV_MKV] = { .format = PIN_FMT_HDV_MKV, .kind = PIN_KIND_HDV,
         .label = "HDV in Matroska", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_ANALOG_H264_MKV] = { .format = PIN_FMT_ANALOG_H264_MKV, .kind = PIN_KIND_ANALOG,
         .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_ANALOG_HEVC_MKV] = { .format = PIN_FMT_ANALOG_HEVC_MKV, .kind = PIN_KIND_ANALOG,
         .label = "HEVC in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_DV_H264_MKV] = { .format = PIN_FMT_DV_H264_MKV, .kind = PIN_KIND_DV,
         .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_aspect = 1 },
     [PIN_FMT_DV_HEVC_MKV] = { .format = PIN_FMT_DV_HEVC_MKV, .kind = PIN_KIND_DV,
         .label = "HEVC in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0 },
+        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_aspect = 1 },
 };
 
 int pin_session_format_available(pin_format_t f)
@@ -1169,6 +1195,146 @@ void pin_session_format_warning(pin_format_t f, char *out, size_t cap)
 #else
     (void)f;
 #endif
+}
+
+/* ---- help texts that name formats (pin_format_title_help(), pin_format_aspect_help()) ---- */
+
+/* How those texts call each format: short, with the kind where the container alone does not say. */
+static const char *const g_format_short[PIN_FMT_COUNT] = {
+    [PIN_FMT_ANALOG_AVI] = "uncompressed AVI",
+    [PIN_FMT_ANALOG_FFV1_MKV] = "FFV1 MKV",
+    [PIN_FMT_DV_RAW] = "raw .dv",
+    [PIN_FMT_DV_AVI] = "DV AVI",
+    [PIN_FMT_DV_MOV] = "DV MOV",
+    [PIN_FMT_HDV_TS] = "raw .m2t (HDV)",
+    [PIN_FMT_HDV_MOV] = "HDV MOV",
+    [PIN_FMT_HDV_MKV] = "HDV MKV",
+    [PIN_FMT_ANALOG_H264_MKV] = "H.264 MKV",
+    [PIN_FMT_ANALOG_HEVC_MKV] = "HEVC MKV",
+    [PIN_FMT_DV_H264_MKV] = "DV H.264 MKV",
+    [PIN_FMT_DV_HEVC_MKV] = "DV HEVC MKV",
+};
+
+static int format_is_kind(pin_format_t f, pin_kind_t kind)
+{
+    return (unsigned)f < PIN_FMT_COUNT && g_formats[f].kind == kind;
+}
+
+/* format_offered() without running the encoder probe (a GUI asks for these texts on its UI
+ * thread): an H.264 / HEVC format only once a probe found its encoder. */
+static int format_offered_known(pin_format_t f)
+{
+    if (pin_fmt_is_hwenc(f))
+        return pin_hwenc_known_available(pin_fmt_is_hevc(f) ? PIN_HWENC_HEVC : PIN_HWENC_H264);
+    return format_offered(f);
+}
+
+/* Appends the short names of fs[0..n-1] as "A", "A and B", "A, B and C"; the first letter in
+ * upper case if cap_first. */
+static void append_names(char *out, size_t cap, const pin_format_t *fs, int n, int cap_first)
+{
+    for (int i = 0; i < n; i++) {
+        size_t len = strlen(out);
+        if (len + 1 >= cap)
+            return;
+        const char *sep = i == 0 ? "" : i == n - 1 ? " and " : ", ";
+        snprintf(out + len, cap - len, "%s%s", sep, g_format_short[fs[i]]);
+        if (i == 0 && cap_first)
+            out[len] = (char)toupper((unsigned char)out[len]);
+    }
+}
+
+static void append_text(char *out, size_t cap, const char *text)
+{
+    size_t len = strlen(out);
+    if (len + 1 < cap)
+        snprintf(out + len, cap - len, "%s", text);
+}
+
+void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_format_t format_hdv,
+                                   char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    pin_format_t fs[2];
+    int n = 0;
+    if (input == PIN_INPUT_DV) {
+        snprintf(out, cap, "File name for DV and HDV (scenes and passes get numbered suffixes).");
+        if (format_is_kind(format, PIN_KIND_DV))
+            fs[n++] = format;
+        if (format_is_kind(format_hdv, PIN_KIND_HDV))
+            fs[n++] = format_hdv;
+    } else {
+        snprintf(out, cap, "File name (the extension follows the format).");
+        if (format_is_kind(format, PIN_KIND_ANALOG))
+            fs[n++] = format;
+    }
+    pin_format_t with[2], without[2];
+    int nw = 0, nwo = 0;
+    for (int i = 0; i < n; i++) {
+        if (g_formats[fs[i]].supports_title)
+            with[nw++] = fs[i];
+        else
+            without[nwo++] = fs[i];
+    }
+    if (nw) {
+        append_text(out, cap, " Also stored as the title in ");
+        append_names(out, cap, with, nw, 0);
+        append_text(out, cap, " files");
+    }
+    if (nwo) {
+        append_text(out, cap, nw ? "; " : " ");
+        append_names(out, cap, without, nwo, !nw);
+        append_text(out, cap, " files have no title");
+    }
+    if (nw || nwo)
+        append_text(out, cap, ".");
+}
+
+void pin_session_format_aspect_help(pin_format_t f, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    if ((unsigned)f >= PIN_FMT_COUNT)
+        return;
+    const pin_format_info_t *fi = &g_formats[f];
+    pin_format_t one[1] = { f };
+    if (fi->supports_aspect) {
+        if (fi->kind == PIN_KIND_ANALOG)
+            snprintf(out, cap, "4:3, or 16:9 for anamorphic widescreen tapes (Auto is 4:3). Affects the "
+                     "preview and the ");
+        else
+            snprintf(out, cap, "Overrides the aspect ratio for the preview and the ");
+        append_names(out, cap, one, 1, 0);
+        append_text(out, cap, fi->kind == PIN_KIND_ANALOG ? " files."
+                    : fi->kind == PIN_KIND_DV ? " files. Auto uses what the tape reports."
+                    : " files. Auto uses what the stream reports (16:9 for HDV).");
+        return;
+    }
+    append_names(out, cap, one, 1, 1);
+    append_text(out, cap, fi->kind == PIN_KIND_HDV
+        ? " files have no aspect flag of their own: players take the aspect from the video itself "
+          "(the MPEG-2 stream says 16:9 or 4:3). So this is disabled: Auto applies, and the preview "
+          "shows what the stream reports."
+        : " files have no aspect flag of their own: players take the aspect from the video itself "
+          "(the 4:3 or 16:9 flag the camera recorded with every frame). So this is disabled: Auto "
+          "applies, and the preview shows what the tape reports.");
+    pin_format_t with[PIN_FMT_COUNT];
+    int nw = 0;
+    for (int i = 0; i < PIN_FMT_COUNT; i++)
+        if (g_formats[i].kind == fi->kind && g_formats[i].supports_aspect &&
+            format_offered_known((pin_format_t)i))
+            with[nw++] = (pin_format_t)i;
+    if (nw) {
+        append_text(out, cap, " ");
+        append_names(out, cap, with, nw, 0);
+        append_text(out, cap, " files store one.");
+    } else {
+        append_text(out, cap, fi->kind == PIN_KIND_HDV ? " None of the HDV formats here stores one."
+                                                       : " None of the formats here stores one.");
+    }
 }
 
 int pin_session_formats(pin_kind_t kind, pin_format_info_t *out, int max)
@@ -1306,11 +1472,12 @@ static void open_sink_for_scene(pin_session_t *s)
     const pin_kind_t kind = s->file_kind;
     params.kind = kind;
     strncpy(params.title, s->capture_opts.title, sizeof(params.title) - 1);
-    /* AUTO resolves to the stream's own detected aspect (DV: VAUX 16:9
+    /* The file's kind's aspect (aspect_hdv for HDV, aspect for DV and analog: a tape that
+     * switches kind gives each file its own). AUTO resolves to the stream's own detected aspect (DV: VAUX 16:9
      * flag via dv_on_unit(); analog: fixed 4:3; HDV: the sequence header's
      * aspect_ratio_information, 16:9 until one was seen) -- see the
      * coordinator's "Default AUTO = stream's own". Wider than 4:3 is 16:9. */
-    pin_aspect_t effective_aspect = s->capture_opts.aspect;
+    pin_aspect_t effective_aspect = file_aspect(&s->capture_opts, kind);
     if (effective_aspect == PIN_ASPECT_AUTO)
         effective_aspect = s->dar_num * 3 > s->dar_den * 4 ? PIN_ASPECT_16_9 : PIN_ASPECT_4_3;
     params.aspect = effective_aspect;

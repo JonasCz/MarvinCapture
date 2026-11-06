@@ -331,6 +331,57 @@ static void test_devices(void)
     CHECK(strncmp(pin_no_devices_hint(), "No devices found.", 17) == 0, "no-devices hint");
 }
 
+/* The name field's and the aspect drop-downs' help texts: they name the formats (no probe ran
+ * here, so the H.264 / HEVC formats are never listed as storing an aspect). */
+static void test_format_help(void)
+{
+    char b[512];
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_AVI, PIN_FMT_HDV_TS, b, sizeof(b));
+    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+                 "title in DV AVI files; raw .m2t (HDV) files have no title.", "title: DV AVI, raw HDV");
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, b, sizeof(b));
+    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Raw .dv and raw .m2t "
+                 "(HDV) files have no title.", "title: both raw");
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_MOV, PIN_FMT_HDV_MKV, b, sizeof(b));
+    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+                 "title in DV MOV and HDV MKV files.", "title: both store it");
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_MOV, b, sizeof(b));
+    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+                 "title in HDV MOV files; raw .dv files have no title.", "title: raw DV, HDV MOV");
+    pin_format_title_help(PIN_INPUT_SVIDEO, PIN_FMT_ANALOG_FFV1_MKV, PIN_FMT_HDV_TS, b, sizeof(b));
+    CHECK_STR(b, "File name (the extension follows the format). Also stored as the title in FFV1 MKV files.",
+              "title: analog (the HDV format ignored)");
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_COUNT, PIN_FMT_COUNT, b, sizeof(b));
+    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes).", "title: no list yet");
+    pin_format_title_help(PIN_INPUT_COMPOSITE, PIN_FMT_DV_AVI, PIN_FMT_COUNT, b, sizeof(b));
+    CHECK_STR(b, "File name (the extension follows the format).", "title: a DV format in the analog field");
+
+    pin_format_aspect_help(PIN_FMT_DV_RAW, b, sizeof(b));
+    CHECK(strncmp(b, "Raw .dv files have no aspect flag of their own: players take the aspect from the video "
+                     "itself", 88) == 0, "aspect: raw DV, why");
+    CHECK(strstr(b, " DV AVI and DV MOV files store one.") != NULL, "aspect: raw DV, which formats store one");
+    CHECK(strstr(b, "H.264") == NULL, "aspect: no encoder probed, no H.264");
+    pin_format_aspect_help(PIN_FMT_HDV_TS, b, sizeof(b));
+    CHECK(strncmp(b, "Raw .m2t (HDV) files have no aspect flag of their own", 53) == 0 &&
+          strstr(b, "None of the HDV formats here stores one.") != NULL, "aspect: raw HDV");
+    pin_format_aspect_help(PIN_FMT_DV_AVI, b, sizeof(b));
+    CHECK_STR(b, "Overrides the aspect ratio for the preview and the DV AVI files. Auto uses what the tape "
+                 "reports.", "aspect: DV AVI");
+    pin_format_aspect_help(PIN_FMT_HDV_MKV, b, sizeof(b));
+    CHECK_STR(b, "Overrides the aspect ratio for the preview and the HDV MKV files. Auto uses what the stream "
+                 "reports (16:9 for HDV).", "aspect: HDV MKV");
+    pin_format_aspect_help(PIN_FMT_ANALOG_AVI, b, sizeof(b));
+    CHECK_STR(b, "4:3, or 16:9 for anamorphic widescreen tapes (Auto is 4:3). Affects the preview and the "
+                 "uncompressed AVI files.", "aspect: analog");
+    pin_format_aspect_help(PIN_FMT_COUNT, b, sizeof(b));
+    CHECK_STR(b, "", "aspect: unknown format");
+    pin_format_aspect_help(PIN_FMT_DV_RAW, b, 20);
+    CHECK(strlen(b) == 19, "aspect: cut to the buffer");
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, b, 30);
+    CHECK(strlen(b) == 29, "title: cut to the buffer");
+    pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, NULL, 0);   /* no crash */
+}
+
 int main(void)
 {
     test_state_and_short();
@@ -338,6 +389,7 @@ int main(void)
     test_counters();
     test_deck_name();
     test_devices();
+    test_format_help();
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

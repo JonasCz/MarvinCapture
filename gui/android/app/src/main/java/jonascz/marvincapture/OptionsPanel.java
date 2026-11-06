@@ -49,7 +49,8 @@ import java.util.function.BooleanSupplier;
  * analog picture and audio-gain controls, screen and performance options, about. In place of the
  * status panel, so the preview stays visible (useful for the picture controls). Every list,
  * label, help text and warning comes from the core (pin_formats, pin_format_options,
- * pin_format_warning, pin_get_control, pin_std_name); the values are stored by Settings. Locked
+ * pin_format_warning, pin_format_title_help, pin_format_aspect_help, pin_get_control,
+ * pin_std_name); the values are stored by Settings. Locked
  * while a capture runs (pin_state_is_capturing), except the picture controls, which are live.
  */
 final class OptionsPanel extends LinearLayout {
@@ -72,7 +73,7 @@ final class OptionsPanel extends LinearLayout {
     private final ArrayList<BooleanSupplier> lockableCond = new ArrayList<>();
     private final ArrayList<Slider> sliders = new ArrayList<>();
     private LinearLayout analogBlock, dvBlock, pictureRows, perfBlock, updateBox;
-    private TextView pictureNote;
+    private TextView pictureNote, analogNameHelp, dvNameHelp;
     private Glyphs.Button closeButton;
     private Ui.Segmented inputSeg;
     private boolean locked;
@@ -373,8 +374,24 @@ final class OptionsPanel extends LinearLayout {
             }
         });
         parent.addView(lock(e), Ui.fillWidth());
-        parent.addView(Ui.help(c, "Saved as name-0001, name-0002, …, and written into the file as its title "
-                + "where the format has one."));
+        TextView help = Ui.help(c, nameHelpText(analog));
+        if (analog) analogNameHelp = help;
+        else dvNameHelp = help;
+        parent.addView(help);
+    }
+
+    /** The file name's help: the core's (which of the selected formats store the title), then the numbering. */
+    private static String nameHelpText(boolean analog) {
+        String core = analog
+                ? Core.formatTitleHelp(Core.INPUT_SVIDEO, Settings.format(Core.KIND_ANALOG), -1)
+                : Core.formatTitleHelp(Core.INPUT_DV, Settings.format(Core.KIND_DV), Settings.format(Core.KIND_HDV));
+        return core + " Saved as name-0001, name-0002, …";
+    }
+
+    /** A format changed: the name fields' help names the formats. */
+    private void refreshNameHelp() {
+        if (analogNameHelp != null) analogNameHelp.setText(nameHelpText(true));
+        if (dvNameHelp != null) dvNameHelp.setText(nameHelpText(false));
     }
 
     /** Format (+ its settings), aspect, scene split (DV / HDV), the two automatic stops. */
@@ -385,6 +402,9 @@ final class OptionsPanel extends LinearLayout {
         parent.addView(Ui.label(c, "Format"));
         LinearLayout optionsBlock = Ui.column(c);
         Switch[] split = new Switch[1];
+        Spinner[] aspect = new Spinner[1];
+        // why the aspect setting is off for raw .dv / .m2t, or what it does (the core's text)
+        TextView aspectHelp = Ui.help(c, Core.formatAspectHelp(Settings.format(kind)));
         if (formats.length == 0) {
             parent.addView(Ui.help(c, "Looking for the phone's video encoders…"));
         } else {
@@ -398,19 +418,27 @@ final class OptionsPanel extends LinearLayout {
                 Settings.setInt("gui.format_" + kk, formats[i]);
                 fillFormatOptions(optionsBlock, kind, formats[i]);
                 if (split[0] != null) split[0].setEnabled(!locked && splitAllowed(kind));
+                if (aspect[0] != null) aspect[0].setEnabled(!locked && Settings.aspectAllowed(kind));
+                aspectHelp.setText(Core.formatAspectHelp(formats[i]));
+                refreshNameHelp();
+                CaptureService svc = host.service();
+                if (svc != null) svc.applyAspect();   // a format without an aspect makes it Auto
                 pushHint();
             })), Ui.fillWidth());
             fillFormatOptions(optionsBlock, kind, cur);
         }
         parent.addView(optionsBlock, Ui.fillWidth());
 
+        // disabled for a format that stores no aspect (raw .dv / .m2t): the choice is kept, Auto applies
         parent.addView(Ui.label(c, "Aspect ratio"));
-        parent.addView(lock(Ui.spinner(c, Arrays.asList("Auto", "4:3", "16:9"), Settings.aspect(kind), i -> {
+        aspect[0] = lock(Ui.spinner(c, Arrays.asList("Auto", "4:3", "16:9"), Settings.aspect(kind), i -> {
             Settings.setInt("gui.aspect_" + kk, i);
             CaptureService svc = host.service();
             if (svc != null) svc.applyAspect();
             pushHint();
-        })), Ui.fillWidth());
+        }), () -> Settings.aspectAllowed(kind));
+        parent.addView(aspect[0], Ui.fillWidth());
+        parent.addView(aspectHelp);
 
         if (kind != Core.KIND_ANALOG) {
             Switch sw = new Switch(c);

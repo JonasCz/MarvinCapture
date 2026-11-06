@@ -43,7 +43,7 @@ struct AnalogPanel: View {
                 OutputNameRow(
                     name: $m.analogName, directory: model.analogOutputDir,
                     nameLabel: "Analog name and title",
-                    nameHelp: "File name (the extension follows the format), also stored as the title metadata of the file",
+                    nameHelp: model.analogNameHelp,
                     folderLabel: "Choose analog output folder",
                     onChooseFolder: { model.chooseOutputFolder() })
                 HStack(alignment: .top, spacing: 8) {
@@ -58,8 +58,10 @@ struct AnalogPanel: View {
                         }
                     }
                     Field("Aspect") {
+                        // disabled for a format that stores no aspect (none of the analog ones today)
                         AspectPicker(selection: $m.analogAspectIndex, label: "Analog aspect ratio",
-                                     help: "4:3, or 16:9 for anamorphic widescreen tapes. Affects the preview and the file.")
+                                     help: model.analogAspectHelp)
+                            .disabled(!model.analogAspectEnabled)
                     }
                     .frame(width: 104)
                 }

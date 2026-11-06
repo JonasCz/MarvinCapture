@@ -25,12 +25,21 @@
  *     "name-0003.dv" with the NTSC frames (the replay drops the frame still being read
  *     at the end of the file);
  *   - to standard output ("-"): a pipe carries one format, so the capture ends at the
- *     change with PIN_STOP_ERROR and says why; what went out is every PAL frame.
+ *     change with PIN_STOP_ERROR and says why; what went out is every PAL frame;
+ *   - as DV AVI with aspect 16:9, aspect_hdv 4:3 and a title: each file gets its own kind's
+ *     aspect and the title where its format has one, so both AVIs (the one opened after the HDV
+ *     file too) read back (libavformat) as 16:9 with the title.
+ * And a tape that starts on HDV (ep88-hdv-dv.bin: HDV 1080i 50 pictures, then PAL DV 50 frames),
+ * the same options: the raw .m2t, then a DV AVI that is 16:9 (aspect, not aspect_hdv) with the
+ * title. (No HDV format that stores an aspect can be captured yet: HDV MOV / MKV are disabled.)
  *
  * Usage: test_replay_mixed_kind <data dir>
  */
 
 #include "replay_test_util.h"
+
+#include <libavformat/avformat.h>
+#include <libavutil/rational.h>
 
 #if defined(_WIN32)
 #include <fcntl.h>
@@ -111,6 +120,43 @@ static pin_status_snapshot_t capture_tape(const char *dump, const pin_capture_op
     return snap;
 }
 
+/* What libavformat reads from a file: the video's display aspect as the container stores it
+ * (the stream's sample aspect ratio times its size), its height, its video frames and the title. */
+typedef struct {
+    int dar_num, dar_den, height, frames;
+    char title[256];
+} probed_t;
+
+static probed_t probe(const char *path)
+{
+    probed_t r;
+    memset(&r, 0, sizeof(r));
+    AVFormatContext *fc = NULL;
+    CHECK(avformat_open_input(&fc, path, NULL, NULL) >= 0);
+    CHECK(avformat_find_stream_info(fc, NULL) >= 0);
+    int v = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    CHECK(v >= 0);
+    const AVStream *st = fc->streams[v];
+    AVRational sar = st->sample_aspect_ratio;   /* the container's (AVI vprp, MKV display size) */
+    CHECK(sar.num > 0 && sar.den > 0);
+    r.height = st->codecpar->height;
+    av_reduce(&r.dar_num, &r.dar_den, (int64_t)sar.num * st->codecpar->width,
+              (int64_t)sar.den * st->codecpar->height, 1 << 20);
+    AVDictionaryEntry *t = av_dict_get(fc->metadata, "title", NULL, 0);
+    snprintf(r.title, sizeof(r.title), "%s", t ? t->value : "");
+    AVPacket *pkt = av_packet_alloc();
+    while (av_read_frame(fc, pkt) >= 0) {
+        if (pkt->stream_index == v)
+            r.frames++;
+        av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+    avformat_close_input(&fc);
+    printf("%s: %d frame(s), %d lines, display aspect %d:%d, title \"%s\"\n", path, r.frames, r.height,
+           r.dar_num, r.dar_den, r.title);
+    return r;
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 2);
@@ -172,6 +218,58 @@ int main(int argc, char **argv)
     file_t p = read_file("mixed_kind_pipe.out");
     CHECK(p.len == pal.len && !memcmp(p.data, pal.data, (size_t)pal.len));
     printf("OK: a pipe stops at DV -> HDV, after every DV frame\n");
+
+    /* 3. DV AVI, aspect 16:9 for DV and 4:3 for HDV, a title: DV -> HDV -> DV, each file its own
+     * kind's aspect, the title where the format has one (not the raw .m2t) */
+    const char *avi_names[] = { "mixed_kind_avi.avi", "mixed_kind_avi-0002.m2t", "mixed_kind_avi-0003.avi",
+                                "mixed_kind_avi-0004.avi", "mixed_kind_avi-0004.m2t" };
+    for (size_t i = 0; i < sizeof(avi_names) / sizeof(avi_names[0]); i++)
+        remove(avi_names[i]);
+    pin_capture_opts_defaults(&opts);
+    strncpy(opts.path, "mixed_kind_avi", sizeof(opts.path) - 1);
+    strncpy(opts.title, "Mixed tape", sizeof(opts.title) - 1);
+    opts.format_dv = PIN_FMT_DV_AVI;
+    opts.format_hdv = PIN_FMT_HDV_TS;
+    opts.aspect = PIN_ASPECT_16_9;
+    opts.aspect_hdv = PIN_ASPECT_4_3;
+    snap = capture_tape(dump, &opts);
+    CHECK_EQ_I(snap.stop_reason, PIN_STOP_END_OF_TAPE);
+    CHECK(snap.frames_error == 0);
+    CHECK(pin_test_file_exists(avi_names[0]) && pin_test_file_exists(avi_names[1]) &&
+          pin_test_file_exists(avi_names[2]));
+    CHECK(!pin_test_file_exists(avi_names[3]) && !pin_test_file_exists(avi_names[4]));
+    probed_t a1 = probe(avi_names[0]), a3 = probe(avi_names[2]);
+    CHECK(a1.height == 576 && a1.frames == pal.len / 144000);
+    CHECK(a3.height == 480 && a3.frames == ntsc.len / 120000 - 1);
+    CHECK(a1.dar_num == 16 && a1.dar_den == 9 && a3.dar_num == 16 && a3.dar_den == 9);
+    CHECK(strcmp(a1.title, "Mixed tape") == 0 && strcmp(a3.title, "Mixed tape") == 0);
+    file_t m2 = read_file(avi_names[1]);
+    CHECK(m2.len > 3 * TS && m2.len % TS == 0 && pkt_pid(m2.data) == 0);   /* the raw HDV file as before */
+    free(m2.data);
+    printf("OK: DV -> HDV -> DV as DV AVI: both AVIs 16:9 with the title, the HDV file raw\n");
+
+    /* 4. a tape that starts on HDV: raw .m2t, then DV AVI with aspect 16:9 (not aspect_hdv's 4:3) */
+    char hdv_dv[4096];
+    snprintf(hdv_dv, sizeof(hdv_dv), "%s/ep88-hdv-dv.bin", argv[1]);
+    pin_test_require_fixture(hdv_dv);
+    const char *hd_names[] = { "mixed_kind_hdv.m2t", "mixed_kind_hdv-0002.avi", "mixed_kind_hdv-0003.avi",
+                               "mixed_kind_hdv-0003.m2t", "mixed_kind_hdv.avi" };
+    for (size_t i = 0; i < sizeof(hd_names) / sizeof(hd_names[0]); i++)
+        remove(hd_names[i]);
+    strncpy(opts.path, "mixed_kind_hdv", sizeof(opts.path) - 1);
+    snap = capture_tape(hdv_dv, &opts);
+    CHECK_EQ_I(snap.stop_reason, PIN_STOP_END_OF_TAPE);
+    CHECK(snap.frames_error == 0);
+    CHECK(pin_test_file_exists(hd_names[0]) && pin_test_file_exists(hd_names[1]));
+    for (size_t i = 2; i < sizeof(hd_names) / sizeof(hd_names[0]); i++)
+        CHECK(!pin_test_file_exists(hd_names[i]));
+    file_t h1 = read_file(hd_names[0]);
+    CHECK(h1.len > 3 * TS && h1.len % TS == 0 && pkt_pid(h1.data) == 0 && pkt_pid(h1.data + TS) == 0x81);
+    free(h1.data);
+    probed_t h2 = probe(hd_names[1]);
+    CHECK(h2.height == 576 && h2.frames == 49 && h2.dar_num == 16 && h2.dar_den == 9);
+    CHECK(strcmp(h2.title, "Mixed tape") == 0);
+    printf("OK: HDV -> DV: the DV AVI after the raw HDV file is 16:9 (aspect) with the title\n");
 
     free(pal.data);
     free(ntsc.data);

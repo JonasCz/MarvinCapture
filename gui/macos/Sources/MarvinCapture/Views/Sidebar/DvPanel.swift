@@ -42,7 +42,7 @@ struct DvPanel: View {
                 OutputNameRow(
                     name: $m.dvName, directory: model.dvOutputDir,
                     nameLabel: "DV name and title",
-                    nameHelp: "File name for DV and HDV (scenes and passes get numbered suffixes), also stored as the title metadata of the file",
+                    nameHelp: model.dvNameHelp,
                     folderLabel: "Choose DV output folder",
                     onChooseFolder: { model.chooseOutputFolder() })
                 KindSettingsView(settings: model.kindTabs[Swift.min(Swift.max(model.selectedKindTabIndex, 0), 1)])

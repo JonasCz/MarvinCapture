@@ -305,7 +305,7 @@ MJ_FN(jstring, formatLabel)(JNIEnv *env, jclass c, jint f)
     return mj_string(env, format_info(f, &i) ? i.label : "");
 }
 
-/* Core.FMT_*: 1 title, 2 scene split, 4 multi-pass, 8 default of its kind; the kind << 8. */
+/* Core.FMT_*: 1 title, 2 scene split, 4 multi-pass, 8 default of its kind, 16 aspect; the kind << 8. */
 MJ_FN(jint, formatFlags)(JNIEnv *env, jclass c, jint f)
 {
     (void)env; (void)c;
@@ -313,7 +313,8 @@ MJ_FN(jint, formatFlags)(JNIEnv *env, jclass c, jint f)
     if (!format_info(f, &i))
         return 0;
     return (i.supports_title ? 1 : 0) | (i.supports_scene_split ? 2 : 0) |
-           (i.supports_multi_pass ? 4 : 0) | (i.is_default ? 8 : 0) | ((jint)i.kind << 8);
+           (i.supports_multi_pass ? 4 : 0) | (i.is_default ? 8 : 0) | (i.supports_aspect ? 16 : 0) |
+           ((jint)i.kind << 8);
 }
 
 MJ_FN(jstring, formatWarning)(JNIEnv *env, jclass c, jint f)
@@ -321,6 +322,27 @@ MJ_FN(jstring, formatWarning)(JNIEnv *env, jclass c, jint f)
     (void)c;
     char w[1024];
     pin_format_warning((pin_format_t)f, w, sizeof(w));
+    return mj_string(env, w);
+}
+
+/* The name field's help: which of the formats store the title (input Core.INPUT_DV: format the DV
+ * one, formatHdv the HDV one; an analog input: format the analog one). A negative format (no list
+ * yet) is left out. */
+MJ_FN(jstring, formatTitleHelp)(JNIEnv *env, jclass c, jint input, jint format, jint formatHdv)
+{
+    (void)c;
+    char w[512];
+    pin_format_title_help((pin_input_t)input, format >= 0 ? (pin_format_t)format : PIN_FMT_COUNT,
+                          formatHdv >= 0 ? (pin_format_t)formatHdv : PIN_FMT_COUNT, w, sizeof(w));
+    return mj_string(env, w);
+}
+
+/* The aspect setting's help for format f: what it does, or why it is off and which formats store one. */
+MJ_FN(jstring, formatAspectHelp)(JNIEnv *env, jclass c, jint f)
+{
+    (void)c;
+    char w[512];
+    pin_format_aspect_help(f >= 0 ? (pin_format_t)f : PIN_FMT_COUNT, w, sizeof(w));
     return mj_string(env, w);
 }
 
@@ -509,10 +531,10 @@ static int build_opts(JNIEnv *env, jstring path, jstring title, jintArray opts, 
     if (mj_utf8(env, path, o->path, sizeof(o->path)) != 0)
         return 0;
     mj_utf8(env, title, o->title, sizeof(o->title));
-    jint v[13];
-    if (!opts || (*env)->GetArrayLength(env, opts) < 13)
+    jint v[14];
+    if (!opts || (*env)->GetArrayLength(env, opts) < 14)
         return 0;
-    (*env)->GetIntArrayRegion(env, opts, 0, 13, v);
+    (*env)->GetIntArrayRegion(env, opts, 0, 14, v);
     /* a negative format or format setting keeps the core's default */
     if (v[0] >= 0) o->format_analog = (pin_format_t)v[0];
     if (v[1] >= 0) o->format_dv = (pin_format_t)v[1];
@@ -528,6 +550,7 @@ static int build_opts(JNIEnv *env, jstring path, jstring title, jintArray opts, 
     o->passes = 1;
     o->start_deck = v[11] != 0;
     o->rewind_first = v[12] != 0;
+    o->aspect_hdv = (pin_aspect_t)v[13];     /* HDV files; aspect (v[3]) is analog and DV files' */
     return 1;
 }
 

@@ -594,7 +594,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             // no picture: the card has the shape the picture will have (the chosen aspect)
             int kind = !has ? (Settings.input() == Core.INPUT_DV ? Core.KIND_DV : Core.KIND_ANALOG)
                     : st.analog() ? Core.KIND_ANALOG : svc.streamKind();
-            int a = Settings.aspect(kind);
+            int a = Settings.effectiveAspect(kind);
             if (a == 2) root.setAspect(16, 9);
             else if (a == 1 || !has) root.setAspect(4, 3);
         }

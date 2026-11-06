@@ -19,6 +19,8 @@ public sealed partial class FormatItem
     public bool SupportsSceneSplit => Info.SupportsSceneSplit != 0;
     public bool SupportsMultiPass => Info.SupportsMultiPass != 0;
     public bool IsDefault => Info.IsDefault != 0;
+    /// <summary>The file stores a display aspect (raw .dv / .m2t do not: players take it from the video).</summary>
+    public bool SupportsAspect => Info.SupportsAspect != 0;
 
     public FormatItem(PinFormatInfo info)
     {
@@ -32,8 +34,8 @@ public sealed partial class FormatItem
 
 /// <summary>
 /// One tab of the "Settings for: DV | HDV" TabView: format (with its settings behind the
-/// gear, <see cref="FormatOptions"/>), title (disabled per format capability), scene split,
-/// idle-stop minutes and pass count.
+/// gear, <see cref="FormatOptions"/>), aspect (disabled for a format that stores none), scene
+/// split, idle-stop minutes and pass count.
 /// </summary>
 public sealed partial class KindSettingsViewModel : ObservableObject
 {
@@ -43,7 +45,8 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     public ObservableCollection<FormatItem> Formats { get; } = new();
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(TitleEnabled), nameof(SplitEnabled), nameof(PassesEnabled), nameof(PassesUsable))]
+    [NotifyPropertyChangedFor(nameof(SplitEnabled), nameof(PassesEnabled), nameof(PassesUsable),
+                              nameof(AspectEnabled), nameof(EffectiveAspect), nameof(AspectHelp))]
     private FormatItem? _selectedFormat;
 
     partial void OnSelectedFormatChanged(FormatItem? value) => FormatOptions.Format = value?.Format;
@@ -95,10 +98,22 @@ public sealed partial class KindSettingsViewModel : ObservableObject
         ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass."
         : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass.";
 
-    /// <summary>Aspect override for this kind (PinAspect order: Auto, 4:3, 16:9).</summary>
-    [ObservableProperty] private int _aspectIndex;
+    /// <summary>Aspect override for this kind (PinAspect order: Auto, 4:3, 16:9): the user's choice, kept
+    /// (and saved) while the drop-down is disabled, so it comes back with a format that stores an aspect.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(EffectiveAspect))]
+    private int _aspectIndex;
 
-    public bool TitleEnabled => SelectedFormat?.SupportsTitle ?? false;
+    /// <summary>The drop-down is enabled only for a format that stores an aspect (not raw .dv / .m2t).</summary>
+    public bool AspectEnabled => SelectedFormat?.SupportsAspect ?? false;
+
+    /// <summary>The aspect this kind's files and its preview use: the choice, or Auto while the
+    /// drop-down is disabled (a disabled control never has an effect).</summary>
+    public PinAspect EffectiveAspect => AspectEnabled ? (PinAspect)AspectIndex : PinAspect.Auto;
+
+    /// <summary>The drop-down's tooltip, from the core: what it does for the selected format, or why it is disabled.</summary>
+    public string AspectHelp => SelectedFormat is null ? "" : Native.FormatAspectHelp(SelectedFormat.Format);
+
     public bool SplitEnabled => SelectedFormat?.SupportsSceneSplit ?? false;
     public bool PassesEnabled => SelectedFormat?.SupportsMultiPass ?? false;
 

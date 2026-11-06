@@ -235,6 +235,20 @@ instance (wrapping after 8) and never write it. Closing or quitting while a
 capture runs asks first; confirming stops the capture, shows "Finalizing
 files…" and quits once the core reports READY.
 
+## Name, title and aspect
+
+As on Windows: the name field is also the files' title, always passed (`buildCaptureOpts`);
+the core stores it in each file whose format has one. Each kind has its own aspect picker
+(analog panel, DV and HDV options), and each file of a capture gets its own kind's:
+`aspect` from the analog panel or the DV options, `aspect_hdv` from the HDV options, so
+a tape that switches between DV and HDV does not give the new file the other kind's. A
+picker is disabled while its format stores no aspect (`supports_aspect` 0: raw `.dv`,
+HDV `.m2t`); the choice is kept and saved, but Auto goes into the capture options and
+the preview (`effectiveAspectIndex`, `analogEffectiveAspectIndex`). The tooltips of the
+name field and the pickers are the core's (`pin_format_title_help`,
+`pin_format_aspect_help`, through `Pin.formatTitleHelp` / `Pin.formatAspectHelp`) and
+name the formats; they follow the format pickers.
+
 ## Settings
 
 The settings file is shared with the command-line program:

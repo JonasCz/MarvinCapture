@@ -38,6 +38,14 @@ Two ways in, both on the same core library:
   same rule (`pin_capture_passes_allowed`, `pin_capture_opts_normalize`), so
   `--passes 2` without `--idle-min` / a duration limit also captures once.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
+  The "Name and title" field is the files' name and also their title, stored in each file
+  whose format has one (AVI, MOV, MKV; raw `.dv` and HDV `.m2t` have none); its tooltip
+  names which of the selected formats store it. The aspect drop-down next to each
+  format (analog, DV, HDV) is greyed out, with a tooltip saying why, when that format
+  stores no aspect: raw `.dv` and `.m2t` files carry no aspect flag of their own, players
+  take it from the video itself. Auto applies then, to the file and the preview; the
+  choice is kept and comes back when an AVI, MOV or MKV format is picked. The tooltips
+  come from the core (`pin_format_title_help`, `pin_format_aspect_help`).
   The preview is paced by a small jitter buffer in the core (`pin_pace.h`):
   each frame is shown on the first display refresh at or after a time on an
   even grid at the source's nominal frame rate (25 / 29.97 fps, from the
@@ -112,11 +120,17 @@ held in memory meanwhile, so the change is back-dated to its first frame. Then:
 | output | new file on |
 |---|---|
 | raw `.dv` | PAL <-> NTSC (aspect and audio are carried per frame) |
-| DV AVI / MOV / H.264 / HEVC | PAL <-> NTSC, aspect (unless `--aspect` is forced), audio mode: they fix them when the file is created |
+| DV AVI / MOV / H.264 / HEVC | PAL <-> NTSC, aspect (unless the DV aspect is forced: `--aspect`, the GUI's DV aspect), audio mode: they fix them when the file is created |
 | HDV `.m2t` / `.ts` | size, frame rate, interlaced / progressive |
 | any | DV <-> HDV: the new file has the other kind's format and extension (`--format` per kind), an HDV one starts with PAT, PMT and a GOP |
 
-The new file gets the new format's parameters. Without `--split` the first file keeps its
+The new file gets the new format's parameters, and its own kind's options: the format
+(`--format` per kind, the GUI's DV and HDV tabs), the aspect (`pin_capture_opts_t`'s
+`aspect` for DV, `aspect_hdv` for HDV: the GUI's DV and HDV tabs; `--aspect` sets both)
+and the title, which goes into every file whose format stores one, so a DV AVI after an
+HDV `.m2t` has it whichever kind the capture started on. Scene split, the no-signal stop,
+the time limit and the passes stay those of the kind the capture started with.
+Without `--split` the first file keeps its
 name and the ones after a change are numbered: `name.dv`, `name-0002.m2t`,
 `name-0003.dv` (`name-pass-2-0002.dv` in pass 2); with `--split` a change takes the next
 scene number. A format change is a hard cut: it never waits for the 1 s / 1 MB minimum,

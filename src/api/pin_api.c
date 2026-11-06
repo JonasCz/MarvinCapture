@@ -452,19 +452,57 @@ pin_status_t pin_deck(pin_session_t *s, pin_deck_cmd_t cmd)
  * formats
  * ==================================================================== */
 
+/* sizeof(pin_format_info_t) before supports_aspect was appended. */
+#define FORMAT_INFO_SIZE_V1 offsetof(pin_format_info_t, supports_aspect)
+
+/* The caller's entry size: an older caller's known size, else (0 or garbage too) ours. */
+static size_t format_info_stride(const pin_format_info_t *out)
+{
+    return out->size == FORMAT_INFO_SIZE_V1 ? FORMAT_INFO_SIZE_V1 : sizeof(*out);
+}
+
 int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max)
 {
-    return pin_session_formats(kind, out, max);
+    pin_format_info_t all[PIN_FMT_COUNT];
+    int n = pin_session_formats(kind, all, PIN_FMT_COUNT);
+    if (out && max > 0) {
+        size_t stride = format_info_stride(out);
+        for (int i = 0; i < n && i < max; i++) {
+            all[i].size = (uint32_t)stride;
+            memcpy((char *)out + (size_t)i * stride, &all[i], stride);
+        }
+    }
+    return n;
 }
 
 pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out)
 {
-    return pin_session_format_info(f, out);
+    if (!out)
+        return PIN_ERR_ARG;
+    pin_format_info_t fi;
+    pin_status_t st = pin_session_format_info(f, &fi);
+    if (st == PIN_OK) {
+        size_t stride = format_info_stride(out);
+        fi.size = (uint32_t)stride;
+        memcpy(out, &fi, stride);
+    }
+    return st;
 }
 
 void pin_format_warning(pin_format_t f, char *out, size_t cap)
 {
     pin_session_format_warning(f, out, cap);
+}
+
+void pin_format_title_help(pin_input_t input, pin_format_t format, pin_format_t format_hdv,
+                           char *out, size_t cap)
+{
+    pin_session_format_title_help(input, format, format_hdv, out, cap);
+}
+
+void pin_format_aspect_help(pin_format_t f, char *out, size_t cap)
+{
+    pin_session_format_aspect_help(f, out, cap);
 }
 
 int pin_encoders_probe(void)
@@ -492,9 +530,10 @@ void pin_format_quality_hint(pin_format_t f, int video_quality, int deinterlace,
  * capture
  * ==================================================================== */
 
-/* sizeof(pin_capture_opts_t) before the format settings were appended: what a front end
- * compiled against that header passes (the Windows GUI sets size itself). */
+/* sizeof(pin_capture_opts_t) before the format settings were appended, and before aspect_hdv:
+ * what a front end compiled against those headers passes (the Windows GUI sets size itself). */
 #define CAPTURE_OPTS_SIZE_V3 offsetof(pin_capture_opts_t, deinterlace)
+#define CAPTURE_OPTS_SIZE_V4 offsetof(pin_capture_opts_t, aspect_hdv)
 
 static void opts_full_defaults(pin_capture_opts_t *o)
 {
@@ -512,6 +551,7 @@ static void opts_full_defaults(pin_capture_opts_t *o)
     o->deinterlace = PIN_DEINTERLACE_DEFAULT;
     o->video_quality = PIN_QUALITY_DEFAULT;
     o->ffv1_compression = PIN_FFV1_DEFAULT;
+    o->aspect_hdv = PIN_ASPECT_AUTO;
 }
 
 /* How many bytes of the caller's struct are there: an older caller's known size, else (0 from
@@ -519,7 +559,7 @@ static void opts_full_defaults(pin_capture_opts_t *o)
  * sizes were looked at. Only exact older sizes count, so stack garbage cannot shrink it. */
 static size_t opts_caller_size(const pin_capture_opts_t *o)
 {
-    return o->size == CAPTURE_OPTS_SIZE_V3 ? CAPTURE_OPTS_SIZE_V3 : sizeof(*o);
+    return o->size == CAPTURE_OPTS_SIZE_V3 || o->size == CAPTURE_OPTS_SIZE_V4 ? o->size : sizeof(*o);
 }
 
 void pin_capture_opts_defaults(pin_capture_opts_t *o)
@@ -533,8 +573,11 @@ void pin_capture_opts_defaults(pin_capture_opts_t *o)
     memcpy(o, &full, n);
 }
 
-/* The caller's options as this library's struct: an older caller's fields over the defaults. */
-static const pin_capture_opts_t *opts_import(const pin_capture_opts_t *o, pin_capture_opts_t *buf)
+/* The caller's options as this library's struct: an older caller's fields over the defaults.
+ * A caller from before aspect_hdv had one aspect for every file: HDV files keep getting it.
+ * Not static: tests/engine/test_pin_platform_api.c checks it (not in pin_api.h). */
+const pin_capture_opts_t *pin_capture_opts_import(const pin_capture_opts_t *o, pin_capture_opts_t *buf);
+const pin_capture_opts_t *pin_capture_opts_import(const pin_capture_opts_t *o, pin_capture_opts_t *buf)
 {
     if (!o)
         return NULL;
@@ -544,6 +587,7 @@ static const pin_capture_opts_t *opts_import(const pin_capture_opts_t *o, pin_ca
     opts_full_defaults(buf);
     memcpy(buf, o, n);
     buf->size = sizeof(*buf);
+    buf->aspect_hdv = buf->aspect;
     return buf;
 }
 
@@ -568,19 +612,19 @@ pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
                                pin_output_check_t *out)
 {
     pin_capture_opts_t buf;
-    return pin_session_check_output(s, opts_import(o, &buf), out);
+    return pin_session_check_output(s, pin_capture_opts_import(o, &buf), out);
 }
 
 pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opts_t *o)
 {
     pin_capture_opts_t buf;
-    return pin_session_set_output_hint(s, opts_import(o, &buf));
+    return pin_session_set_output_hint(s, pin_capture_opts_import(o, &buf));
 }
 
 pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite)
 {
     pin_capture_opts_t buf;
-    return pin_session_capture_start(s, opts_import(o, &buf), overwrite);
+    return pin_session_capture_start(s, pin_capture_opts_import(o, &buf), overwrite);
 }
 
 pin_status_t pin_capture_stop(pin_session_t *s)

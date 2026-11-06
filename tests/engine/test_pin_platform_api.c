@@ -20,8 +20,8 @@
  * elsewhere (pin_usb_model, pin_device_fd_problem), opening one by file descriptor
  * (pin_open("fd:N")), the app's own directories (pin_set_app_dirs), the per-platform format
  * list and warnings (with the H.264 / HEVC formats that depend on the encoder probe), the
- * format settings (pin_format_options, the size-versioned pin_capture_opts_t), and the
- * keep-busy mode. Hardware-free; links src/api/pin_api.c. */
+ * format settings (pin_format_options, the size-versioned pin_capture_opts_t and
+ * pin_format_info_t, an older caller's single aspect for HDV too), and the keep-busy mode. Hardware-free; links src/api/pin_api.c. */
 
 #include "../../src/api/pin_api.h"
 #include "../../src/core/pin_thread_boost.h"
@@ -41,6 +41,9 @@
 #else
 #include <process.h>
 #endif
+
+/* pin_api.c: an older caller's pin_capture_opts_t as today's (not in pin_api.h) */
+const pin_capture_opts_t *pin_capture_opts_import(const pin_capture_opts_t *o, pin_capture_opts_t *buf);
 
 static int g_failures = 0;
 #define CHECK(cond, msg)                                                     \
@@ -300,6 +303,41 @@ static void test_formats(void)
     CHECK(pin_format_info(PIN_FMT_HDV_MOV, &fi) == PIN_OK && strcmp(fi.extension, "mov") == 0,
           "format info answers for every format");
 
+    /* supports_aspect: what the sinks store (raw .dv / .m2t carry no aspect flag of ours) */
+    for (int i = 0; i < PIN_FMT_COUNT; i++) {
+        memset(&fi, 0, sizeof(fi));
+        fi.size = sizeof(fi);
+        CHECK(pin_format_info((pin_format_t)i, &fi) == PIN_OK && fi.size == sizeof(fi), "format info");
+        int raw = i == PIN_FMT_DV_RAW || i == PIN_FMT_HDV_TS;
+        CHECK(fi.supports_aspect == !raw, "supports_aspect: every format but raw .dv and .m2t");
+        CHECK(fi.supports_title == !raw, "supports_title: every format but raw .dv and .m2t");
+    }
+    /* a caller from before supports_aspect: its own entry size, nothing written past it */
+    const size_t old_fi = offsetof(pin_format_info_t, supports_aspect);
+    unsigned char fbuf[PIN_FMT_COUNT * sizeof(pin_format_info_t)];
+    memset(fbuf, 0xAA, sizeof(fbuf));
+    ((pin_format_info_t *)fbuf)->size = (uint32_t)old_fi;
+    int nd = pin_formats(PIN_KIND_DV, (pin_format_info_t *)fbuf, PIN_FMT_COUNT);
+    CHECK(nd >= 3, "DV formats");
+    for (int i = 0; i < nd; i++) {
+        pin_format_info_t e;
+        memset(&e, 0, sizeof(e));
+        memcpy(&e, fbuf + (size_t)i * old_fi, old_fi);
+        CHECK(e.size == old_fi && e.kind == PIN_KIND_DV, "old stride: each entry at its own place");
+    }
+    int untouched_f = 1;
+    for (size_t i = (size_t)nd * old_fi; i < sizeof(fbuf); i++)
+        if (fbuf[i] != 0xAA)
+            untouched_f = 0;
+    CHECK(untouched_f, "old stride: nothing written past the caller's entries");
+    memset(fbuf, 0xAA, sizeof(fbuf));
+    ((pin_format_info_t *)fbuf)->size = (uint32_t)old_fi;
+    CHECK(pin_format_info(PIN_FMT_DV_AVI, (pin_format_info_t *)fbuf) == PIN_OK &&
+          ((pin_format_info_t *)fbuf)->format == PIN_FMT_DV_AVI && fbuf[old_fi] == 0xAA,
+          "format info, old size: nothing written past it");
+    CHECK(pin_format_info(PIN_FMT_COUNT, &fi) == PIN_ERR_ARG && pin_format_info(PIN_FMT_DV_AVI, NULL) == PIN_ERR_ARG,
+          "format info: bad arguments");
+
     char w[512];
     for (int i = 0; i < PIN_FMT_COUNT; i++) {
         memset(w, 'x', sizeof(w));
@@ -399,6 +437,7 @@ static void test_format_settings(void)
     pin_capture_opts_defaults(&d);
     CHECK(d.size == sizeof(d) && d.deinterlace == PIN_DEINTERLACE_DOUBLE_RATE && d.video_quality == 18 &&
           d.ffv1_compression == PIN_FFV1_FAST && d.format_analog == PIN_FMT_ANALOG_AVI, "defaults");
+    CHECK(d.aspect == PIN_ASPECT_AUTO && d.aspect_hdv == PIN_ASPECT_AUTO, "defaults: both aspects AUTO");
 
     /* a caller compiled before the format settings: only its own bytes are written */
     const size_t old = offsetof(pin_capture_opts_t, deinterlace);
@@ -413,6 +452,35 @@ static void test_format_settings(void)
         if (buf[i] != 0xAA)
             untouched = 0;
     CHECK(untouched, "old size: nothing written past it");
+
+    /* a caller from before aspect_hdv had one aspect for every file: HDV files keep getting it */
+    const size_t old4 = offsetof(pin_capture_opts_t, aspect_hdv);
+    memset(buf, 0xAA, sizeof(buf));
+    oldo->size = (uint32_t)old4;
+    pin_capture_opts_defaults(oldo);
+    untouched = 1;
+    for (size_t i = old4; i < sizeof(buf); i++)
+        if (buf[i] != 0xAA)
+            untouched = 0;
+    CHECK(oldo->size == old4 && oldo->ffv1_compression == PIN_FFV1_FAST && untouched,
+          "size before aspect_hdv: filled, nothing written past it");
+    oldo->aspect = PIN_ASPECT_16_9;
+    pin_capture_opts_t imp;
+    const pin_capture_opts_t *in = pin_capture_opts_import(oldo, &imp);
+    CHECK(in == &imp && in->size == sizeof(imp) && in->aspect == PIN_ASPECT_16_9 &&
+          in->aspect_hdv == PIN_ASPECT_16_9 && in->ffv1_compression == PIN_FFV1_FAST,
+          "size before aspect_hdv: aspect_hdv = aspect");
+    memset(buf, 0xAA, sizeof(buf));
+    oldo->size = (uint32_t)old;
+    pin_capture_opts_defaults(oldo);
+    oldo->aspect = PIN_ASPECT_4_3;
+    in = pin_capture_opts_import(oldo, &imp);
+    CHECK(in == &imp && in->aspect_hdv == PIN_ASPECT_4_3 && in->video_quality == 18,
+          "size before the format settings: aspect_hdv = aspect, the rest defaults");
+    pin_capture_opts_defaults(&d);
+    d.aspect = PIN_ASPECT_16_9;
+    d.aspect_hdv = PIN_ASPECT_4_3;
+    CHECK(pin_capture_opts_import(&d, &imp) == &d, "today's size: taken as it is");
 
     pin_script_t *sc = NULL;
     char err[256];

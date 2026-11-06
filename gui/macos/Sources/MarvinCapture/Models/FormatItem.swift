@@ -27,6 +27,8 @@ struct FormatItem: Identifiable, Hashable {
     var supportsSceneSplit: Bool
     var supportsMultiPass: Bool
     var isDefault: Bool
+    /// The file stores a display aspect (raw .dv / .m2t do not: players take it from the video).
+    var supportsAspect: Bool
 
     var id: UInt32 { format.rawValue }
 
@@ -39,6 +41,7 @@ struct FormatItem: Identifiable, Hashable {
         supportsSceneSplit = info.supports_scene_split != 0
         supportsMultiPass = info.supports_multi_pass != 0
         isDefault = info.is_default != 0
+        supportsAspect = info.supports_aspect != 0
     }
 
     static func == (a: FormatItem, b: FormatItem) -> Bool { a.format == b.format }

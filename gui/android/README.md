@@ -98,8 +98,9 @@ The release APK for arm64-v8a is about 2.9 MB (5.9 MB with x86_64 as well):
 Plugging the box in (USB-C OTG adapter) offers to open the app; ticking "always" makes
 that the default and grants the USB permission. Started from the launcher, the app
 asks for the permission itself. Captures go to `Movies/MarvinCapture/` on the chosen storage (options: Save to) as `<name>-0001.<ext>`, `-0002`, ... (`pin_next_file_number`); the name is set
-in the options and is also written into the file as its title where the format has
-one.
+in the options and is also written into each file as its title where the file's format
+has one (the core's help under the name says which of the selected formats do: not raw
+`.dv` or `.m2t`).
 
 ### Replay device (demo, emulator)
 
@@ -201,7 +202,12 @@ aspect, stop after no signal / total time, picture and audio-gain sliders
 core); DV and HDV (shown for the DV input, which detects which one arrives): the "Show settings for"
 DV / HDV tab (like the desktop apps) at the top of the section, then what both share (the deck controls
 option, the file name), then the selected kind's format, aspect, scene split (where the format supports it), the two
-stops. Each format shows the core's warning (`pin_format_warning`) and its own settings
+stops. The aspect setting is disabled while its format stores no aspect (`Core.FMT_ASPECT`
+not set: raw `.dv`, HDV `.m2t`), with the core's reason under it (`pin_format_aspect_help`);
+the choice is kept, but Auto goes to the capture and the preview (`Settings.effectiveAspect`).
+Each file of a capture gets its own kind's aspect: `OPT_ASPECT` from the analog or DV
+setting, `OPT_ASPECT_HDV` (`aspect_hdv`) from the HDV one. The help under the file name
+comes from the core too (`pin_format_title_help`) and follows the format choices. Each format shows the core's warning (`pin_format_warning`) and its own settings
 from `pin_format_options` (H.264 / HEVC: interlaced video as "Deinterlace" or "Encode as is" (the core's
 keep-fields mode, with its help in amber and "OK to use if your camera is set to progressive");
 quality as a bare 0 to 35 slider (the core accepts 0 to 51; no estimate or scale text, CRF sizes depend on the content);

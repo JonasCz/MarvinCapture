@@ -270,6 +270,16 @@ int pin_hwenc_available(pin_hwenc_codec_t c)
     return (pin_hwenc_probe() >> c) & 1;
 }
 
+int pin_hwenc_known_available(pin_hwenc_codec_t c)
+{
+    if ((unsigned)c >= PIN_HWENC_CODEC_COUNT)
+        return 0;
+    pthread_mutex_lock(&g_mtx);
+    int ok = g_probed && g_ok[c];
+    pthread_mutex_unlock(&g_mtx);
+    return ok;
+}
+
 AVCodecContext *pin_hwenc_open(pin_hwenc_codec_t c, const pin_hwenc_config_t *cfg)
 {
     if ((unsigned)c >= PIN_HWENC_CODEC_COUNT || !cfg)
