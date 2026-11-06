@@ -25,9 +25,10 @@
 
 **Testing**
 
-- [testing-required.md](testing-required.md): what is untested or likely broken
-  (HDV 720p, 24p, other cameras/decks, mixed-format tapes), tagged by whether it
-  needs hardware, a FireWire PC as a source, or only code.
+- [testing-required.md](testing-required.md): what was fixed and tested in code so far
+  (HDV format detection and scene split, mixed-format tapes, disk and FAT32 limits) and
+  what is still untested or likely broken (24p, other cameras/decks, real mixed tapes),
+  tagged by whether it needs hardware, a FireWire PC as a source, or only code.
 
 **Handoff notes**
 
