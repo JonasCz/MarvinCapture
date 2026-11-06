@@ -247,7 +247,9 @@ HDV `.m2t`); the choice is kept and saved, but Auto goes into the capture option
 the preview (`effectiveAspectIndex`, `analogEffectiveAspectIndex`). The tooltips of the
 name field and the pickers are the core's (`pin_format_title_help`,
 `pin_format_aspect_help`, through `Pin.formatTitleHelp` / `Pin.formatAspectHelp`) and
-name the formats; they follow the format pickers.
+name the formats; they follow the format pickers. "Split into scenes" shows on and
+disabled for HDV MOV / MKV (`splitChecked`, from `scene_split_forced`; the saved choice is
+kept), its tooltip `pin_format_scene_split_help` (`Pin.formatSceneSplitHelp`).
 
 ## Settings
 

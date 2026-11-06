@@ -95,6 +95,18 @@ add_test(NAME test_replay_hdv_split COMMAND test_replay_hdv_split
 pin_engine_replay_test_env(test_replay_hdv_split)
 set_tests_properties(test_replay_hdv_split PROPERTIES TIMEOUT 60)
 
+# HDV to MOV (sink_hdvmux.c) on a tape where only the camera clock jumps: two numbered files
+# without --split (the format always splits), each decoding cleanly from 0 with its audio.
+add_executable(test_replay_hdv_mov test_replay_hdv_mov.c)
+target_link_libraries(test_replay_hdv_mov PRIVATE marvin-core pinnacle_sinks)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_replay_hdv_mov PRIVATE m)
+endif()
+add_test(NAME test_replay_hdv_mov COMMAND test_replay_hdv_mov
+    "${PIN_TEST_DATA}/hdv-repair-closed.ts" "${PIN_TEST_DATA}/hdv-repair-jump.ts")
+pin_engine_replay_test_env(test_replay_hdv_mov)
+set_tests_properties(test_replay_hdv_mov PROPERTIES TIMEOUT 60)
+
 # Unplug during a capture (replay fakes the USB NO_DEVICE failure): files finalised,
 # stop reason DEVICE_LOST, session in ERROR, a new session opens afterwards.
 pin_engine_replay_test(test_replay_unplug "${PIN_TEST_DATA}/dv-ntsc.dv" "${PIN_HDV_CAPTURE}")
@@ -153,7 +165,7 @@ set_tests_properties(test_cli_pipe PROPERTIES TIMEOUT 120)
 # All of the above replay the generated recordings.
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
-    test_replay_hdv test_replay_hdv_split test_replay_unplug test_replay_hwenc
+    test_replay_hdv test_replay_hdv_split test_replay_hdv_mov test_replay_unplug test_replay_hwenc
     test_replay_mixed_dv test_replay_mixed_kind test_replay_disk test_replay_fat32 test_cli_pipe
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 

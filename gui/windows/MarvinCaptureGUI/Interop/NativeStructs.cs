@@ -80,6 +80,8 @@ public unsafe struct PinFormatInfo
     public int IsDefault;
     // Appended (the core takes the old size too): the file stores a display aspect (raw .dv / .m2t do not).
     public int SupportsAspect;
+    // Appended: the format always splits into scenes (HDV MOV / MKV); the option shows checked and disabled.
+    public int SceneSplitForced;
 
     public string Label { get { fixed (byte* p = LabelBuf) return Utf8Fixed.Get(p, PinLimits.NameMax); } }
     public string Extension { get { fixed (byte* p = ExtensionBuf) return Utf8Fixed.Get(p, 16); } }

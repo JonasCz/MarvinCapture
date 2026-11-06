@@ -31,9 +31,10 @@ pin_sink_t *pin_sink_create(pin_format_t format)
         return sink_raw_create();
     case PIN_FMT_DV_AVI:
     case PIN_FMT_DV_MOV:
+        return sink_rewrap_create(format);
     case PIN_FMT_HDV_MOV:
     case PIN_FMT_HDV_MKV:
-        return sink_rewrap_create(format);
+        return sink_hdvmux_create(format);
     case PIN_FMT_ANALOG_H264_MKV:
     case PIN_FMT_ANALOG_HEVC_MKV:
     case PIN_FMT_DV_H264_MKV:

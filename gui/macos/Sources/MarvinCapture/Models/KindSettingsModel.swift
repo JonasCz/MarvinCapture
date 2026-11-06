@@ -76,7 +76,17 @@ final class KindSettingsModel: Identifiable {
     var effectiveAspectIndex: Int { aspectEnabled ? aspectIndex : 0 }
     /// The aspect picker's tooltip, from the core: what it does for the selected format, or why it is disabled.
     var aspectHelp: String { selectedFormat.map { Pin.formatAspectHelp($0.format) } ?? "" }
-    var splitEnabled: Bool { selectedFormat?.supportsSceneSplit ?? false }
+    /// The selected format always splits into scenes (the core's pin_format_info_t.scene_split_forced).
+    var splitForced: Bool { selectedFormat?.sceneSplitForced ?? false }
+    /// What the toggle shows: on while the format forces it, else the user's choice (kept and saved meanwhile).
+    var splitChecked: Bool {
+        get { splitForced || splitIntoScenes }
+        set { if !splitForced { splitIntoScenes = newValue } }
+    }
+    /// The toggle is enabled for a format with scene split that does not force it.
+    var splitEnabled: Bool { (selectedFormat?.supportsSceneSplit ?? false) && !splitForced }
+    /// The toggle's tooltip, from the core: what it does, or why it is always on.
+    var splitHelp: String { selectedFormat.map { Pin.formatSceneSplitHelp($0.format) } ?? "" }
     var passesEnabled: Bool { selectedFormat?.supportsMultiPass ?? false }
 
     /// The core's rule: passes need the no-signal timeout or the "stop after" limit.

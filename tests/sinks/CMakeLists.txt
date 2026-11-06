@@ -52,6 +52,17 @@ target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
 add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts" "${PIN_TEST_DATA}/hdv-720p.ts")
 set_tests_properties(test_hdv_rewrap PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
+# HDV to MOV / MKV with repair of damaged GOPs, on streams damaged like tape dropouts
+add_executable(test_hdv_repair test_hdv_repair.c)
+target_link_libraries(test_hdv_repair PRIVATE pinnacle_sinks)
+if(UNIX AND NOT APPLE)
+    target_link_libraries(test_hdv_repair PRIVATE m)
+endif()
+add_test(NAME test_hdv_repair COMMAND test_hdv_repair
+    "${PIN_TEST_DATA}/hdv-repair.ts" "${PIN_TEST_DATA}/hdv-repair-closed.ts"
+    "${PIN_TEST_DATA}/hdv-repair-jump.ts" "${PIN_TEST_DATA}/hdv-720p.ts" "${CMAKE_CURRENT_BINARY_DIR}")
+set_tests_properties(test_hdv_repair PROPERTIES FIXTURES_REQUIRED pin_test_data)
+
 add_executable(test_stdout_sinks test_stdout_sinks.c)
 target_link_libraries(test_stdout_sinks PRIVATE pinnacle_sinks)
 add_test(NAME test_stdout_sinks COMMAND test_stdout_sinks)

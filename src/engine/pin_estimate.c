@@ -76,13 +76,6 @@ double pin_est_seconds_left(uint64_t free_bytes, double bytes_per_s)
     return bytes_per_s > 0 ? (double)free_bytes / bytes_per_s : 0.0;
 }
 
-double pin_est_seconds_left_remux(uint64_t free_bytes, uint64_t written_bytes, double bytes_per_s)
-{
-    uint64_t keep = pin_stop_remux_reserve(written_bytes);
-    uint64_t usable = free_bytes > keep ? free_bytes - keep : 0;
-    return bytes_per_s > 0 ? (double)usable / (3.0 * bytes_per_s) : 0.0;
-}
-
 #define FFV1_SECTION "core"
 #define FFV1_KEY "ffv1_bytes_per_hour"
 #define FFV1_MIN_BPH 1.0e9

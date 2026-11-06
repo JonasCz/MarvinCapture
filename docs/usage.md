@@ -44,8 +44,11 @@ Two ways in, both on the same core library:
   format (analog, DV, HDV) is greyed out, with a tooltip saying why, when that format
   stores no aspect: raw `.dv` and `.m2t` files carry no aspect flag of their own, players
   take it from the video itself. Auto applies then, to the file and the preview; the
-  choice is kept and comes back when an AVI, MOV or MKV format is picked. The tooltips
-  come from the core (`pin_format_title_help`, `pin_format_aspect_help`).
+  choice is kept and comes back when an AVI, MOV or MKV format is picked. "Split into
+  scenes" is checked and disabled for HDV MOV / MKV, which always split
+  (`pin_format_info_t.scene_split_forced`); the user's own choice is kept for the other
+  formats. The tooltips come from the core (`pin_format_title_help`,
+  `pin_format_aspect_help`, `pin_format_scene_split_help`).
   The preview is paced by a small jitter buffer in the core (`pin_pace.h`):
   each frame is shown on the first display refresh at or after a time on an
   even grid at the source's nominal frame rate (25 / 29.97 fps, from the
@@ -97,7 +100,7 @@ ffmpeg -i out.dv -c:v copy -c:a copy out.avi     # rewrap, no re-encode
 ```
 
 **Scene splitting (`--split`, DV/HDV).** A confirmed timecode / recording-date
-break starts a new file (`name-0001`, `name-0002`, ...). A new file is only
+break (HDV: or a jump of the camera's clock) starts a new file (`name-0001`, `name-0002`, ...). A new file is only
 created once the new segment is a real one, i.e. it has reached **at least
 1 s and at least 1 MB**; the frames are held in memory until then. If the
 capture, the pass or the tape ends first, or another break arrives first, the
@@ -107,7 +110,9 @@ behind (the very first file is always created). Only content-triggered splits
 are deferred this way; a hard size limit would not be. Details:
 `src/engine/pin_split.h`. HDV has only the GOP timecode: a break counts after three
 GOPs, and the new file starts with PAT, PMT and the picture that opens the GOP where
-the new timecode begins ([hdv.md](hdv.md#scene-split---split)).
+the new timecode begins ([hdv.md](hdv.md#scene-split---split)). HDV to MOV / MKV always
+splits, `--split` or not: those files are written live with damaged GOPs repaired and
+timestamps from 0 ([hdv.md](hdv.md#mov-and-mkv-written-live-damaged-gops-repaired)).
 
 **Tapes that mix formats.** The capture follows the stream: DV <-> HDV, PAL <-> NTSC,
 DV's 4:3 / 16:9 and audio mode (sample rate, channels, 12 / 16 bit), HDV's size, frame
@@ -305,9 +310,9 @@ capture starts (not for the user's own stop).
 | `END_OF_TAPE` | replay device: the end of the file in the last pass |
 | `DEVICE_LOST` | the USB stream failed and the unit no longer answers a standard GET_STATUS on EP0 (unplugged); the session goes to ERROR. Another USB failure is `ERROR` |
 | `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
-| `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued, plus (HDV to MOV / MKV only) the size of the file, because those are remuxed from a temp `.ts` when closed. Checked once a second. Also an analog file on a FAT32 drive that reached its 4 GiB limit (see "Long captures") |
+| `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued. Checked once a second. Also an analog file on a FAT32 drive that reached its 4 GiB limit (see "Long captures") |
 | `WRITE_ERROR` | writing a file failed, or the next file (split, pass, format change) could not be created. The file keeps what reached the drive: a raw `.dv` / `.m2t` ends with a cut frame or picture, an AVI or MOV has no index (it could not be written; players read the file without one or offer to repair it). A drive that is full gives `DISK_FULL` instead, before writing fails |
-| `ERROR` | any other error: a USB failure, a failed video encoder, and standard output seeing the tape change between DV and HDV |
+| `ERROR` | any other error: a USB failure, a failed video encoder, HDV to MOV / MKV whose repair of damaged GOPs cannot keep up with the capture ([hdv.md](hdv.md#mov-and-mkv-written-live-damaged-gops-repaired)), and standard output seeing the tape change between DV and HDV |
 | `DISK_SLOW` | the output drive could not keep up and the disk writer's queue filled (64 MB for DV / HDV, ~18 s; 512 MB for analog, ~25 s). The file ends cleanly before the first unit that did not fit, rather than going on with a hole: the sinks count frames, so a lost analog frame would shift the audio against the video for the rest of the file |
 
 A capture that drives the deck (`start_deck`) stops the tape when it ends for
@@ -319,8 +324,7 @@ while nothing ever arrived) leaves no file behind: no output file, no
 `--keep-raw` file, no temporary file, and an existing file that `--overwrite`
 would have replaced is not touched. The sinks create a file only when its first
 video unit is written (`pin_sink_lazy`, `src/sinks/sink_lazy.c`; audio that
-arrives before the first video is dropped), a rewrapped HDV capture's temporary
-`.rawts.tmp` is removed when empty, and a pass or scene file that gets no unit is
+arrives before the first video is dropped), and a pass or scene file that gets no unit is
 never created. The core reports it as `stop_no_video` in the status (1 until the
 next capture starts) and, when the end was not abnormal, as
 `PIN_EVT_NO_VIDEO` right after `PIN_EVT_CAPTURE_ENDED`; `stop_text` and the
@@ -350,8 +354,8 @@ second thread that runs the reassembler and writes the file (`pin_writer`). If
 the queue ever overflows, the capture stops (`DISK_SLOW`, above).
 
 Closing a file is the other long wait on the disk: it drains the writer queue
-and finalises the container, and HDV to MOV / MKV remuxes the whole temp `.ts`
-(minutes for a long scene). A file is therefore handed to a closer thread
+and finalises the container (HDV to MOV / MKV also waits for the GOP repairs still
+running). A file is therefore handed to a closer thread
 (`src/engine/pin_closer.c`) and the capture goes straight on into the next
 scene or pass; the files close one at a time, in order, each with its
 `PIN_EVT_FILE_CLOSED` (now also for a scene split). The end of a capture
@@ -359,8 +363,8 @@ scene or pass; the files close one at a time, in order, each with its
 file is closed; until then the session is in `PIN_STATE_STOPPING` with the
 session lock released, so status calls answer at once and the GUIs show
 "Finishing NAME…" (the Stop buttons read "Finishing the file…", disabled).
-Commands posted meanwhile stay pending and run after it. The free-space check adds the remux room of the files still
-being closed.
+Commands posted meanwhile stay pending and run after it. The free-space check adds what the files still
+being closed have queued.
 
 The reassembler concatenates type-9 payloads in arrival order and ignores their
 ring addresses. That is right while addresses advance contiguously; if an
@@ -379,8 +383,8 @@ are accepted as they are:
 | Windows GUI analog elapsed time is formatted `hh:mm:ss` | `MainViewModel.StatusTimeText` | 24 h: the display wraps to 00:00:00 |
 | Windows GUI "Stop after" / "Stop no signal" | `Maximum="600"` | 10 h |
 | `MarvinCaptureCLI` durations are `HH:MM:SS` | `pin_dur_parse` | 99:59:59 |
-| `MarvinCaptureCLI` waits at most 30 min for a file to close | `close_capture` in `src/engine/pin_script_run.c` | a 10 h+ HDV capture to MOV / MKV on a slow disk (the remux of the temp `.ts` happens at close) |
-| MPEG-TS PTS/PCR are 33-bit at 90 kHz | FFmpeg (HDV remux, preview) | 26.5 h; FFmpeg handles the wrap |
+| `MarvinCaptureCLI` waits at most 30 min for a file to close | `close_capture` in `src/engine/pin_script_run.c` | not in practice: closing drains the writer queue (at most 64 MB for DV / HDV) |
+| MPEG-TS PTS/PCR are 33-bit at 90 kHz | the HDV MOV / MKV sink, the scene split, FFmpeg (preview) | 26.5 h; all of them handle the wrap |
 
 Not a time limit, but the same in practice: a FAT32 drive takes no file over
 4 GiB. A DV or HDV capture to a file on one goes on in a new file before the

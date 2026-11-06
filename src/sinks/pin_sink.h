@@ -70,6 +70,8 @@ typedef struct {
     uint64_t audio_padded_samples; /* silence inserted to keep audio in sync with video */
     int encoder_behind;          /* sink_ffv1, sink_hwenc: the encode thread's queue is backing up */
     int pipe_closed;             /* stdout sinks: the reading program is gone (not a disk error) */
+    int reencode_behind;         /* sink_hdvmux: repairing damaged GOPs cannot keep up; the sink
+                                    failed with PIN_ERR_CODEC and the capture ends */
     pin_status_t last_error;
 } pin_sink_status_t;
 
@@ -134,9 +136,9 @@ void pin_sink_lazy_set_renumber(pin_sink_t *s, pin_sink_name_fn next, void *ctx,
  * any thread while the writer feeds the sink. */
 unsigned pin_sink_lazy_renumbered(pin_sink_t *s, char *out, size_t cap);
 
-/* Where the HDV MOV / MKV sink writes its "<name>.rawts.tmp" (the raw stream it remuxes at
- * close): NULL or "" = next to the output file (the default), else this directory. Process-wide
- * (pin_set_app_dirs()), for sinks opened afterwards. -1 if dir is too long. */
+/* Where a sink would write a temporary file: NULL or "" = next to the output file (the default),
+ * else this directory. Process-wide (pin_set_app_dirs()), for sinks opened afterwards. -1 if dir
+ * is too long. No sink writes one at present (HDV to MOV / MKV is written live). */
 int pin_sink_set_temp_dir(const char *dir);
 
 /* The sink for `--capture -` (open() it with the path "-"): DV raw DIF, HDV

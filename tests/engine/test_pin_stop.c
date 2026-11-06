@@ -77,9 +77,8 @@ int main(void)
                     "because the end of the tape was reached.") == 0, "no video, stdout, default detail");
     pin_stop_message_no_video(PIN_STOP_USER, NULL, NULL, b, sizeof(b));
     CHECK(strstr(b, "standard output") != NULL, "no video, no path");
-    CHECK(pin_stop_disk_reserve(0, 0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
-    CHECK(pin_stop_disk_reserve(10, 20, 30) == 60, "margin + backlog + remux");
-    CHECK(pin_stop_remux_reserve(100) == 200, "remux keeps twice the written size free");
+    CHECK(pin_stop_disk_reserve(0, 0) == PIN_STOP_DISK_MARGIN, "default margin");
+    CHECK(pin_stop_disk_reserve(10, 20) == 30, "margin + backlog");
     CHECK(pin_stop_file_cap(PIN_FAT32_FILE_MAX) == PIN_FAT32_FILE_MAX - (64ull << 20) + 1,
           "FAT32: files grow to 4 GiB less 64 MiB");
     CHECK(pin_stop_file_cap(0) == 0, "no limit");

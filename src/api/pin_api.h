@@ -117,9 +117,9 @@ PIN_API pin_status_t pin_set_firmware_dir(const char *utf8_dir);
  *   runtime_dir  where the cross-process lock files go (default: $XDG_RUNTIME_DIR/pinnacle-oss,
  *                $TMPDIR/pinnacle-oss or /tmp/pinnacle-oss-<uid>; unused on Windows). On Android
  *                none of these exists: pass the app's cache directory, or pin_open() fails.
- *   temp_dir     where HDV to MOV / MKV writes the "<name>.rawts.tmp" it remuxes when the
- *                capture stops (default: next to the output file; Android's media provider
- *                refuses a .tmp file in Movies/)
+ *   temp_dir     where a format that needs a temporary file would write it (default: next to
+ *                the output file; Android's media provider refuses a .tmp file in Movies/). No
+ *                format needs one at present: HDV to MOV / MKV is written live.
  * Directories are created if missing. PIN_ERR_ARG (and nothing changed) if a path is longer
  * than 511 bytes. */
 PIN_API pin_status_t pin_set_app_dirs(const char *config_dir, const char *runtime_dir,
@@ -233,7 +233,7 @@ typedef enum {
     PIN_STATE_PREPARING,    /* firmware upload / bring-up / input switch */
     PIN_STATE_READY,        /* idle, preview running if a signal is present */
     PIN_STATE_CAPTURING,
-    PIN_STATE_STOPPING,     /* finalising files (may take a moment for remuxes) */
+    PIN_STATE_STOPPING,     /* finalising files (may take a moment) */
     PIN_STATE_REWINDING,    /* multi-pass: rewinding to the start of the tape */
     PIN_STATE_ERROR,        /* see last_error; close and reopen, or pin_prepare() again */
 } pin_state_t;
@@ -379,14 +379,22 @@ typedef struct {
      * aspect from the video itself (DV's 16:9 flag, the MPEG-2 sequence header), so a GUI
      * disables its aspect control for them (pin_format_aspect_help() says why). */
     int supports_aspect;
+    /* Appended. 1 if the format always splits into scenes, whatever pin_capture_opts_t's
+     * scene_split says: HDV to MOV / MKV (its files take the stream's timing apart and must not
+     * run across another recording, see docs/hdv.md). A GUI shows its scene split option
+     * checked and disabled for it; pin_format_scene_split_help() says why. */
+    int scene_split_forced;
 } pin_format_info_t;
 
 /* Formats for a kind, in display order. Returns the count. out[0].size sets the size of every
- * entry (see supports_aspect). Only the formats this platform offers: every platform leaves out
- * PIN_FMT_HDV_MOV and PIN_FMT_HDV_MKV for now (disabled, untested; they remux the whole
- * recording when it stops), and the H.264 / HEVC formats appear only where their encoder
- * opened in pin_encoders_probe() (which the first call runs if nobody did: see there).
- * pin_format_info() answers for every format. */
+ * entry (see supports_aspect). Only the formats this platform offers: the H.264 / HEVC formats
+ * appear only where their encoder opened in pin_encoders_probe() (which the first call runs if
+ * nobody did: see there). pin_format_info() answers for every format.
+ *
+ * PIN_FMT_HDV_MOV / PIN_FMT_HDV_MKV are written live: undamaged GOPs are copied, damaged ones
+ * (tape dropouts) are decoded with error concealment and encoded again as MPEG-2 of the same
+ * size and bit rate; the files' timestamps start at 0 and run without gaps, and they always
+ * split into scenes (scene_split_forced). See docs/hdv.md ("MOV and MKV"). */
 PIN_API int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 PIN_API pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out);
 
@@ -427,6 +435,12 @@ PIN_API void pin_format_warning(pin_format_t f, char *out, size_t cap);
 PIN_API void pin_format_title_help(pin_input_t input, pin_format_t format, pin_format_t format_hdv,
                                    char *out, size_t cap);
 PIN_API void pin_format_aspect_help(pin_format_t f, char *out, size_t cap);
+
+/* The help text (tooltip) of a GUI's "split into scenes" option for format f: what it does, or,
+ * for a format that always splits (pin_format_info_t.scene_split_forced), why it is checked and
+ * disabled; for a format without scene split, that its files are not split. "" for an unknown
+ * format. 512 bytes are enough. */
+PIN_API void pin_format_scene_split_help(pin_format_t f, char *out, size_t cap);
 
 /* The format settings of pin_capture_opts_t and which format each applies to. */
 typedef enum {

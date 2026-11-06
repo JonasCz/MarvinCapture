@@ -72,11 +72,15 @@
                  IsOpen="{x:Bind ViewModel.FormatOptions.HasWarning, Mode=OneWay}"
                  Message="{x:Bind ViewModel.FormatOptions.Warning, Mode=OneWay}" />
 
-        <CheckBox
-            Content="Split into scenes"
-            IsChecked="{x:Bind ViewModel.SplitIntoScenes, Mode=TwoWay}"
-            IsEnabled="{x:Bind Both(ViewModel.SplitEnabled, IsEditable), Mode=OneWay}"
-            AutomationProperties.HelpText="Starts a new numbered file at every recording start, timecode jump or date change on the tape." />
+        <!-- the Grid carries the tooltip: a disabled CheckBox shows none (HDV MOV / MKV always split) -->
+        <Grid Background="Transparent" HorizontalAlignment="Left"
+              ToolTipService.ToolTip="{x:Bind ViewModel.SplitHelp, Mode=OneWay}">
+            <CheckBox
+                Content="Split into scenes"
+                IsChecked="{x:Bind ViewModel.SplitChecked, Mode=TwoWay}"
+                IsEnabled="{x:Bind Both(ViewModel.SplitEnabled, IsEditable), Mode=OneWay}"
+                AutomationProperties.HelpText="{x:Bind ViewModel.SplitHelp, Mode=OneWay}" />
+        </Grid>
 
         <Grid ColumnSpacing="12">
             <Grid.ColumnDefinitions>

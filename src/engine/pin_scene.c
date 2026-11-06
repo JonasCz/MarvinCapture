@@ -81,6 +81,11 @@ static void state_from_record(pin_scene_state_t *s, const pin_scene_record_t *r)
         s->time_minute = r->time_minute;
         s->time_second = r->time_second;
     }
+    if (r->ts_valid) {
+        s->ts_valid = 1;
+        s->ts = r->ts;
+        s->ts_index = r->frame_index;
+    }
 }
 
 /* Copies only the fields present in r into state, leaving fields r doesn't
@@ -108,6 +113,11 @@ static void state_advance(pin_scene_state_t *state, const pin_scene_record_t *r)
         state->time_hour = r->time_hour;
         state->time_minute = r->time_minute;
         state->time_second = r->time_second;
+    }
+    if (r->ts_valid) {
+        state->ts_valid = 1;
+        state->ts = r->ts;
+        state->ts_index = r->frame_index;
     }
 }
 
@@ -202,9 +212,23 @@ static cont_t classify(const pin_scene_state_t *base, const pin_scene_record_t *
             date_result = CONT_YES;
     }
 
-    if (tc_result == CONT_BREAK || date_result == CONT_BREAK)
+    /* the camera clock: where the pictures fed since put it, within tc_jump_seconds either way
+     * (a dropout that lost pictures moves the clock on by them, the pictures counted do not) */
+    cont_t ts_result = CONT_NEUTRAL;
+    if (base->ts_valid && r->ts_valid && cfg->fps > 0) {
+        int64_t d = (r->ts - base->ts) & ((1LL << 33) - 1);
+        if (d >= (1LL << 32))
+            d -= 1LL << 33;                 /* signed, across the 33-bit wrap */
+        double ahead = d / 90000.0 - (r->frame_index - base->ts_index) / cfg->fps;
+        if (fabs(ahead) > cfg->tc_jump_seconds)
+            ts_result = CONT_BREAK;
+        else
+            ts_result = CONT_YES;
+    }
+
+    if (tc_result == CONT_BREAK || date_result == CONT_BREAK || ts_result == CONT_BREAK)
         return CONT_BREAK;
-    if (tc_result == CONT_YES || date_result == CONT_YES)
+    if (tc_result == CONT_YES || date_result == CONT_YES || ts_result == CONT_YES)
         return CONT_YES;
     return CONT_NEUTRAL;
 }

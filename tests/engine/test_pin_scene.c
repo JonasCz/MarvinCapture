@@ -426,6 +426,87 @@ static void test_hdv_zero_tc_never_cuts(void)
     CHECK(!feed_gops(&d, &idx, 0, 12, zeros, &cut), "HDV: zero timecode never cuts");
 }
 
+/* HDV's camera clock (the video PES DTS, on each GOP-opening picture next to the timecode): a
+ * jump of it splits even where the timecode runs on (a camera that pauses and resumes), a dropout
+ * that lost pictures does not, and neither does the 33-bit wrap. 12-picture GOPs at 25 fps. */
+static int feed_clock(pin_scene_detector_t *d, long *idx, long tc, int64_t *ts, int gops, long *cut)
+{
+    int fired = 0;
+    for (int g = 0; g < gops; g++) {
+        for (int p = 0; p < 12; p++) {
+            pin_scene_record_t r;
+            memset(&r, 0, sizeof(r));
+            r.frame_index = (*idx)++;
+            if (p == 0) {
+                r.tc_valid = 1;
+                r.tc_hour = (int)(tc / (25 * 3600));
+                r.tc_minute = (int)(tc / (25 * 60) % 60);
+                r.tc_second = (int)(tc / 25 % 60);
+                r.tc_frame = (int)(tc % 25);
+                r.ts_valid = 1;
+                r.ts = *ts & ((1LL << 33) - 1);
+            }
+            if (pin_scene_feed(d, &r, cut))
+                fired = 1;
+        }
+        tc += 12;
+        *ts += 12 * 3600;
+    }
+    return fired;
+}
+
+static void test_hdv_clock(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_hdv(&cfg, 25.0);
+    pin_scene_detector_t d;
+    long idx, cut = -1, tc = tc_frames_of(1, 0, 0, 0);
+    int64_t ts;
+
+    /* a clean run across the 33-bit wrap: no cut */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    ts = (1LL << 33) - 10 * 12 * 3600;
+    CHECK(!feed_clock(&d, &idx, tc, &ts, 20, &cut), "clock: the 33-bit wrap is no jump");
+
+    /* the clock jumps 10 s ahead, the timecode runs on: a cut at the first GOP after it */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    ts = 834LL * 90000;
+    CHECK(!feed_clock(&d, &idx, tc, &ts, 4, &cut), "clock: first recording");
+    long first_new = idx;
+    ts += 10LL * 90000;
+    CHECK(feed_clock(&d, &idx, tc + 48, &ts, 4, &cut) && cut == first_new,
+          "clock: a jump with the timecode running on splits at the GOP");
+
+    /* back by a second: a cut too */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    ts = 834LL * 90000;
+    feed_clock(&d, &idx, tc, &ts, 4, &cut);
+    first_new = idx;
+    ts -= 2LL * 90000;
+    CHECK(feed_clock(&d, &idx, tc + 48, &ts, 4, &cut) && cut == first_new, "clock: backward splits");
+
+    /* a dropout: 0.6 s of pictures never arrived, clock and timecode moved on by them: no cut */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    ts = 834LL * 90000;
+    feed_clock(&d, &idx, tc, &ts, 4, &cut);
+    ts += 15 * 3600;
+    CHECK(!feed_clock(&d, &idx, tc + 48 + 15, &ts, 6, &cut), "clock: a dropout that lost pictures");
+
+    /* a single GOP with a garbled clock: absorbed by the debounce */
+    pin_scene_init(&d, &cfg);
+    idx = 0;
+    ts = 834LL * 90000;
+    feed_clock(&d, &idx, tc, &ts, 4, &cut);
+    int64_t bad = ts + 500LL * 90000;
+    CHECK(!feed_clock(&d, &idx, tc + 48, &bad, 1, &cut), "clock: one garbled GOP");
+    ts += 12 * 3600;
+    CHECK(!feed_clock(&d, &idx, tc + 60, &ts, 6, &cut), "clock: back on the run, no cut");
+}
+
 int main(void)
 {
     test_clean_run();
@@ -442,6 +523,7 @@ int main(void)
     test_hdv_stray_gops_absorbed();
     test_hdv_jump_confirms();
     test_hdv_zero_tc_never_cuts();
+    test_hdv_clock();
 
     if (g_failures == 0) {
         printf("test_pin_scene: all tests passed\n");

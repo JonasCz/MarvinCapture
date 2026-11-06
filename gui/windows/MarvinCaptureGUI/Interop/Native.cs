@@ -296,6 +296,27 @@ public static unsafe partial class Native
     }
 
     [LibraryImport(Lib)]
+    private static partial void pin_format_scene_split_help(PinFormat f, byte* out_, nuint cap);
+
+    /// <summary>Help text of the "split into scenes" option for format f: what it does, or why it is
+    /// always on (PinFormatInfo.SceneSplitForced) or not available.</summary>
+    public static string FormatSceneSplitHelp(PinFormat f)
+    {
+        const int cap = 512;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_scene_split_help(f, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    [LibraryImport(Lib)]
     private static partial PinStatus pin_format_options(PinFormat f, ref PinFormatOptions out_);
 
     /// <summary>Which format settings apply to f, with the core's labels, ranges and help texts.</summary>

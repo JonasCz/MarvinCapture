@@ -452,13 +452,16 @@ pin_status_t pin_deck(pin_session_t *s, pin_deck_cmd_t cmd)
  * formats
  * ==================================================================== */
 
-/* sizeof(pin_format_info_t) before supports_aspect was appended. */
+/* sizeof(pin_format_info_t) before supports_aspect, and before scene_split_forced was appended. */
 #define FORMAT_INFO_SIZE_V1 offsetof(pin_format_info_t, supports_aspect)
+#define FORMAT_INFO_SIZE_V2 offsetof(pin_format_info_t, scene_split_forced)
 
 /* The caller's entry size: an older caller's known size, else (0 or garbage too) ours. */
 static size_t format_info_stride(const pin_format_info_t *out)
 {
-    return out->size == FORMAT_INFO_SIZE_V1 ? FORMAT_INFO_SIZE_V1 : sizeof(*out);
+    if (out->size == FORMAT_INFO_SIZE_V1 || out->size == FORMAT_INFO_SIZE_V2)
+        return out->size;
+    return sizeof(*out);
 }
 
 int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max)
@@ -498,6 +501,11 @@ void pin_format_title_help(pin_input_t input, pin_format_t format, pin_format_t 
                            char *out, size_t cap)
 {
     pin_session_format_title_help(input, format, format_hdv, out, cap);
+}
+
+void pin_format_scene_split_help(pin_format_t f, char *out, size_t cap)
+{
+    pin_session_format_scene_split_help(f, out, cap);
 }
 
 void pin_format_aspect_help(pin_format_t f, char *out, size_t cap)
@@ -918,7 +926,7 @@ int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub, cha
         /* why the last capture stopped (not after the user's own stop), until the next one */
         snprintf(out, cap, "%s", st->stop_text);
     } else if (st->state == PIN_STATE_STOPPING && file[0]) {
-        /* the capture ended; the last file is being written out / remuxed */
+        /* the capture ended; the last file is being written out */
         snprintf(out, cap, "Finishing %s" ELLIPSIS, file);
     } else if (!file[0] || st->state != PIN_STATE_CAPTURING) {
         if (st->state == PIN_STATE_READY && behind_hub) {

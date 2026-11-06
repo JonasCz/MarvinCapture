@@ -36,7 +36,8 @@ if(NOT FFMPEG)
 endif()
 
 set(files dv-pal.dv dv-ntsc.dv dv-pal-32k.dv hdv.ts hdv-720p.ts hdv-split-a1.ts hdv-split-x.ts
-          hdv-split-a2.ts hdv-split-b.ts ep88-pal.bin ep88-ntsc.bin ep88-pal-ntsc.bin
+          hdv-split-a2.ts hdv-split-b.ts hdv-repair.ts hdv-repair-closed.ts hdv-repair-jump.ts
+          ep88-pal.bin ep88-ntsc.bin ep88-pal-ntsc.bin
           ep88-dv-hdv-dv.bin ep88-dv-stray.bin ep88-hdv-pid.bin ep88-pal-48k-32k.bin ep88-hdv-dv.bin)
 
 file(SHA256 "${CMAKE_CURRENT_LIST_FILE}" script_hash)
@@ -146,7 +147,28 @@ hdv_split_piece(hdv-split-a1.ts 1.34 1.36 01:00:00:00 834 12)
 hdv_split_piece(hdv-split-x.ts 0.46 0.48 03:00:00:00 835.36 100)
 hdv_split_piece(hdv-split-a2.ts 1.42 1.44 01:00:01:21 835.84 12)
 hdv_split_piece(hdv-split-b.ts 1.90 1.92 05:00:00:00 837.28 12)
-foreach(ts hdv.ts hdv-720p.ts hdv-split-a1.ts hdv-split-x.ts hdv-split-a2.ts hdv-split-b.ts)
+# HDV repair (test_hdv_repair cuts, garbles and joins them): as hdv.ts, longer, with a 997 Hz
+# tone (a whole number of 1 kHz periods fits in an MP2 frame, so a 1 kHz tone a frame early or
+# late would look right).
+#   repair         6 s, open GOPs (leading B pictures, as ffmpeg writes them)
+#   repair-closed  3 s, closed GOPs
+#   repair-jump    1.5 s, its clock at 5000 s, its timecode where repair-closed's ends (joined
+#                  after it: a jump of the camera clock alone, as when a camera pauses)
+function(hdv_repair_piece out seconds offset timecode flags)   # ARGN: more encoder options
+    ffmpeg(${out} -f lavfi -i testsrc2=size=1440x1080:rate=25:duration=${seconds}
+           -f lavfi -i sine=frequency=997:sample_rate=48000:duration=${seconds}
+           -vf setfield=tff -pix_fmt yuv420p -c:v mpeg2video -b:v 25M -maxrate 25M -bufsize 7340032
+           -g 12 -bf 2 -flags ${flags} ${ARGN} -aspect 16:9
+           -color_primaries bt709 -color_trc bt709 -colorspace bt709 -timecode ${timecode}
+           -c:a mp2 -b:a 384k -ac 2
+           -mpegts_pmt_start_pid 0x81 -streamid 0:0x810 -streamid 1:0x814
+           -output_ts_offset ${offset} -f mpegts)
+endfunction()
+hdv_repair_piece(hdv-repair.ts 6 834 00:20:00:00 +ilme+ildct)
+hdv_repair_piece(hdv-repair-closed.ts 3 900 00:20:00:00 +ilme+ildct+cgop -sc_threshold 1000000000)
+hdv_repair_piece(hdv-repair-jump.ts 1.5 5000 00:20:03:00 +ilme+ildct)
+foreach(ts hdv.ts hdv-720p.ts hdv-split-a1.ts hdv-split-x.ts hdv-split-a2.ts hdv-split-b.ts
+           hdv-repair.ts hdv-repair-closed.ts hdv-repair-jump.ts)
     file(SIZE "${OUT}/${ts}" ts_size)
     math(EXPR ts_rest "${ts_size} % 188")
     if(ts_size EQUAL 0 OR NOT ts_rest EQUAL 0)

@@ -918,7 +918,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.Title = analog ? AnalogName : DvName;
         o.Aspect = analog ? AnalogEffectiveAspect : DvSettings.EffectiveAspect;
         o.AspectHdv = HdvSettings.EffectiveAspect;
-        o.SceneSplit = !analog && kind.SplitIntoScenes && kind.SplitEnabled ? 1 : 0;
+        o.SceneSplit = !analog && kind.SplitChecked && (kind.SelectedFormat?.SupportsSceneSplit ?? false) ? 1 : 0;
         o.IdleStopMinutes = (int)Math.Max(0, analog ? AnalogIdleStopMinutes : kind.IdleStopMinutes);
         o.MaxDurationMinutes = (int)Math.Max(0, analog ? AnalogMaxDurationMinutes : kind.MaxDurationMinutes);
         o.Passes = analog ? 1 : kind.EffectivePasses;

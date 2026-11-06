@@ -35,6 +35,11 @@ int pin_fmt_is_hevc(pin_format_t f)
     return f == PIN_FMT_ANALOG_HEVC_MKV || f == PIN_FMT_DV_HEVC_MKV;
 }
 
+int pin_fmt_always_splits(pin_format_t f)
+{
+    return f == PIN_FMT_HDV_MOV || f == PIN_FMT_HDV_MKV;
+}
+
 static int is_dv(pin_format_t f)
 {
     return f == PIN_FMT_DV_H264_MKV || f == PIN_FMT_DV_HEVC_MKV;

@@ -60,7 +60,7 @@ final class Core {
             EVT_ERROR = 8, EVT_INPUT_FORMAT = 6, EVT_CAPTURE_ENDED = 11, EVT_NO_VIDEO = 13;
 
     // formatFlags()
-    static final int FMT_TITLE = 1, FMT_SPLIT = 2, FMT_DEFAULT = 8, FMT_ASPECT = 16;
+    static final int FMT_TITLE = 1, FMT_SPLIT = 2, FMT_DEFAULT = 8, FMT_ASPECT = 16, FMT_SPLIT_FORCED = 32;
 
     // formatOptionInts()
     static final int FO_HAS_QUALITY = 0, FO_HAS_DEINTERLACE = 1, FO_HAS_FFV1 = 2, FO_QUALITY_MIN = 3,
@@ -142,6 +142,8 @@ final class Core {
     static native String formatTitleHelp(int input, int format, int formatHdv);
     /** The aspect setting's help for a format: what it does, or why it is off (FMT_ASPECT not set). */
     static native String formatAspectHelp(int format);
+    /** The scene split setting's help for a format: what it does, or why it is always on (FMT_SPLIT_FORCED). */
+    static native String formatSceneSplitHelp(int format);
     static native int[] formatOptionInts(int format);
     static native String[] formatOptionTexts(int format);
     static native String formatQualityHint(int format, int quality, int deinterlace, boolean is60hz);

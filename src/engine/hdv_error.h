@@ -79,6 +79,8 @@ typedef struct {
     int pic_structure;          /* picture_structure: 1 top field, 2 bottom field, 3 frame */
     int pic_tff;                /* top_field_first */
     int pic_progressive;        /* progressive_frame */
+    int dts_valid;          /* the video PES header that opens the unit has a time stamp: */
+    int64_t dts;                /* its DTS, or its PTS if it has no DTS (90 kHz, 33 bits) */
 } hdv_unit_errors_t;
 
 void hdv_error_init(hdv_err_state_t *st);

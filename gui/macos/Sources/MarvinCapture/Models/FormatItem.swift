@@ -29,6 +29,8 @@ struct FormatItem: Identifiable, Hashable {
     var isDefault: Bool
     /// The file stores a display aspect (raw .dv / .m2t do not: players take it from the video).
     var supportsAspect: Bool
+    /// The format always splits into scenes (HDV MOV / MKV): the toggle shows on and disabled.
+    var sceneSplitForced: Bool
 
     var id: UInt32 { format.rawValue }
 
@@ -42,6 +44,7 @@ struct FormatItem: Identifiable, Hashable {
         supportsMultiPass = info.supports_multi_pass != 0
         isDefault = info.is_default != 0
         supportsAspect = info.supports_aspect != 0
+        sceneSplitForced = info.scene_split_forced != 0
     }
 
     static func == (a: FormatItem, b: FormatItem) -> Bool { a.format == b.format }

@@ -180,7 +180,9 @@ mkdir -p "${BUILD_DIR}"
 cd "${WORK_BUILD_DIR}"
 
 # Components actually used by marvin-core:
-#   encode:  FFV1 + FLAC (analog capture), PCM s16le; per platform the OS's own H.264 / HEVC
+#   encode:  FFV1 + FLAC (analog capture), PCM s16le; MPEG-2 video + MP2 (the HDV
+#            MOV/MKV writer re-encodes damaged GOPs and fills lost audio with silence,
+#            sink_hdvmux.c; both LGPL); per platform the OS's own H.264 / HEVC
 #            encoder (the hardware-encoder sink, sink_hwenc.c; see the case below)
 #   decode:  FFV1, FLAC, DV (dvvideo: preview, and DV to H.264 / HEVC), MPEG-2 video (HDV),
 #            PCM s16le/s16be, MP2 (HDV audio)
@@ -223,6 +225,8 @@ CONFIGURE_ARGS=(
     --enable-encoder=ffv1
     --enable-encoder=flac
     --enable-encoder=pcm_s16le
+    --enable-encoder=mpeg2video
+    --enable-encoder=mp2
 
     --enable-decoder=ffv1
     --enable-decoder=flac

@@ -20,6 +20,8 @@
  * device entry: the exact strings every GUI shows. Links src/api/pin_api.c. */
 
 #include "../../src/api/pin_api.h"
+#include "../../src/engine/pin_format_opts.h"
+#include <stddef.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -363,7 +365,7 @@ static void test_format_help(void)
     CHECK(strstr(b, "H.264") == NULL, "aspect: no encoder probed, no H.264");
     pin_format_aspect_help(PIN_FMT_HDV_TS, b, sizeof(b));
     CHECK(strncmp(b, "Raw .m2t (HDV) files have no aspect flag of their own", 53) == 0 &&
-          strstr(b, "None of the HDV formats here stores one.") != NULL, "aspect: raw HDV");
+          strstr(b, " HDV MOV and HDV MKV files store one.") != NULL, "aspect: raw HDV");
     pin_format_aspect_help(PIN_FMT_DV_AVI, b, sizeof(b));
     CHECK_STR(b, "Overrides the aspect ratio for the preview and the DV AVI files. Auto uses what the tape "
                  "reports.", "aspect: DV AVI");
@@ -375,6 +377,40 @@ static void test_format_help(void)
                  "uncompressed AVI files.", "aspect: analog");
     pin_format_aspect_help(PIN_FMT_COUNT, b, sizeof(b));
     CHECK_STR(b, "", "aspect: unknown format");
+
+    /* scene split: forced for HDV MOV / MKV (checked and disabled in a GUI), else what it does */
+    pin_format_info_t sfi;
+    memset(&sfi, 0, sizeof(sfi));
+    sfi.size = sizeof(sfi);
+    CHECK(pin_format_info(PIN_FMT_HDV_MOV, &sfi) == PIN_OK && sfi.scene_split_forced == 1 &&
+          sfi.supports_scene_split == 1, "scene split forced: HDV MOV");
+    CHECK(pin_format_info(PIN_FMT_HDV_MKV, &sfi) == PIN_OK && sfi.scene_split_forced == 1, "forced: HDV MKV");
+    CHECK(pin_format_info(PIN_FMT_HDV_TS, &sfi) == PIN_OK && sfi.scene_split_forced == 0, "not forced: raw HDV");
+    CHECK(pin_format_info(PIN_FMT_DV_AVI, &sfi) == PIN_OK && sfi.scene_split_forced == 0, "not forced: DV AVI");
+    pin_format_scene_split_help(PIN_FMT_HDV_MKV, b, sizeof(b));
+    CHECK(strncmp(b, "Always on for HDV MKV files:", 28) == 0, "scene split help: forced");
+    pin_format_scene_split_help(PIN_FMT_DV_RAW, b, sizeof(b));
+    CHECK_STR(b, "A new numbered file for each recording on the tape: where the timecode or the recording "
+                 "date jumps.", "scene split help: DV");
+    pin_format_scene_split_help(PIN_FMT_HDV_TS, b, sizeof(b));
+    CHECK(strstr(b, "camera's clock") != NULL, "scene split help: HDV names the clock");
+    pin_format_scene_split_help(PIN_FMT_ANALOG_AVI, b, sizeof(b));
+    CHECK_STR(b, "Uncompressed AVI files are not split into scenes.", "scene split help: analog");
+    pin_format_scene_split_help(PIN_FMT_COUNT, b, sizeof(b));
+    CHECK_STR(b, "", "scene split help: unknown format");
+    /* the format table and the rule the script and the session use agree */
+    for (int f = 0; f < PIN_FMT_COUNT; f++) {
+        memset(&sfi, 0, sizeof(sfi));
+        sfi.size = sizeof(sfi);
+        CHECK(pin_format_info((pin_format_t)f, &sfi) == PIN_OK &&
+              sfi.scene_split_forced == pin_fmt_always_splits((pin_format_t)f) &&
+              (!sfi.scene_split_forced || sfi.supports_scene_split), "scene_split_forced: one rule");
+    }
+    /* an older caller's struct size (before scene_split_forced) gets that layout */
+    memset(&sfi, 0x55, sizeof(sfi));
+    sfi.size = (uint32_t)offsetof(pin_format_info_t, scene_split_forced);
+    CHECK(pin_format_info(PIN_FMT_HDV_MOV, &sfi) == PIN_OK && sfi.scene_split_forced == 0x55555555 &&
+          sfi.supports_aspect == 1, "format info: old struct size");
     pin_format_aspect_help(PIN_FMT_DV_RAW, b, 20);
     CHECK(strlen(b) == 19, "aspect: cut to the buffer");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, b, 30);

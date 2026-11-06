@@ -53,9 +53,6 @@ int main(void)
     CHECK(near(pin_est_seconds_left(36000000, 3600000), 10, 1e-9), "seconds left");
     CHECK(pin_est_seconds_left(100, 0) == 0, "unknown rate");
     /* remux: (free - 2 * written) / (3 * rate) */
-    CHECK(near(pin_est_seconds_left_remux(1000, 100, 10), 800.0 / 30.0, 1e-9), "remux seconds left");
-    CHECK(pin_est_seconds_left_remux(100, 100, 10) == 0, "remux: no room left");
-    CHECK(near(pin_est_seconds_left_remux(900, 0, 10), 30, 1e-9), "remux before a capture");
 
     /* persistence */
     const char *path = "test_pin_estimate.ini";

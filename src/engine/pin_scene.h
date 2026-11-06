@@ -73,6 +73,13 @@ typedef struct {
 
     int rec_start_valid;
     int rec_start;
+
+    /* HDV: the camera clock (the video PES's DTS, 90 kHz, 33 bits, it wraps) of the picture.
+     * Like the timecode, only on the picture that opens a GOP. A jump of it (more than
+     * tc_jump_seconds ahead of where the pictures fed since put it, or back) is a break of its
+     * own: another recording even where the timecode runs on. */
+    int ts_valid;
+    int64_t ts;
 } pin_scene_record_t;
 
 typedef struct {
@@ -111,6 +118,9 @@ typedef struct {
     int date_day, date_month, date_year;
     int time_valid;
     int time_hour, time_minute, time_second;
+    int ts_valid;
+    int64_t ts;
+    long ts_index; /* frame_index of the record the clock came from */
 } pin_scene_state_t;
 
 typedef struct {

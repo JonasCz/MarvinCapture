@@ -403,6 +403,8 @@ final class OptionsPanel extends LinearLayout {
         LinearLayout optionsBlock = Ui.column(c);
         Switch[] split = new Switch[1];
         Spinner[] aspect = new Spinner[1];
+        // what scene split does, or why it is always on for this format (the core's text)
+        TextView splitHelp = Ui.help(c, Core.formatSceneSplitHelp(Settings.format(kind)));
         // why the aspect setting is off for raw .dv / .m2t, or what it does (the core's text)
         TextView aspectHelp = Ui.help(c, Core.formatAspectHelp(Settings.format(kind)));
         if (formats.length == 0) {
@@ -417,7 +419,12 @@ final class OptionsPanel extends LinearLayout {
             parent.addView(lock(Ui.spinner(c, labels, sel, i -> {
                 Settings.setInt("gui.format_" + kk, formats[i]);
                 fillFormatOptions(optionsBlock, kind, formats[i]);
-                if (split[0] != null) split[0].setEnabled(!locked && splitAllowed(kind));
+                if (split[0] != null) {
+                    // on while the format forces it; the user's own choice is kept and comes back
+                    split[0].setChecked(Settings.split(kind) || splitForced(kind));
+                    split[0].setEnabled(!locked && splitAllowed(kind));
+                }
+                splitHelp.setText(Core.formatSceneSplitHelp(formats[i]));
                 if (aspect[0] != null) aspect[0].setEnabled(!locked && Settings.aspectAllowed(kind));
                 aspectHelp.setText(Core.formatAspectHelp(formats[i]));
                 refreshNameHelp();
@@ -446,10 +453,13 @@ final class OptionsPanel extends LinearLayout {
             sw.setTextSize(15);
             sw.setTextColor(Ui.TEXT);
             sw.setPadding(0, Ui.dp(c, 12), 0, Ui.dp(c, 4));
-            sw.setChecked(Settings.split(kind));
-            sw.setOnCheckedChangeListener((b, on) -> Settings.setBool("gui.split_" + kk, on));
+            sw.setChecked(Settings.split(kind) || splitForced(kind));
+            sw.setOnCheckedChangeListener((b, on) -> {
+                if (!splitForced(kind)) Settings.setBool("gui.split_" + kk, on);
+            });
             split[0] = lock(sw, () -> splitAllowed(kind));
             parent.addView(sw, Ui.fillWidth());
+            parent.addView(splitHelp);
         }
 
         parent.addView(Ui.label(c, "Stop after no signal for"));
@@ -460,9 +470,16 @@ final class OptionsPanel extends LinearLayout {
                 m -> Settings.setInt("gui.duration_" + kk, m))), Ui.fillWidth());
     }
 
+    /** The format has scene split and leaves it to the user (HDV MOV / MKV always split). */
     private static boolean splitAllowed(int kind) {
         int f = Settings.format(kind);
-        return f >= 0 && (Core.formatFlags(f) & Core.FMT_SPLIT) != 0;
+        return f >= 0 && (Core.formatFlags(f) & Core.FMT_SPLIT) != 0 && !splitForced(kind);
+    }
+
+    /** The format always splits into scenes (the core's scene_split_forced). */
+    private static boolean splitForced(int kind) {
+        int f = Settings.format(kind);
+        return f >= 0 && (Core.formatFlags(f) & Core.FMT_SPLIT_FORCED) != 0;
     }
 
     private interface IntSink { void set(int v); }

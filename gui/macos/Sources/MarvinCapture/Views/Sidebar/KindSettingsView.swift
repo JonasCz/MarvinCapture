@@ -51,9 +51,9 @@ struct KindSettingsView: View {
             if !settings.formatOptions.warning.isEmpty {
                 InfoBannerContent(severity: .warning, title: "", message: settings.formatOptions.warning)
             }
-            Toggle("Split into scenes", isOn: $settings.splitIntoScenes)
+            Toggle("Split into scenes", isOn: $settings.splitChecked)
                 .disabled(!settings.splitEnabled)
-                .help("Starts a new numbered file at every recording start, timecode jump or date change on the tape.")
+                .help(settings.splitHelp)
             HStack(alignment: .top, spacing: 8) {
                 NumberField(title: "No signal (min)", value: $settings.idleStopMinutes,
                             help: "Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically).",

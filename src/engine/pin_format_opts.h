@@ -44,6 +44,9 @@ extern "C" {
 int pin_fmt_is_hwenc(pin_format_t f);
 /* 1 for the two HEVC ones. */
 int pin_fmt_is_hevc(pin_format_t f);
+/* 1 for the formats that always split into scenes (pin_format_info_t.scene_split_forced): HDV MOV
+ * and MKV, written with timing of their own that must not run across another recording. */
+int pin_fmt_always_splits(pin_format_t f);
 
 /* pin_format_options() without the size check: fills every field but size. PIN_ERR_ARG for
  * an unknown format. */

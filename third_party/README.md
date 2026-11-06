@@ -15,7 +15,9 @@ HEVC sink needs are written out in `src/sinks/hwenc_convert.c`).
   compiled in, so the resulting static libraries can be linked into the
   AGPL-3.0 `marvin-core` without a license conflict.
 - **Components enabled** (everything else is `--disable-everything`):
-  - Encoders: `ffv1`, `flac`, `pcm_s16le`, and per platform the operating
+  - Encoders: `ffv1`, `flac`, `pcm_s16le`, `mpeg2video` and `mp2` (HDV to MOV /
+    MKV re-encodes damaged GOPs and fills lost audio with silence; both are
+    FFmpeg's own LGPL encoders), and per platform the operating
     system's H.264 / HEVC encoder (wrappers only; the encoder itself comes with
     the OS):
     - Android: `h264_mediacodec`, `hevc_mediacodec` (`--enable-jni

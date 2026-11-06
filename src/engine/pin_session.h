@@ -80,7 +80,7 @@ int pin_session_monitor_available(pin_session_t *s);
 /* Global (not per-session): firmware directory override, see pin_api.h's
  * pin_set_firmware_dir(). Resolves fpga-ohci.bin / fpga-capture.bin. */
 pin_status_t pin_session_set_firmware_dir(const char *utf8_dir);
-/* pin_set_app_dirs(): settings, lock files and the HDV remux temp file. */
+/* pin_set_app_dirs(): settings, lock files and a temp file (none used at present). */
 pin_status_t pin_session_set_app_dirs(const char *config_dir, const char *runtime_dir,
                                       const char *temp_dir);
 /* Finds the model's bitstream for the kind (model->dv_bitstream / analog_bitstream) in, in order: the pin_set_firmware_dir() dir,
@@ -117,6 +117,7 @@ void pin_session_format_warning(pin_format_t f, char *out, size_t cap);
 void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_format_t format_hdv,
                                    char *out, size_t cap);
 void pin_session_format_aspect_help(pin_format_t f, char *out, size_t cap);
+void pin_session_format_scene_split_help(pin_format_t f, char *out, size_t cap);
 /* 1 if this machine can write format f: every format but the H.264 / HEVC ones, which need
  * their encoder (pin_hwenc_available(), probing on the first call). */
 int pin_session_format_available(pin_format_t f);

@@ -239,7 +239,7 @@ static void test_app_dirs(void)
     pinnacle_lock_release(lk);
 #endif
 
-    /* HDV MOV's remux temp file in temp_dir, not next to the output */
+    /* HDV MOV is written live: no temp file, neither in temp_dir nor next to the output */
 #if defined(_WIN32)
     mkdir(tdir);
 #else
@@ -263,9 +263,9 @@ static void test_app_dirs(void)
         p.audio_rate = 48000;
         p.audio_channels = 2;
         CHECK(sk->open(sk, out, &p) == PIN_OK, "HDV MOV open");
-        CHECK(exists(raw) && !exists(beside), "temp file in temp_dir");
-        sk->close(sk);       /* nothing written: no output, temp file removed */
-        CHECK(!exists(raw) && !exists(out), "temp file removed");
+        CHECK(!exists(raw) && !exists(beside), "no temp file");
+        sk->close(sk);       /* nothing written: no output */
+        CHECK(!exists(out), "no pictures, no file");
     }
 
     /* back to the defaults */
@@ -295,8 +295,10 @@ static void test_formats(void)
         f[i].size = sizeof(f[i]);
     }
     int n = pin_formats(PIN_KIND_HDV, f, PIN_FMT_COUNT);
-    /* HDV MOV / MKV are disabled on every platform for now (pin_session.c, format_offered) */
-    CHECK(n == 1 && f[0].format == PIN_FMT_HDV_TS && f[0].is_default, "every platform: HDV raw TS only");
+    /* every platform: the raw transport stream (the default), MOV and MKV */
+    CHECK(n == 3 && f[0].format == PIN_FMT_HDV_TS && f[0].is_default && f[1].format == PIN_FMT_HDV_MOV &&
+          f[2].format == PIN_FMT_HDV_MKV && f[1].scene_split_forced && f[2].scene_split_forced,
+          "every platform: HDV raw TS, MOV, MKV");
     pin_format_info_t fi;
     memset(&fi, 0, sizeof(fi));
     fi.size = sizeof(fi);

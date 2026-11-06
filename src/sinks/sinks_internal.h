@@ -39,7 +39,11 @@ pin_sink_t *sink_ffv1_create(void);       /* PIN_FMT_ANALOG_FFV1_MKV */
  * audio sample instead of 0, to check timestamp handling as if the capture
  * had already run for hours. Call between create and open. */
 void sink_ffv1_test_set_start(pin_sink_t *s, int64_t video_frame, int64_t audio_sample);
-pin_sink_t *sink_rewrap_create(pin_format_t format); /* DV_AVI, DV_MOV, HDV_MOV, HDV_MKV */
+pin_sink_t *sink_rewrap_create(pin_format_t format); /* DV_AVI, DV_MOV */
+pin_sink_t *sink_hdvmux_create(pin_format_t format); /* HDV_MOV, HDV_MKV: live, repairs damaged GOPs */
+/* Tests only: sink_hdvmux's limit of bytes waiting for a repair before it gives up (behind), and
+ * a delay each repair takes on top. Call between create and open. */
+void sink_hdvmux_test_set(pin_sink_t *s, uint64_t pend_limit, int worker_delay_ms);
 
 /* Tests only (pin_sink_fault.c): the seam PIN_TEST_WRITE_FAIL_AFTER=<bytes>, a file that takes
  * that many bytes and refuses the rest, as a full drive would. pin_sink_fault_budget() is a new

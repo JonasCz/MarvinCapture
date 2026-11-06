@@ -938,7 +938,7 @@ final class WindowModel {
         setCString(&o.title, analog ? analogName : dvName)
         o.aspect = pin_aspect_t(rawValue: UInt32(clamping: analog ? analogEffectiveAspectIndex : dvSettings.effectiveAspectIndex))
         o.aspect_hdv = pin_aspect_t(rawValue: UInt32(clamping: hdvSettings.effectiveAspectIndex))
-        o.scene_split = !analog && kind.splitIntoScenes && kind.splitEnabled ? 1 : 0
+        o.scene_split = !analog && kind.splitChecked && (kind.selectedFormat?.supportsSceneSplit ?? false) ? 1 : 0
         o.idle_stop_minutes = Int32(clamping: Swift.max(0, analog ? analogIdleStopMinutes : kind.idleStopMinutes))
         o.max_duration_minutes = Int32(clamping: Swift.max(0, analog ? analogMaxDurationMinutes : kind.maxDurationMinutes))
         o.passes = Int32(analog ? 1 : kind.effectivePasses)

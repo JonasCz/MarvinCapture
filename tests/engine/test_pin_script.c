@@ -192,12 +192,12 @@ static void test_extensions(void)
     CHECK(pin_script_ext_formats("dv", f, &mask) && f[1] == PIN_FMT_DV_RAW && mask == (1u | 4u), ".dv: DV only");
     CHECK(pin_script_ext_formats("avi", f, &mask) && f[0] == PIN_FMT_ANALOG_AVI && f[1] == PIN_FMT_DV_AVI &&
               f[2] == PIN_FMT_HDV_TS && mask == 4u, ".avi: analog and DV");
-    CHECK(pin_script_ext_formats("MOV", f, &mask) && f[1] == PIN_FMT_DV_MOV && f[2] == PIN_FMT_HDV_TS &&
-              f[0] == PIN_FMT_ANALOG_AVI && mask == (1u | 4u), ".mov (case-insensitive): DV only (HDV MOV disabled)");
+    CHECK(pin_script_ext_formats("MOV", f, &mask) && f[1] == PIN_FMT_DV_MOV && f[2] == PIN_FMT_HDV_MOV &&
+              f[0] == PIN_FMT_ANALOG_AVI && mask == 1u, ".mov (case-insensitive): DV and HDV");
     CHECK(pin_script_ext_formats("ts", f, &mask) && f[2] == PIN_FMT_HDV_TS && mask == (1u | 2u), ".ts");
     CHECK(pin_script_ext_formats("m2t", f, &mask) && f[2] == PIN_FMT_HDV_TS, ".m2t");
-    CHECK(pin_script_ext_formats("mkv", f, &mask) && f[0] == PIN_FMT_ANALOG_FFV1_MKV && f[2] == PIN_FMT_HDV_TS &&
-              f[1] == PIN_FMT_DV_RAW && mask == (2u | 4u), ".mkv: analog only (HDV MKV disabled)");
+    CHECK(pin_script_ext_formats("mkv", f, &mask) && f[0] == PIN_FMT_ANALOG_FFV1_MKV && f[2] == PIN_FMT_HDV_MKV &&
+              f[1] == PIN_FMT_DV_RAW && mask == 2u, ".mkv: analog and HDV");
     CHECK(!pin_script_ext_formats("mp4", f, &mask), "unknown extension");
 
     char base[128], ext[16];
@@ -223,6 +223,18 @@ static void test_cli_examples(void)
     expect_text(sc, 4, "wait-any idle=00:00:05");
     CHECK(sc->nsteps == 5, "example 1 has 5 steps");
     CHECK(!sc->help, "no help");
+    pin_script_destroy(sc);
+
+    /* HDV MOV / MKV always split into scenes: the capture step says so, unless --split was given */
+    CHECK(PARSE(sc, err, "--capture", "tape.mov", "--wait") == PIN_OK, "HDV MOV by extension");
+    CHECK(sc->items[0].cap.format[2] == PIN_FMT_HDV_MOV && !sc->items[0].cap.split, ".mov: HDV MOV");
+    expect_text(sc, 0, "capture tape.mov (HDV: split into scenes, as HDV MOV always is)");
+    pin_script_destroy(sc);
+    CHECK(PARSE(sc, err, "--format", "hdv-mkv", "--split", "--capture", "tape", "--wait") == PIN_OK, "hdv-mkv");
+    expect_text(sc, 0, "capture tape");
+    pin_script_destroy(sc);
+    CHECK(PARSE(sc, err, "--capture", "tape.m2t", "--wait") == PIN_OK, "raw HDV");
+    expect_text(sc, 0, "capture tape.m2t");
     pin_script_destroy(sc);
 
     /* example 2 */

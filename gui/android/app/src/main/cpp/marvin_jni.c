@@ -305,7 +305,8 @@ MJ_FN(jstring, formatLabel)(JNIEnv *env, jclass c, jint f)
     return mj_string(env, format_info(f, &i) ? i.label : "");
 }
 
-/* Core.FMT_*: 1 title, 2 scene split, 4 multi-pass, 8 default of its kind, 16 aspect; the kind << 8. */
+/* Core.FMT_*: 1 title, 2 scene split, 4 multi-pass, 8 default of its kind, 16 aspect, 32 scene split
+ * always on (HDV MOV / MKV); the kind << 8. */
 MJ_FN(jint, formatFlags)(JNIEnv *env, jclass c, jint f)
 {
     (void)env; (void)c;
@@ -314,7 +315,7 @@ MJ_FN(jint, formatFlags)(JNIEnv *env, jclass c, jint f)
         return 0;
     return (i.supports_title ? 1 : 0) | (i.supports_scene_split ? 2 : 0) |
            (i.supports_multi_pass ? 4 : 0) | (i.is_default ? 8 : 0) | (i.supports_aspect ? 16 : 0) |
-           ((jint)i.kind << 8);
+           (i.scene_split_forced ? 32 : 0) | ((jint)i.kind << 8);
 }
 
 MJ_FN(jstring, formatWarning)(JNIEnv *env, jclass c, jint f)
@@ -343,6 +344,15 @@ MJ_FN(jstring, formatAspectHelp)(JNIEnv *env, jclass c, jint f)
     (void)c;
     char w[512];
     pin_format_aspect_help(f >= 0 ? (pin_format_t)f : PIN_FMT_COUNT, w, sizeof(w));
+    return mj_string(env, w);
+}
+
+/* The scene split setting's help for format f: what it does, or why it is always on. */
+MJ_FN(jstring, formatSceneSplitHelp)(JNIEnv *env, jclass c, jint f)
+{
+    (void)c;
+    char w[512];
+    pin_format_scene_split_help(f >= 0 ? (pin_format_t)f : PIN_FMT_COUNT, w, sizeof(w));
     return mj_string(env, w);
 }
 

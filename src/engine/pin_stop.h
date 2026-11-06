@@ -35,16 +35,9 @@ extern "C" {
  * moov is ~16-32 bytes per frame, a few MB per hour). */
 #define PIN_STOP_DISK_MARGIN (64ull << 20)
 
-/* Bytes that must stay free for the open file to be finished: the margin,
- * what the writer has queued but not written yet, and remux_bytes for a
- * format that copies the whole file when it is closed (HDV to MOV/MKV
- * writes a temp .ts and remuxes it at close). margin 0 = PIN_STOP_DISK_MARGIN. */
-uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog, uint64_t remux_bytes);
-
-/* What a format that rewraps the whole file when it is closed (HDV to MOV / MKV: a temp .ts, then
- * the remux) keeps free while it runs: twice what is written so far (the remux output is as big
- * as the temp file, the rest is slack). Pass it as remux_bytes. */
-uint64_t pin_stop_remux_reserve(uint64_t bytes_written);
+/* Bytes that must stay free for the open file to be finished: the margin and
+ * what the writer has queued but not written yet. margin 0 = PIN_STOP_DISK_MARGIN. */
+uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog);
 
 /* The largest file FAT32 takes: 4 GiB less a byte. Larger writes fail (EFBIG). */
 #define PIN_FAT32_FILE_MAX 0xFFFFFFFFull

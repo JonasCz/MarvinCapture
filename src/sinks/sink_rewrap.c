@@ -17,8 +17,7 @@
  */
 
 /*
- * On-the-fly rewrap for DV (-> type-2 AVI or MOV) and a close-time remux
- * fallback for HDV (-> MOV or MKV).
+ * On-the-fly rewrap for DV (-> type-2 AVI or MOV).
  *
  * DV: each reassembled frame (dv_reassembler's whole-unit callback) is
  * muxed as one dvvideo packet -- the DIF bytes are DV's own bitstream, no
@@ -62,17 +61,7 @@
  * list for a capture-wide fallback if this turns out to matter in
  * practice.
  *
- * HDV: the "feed the mpegts demuxer live over a non-seekable queue" path
- * the plan describes as the preferred approach needs a look-ahead buffer
- * before the demuxer will report streams, which is fiddly to get right
- * under this task's time budget and, per the plan's own risk list, has a
- * documented fallback: write the raw TS to a temp file, then remux at
- * close(). That fallback is what's implemented here for HDV. The temp file
- * is a real, seekable file, so opening it with the mpegts demuxer needs no
- * special-casing; mpeg2video + mp2 are stream-copied into the target
- * container with codec_tag left to the muxer (mov_get_mpeg2_xdcam_codec_tag
- * picks the hdv2/hdv3 4CC from the stream's geometry/profile) and
- * field_order/SAR/colour set explicitly to match the plan.
+ * HDV to MOV / MKV is sink_hdvmux.c.
  */
 
 #include "pin_sink.h"
@@ -112,17 +101,13 @@ typedef struct {
     int header_written;
     int64_t vpts;
     int fault_io;             /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
-    uint64_t io_left;         /* HDV temp file: the same seam's budget */
 
     pin_sink_status_t st;
-
-    /* Temp path for HDV's raw-then-remux fallback, and the file the remux writes. */
-    char raw_path[1200];
-    FILE *raw_f;
-    char final_path[1200];
 } rewrap_priv_t;
 
-/* pin_sink_set_temp_dir(): "" = next to the output file. */
+/* pin_sink_set_temp_dir(): "" = next to the output file. No sink writes a temp file at present
+ * (HDV to MOV / MKV used to remux one at close; sink_hdvmux.c now writes live): kept so
+ * pin_set_app_dirs() keeps its meaning if one does again. */
 static char g_temp_dir[1024];
 
 int pin_sink_set_temp_dir(const char *dir)
@@ -540,182 +525,6 @@ static pin_status_t dv_close(pin_sink_t *s)
     return rc;
 }
 
-/* ----------------------------------------------------------------- HDV -- */
-
-static pin_status_t hdv_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
-{
-    rewrap_priv_t *p = s->priv;
-    p->params = *params;
-    if (strlen(path) >= sizeof(p->final_path))
-        return PIN_ERR_ARG;
-    snprintf(p->final_path, sizeof(p->final_path), "%s", path);
-    if (g_temp_dir[0]) {
-        /* pin_set_app_dirs(): Android's media provider refuses a .tmp file in Movies/ (not
-         * a video type), so the temp file goes to the app's own directory there. */
-        const char *name = path;
-        for (const char *c = path; *c; c++)
-            if (*c == '/' || *c == '\\')
-                name = c + 1;
-        snprintf(p->raw_path, sizeof(p->raw_path), "%s/%s.rawts.tmp", g_temp_dir, name);
-    } else {
-        snprintf(p->raw_path, sizeof(p->raw_path), "%s.rawts.tmp", path);
-    }
-    p->raw_f = fopen(p->raw_path, "wb");
-    if (!p->raw_f)
-        return PIN_ERR_IO;
-    setvbuf(p->raw_f, NULL, _IOFBF, 4 << 20);
-    p->io_left = pin_sink_fault_budget();
-    return PIN_OK;
-}
-
-static pin_status_t hdv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
-{
-    rewrap_priv_t *p = s->priv;
-    if (pin_sink_fault_fwrite(data, len, p->raw_f, &p->io_left) != len) {
-        p->st.last_error = PIN_ERR_IO;
-        return PIN_ERR_IO;
-    }
-    p->st.bytes_written += len;
-    p->st.units_written++;
-    return PIN_OK;
-}
-
-/* Fallback remux, run once at close(): demux the temp .ts (a real, seekable
- * file -- no look-ahead concerns) and stream-copy video+audio into the
- * target MOV/MKV. */
-static pin_status_t hdv_remux(rewrap_priv_t *p, const char *final_path)
-{
-    AVFormatContext *in = NULL;
-    int rc = avformat_open_input(&in, p->raw_path, NULL, NULL);
-    if (rc < 0) {
-        pin_logf(PIN_LOG_ERROR, "sink_rewrap: opening the HDV temp TS failed (%d)\n", rc);
-        return PIN_ERR_CODEC;
-    }
-    if (avformat_find_stream_info(in, NULL) < 0) {
-        avformat_close_input(&in);
-        return PIN_ERR_CODEC;
-    }
-
-    const char *muxer = p->format == PIN_FMT_HDV_MOV ? "mov" : "matroska";
-    AVFormatContext *out = NULL;
-    avformat_alloc_output_context2(&out, NULL, muxer, final_path);
-    if (!out) {
-        avformat_close_input(&in);
-        return PIN_ERR_CODEC;
-    }
-    out->avoid_negative_ts = AVFMT_AVOID_NEG_TS_MAKE_ZERO;   /* see the rebasing below */
-
-    int map[8];
-    memset(map, -1, sizeof(map));
-    int vidx = -1;
-    for (unsigned i = 0; i < in->nb_streams && i < 8; i++) {
-        AVCodecParameters *cp = in->streams[i]->codecpar;
-        if (cp->codec_type != AVMEDIA_TYPE_VIDEO && cp->codec_type != AVMEDIA_TYPE_AUDIO)
-            continue;
-        AVStream *o = avformat_new_stream(out, NULL);
-        avcodec_parameters_copy(o->codecpar, cp);
-        o->codecpar->codec_tag = 0;   /* let the target muxer choose (hdv3 etc.) */
-        o->time_base = in->streams[i]->time_base;
-        if (cp->codec_type == AVMEDIA_TYPE_VIDEO) {
-            vidx = (int)i;
-            /* what the engine read from the stream (sequence and picture coding
-             * extensions): 1080i top field first, 720p / 1080p progressive */
-            o->codecpar->field_order = !p->params.interlaced ? AV_FIELD_PROGRESSIVE
-                                       : p->params.top_field_first ? AV_FIELD_TT : AV_FIELD_BB;
-            o->codecpar->color_primaries = AVCOL_PRI_BT709;
-            o->codecpar->color_trc = AVCOL_TRC_BT709;
-            o->codecpar->color_space = AVCOL_SPC_BT709;
-            o->codecpar->color_range = AVCOL_RANGE_MPEG;
-            /* SAR from the stream's raster and the display aspect: 1440x1080 16:9
-             * is 4:3 (anamorphic), 1280x720 16:9 is 1:1 -- see pin_sink_sar_for. */
-            int sn, sd;
-            pin_sink_sar_for(PIN_KIND_HDV, 1, p->params.aspect, cp->width, cp->height, &sn, &sd);
-            o->codecpar->sample_aspect_ratio = (AVRational){ sn, sd };
-            o->sample_aspect_ratio = (AVRational){ sn, sd };  /* see dv_open()'s comment */
-        }
-        map[i] = o->index;
-    }
-    if (vidx < 0) {
-        avformat_free_context(out);
-        avformat_close_input(&in);
-        return PIN_ERR_CODEC;
-    }
-
-    if (p->params.title[0])
-        av_dict_set(&out->metadata, "title", p->params.title, 0);
-
-    rc = avio_open(&out->pb, final_path, AVIO_FLAG_WRITE);
-    if (rc < 0) {
-        avformat_free_context(out);
-        avformat_close_input(&in);
-        return PIN_ERR_IO;
-    }
-    if (avformat_write_header(out, NULL) < 0) {
-        avio_closep(&out->pb);
-        avformat_free_context(out);
-        avformat_close_input(&in);
-        return PIN_ERR_CODEC;
-    }
-
-    /* The transport stream carries the camera's own clock (PCR/PTS), so the tape's
-     * position in seconds, not 0, is where its first picture lands. A rewrapped file
-     * starts at 0 instead: everything moves by the earliest start of any stream
-     * (in->start_time, in AV_TIME_BASE units), keeping audio and video in sync. A
-     * negative dts that is left (B-frame reordering) is the muxer's to shift. */
-    int64_t base_us = in->start_time != AV_NOPTS_VALUE ? in->start_time : 0;
-
-    AVPacket *pkt = av_packet_alloc();
-    pin_status_t result = PIN_OK;
-    while (av_read_frame(in, pkt) >= 0) {
-        if (pkt->stream_index < 8 && map[pkt->stream_index] >= 0) {
-            AVStream *is = in->streams[pkt->stream_index];
-            AVStream *os = out->streams[map[pkt->stream_index]];
-            int64_t off = av_rescale_q(base_us, AV_TIME_BASE_Q, is->time_base);
-            if (pkt->pts != AV_NOPTS_VALUE)
-                pkt->pts -= off;
-            if (pkt->dts != AV_NOPTS_VALUE)
-                pkt->dts -= off;
-            av_packet_rescale_ts(pkt, is->time_base, os->time_base);
-            pkt->stream_index = map[pkt->stream_index];
-            if (av_interleaved_write_frame(out, pkt) < 0)
-                result = PIN_ERR_IO;
-        }
-        av_packet_unref(pkt);
-    }
-    av_packet_free(&pkt);
-
-    if (av_write_trailer(out) < 0)
-        result = PIN_ERR_IO;
-    avio_closep(&out->pb);
-    avformat_free_context(out);
-    avformat_close_input(&in);
-    return result;
-}
-
-static pin_status_t hdv_close(pin_sink_t *s)
-{
-    rewrap_priv_t *p = s->priv;
-    if (p->raw_f) {
-        fclose(p->raw_f);
-        p->raw_f = NULL;
-    }
-
-    pin_status_t rc = PIN_OK;
-    if (!p->final_path[0])
-        rc = PIN_ERR_INTERNAL;      /* never opened */
-    else if (p->st.units_written > 0)
-        rc = hdv_remux(p, p->final_path);
-    else
-        pin_logf(PIN_LOG_WARN, "sink_rewrap: no HDV pictures captured, leaving no output file\n");
-    if (p->raw_path[0])
-        remove(p->raw_path);
-    if (p->st.last_error != PIN_OK)
-        rc = p->st.last_error;
-    free(p);
-    free(s);
-    return rc;
-}
-
 static void rewrap_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     rewrap_priv_t *p = s->priv;
@@ -739,11 +548,6 @@ pin_sink_t *sink_rewrap_create(pin_format_t format)
         s->open = dv_open;
         s->write_unit = dv_write_unit;
         s->close = dv_close;
-        s->supports_title = 1;
-    } else if (format == PIN_FMT_HDV_MOV || format == PIN_FMT_HDV_MKV) {
-        s->open = hdv_open;
-        s->write_unit = hdv_write_unit;
-        s->close = hdv_close;
         s->supports_title = 1;
     } else {
         free(p);

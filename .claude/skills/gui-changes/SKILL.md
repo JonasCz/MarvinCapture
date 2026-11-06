@@ -60,6 +60,10 @@ only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing cal
   `.m2t`), and `EffectiveAspect` (Auto then) is what the capture and the preview get. The
   name and aspect tooltips are the core's (`pin_format_title_help`, `pin_format_aspect_help`).
   macOS and Android do the same (`effectiveAspectIndex`, `Settings.effectiveAspect`).
+  "Split into scenes" binds `SplitChecked` (on while the format's `SceneSplitForced`: HDV MOV /
+  MKV always split; `SplitIntoScenes` keeps the user's choice), tooltip `SplitHelp`
+  (`pin_format_scene_split_help`); macOS `splitChecked` / `splitHelp`, Android
+  `Core.FMT_SPLIT_FORCED`.
 - Format settings (deinterlace, quality, FFV1 compression): `ViewModels/FormatOptionsViewModel.cs`
   holds `FormatChoices` (the stored values, -1 = the format's default; keys
   `gui.deinterlace_analog` / `_dv`, `gui.quality_analog` / `_dv`, `gui.ffv1_compression`, the

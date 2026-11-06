@@ -169,7 +169,8 @@ static void test_fixture(void)
         hdv_err_state_t st;
         hdv_error_init(&st);
         size_t start = 0;
-        int units = 0, bad = 0;
+        int units = 0, bad = 0, ts_bad = 0, ts_n = 0;
+        int64_t last_ts = -1, first_ts = -1;
         for (size_t i = 0; i <= n; i++) {
             int is_start = i < n && (d[i * 188 + 1] & 0x40) &&
                            (((d[i * 188 + 1] & 0x1F) << 8) | d[i * 188 + 2]) == map.video_pid;
@@ -178,10 +179,24 @@ static void test_fixture(void)
                     hdv_unit_errors_t e;
                     hdv_error_analyze(&st, d + start * 188, i - start, map.video_pid, &e);
                     if (e.frame_error) bad++;
+                    /* the decode time of each picture: one frame (3600 at 25 fps) after the last */
+                    if (!e.dts_valid || (last_ts >= 0 && e.dts - last_ts != 3600))
+                        ts_bad++;
+                    if (e.dts_valid) {
+                        if (first_ts < 0)
+                            first_ts = e.dts;
+                        last_ts = e.dts;
+                        ts_n++;
+                    }
                 }
                 if (is_start) units++;
                 start = i;
             }
+        }
+        if (pass == 0) {
+            CHECK(ts_n > 40 && ts_bad == 0, "every picture's decode time, a frame apart");
+            /* the fixture's clock starts at 834 s (ffmpeg's muxer puts the first DTS ~1.4 s on) */
+            CHECK(first_ts > 834 * 90000LL && first_ts < 837 * 90000LL, "the camera clock's value");
         }
         if (pass == 0) CHECK(bad == 0, "the HDV stream is error-free");
         else CHECK(bad >= 1, "dropped packet in the stream is detected");

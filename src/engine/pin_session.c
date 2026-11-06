@@ -749,7 +749,7 @@ static void closer_drain(pin_session_t *s)
 }
 
 /* Waits for the closer with the lock released, in PIN_STATE_STOPPING
- * ("Finalizing..."): an HDV remux can take minutes, and status calls (the
+ * ("Finalizing..."): a long writer queue can take a while, and status calls (the
  * GUI) must not wait that long. Only where nothing is half done under the
  * lock (capture_end(), from a tick, a command or a loop exit); a command
  * posted meanwhile stays pending for the next tick. The caller sets the next
@@ -801,9 +801,7 @@ static void hand_over_file(pin_session_t *s)
     memset(&wst, 0, sizeof(wst));
     if (s->writer)
         pin_writer_get_stats(s->writer, &wst);
-    /* HDV to MOV / MKV remuxes the whole temp .ts when the file is closed */
-    int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
-    uint64_t reserve = wst.backlog_bytes + (remux ? sst.bytes_written + wst.backlog_bytes : 0);
+    uint64_t reserve = wst.backlog_bytes;
     pin_closer_submit(s->closer, s->writer, s->sink, s->current_file, s->file_announced,
                       sst.bytes_written, sst.units_written, reserve);
     s->writer = NULL;
@@ -1002,6 +1000,8 @@ static pin_aspect_t file_aspect(const pin_capture_opts_t *o, pin_kind_t kind)
  * split. A file that got nothing yet (a pass that began on the old format's last
  * frames) is replaced under its own name. HDV: the file starts on a GOP with PAT/PMT
  * (hdv_write_gate()). Caller holds the lock. */
+static int scene_split_on(const pin_session_t *s);
+
 static void format_cut_begin(void *user, long index)
 {
     pin_session_t *s = user;
@@ -1010,7 +1010,7 @@ static void format_cut_begin(void *user, long index)
     hand_over_file(s);
     if (!empty) {
         s->scene_index++;
-        if (!s->capture_opts.scene_split)
+        if (!scene_split_on(s))
             s->fmt_numbered = 1;
     }
     file_format_for_stream(s);
@@ -1125,11 +1125,11 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_HDV_MOV] = { .format = PIN_FMT_HDV_MOV, .kind = PIN_KIND_HDV,
         .label = "HDV in QuickTime", .extension = "mov",
         .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
-        .supports_aspect = 1 },
+        .supports_aspect = 1, .scene_split_forced = 1 },
     [PIN_FMT_HDV_MKV] = { .format = PIN_FMT_HDV_MKV, .kind = PIN_KIND_HDV,
         .label = "HDV in Matroska", .extension = "mkv",
         .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
-        .supports_aspect = 1 },
+        .supports_aspect = 1, .scene_split_forced = 1 },
     [PIN_FMT_ANALOG_H264_MKV] = { .format = PIN_FMT_ANALOG_H264_MKV, .kind = PIN_KIND_ANALOG,
         .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
         .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0,
@@ -1148,33 +1148,33 @@ static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
         .supports_aspect = 1 },
 };
 
+/* Scene split for the open file: the option, or always for a format that needs it
+ * (scene_split_forced: HDV to MOV / MKV, whose files must not run across a jump of the camera
+ * clock). Never to standard output (the option is cleared there). */
+static int scene_split_on(const pin_session_t *s)
+{
+    if (s->capture_opts.scene_split)
+        return 1;
+    if (pin_path_is_stdout(s->capture_opts.path) || (unsigned)s->active_format >= PIN_FMT_COUNT)
+        return 0;
+    return pin_fmt_always_splits(s->active_format) && g_formats[s->active_format].kind == s->file_kind;
+}
+
 int pin_session_format_available(pin_format_t f)
 {
-    /* HDV to MOV / MKV is disabled for now (UNTESTED): the remux at close does not cope with tape errors / damage. Only the raw transport stream is offered; the code stays so it can be re-enabled. */
-    if (f == PIN_FMT_HDV_MOV || f == PIN_FMT_HDV_MKV)
-        return 0;
     if (!pin_fmt_is_hwenc(f))
         return (unsigned)f < PIN_FMT_COUNT;
     return pin_hwenc_available(pin_fmt_is_hevc(f) ? PIN_HWENC_HEVC : PIN_HWENC_H264);
 }
 
 /* Formats this platform does not offer: pin_formats() leaves them out, pin_format_info() and
- * a capture still take them. Android: HDV to MOV / MKV remuxes the whole recording when it
- * stops (minutes, and twice the space), so only the raw transport stream there. The H.264 /
- * HEVC formats only where their encoder opened (a capture refuses them elsewhere). */
+ * a capture still take them. The H.264 / HEVC formats only where their encoder opened (a
+ * capture refuses them elsewhere). */
 static int format_offered(pin_format_t f)
 {
     if (pin_fmt_is_hwenc(f))
         return pin_session_format_available(f);
-    /* HDV to MOV / MKV is disabled for now (UNTESTED): the remux at close does not cope with tape errors / damage. Only the raw transport stream is offered; the code stays so it can be re-enabled. */
-    if (f == PIN_FMT_HDV_MOV || f == PIN_FMT_HDV_MKV)
-        return 0;
-#if defined(__ANDROID__)
-    return f != PIN_FMT_HDV_MOV && f != PIN_FMT_HDV_MKV;
-#else
-    (void)f;
     return 1;
-#endif
 }
 
 void pin_session_format_warning(pin_format_t f, char *out, size_t cap)
@@ -1290,6 +1290,33 @@ void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_f
     }
     if (nw || nwo)
         append_text(out, cap, ".");
+}
+
+void pin_session_format_scene_split_help(pin_format_t f, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    if ((unsigned)f >= PIN_FMT_COUNT)
+        return;
+    const pin_format_info_t *fi = &g_formats[f];
+    pin_format_t one[1] = { f };
+    if (fi->scene_split_forced) {
+        snprintf(out, cap, "Always on for ");
+        append_names(out, cap, one, 1, 0);
+        append_text(out, cap, " files: each recording on the tape goes to a file of its own "
+                              "(numbered), as their timing starts at 0 and runs without gaps. A new "
+                              "file starts where the timecode, the recording date or the camera's "
+                              "clock jumps.");
+    } else if (fi->supports_scene_split) {
+        snprintf(out, cap, "A new numbered file for each recording on the tape: where the timecode%s "
+                           "jumps.",
+                 fi->kind == PIN_KIND_HDV ? ", the recording date or the camera's clock"
+                                          : " or the recording date");
+    } else {
+        append_names(out, cap, one, 1, 1);
+        append_text(out, cap, " files are not split into scenes.");
+    }
 }
 
 void pin_session_format_aspect_help(pin_format_t f, char *out, size_t cap)
@@ -1435,7 +1462,7 @@ static void open_sink_for_scene(pin_session_t *s)
 {
     /* numbered: scene split, a first number, or the files after a format change */
     pin_naming_opts_t nopts = {
-        .scene_split = s->capture_opts.scene_split,
+        .scene_split = scene_split_on(s),
         .always_number = s->capture_opts.first_number != 0 || s->fmt_numbered,
         .scene_index = s->scene_index,
         .pass = s->pass_index,
@@ -1768,7 +1795,7 @@ static void size_cut_begin(void *user, long index)
     (void)index;
     hand_over_file(s);
     s->scene_index++;
-    if (!s->capture_opts.scene_split)
+    if (!scene_split_on(s))
         s->fmt_numbered = 1;
     open_sink_for_scene(s);
     if (s->sink && s->file_kind == PIN_KIND_HDV)
@@ -1814,7 +1841,7 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
         capture_format_change(s, old, fmt_start);
 
     /* scene split, on the units of the open file's kind */
-    int scene = s->capture_opts.scene_split && rec && kind == s->file_kind && s->sink;
+    int scene = scene_split_on(s) && rec && kind == s->file_kind && s->sink;
     if (scene) {
         if (!s->scene_det_ready) {
             pin_scene_config_t cfg;
@@ -2069,6 +2096,9 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             rec.tc_hour = gop.hours; rec.tc_minute = gop.minutes;
             rec.tc_second = gop.seconds; rec.tc_frame = gop.pictures;
             rec.tc_drop_frame = gop.drop_frame;
+            /* the camera clock too: a jump of it is another recording (pin_scene.h) */
+            rec.ts_valid = herr.dts_valid;
+            rec.ts = herr.dts;
         }
     }
 
@@ -2333,11 +2363,8 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         free_bytes = s->test_free_space > used ? s->test_free_space - used : 0;
         known = 1;
     }
-    /* HDV to MOV / MKV remuxes the whole temp .ts when the file is closed */
-    int remux = s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV;
-    /* plus the files the closer is still finishing (an earlier scene's remux) */
-    uint64_t reserve = pin_stop_disk_reserve(0, wst.backlog_bytes,
-                                             remux ? pin_stop_remux_reserve(s->bytes_written) : 0) +
+    /* plus the files the closer is still finishing */
+    uint64_t reserve = pin_stop_disk_reserve(0, wst.backlog_bytes) +
                        pin_closer_pending_bytes(s->closer);
     char detail[PIN_TEXT_MAX];
     pin_stop_reason_t why;
@@ -2354,6 +2381,15 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         if (sst.last_error == PIN_ERR_CODEC && pin_fmt_is_hwenc(s->active_format)) {
             why = PIN_STOP_ERROR;
             snprintf(detail, sizeof(detail), "the video encoder failed");
+        } else if (sst.last_error == PIN_ERR_CODEC && sst.reencode_behind) {
+            why = PIN_STOP_ERROR;
+            snprintf(detail, sizeof(detail), "repairing the damaged parts of the HDV stream could "
+                     "not keep up with the capture (too much damage for this computer); capture to "
+                     "the raw transport stream (.m2t) instead");
+        } else if (sst.last_error == PIN_ERR_CODEC &&
+                   (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV)) {
+            why = PIN_STOP_ERROR;
+            snprintf(detail, sizeof(detail), "repairing a damaged part of the HDV stream failed");
         } else {
             why = PIN_STOP_WRITE_ERROR;
             detail[0] = 0;
@@ -4334,11 +4370,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         double rate = nominal_bytes_per_second(s, hint_kind, hint_fmt, rate_opts, measured, &src);
         out->est_bytes_per_hour = rate * 3600.0;
         out->est_rate_source = src;
-        if (hint_fmt == PIN_FMT_HDV_MOV || hint_fmt == PIN_FMT_HDV_MKV)   /* rewrapped at close */
-            out->est_seconds_left = pin_est_seconds_left_remux(
-                free_bytes, s->state == PIN_STATE_CAPTURING ? s->bytes_written : 0, rate);
-        else
-            out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
+        out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
         out->disk_low = out->est_seconds_left < 3600.0 || free_bytes < (50ull << 30);
     }
     pin_session_unlock(s);

@@ -19,9 +19,9 @@
 /*
  * pin_closer -- finishes output files on a thread of its own.
  *
- * Closing a file drains its writer queue and finalises the container; for
- * HDV to MOV / MKV that is a remux of the whole temp .ts, minutes for a long
- * scene. Done on the USB read thread under the session lock (as it was), a
+ * Closing a file drains its writer queue and finalises the container (for
+ * HDV to MOV / MKV it waits for the GOP repairs still running, sink_hdvmux.c);
+ * a big queue can take a while. Done on the USB read thread under the session lock (as it was), a
  * scene split lost the stream for that long and froze status calls. Here a
  * file is handed over (its writer and sink) and the capture goes on into the
  * next file at once. Files close one at a time, in the order handed over.
@@ -61,7 +61,7 @@ pin_closer_t *pin_closer_create(pin_closer_done_fn done, void *user);
  * only: its consumer must not look the sink up anywhere else), takes the
  * sink's final counts and closes it. bytes / units: what the caller has
  * already counted for it; the rest is added to pin_closer_take()'s totals.
- * reserve: disk space the close still needs (the remux output); counted in
+ * reserve: disk space the close still needs (the queued data); counted in
  * pin_closer_pending_bytes() until the file is closed. If the job cannot be
  * queued, the file is closed here and now. */
 void pin_closer_submit(pin_closer_t *c, pin_writer_t *writer, pin_sink_t *sink, const char *path,

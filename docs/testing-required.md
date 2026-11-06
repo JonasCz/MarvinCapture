@@ -50,9 +50,10 @@ Code is referred to by file and function rather than by line number.
 
 | Item | What changed | Tests | Still needs |
 |---|---|---|---|
-| 1.1 HDV output parameters | size, frame rate, interlaced/progressive, field order and aspect from the stream | `test_replay_hdv`, `test_pin_vidfmt` | HW: 720p and 1080i60 cameras (HDV MOV/MKV, the only sinks that use them, stay disabled) |
+| 1.1 HDV output parameters | size, frame rate, interlaced/progressive, field order and aspect from the stream | `test_replay_hdv`, `test_pin_vidfmt` | HW: 720p and 1080i60 cameras (HDV MOV/MKV are the only sinks that use them) |
 | 1.2 720p SAR, DAR | SAR from the real raster, DAR from `aspect_ratio_information` | `test_hdv_rewrap`, `test_pin_vidfmt` | HW |
-| 1.3 remux field order | progressive / TT / BB from the params | `test_hdv_rewrap` | the HDV remux stays disabled |
+| 1.3 HDV MOV/MKV field order | progressive / TT / BB from the params | `test_hdv_rewrap` | HW |
+| HDV MOV/MKV under damage | written live (`sink_hdvmux.c`): damaged GOPs re-encoded, lost pictures repeated, lost audio silence, timestamps from 0, scene split always on (also at a jump of the camera clock) | `test_hdv_repair`, `test_replay_hdv_mov`, `test_pin_scene`, `test_hdv_error` | HW: a camera's damaged tape; the files in DaVinci Resolve; whether cameras close their GOPs; a slow computer on a badly damaged tape |
 | 1.4, 2.2 progressive | from `progressive_sequence`; field order from `top_field_first` | `test_pin_vidfmt`, `test_replay_hdv` | 24p / pulldown left alone; CODE: 720p50, 1080p; HW |
 | 1.10 29.97 assumed | scene split, `captured_seconds()` and `.ts` replay at the detected rate; `.m2t` and TS by content | `test_replay_hdv`, `test_replay_hdv_split` | (a replay nit, see 1.10) |
 | 1.11 drop-frame bit | bit 6, as in DV | `test_hdv_aux` | HW: a camera's aux stream (PID 0x811) |
@@ -180,9 +181,9 @@ allows it).
 **1.9 HDV audio.** Untested. Only MPEG-1 Layer II is recognised. The monitor path
 (`pin_hdv_audio.c`) handles 44.1/32 kHz MP2 and mono (duplicated), but `pin_hdv_audio`
 has no test of its own. More than two channels are ignored. The sinks are told 48 kHz
-stereo whatever the stream carries (`open_sink_for_scene()`), which matters only once
-HDV MOV/MKV is enabled. The file keeps the TS audio untouched, so this affects
-monitoring only. **CODE** with `hdv.ts` and ffmpeg-made MP2 at other rates.
+stereo whatever the stream carries (`open_sink_for_scene()`); the HDV MOV/MKV sink
+reads the rate and channels from the MP2 frames instead. The file keeps the TS audio
+untouched, so this affects monitoring only. **CODE** with `hdv.ts` and ffmpeg-made MP2 at other rates.
 
 **1.10 HDV scene split and replay pacing assumed 29.97 fps.** **Fixed** (`e73dd6a`,
 `3f9190b`).
@@ -730,10 +731,11 @@ in tests. The Android emulator's encoder stopped after 18 s ("took no picture fo
   `avi_writer_set_segment_limit()` (5.3, 5.4), next to `PIN_REPLAY_UNPLUG_AFTER`. There
   is still no seam for the 1394 link (AV/C replies, bus reset; section 4) or for libusb
   (5.1, 5.5, 5.6).
-- **HDV remux under damage.** Unchanged. HDV to MOV/MKV stays disabled because the remux
-  "does not cope with tape errors". `test_hdv_rewrap` uses clean data only. Before
-  re-enabling it, add a test with dropped TS packets, CC errors and GOP damage, and one
-  of the parameters the session hands the sink (1.1).
+- **HDV MOV/MKV under damage.** Done: the close-time remux is gone. `sink_hdvmux.c` writes
+  live and re-encodes damaged GOPs. `test_hdv_repair` covers dropped, garbled and
+  error-flagged TS packets, lost audio, cut starts and ends, closed GOPs, a clock jump,
+  720p, damage everywhere and a repair that falls behind; `test_replay_hdv_mov` covers the
+  whole capture. Still to test with a camera's damaged tape (HW) and in DaVinci Resolve.
 
 ## A FireWire PC as a test source
 
@@ -908,8 +910,7 @@ For what is left after this round:
    - more synthetic HDV: 1080i29.97 and bottom-field-first streams, 720p50, 1080p,
      split PSI, a PMT version change, long PES headers (1.1, 1.5-1.7);
    - CI: a Linux push job with ctest, and sanitizer builds;
-   - `pin_hdv_audio` tests (1.9), the PAL timecode range (2.4), the HDV remux under
-     damage before enabling HDV MOV/MKV.
+   - `pin_hdv_audio` tests (1.9), the PAL timecode range (2.4).
 3. **Decide:** the points in 3.15 (a bit-depth-only change; the per-kind options after
    a DV/HDV change are decided: aspect and title per kind, the rest from the start kind),
    what NOT_IMPLEMENTED means (4.1), the zero GOP timecode

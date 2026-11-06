@@ -77,6 +77,15 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
                 } else {
                     pes_len = ((unsigned)pl[4] << 8) | pl[5];
                     start = 9 + pl[8];
+                    /* its decode time: DTS if it has one, else PTS (camera clock, 90 kHz) */
+                    int flags = pl[7] >> 6;
+                    const uint8_t *t = pl + (flags == 3 ? 14 : 9);
+                    if ((flags == 2 || flags == 3) && plen >= (size_t)(t - pl) + 5 &&
+                        pl[8] >= (flags == 3 ? 10 : 5)) {
+                        out->dts_valid = 1;
+                        out->dts = ((int64_t)(t[0] & 0x0E) << 29) | ((int64_t)t[1] << 22) |
+                                   ((int64_t)(t[2] & 0xFE) << 14) | ((int64_t)t[3] << 7) | (t[4] >> 1);
+                    }
                     if (start > plen) start = plen;
                 }
             } else {

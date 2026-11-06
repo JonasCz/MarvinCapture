@@ -178,11 +178,10 @@ int pin_script_ext_formats(const char *ext, pin_format_t out[3], unsigned *unsup
     static const struct { const char *ext; pin_format_t f[3]; } tbl[] = {
         { "dv",  { PIN_FMT_COUNT, PIN_FMT_DV_RAW, PIN_FMT_COUNT } },
         { "avi", { PIN_FMT_ANALOG_AVI, PIN_FMT_DV_AVI, PIN_FMT_COUNT } },
-        /* HDV to MOV / MKV is disabled for now (UNTESTED): the remux at close does not cope with tape errors / damage. Only the raw transport stream is offered; the code stays so it can be re-enabled. */
-        { "mov", { PIN_FMT_COUNT, PIN_FMT_DV_MOV, PIN_FMT_COUNT /* PIN_FMT_HDV_MOV */ } },
+        { "mov", { PIN_FMT_COUNT, PIN_FMT_DV_MOV, PIN_FMT_HDV_MOV } },
         { "ts",  { PIN_FMT_COUNT, PIN_FMT_COUNT, PIN_FMT_HDV_TS } },
         { "m2t", { PIN_FMT_COUNT, PIN_FMT_COUNT, PIN_FMT_HDV_TS } },
-        { "mkv", { PIN_FMT_ANALOG_FFV1_MKV, PIN_FMT_COUNT, PIN_FMT_COUNT /* PIN_FMT_HDV_MKV */ } },
+        { "mkv", { PIN_FMT_ANALOG_FFV1_MKV, PIN_FMT_COUNT, PIN_FMT_HDV_MKV } },
     };
     if (!ext)
         return 0;
@@ -249,16 +248,17 @@ const char *pin_script_help_text(void)
         "  --format KEY             output file format. Overrides the file extension if one is given with the file name passed to --capture; the format's extension is appended if none is given. One per input signal type:\n"
         "                             analog (-i svideo|composite)  avi ffv1-mkv h264-mkv hevc-mkv\n"
         "                             DV  (-i dv, DV tape)          dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv\n"
-        "                             HDV (-i dv, HDV tape)         hdv-ts\n"
-        "                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.\n"
+        "                             HDV (-i dv, HDV tape)         hdv-ts hdv-mov hdv-mkv\n"
+        "                           A later --format for the same signal replaces the earlier one. If no --format suits the signal that arrives, the --capture file extension decides (.avi .mkv for analog; .dv .avi .mov for DV; .ts .m2t .mov .mkv for HDV). If there is no extension either, the default is used: the first format listed above for that signal. An extension the arriving signal cannot use falls back to the default with a warning.\n"
         "                           h264-mkv, hevc-mkv, dv-h264-mkv and dv-hevc-mkv encode with the operating system's own (normally hardware) video encoder, with FLAC audio: small files, but lossy. Windows, macOS and Android, where the encoder is there; never on Linux. A --capture with one that is missing fails (exit 1). See --quality and --deinterlace.\n"
+        "                           hdv-mov and hdv-mkv are written live: undamaged GOPs are copied, damaged ones (tape dropouts) are decoded with error concealment and encoded again as MPEG-2 of the same size and bit rate; lost pictures repeat the one before and lost audio is silence, so each file keeps the tape's length and its sync, with timestamps from 0. They always split into scenes, as with --split (each recording gets its own numbered file). If the repair cannot keep up with a badly damaged tape, the capture stops (exit 4): use hdv-ts then.\n"
         "  --quality N              H.264 / HEVC: 0 (best, biggest files) to 51 (smallest), like x264's CRF: 6 steps up halve the size (default 18)\n"
         "  --deinterlace yes|no     H.264 / HEVC: yes (default) turns every field into a frame (bwdif), 25i into 50p and 29.97i into 59.94p; no keeps the fields, storing each interlaced frame as one progressive picture, which loses quality on motion\n"
         "  --ffv1-compression fast|smaller|smallest\n"
         "                           ffv1-mkv: fast (default) is the quickest; smaller (range coder) and smallest (range coder, large context model) save a few percent for more CPU time. All are lossless.\n"
-        "  --aspect auto|4:3|16:9   (default auto) sets the display aspect ratio flag in the output file, for the formats that store one: avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, and the analog NUT stream on stdout. Raw .dv (dv) and .ts/.m2t (hdv-ts) files have no such flag and are unchanged: players take the aspect from the video itself. auto = from the stream for DV, 16:9 for HDV, 4:3 for analog.\n"
-        "  --split                  scene split (DV/HDV): a confirmed timecode or recording-date break starts a new file. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.\n"
-        "  --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv and the analog NUT stream on stdout. Raw .dv (dv) and .ts/.m2t (hdv-ts) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.\n"
+        "  --aspect auto|4:3|16:9   (default auto) sets the display aspect ratio flag in the output file, for the formats that store one: avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, hdv-mov, hdv-mkv, and the analog NUT stream on stdout. Raw .dv (dv) and .ts/.m2t (hdv-ts) files have no such flag and are unchanged: players take the aspect from the video itself. auto = from the stream for DV, 16:9 for HDV, 4:3 for analog.\n"
+        "  --split                  scene split (DV/HDV): a confirmed timecode or recording-date break (HDV: or a jump of the camera's clock) starts a new file. Always on for hdv-mov and hdv-mkv. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.\n"
+        "  --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, hdv-mov, hdv-mkv and the analog NUT stream on stdout. Raw .dv (dv) and .ts/.m2t (hdv-ts) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.\n"
         "  --keep-raw               keep the raw .dv/.ts next to a rewrapped file\n"
         "  --overwrite              overwrite an existing target file (else an error)\n"
         "  Analog picture and audio controls (svideo/composite only; with defaults):\n"
@@ -395,8 +395,7 @@ static int fmt_from_key(const char *key, pin_format_t *out)
         { "dv", PIN_FMT_DV_RAW }, { "dv-avi", PIN_FMT_DV_AVI }, { "dv-mov", PIN_FMT_DV_MOV },
         { "dv-h264-mkv", PIN_FMT_DV_H264_MKV }, { "dv-hevc-mkv", PIN_FMT_DV_HEVC_MKV },
         { "hdv-ts", PIN_FMT_HDV_TS },
-        /* hdv-mov / hdv-mkv: disabled, untested (see pin_session.c format_offered). */
-        /* { "hdv-mov", PIN_FMT_HDV_MOV }, { "hdv-mkv", PIN_FMT_HDV_MKV }, */
+        { "hdv-mov", PIN_FMT_HDV_MOV }, { "hdv-mkv", PIN_FMT_HDV_MKV },
         { "avi", PIN_FMT_ANALOG_AVI }, { "ffv1-mkv", PIN_FMT_ANALOG_FFV1_MKV },
         { "h264-mkv", PIN_FMT_ANALOG_H264_MKV }, { "hevc-mkv", PIN_FMT_ANALOG_HEVC_MKV },
     };
@@ -584,7 +583,7 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
         } else if (strcmp(name, "--format") == 0) {
             pin_format_t f;
             if (!fmt_from_key(val, &f))
-                FAIL("--format: unknown format \"%s\" (dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv hdv-ts "
+                FAIL("--format: unknown format \"%s\" (dv dv-avi dv-mov dv-h264-mkv dv-hevc-mkv hdv-ts hdv-mov hdv-mkv "
                      "avi ffv1-mkv h264-mkv hevc-mkv)", val);
             int k = fmt_kind(f);
             p.fmt[k] = f;
@@ -840,7 +839,15 @@ pin_status_t pin_script_step_description(const pin_script_t *sc, int step, char 
         case PIN_SSTEP_PLAY: snprintf(out, cap, "play"); break;
         case PIN_SSTEP_PAUSE: snprintf(out, cap, "pause"); break;
         case PIN_SSTEP_STOP: snprintf(out, cap, "stop"); break;
-        case PIN_SSTEP_CAPTURE: snprintf(out, cap, "capture %s", it->cap.path); break;
+        case PIN_SSTEP_CAPTURE:
+            snprintf(out, cap, "capture %s", it->cap.path);
+            /* HDV MOV / MKV always split into scenes: say so where --split was not given */
+            if (!it->cap.split && !it->cap.to_stdout && pin_fmt_always_splits(it->cap.format[PIN_KIND_HDV])) {
+                size_t l = strlen(out);
+                snprintf(out + l, cap > l ? cap - l : 0, " (HDV: split into scenes, as HDV %s always is)",
+                         it->cap.format[PIN_KIND_HDV] == PIN_FMT_HDV_MOV ? "MOV" : "MKV");
+            }
+            break;
         case PIN_SSTEP_WAIT: {
             size_t n = (size_t)snprintf(out, cap, "%s ", it->wait_all ? "wait-all" : "wait-any");
             for (int k = 0; k < it->nconds && n < cap; k++) {

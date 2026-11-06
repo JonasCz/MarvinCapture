@@ -21,6 +21,8 @@ public sealed partial class FormatItem
     public bool IsDefault => Info.IsDefault != 0;
     /// <summary>The file stores a display aspect (raw .dv / .m2t do not: players take it from the video).</summary>
     public bool SupportsAspect => Info.SupportsAspect != 0;
+    /// <summary>The format always splits into scenes (HDV MOV / MKV): the option is checked and disabled.</summary>
+    public bool SceneSplitForced => Info.SceneSplitForced != 0;
 
     public FormatItem(PinFormatInfo info)
     {
@@ -46,7 +48,8 @@ public sealed partial class KindSettingsViewModel : ObservableObject
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(SplitEnabled), nameof(PassesEnabled), nameof(PassesUsable),
-                              nameof(AspectEnabled), nameof(EffectiveAspect), nameof(AspectHelp))]
+                              nameof(AspectEnabled), nameof(EffectiveAspect), nameof(AspectHelp),
+                              nameof(SplitForced), nameof(SplitChecked), nameof(SplitHelp))]
     private FormatItem? _selectedFormat;
 
     partial void OnSelectedFormatChanged(FormatItem? value) => FormatOptions.Format = value?.Format;
@@ -58,7 +61,10 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     /// entries only appear once the encoder probe is done (<see cref="RefreshFormats"/>).</summary>
     private PinFormat? _wantedFormat;
 
-    [ObservableProperty] private bool _splitIntoScenes;
+    /// <summary>The user's choice; kept (and saved) while a format that always splits shows the option checked.</summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(SplitChecked))]
+    private bool _splitIntoScenes;
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(PassesAllowed), nameof(PassesUsable), nameof(DisplayPasses), nameof(PassesToolTip))]
     private double _idleStopMinutes = 5;
@@ -114,7 +120,27 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     /// <summary>The drop-down's tooltip, from the core: what it does for the selected format, or why it is disabled.</summary>
     public string AspectHelp => SelectedFormat is null ? "" : Native.FormatAspectHelp(SelectedFormat.Format);
 
-    public bool SplitEnabled => SelectedFormat?.SupportsSceneSplit ?? false;
+    /// <summary>The selected format always splits into scenes (the core's pin_format_info_t.scene_split_forced).</summary>
+    public bool SplitForced => SelectedFormat?.SceneSplitForced ?? false;
+
+    /// <summary>What the check box shows: checked while the format forces it, else the user's choice.</summary>
+    public bool SplitChecked
+    {
+        get => SplitForced || SplitIntoScenes;
+        set
+        {
+            if (!SplitForced)
+            {
+                SplitIntoScenes = value;
+            }
+        }
+    }
+
+    /// <summary>The check box is enabled for a format with scene split that does not force it.</summary>
+    public bool SplitEnabled => (SelectedFormat?.SupportsSceneSplit ?? false) && !SplitForced;
+
+    /// <summary>The check box's tooltip, from the core: what it does, or why it is always on.</summary>
+    public string SplitHelp => SelectedFormat is null ? "" : Native.FormatSceneSplitHelp(SelectedFormat.Format);
     public bool PassesEnabled => SelectedFormat?.SupportsMultiPass ?? false;
 
     public string SettingsPrefix => Kind == PinKind.Dv ? "dv" : "hdv";

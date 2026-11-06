@@ -205,6 +205,9 @@ option, the file name), then the selected kind's format, aspect, scene split (wh
 stops. The aspect setting is disabled while its format stores no aspect (`Core.FMT_ASPECT`
 not set: raw `.dv`, HDV `.m2t`), with the core's reason under it (`pin_format_aspect_help`);
 the choice is kept, but Auto goes to the capture and the preview (`Settings.effectiveAspect`).
+Scene split is on and disabled for a format that always splits (`Core.FMT_SPLIT_FORCED`: HDV
+MOV / MKV), with the core's text under it (`pin_format_scene_split_help`); the saved choice is
+kept for the other formats.
 Each file of a capture gets its own kind's aspect: `OPT_ASPECT` from the analog or DV
 setting, `OPT_ASPECT_HDV` (`aspect_hdv`) from the HDV one. The help under the file name
 comes from the core too (`pin_format_title_help`) and follows the format choices. Each format shows the core's warning (`pin_format_warning`) and its own settings

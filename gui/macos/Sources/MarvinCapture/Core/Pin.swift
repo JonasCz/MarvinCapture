@@ -229,6 +229,9 @@ enum Pin {
     /// disabled and which formats store one.
     static func formatAspectHelp(_ f: pin_format_t) -> String { format { pin_format_aspect_help(f, $0, $1) } }
 
+    /// Help text of the "split into scenes" toggle for format `f`: what it does, or why it is always on.
+    static func formatSceneSplitHelp(_ f: pin_format_t) -> String { format { pin_format_scene_split_help(f, $0, $1) } }
+
     /// "About 2.9 GB per hour (6.4 Mbit/s)" for one quality setting of an H.264 / HEVC format, else "".
     static func formatQualityHint(_ f: pin_format_t, quality: Int, deinterlace: Int, is60Hz: Bool) -> String {
         format { pin_format_quality_hint(f, Int32(clamping: quality), Int32(clamping: deinterlace), is60Hz ? 1 : 0, $0, $1) }

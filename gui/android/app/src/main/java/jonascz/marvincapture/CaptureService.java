@@ -404,7 +404,8 @@ public final class CaptureService extends Service {
         o[Core.OPT_FORMAT_HDV] = fh;
         o[Core.OPT_ASPECT] = Settings.effectiveAspect(analog ? Core.KIND_ANALOG : Core.KIND_DV);
         o[Core.OPT_ASPECT_HDV] = Settings.effectiveAspect(Core.KIND_HDV);
-        o[Core.OPT_SCENE_SPLIT] = !analog && Settings.split(kind) && (flags & Core.FMT_SPLIT) != 0 ? 1 : 0;
+        o[Core.OPT_SCENE_SPLIT] = !analog && (Settings.split(kind) || (flags & Core.FMT_SPLIT_FORCED) != 0)
+                && (flags & Core.FMT_SPLIT) != 0 ? 1 : 0;
         o[Core.OPT_IDLE_STOP] = Settings.idleStop(kind);
         o[Core.OPT_MAX_DURATION] = Settings.maxDuration(kind);
         o[Core.OPT_FIRST_NUMBER] = Core.nextFileNumber(p.path);   // every file is "name-NNNN.ext"

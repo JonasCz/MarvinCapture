@@ -18,26 +18,13 @@
 
 /*
  * ctest: feeds an HDV capture (hdv.ts, HDV-like TS made with ffmpeg at test
- * time, see tests/data/README.md) through sink_rewrap's HDV path (PIN_FMT_HDV_MOV,
- * which for HDV always takes the plan's documented raw-then-remux-at-close
- * fallback -- see sink_rewrap.c's header comment) and checks the result
- * with libavformat: stream codecs, dimensions, field order, SAR, title. Also
- * a 720p capture (hdv-720p.ts, progressive, given as the second argument) and
- * pin_sink_sar_for()'s HDV values.
- *
- * Only the first ~48 MB of the capture is used (a live 5-minute HDV run is
- * ~1 GB; a few seconds of video is enough to exercise the remux path and
- * keeps this ctest fast). The plan asks the picture units be split "at
- * video PES starts", matching how dv_reassembler hands HDV pictures to a
- * sink during a real capture; this sink's write_unit() for HDV, though,
- * just appends bytes to a temp file verbatim (see sink_rewrap.c) ahead of
- * a single remux at close() -- so, unlike the DV path, *where* the pushed
- * chunks are cut cannot change its output, only how many pin_writer-style
- * pushes it took to deliver the same bytes. This test therefore pushes
- * fixed, 188-byte-aligned chunks rather than reimplementing PES/PID
- * parsing (dv_reassembler.c and engine/hdv_aux.c already own that logic
- * elsewhere in the tree); the byte-for-byte content reaching sink_rewrap is
- * unaffected either way.
+ * time, see tests/data/README.md) through the HDV MOV / MKV sink (sink_hdvmux.c,
+ * written live) and checks the result with libavformat: stream codecs,
+ * dimensions, field order, SAR, title. Also a 720p capture (hdv-720p.ts,
+ * progressive, given as the second argument) and pin_sink_sar_for()'s HDV values.
+ * The pushes are fixed, 188-byte-aligned chunks, not pictures: the sink demuxes
+ * the stream itself, so where the units are cut must not matter (test_hdv_repair
+ * pushes runs of random length, and damages the stream).
  *
  * Skips (prints a message, exits 0) if the capture file isn't present (no
  * ffmpeg to make it), except when CI is set: then it fails.
@@ -87,9 +74,7 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path, in
     size_t n;
     int units = 0;
     while (total < MAX_BYTES && (n = fread(buf, 1, sizeof(buf), in)) > 0) {
-        /* Keep every push a whole number of 188-byte TS packets -- required
-         * for the mpegts demuxer to parse the temp file at remux time, not
-         * by this sink's write_unit() itself (see the file header comment). */
+        /* every push a whole number of 188-byte TS packets, as the reassembler's units are */
         size_t whole = (n / TS_PACKET) * TS_PACKET;
         if (whole == 0)
             break;
