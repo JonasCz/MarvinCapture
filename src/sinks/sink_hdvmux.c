@@ -17,65 +17,37 @@
  */
 
 /*
- * HDV (MPEG-2 transport stream) to MOV or MKV, written live, with repair of
- * damaged GOPs (PIN_FMT_HDV_MOV, PIN_FMT_HDV_MKV).
+ * HDV (MPEG-2 transport stream) to MOV or MKV, written live, every GOP checked by decoding it,
+ * damaged GOPs repaired (PIN_FMT_HDV_MOV, PIN_FMT_HDV_MKV). docs/hdv.md ("MOV and MKV") has the
+ * whole story; in short:
  *
- * The sink demuxes the transport stream itself and hands the packets to
- * libavformat's muxer, as `ffmpeg -c copy` would, but it does not trust the
- * input's timing or its damaged parts:
+ * Writer thread (write_unit): demuxes the transport stream itself (PAT, PMT, PES per PID; a
+ * continuity gap, a transport error bit or a lost sync byte marks the PES damaged), cuts the
+ * video into pictures at their start codes (a sequence or GOP header goes with the picture
+ * after it; two field pictures make one frame) and those into GOPs, and the audio into MP2
+ * frames. GOPs go to the decode thread, audio frames to the muxer's queue.
  *
- * Demux. The PAT and PMT give the video PID (MPEG-2) and the audio PID
- * (MPEG-1 Layer II). PES packets are put back together per PID. A
- * continuity-counter gap, a transport error bit or a lost sync byte marks
- * the PES being assembled as damaged. The video elementary stream is cut
- * into pictures at its start codes; a sequence or GOP header goes with the
- * picture after it, and two field pictures make one frame. Audio PES
- * payloads are cut into MP2 frames.
+ * Decode thread: decodes every picture with one MPEG-2 decoder (so open GOPs have their
+ * references) and decides about a GOP once all its frames are back (a frame of a later GOP came
+ * out: the decoder gives them in display order). A GOP is passed through bit for bit when it
+ * begins with an I picture, its temporal_references are 0..n-1, no packet of it was lost or
+ * flagged, the camera clock shows no pictures missing in front of it, and the decoder gave every
+ * picture back without concealing anything. Otherwise its decoded pictures (concealment and all)
+ * go into a repair, which an encode worker encodes again as closed MPEG-2 GOPs of the source's
+ * size, rate, aspect, field order and bit rate; each picture lands on the frame its PES PTS
+ * says, a frame no picture landed on repeats a neighbour. The open GOP after a repair gives its
+ * leading B frames to the repair and is made closed; the first GOP of a file (and one after a
+ * clock jump) loses its leading B pictures, so a file always starts on an I frame. The decode
+ * thread also writes the file, in order, waiting for a repair's result before anything after it.
  *
- * GOPs. A GOP starts at a picture with a GOP or sequence header, or at an I
- * picture. It is passed through untouched when it is whole: it begins with
- * an I picture, its temporal_references are 0..n-1, no picture in it is
- * damaged, and the camera clock shows no pictures missing in front of it.
- * Anything else is "bad".
+ * Timestamps are the file's own (frames and samples from 0); the camera clock only places
+ * things: audio by its PTS through the GOP it belongs to, silence (made once with the MP2
+ * encoder) where audio is missing or damaged, overlapping audio dropped.
  *
- * Repair. Consecutive bad GOPs form a span. A worker thread decodes the span
- * with FFmpeg's MPEG-2 decoder (its error concealment fills what is lost),
- * after the reference pictures of the GOP before it, and encodes the result
- * again with FFmpeg's MPEG-2 encoder as closed GOPs with the source's size,
- * frame rate, aspect, field order and bit rate. Each decoded picture lands
- * on the frame its camera time (PES PTS) says; a frame no picture landed on
- * (lost in a dropout) repeats the one before, so the file keeps the tape's
- * length and the audio stays in sync. When the GOP after a span is open
- * (its leading B pictures refer to the span's last picture), those leading
- * B pictures are decoded and encoded into the span too, and the GOP itself
- * is made closed (the B pictures dropped, the temporal_references moved
- * down, closed_gop set), so nothing in the file refers to a re-encoded
- * picture it was not encoded against, and the repair ends at the next good
- * GOP's first anchor. The first GOP of a file, or one after a jump of the
- * camera clock, loses its leading B pictures the same way (they refer to a
- * picture that is not in the file).
- *
- * Spans go to a pool of worker threads; the muxer writes in order, waiting
- * for a span's result before anything after it. If the work in front of the
- * muxer grows past PEND_LIMIT bytes, the repair cannot keep up with the
- * capture: write_unit() fails (PIN_ERR_CODEC, reencode_behind) and the
- * capture ends with that error.
- *
- * Timestamps. The output's clocks are its own: the video counts frames from
- * 0 (a GOP's pictures at its first frame + temporal_reference, the decode
- * order one before), the audio counts samples from 0. The camera clock only
- * decides where things go: an audio frame goes where its PTS falls on the
- * video, mapped through the GOP it belongs to. Where audio is missing
- * (lost, damaged, or not there yet at the start) MP2 silence fills in, made
- * once with FFmpeg's MP2 encoder; audio that would overlap is dropped.
- * Damaged audio is never written: a PES with a gap keeps only the frames in
- * front of the gap, and the next intact PES brings the audio back. A jump of
- * the camera clock (the engine normally splits the file there,
- * pin_scene.c) is just taken up: the output goes on without a gap.
- *
- * MOV gets the HDV sample description of the stream's raster and rate
- * (hdv3 1080i50, hdv2 1080i60, hdv5 720p25, ...), as Final Cut writes it;
- * Matroska gets the sequence header as CodecPrivate.
+ * Counts (pin_sink_status_t): frames_out, frames_error (re-encoded, or played with silenced
+ * audio), frames_repeated; final_status gets them at close. Too much waiting in front of the
+ * decoder, the encoders or the muxer: the sink fails (PIN_ERR_CODEC, reencode_behind) and the
+ * capture ends.
  */
 
 #include "pin_sink.h"
@@ -99,9 +71,11 @@
 #define NOPTS AV_NOPTS_VALUE
 #define TS_REF_ONLY (-(1LL << 40))   /* decoder packet pts: a reference, its picture not output */
 #define MAX_GOP_PICS 120             /* a "GOP" this long lost its headers: cut it anyway */
-#define SPAN_MAX_SECONDS 4.0         /* a longer span is handed to a worker in parts */
+#define SPAN_MAX_SECONDS 2.0         /* a longer span is handed to a worker in parts */
 #define PEND_LIMIT (160ull << 20)    /* bytes waiting in front of the muxer: the repair is behind */
-#define MAX_WORKERS 4
+#define GQ_LIMIT (64ull << 20)       /* bytes waiting for the decode thread: the check is behind */
+#define MAX_HELD_SECONDS 6.0         /* decoded frames waiting for an encoder: the repair is behind */
+#define MAX_WORKERS 3
 
 /* ------------------------------------------------------------- buffers -- */
 
@@ -317,13 +291,34 @@ static int mp2_header(const uint8_t *d, int *sr, int *ch, int *kbps)
 
 /* --------------------------------------------------------- the output -- */
 
+/* A GOP on its way from the writer thread to the decode thread, and while it is decoded. */
+typedef struct gop {
+    pics_t pics;
+    seqinfo_t seq;        /* the stream's values when it was cut (the decode thread's copy) */
+    int64_t first_id;     /* the decoder's id of pics.p[0]; picture i is first_id + i */
+    AVFrame **frames;     /* what the decoder gave back, per picture (NULL: nothing) */
+    int dec_error;        /* the decoder concealed something, or refused a picture */
+    int eof;              /* no picture: the end of the file */
+    size_t bytes;
+    struct gop *next;
+} gop_t;
+
+/* A decoded frame for a repair, and the camera time of its picture. */
+typedef struct {
+    AVFrame *f;
+    int64_t pts;          /* NOPTS: none */
+    int64_t slot;         /* the frame it must be in the span (NOPTS: by pts, else next) */
+} sframe_t;
+
 enum { ITEM_PASS, ITEM_SPAN };
 
 typedef struct {
-    pics_t pics;          /* feed order: warm-up references, the span, the next GOP's I + leading B */
-    int64_t *slot;        /* per picture: its frame in the span, TS_REF_ONLY, or NOPTS */
+    sframe_t *in;         /* while the span is collected */
+    int nin, capin;
+    AVFrame **slots;      /* the frames to encode, one per output frame */
     int target;           /* frames to produce */
-    seqinfo_t seq;        /* the stream's values, copied when submitted (the workers' own) */
+    int repeated;         /* of them, repeats of a neighbour (pictures lost) */
+    seqinfo_t seq;        /* the stream's values (the workers' own) */
     int gop_len;
     AVPacket **out;       /* the result, in decode order */
     int nout;
@@ -347,76 +342,113 @@ typedef struct {
     pin_sink_params_t params;
     char path[1200];
 
-    /* demux */
+    /* ---- the writer thread (write_unit): demux, pictures, GOPs */
     int pmt_pid, vpid, apid;
-    int cc[8192 / 1];     /* last continuity counter per PID (-1 none); only vpid/apid used */
+    int cc[8192];         /* last continuity counter per PID (-1 none); only vpid/apid used */
     buf_t vpes, apes;
     int vpes_on, apes_on;
     int vpes_loss;
     long apes_loss_at;    /* payload bytes before the first loss, -1 none */
     int64_t last_ts;      /* the clock unwrap */
-
-    /* video elementary stream -> pictures */
     buf_t es;
     size_t es_scan;       /* scanned up to here */
     int au_dmg, au_has_pic, au_fields, au_pic_off;
     int64_t au_pts;
     seqinfo_t seq;        /* the first good sequence header */
     int picext_seen;
+    pics_t gop;           /* the GOP being cut */
+    int64_t next_id;      /* decoder ids handed out */
+    buf_t acarry;         /* an audio frame cut by the end of a PES */
+    int64_t a_next_cam;   /* camera time of the next audio frame, NOPTS */
 
-    /* pictures -> GOPs */
-    pics_t gop;
-    int gops_seen;
-    int64_t last_cam_end; /* camera time after the last frame given out */
-    int prev_pass_ok;     /* the last item is a good GOP on the same clock (span warm-up) */
-    pics_t warm;          /* its reference pictures */
-    item_t *span;         /* the span being collected (not yet submitted) */
-    int span_gops;
-    int span_took_lead;
-    int gop_len;          /* pictures in the first whole GOP: the re-encode's GOP length */
-    int64_t frame_pos;    /* next output frame */
-    double dur;           /* one frame in 90 kHz ticks */
-
-    /* the output queue (writer thread) */
-    item_t *head, *tail;
-    size_t pend_bytes;
-
-    /* audio */
-    buf_t acarry;         /* a frame cut by the end of a PES */
-    int64_t a_next_cam;   /* camera time of the next frame, NOPTS */
-    aframe_t *aq;
+    /* ---- shared, under lock */
+    pthread_mutex_t lock;
+    pthread_cond_t dec_wake;   /* a GOP for the decode thread, a repair done, or the end */
+    pthread_cond_t enc_wake;   /* a repair for the workers, or the end */
+    gop_t *gq_head, *gq_tail;  /* GOPs waiting for the decode thread */
+    size_t gq_bytes;
+    item_t *jq[64];            /* repairs waiting for a worker */
+    int jq_n;
+    int frames_held;           /* decoded frames in repairs not yet encoded */
+    int abort_;                /* stop now, write nothing more */
+    int dec_done;              /* the decode thread hands out no more repairs */
+    aframe_t *aq;              /* audio frames waiting for the muxer */
     int aq_n, aq_cap;
-    int a_sr, a_ch, a_kbps;
-    int64_t a_pos;        /* samples written */
+    int a_sr, a_ch, a_kbps;    /* the first audio frame's */
+    pin_sink_status_t st;
+
+    /* ---- the decode thread: decode, decide, mux */
+    AVCodecContext *dec;
+    gop_t *inflight;           /* fed to the decoder, not decided yet (in order) */
+    int64_t max_out_id;        /* the latest picture the decoder gave back */
+    int gops_seen;
+    int64_t last_cam_end;      /* camera time after the last frame given out */
+    int prev_pass_ok;          /* the last item is a whole GOP on the same clock */
+    item_t *span;              /* the repair being collected (not yet submitted) */
+    int span_took_lead;
+    int gop_len;               /* pictures in the first whole GOP: the re-encode's GOP length */
+    int64_t frame_pos;         /* next output frame */
+    double dur;                /* one frame in 90 kHz ticks */
+    item_t *head, *tail;       /* the output queue */
+    size_t pend_bytes;
+    int64_t a_pos;             /* audio samples written */
+    int audio_started;         /* a real audio frame is written */
     uint8_t *silence;
     int silence_len;
     int64_t anchor_cam, anchor_out;  /* camera time <-> output frame */
     int anchor_valid;
-    int64_t video_end;    /* output frames written */
-
-    /* muxer */
+    int64_t video_end;         /* output frames written */
+    uint8_t *eflag;            /* per output frame: 1 with error (re-encoded, or audio silenced) */
+    size_t eflag_cap;
     AVFormatContext *fmt;
     AVStream *vst, *ast;
     int header_written, header_failed;
     int fault_io;
     int any_written;
-    int64_t last_dts;
 
-    /* workers */
-    pthread_mutex_t lock;
-    pthread_cond_t wake, done_cv;
+    /* threads */
+    pthread_t dec_thr;
+    int dec_started;
     pthread_t thr[MAX_WORKERS];
     int nthr;
-    item_t *jq[64];       /* submitted spans not yet taken */
-    int jq_n;
-    int quit;
     int enc_threads;
 
-    uint64_t spans, pics_reencoded, pics_dropped;
+    uint64_t spans, pics_reencoded, pics_dropped, frames_silenced;
     uint64_t pend_limit;  /* PEND_LIMIT, or a test's */
     int test_delay_ms;    /* tests: each repair takes this much longer */
-    pin_sink_status_t st;
 } hdvmux_t;
+
+static void set_error(hdvmux_t *m, pin_status_t err)
+{
+    pthread_mutex_lock(&m->lock);
+    if (m->st.last_error == PIN_OK)
+        m->st.last_error = err;
+    pthread_cond_broadcast(&m->dec_wake);
+    pthread_mutex_unlock(&m->lock);
+}
+
+static pin_status_t get_error(hdvmux_t *m)
+{
+    pthread_mutex_lock(&m->lock);
+    pin_status_t e = m->st.last_error;
+    pthread_mutex_unlock(&m->lock);
+    return e;
+}
+
+/* The repair cannot keep up with the capture: the sink fails, the capture ends. */
+static void behind(hdvmux_t *m, const char *what)
+{
+    pthread_mutex_lock(&m->lock);
+    int first = m->st.last_error == PIN_OK;
+    if (first) {
+        m->st.reencode_behind = 1;
+        m->st.last_error = PIN_ERR_CODEC;
+    }
+    pthread_cond_broadcast(&m->dec_wake);
+    pthread_mutex_unlock(&m->lock);
+    if (first)
+        pin_logf(PIN_LOG_ERROR, "sink_hdvmux: %s cannot keep up with the capture\n", what);
+}
 
 /* ------------------------------------------------------------- workers -- */
 
@@ -437,11 +469,6 @@ static AVFrame *black_frame(const seqinfo_t *si)
     for (int y = 0; y < f->height / 2; y++) {
         memset(f->data[1] + (size_t)y * f->linesize[1], 128, f->width / 2);
         memset(f->data[2] + (size_t)y * f->linesize[2], 128, f->width / 2);
-    }
-    if (!si->progressive_seq) {
-        f->flags |= AV_FRAME_FLAG_INTERLACED;
-        if (si->tff)
-            f->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
     }
     return f;
 }
@@ -505,107 +532,35 @@ static AVCodecContext *open_encoder(const hdvmux_t *m, const job_t *j)
     return e;
 }
 
-static void place_frame(AVFrame **slots, int target, AVFrame *f, int *cursor)
-{
-    int64_t s = f->pts;
-    if (s == TS_REF_ONLY || (s != NOPTS && s < 0)) {
-        av_frame_free(&f);
-        return;
-    }
-    if (s == NOPTS)
-        s = *cursor;
-    if (s >= target || slots[s]) {
-        av_frame_free(&f);
-        return;
-    }
-    slots[s] = f;
-    *cursor = (int)s + 1;
-}
-
-/* Decodes and re-encodes one span (a worker thread). */
+/* Encodes one repair's frames (a worker thread); the decode thread decoded them. */
 static void run_job(hdvmux_t *m, job_t *j)
 {
-    AVFrame **slots = calloc((size_t)j->target + 1, sizeof(*slots));
-    const AVCodec *dc = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
-    AVCodecContext *d = dc ? avcodec_alloc_context3(dc) : NULL;
     AVPacket *pkt = av_packet_alloc();
-    AVFrame *fr = av_frame_alloc();
-    AVCodecContext *e = NULL;
-    int cursor = 0;
-    if (!slots || !d || !pkt || !fr)
-        goto fail;
-    d->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
-    d->flags2 |= AV_CODEC_FLAG2_SHOW_ALL;
-    d->thread_count = 1;
-    if (avcodec_open2(d, dc, NULL) < 0)
-        goto fail;
-    for (int i = 0; i <= j->pics.n; i++) {
-        if (i < j->pics.n) {
-            const pic_t *p = &j->pics.p[i];
-            if (av_new_packet(pkt, (int)p->len) < 0)
-                goto fail;
-            memcpy(pkt->data, p->data, p->len);
-            pkt->pts = j->slot[i];
-            pkt->dts = NOPTS;
-            avcodec_send_packet(d, pkt);   /* a broken picture is the decoder's to conceal */
-            av_packet_unref(pkt);
-        } else {
-            avcodec_send_packet(d, NULL);
-        }
-        while (avcodec_receive_frame(d, fr) == 0) {
-            AVFrame *keep = av_frame_clone(fr);
-            av_frame_unref(fr);
-            if (keep)
-                place_frame(slots, j->target, keep, &cursor);
-        }
-    }
-    /* frames nothing landed on: the frame before (or, at the start, the first one there) */
-    AVFrame *last = NULL;
-    for (int k = 0; k < j->target; k++) {
-        if (slots[k])
-            last = slots[k];
-        else if (last)
-            slots[k] = av_frame_clone(last);
-    }
-    for (int k = j->target - 1; k >= 0; k--) {
-        if (slots[k])
-            last = slots[k];
-        else if (last)
-            slots[k] = av_frame_clone(last);
-    }
-    if (j->target > 0 && !slots[0]) {
-        for (int k = 0; k < j->target; k++)
-            if (!(slots[k] = black_frame(&j->seq)))
-                goto fail;
-    }
-
-    e = open_encoder(m, j);
-    if (!e)
-        goto fail;
+    AVCodecContext *e = open_encoder(m, j);
     j->out = calloc((size_t)j->target + 8, sizeof(*j->out));
-    if (!j->out)
+    if (!pkt || !e || !j->out)
         goto fail;
     for (int k = 0; k <= j->target; k++) {
         if (k < j->target) {
-            AVFrame *f = slots[k];
+            AVFrame *f = j->slots[k];
+            if (f->format != AV_PIX_FMT_YUV420P || f->width != j->seq.width ||
+                f->height != j->seq.height) {
+                AVFrame *b = black_frame(&j->seq);   /* a different raster: never fed to it */
+                if (!b)
+                    goto fail;
+                av_frame_free(&j->slots[k]);
+                j->slots[k] = f = b;
+            }
             f->pts = k;
             f->pict_type = AV_PICTURE_TYPE_NONE;
-            f->flags &= ~AV_FRAME_FLAG_KEY;
+            f->flags &= ~(AV_FRAME_FLAG_KEY | AV_FRAME_FLAG_CORRUPT);
+            f->decode_error_flags = 0;
             if (!j->seq.progressive_seq) {
                 f->flags |= AV_FRAME_FLAG_INTERLACED;
                 if (j->seq.tff)
                     f->flags |= AV_FRAME_FLAG_TOP_FIELD_FIRST;
                 else
                     f->flags &= ~AV_FRAME_FLAG_TOP_FIELD_FIRST;
-            }
-            if (f->format != AV_PIX_FMT_YUV420P || f->width != j->seq.width ||
-                f->height != j->seq.height) {
-                AVFrame *b = black_frame(&j->seq);   /* a different raster: never fed to it */
-                if (!b)
-                    goto fail;
-                b->pts = k;
-                av_frame_free(&slots[k]);
-                slots[k] = f = b;
             }
             if (avcodec_send_frame(e, f) < 0)
                 goto fail;
@@ -622,21 +577,13 @@ static void run_job(hdvmux_t *m, job_t *j)
             av_packet_unref(pkt);
         }
     }
-    if (j->nout != j->target)
-        goto fail;
-    goto out;
+    if (j->nout == j->target)
+        goto out;
 fail:
     j->failed = 1;
 out:
-    if (slots) {
-        for (int k = 0; k < j->target; k++)
-            av_frame_free(&slots[k]);
-        free(slots);
-    }
-    avcodec_free_context(&d);
     avcodec_free_context(&e);
     av_packet_free(&pkt);
-    av_frame_free(&fr);
 }
 
 static void *worker_main(void *arg)
@@ -644,19 +591,23 @@ static void *worker_main(void *arg)
     hdvmux_t *m = arg;
     pthread_mutex_lock(&m->lock);
     for (;;) {
-        while (!m->quit && m->jq_n == 0)
-            pthread_cond_wait(&m->wake, &m->lock);
-        if (m->jq_n == 0)
-            break;
+        while (!m->abort_ && !m->dec_done && m->jq_n == 0)
+            pthread_cond_wait(&m->enc_wake, &m->lock);
+        if (m->abort_ || m->jq_n == 0)
+            break;            /* stopped, or the decode thread is done and nothing is left */
         item_t *it = m->jq[0];
         memmove(m->jq, m->jq + 1, (size_t)(--m->jq_n) * sizeof(m->jq[0]));
         pthread_mutex_unlock(&m->lock);
         if (m->test_delay_ms > 0)
             av_usleep((unsigned)m->test_delay_ms * 1000);
         run_job(m, &it->job);
+        int held = it->job.target;
+        for (int k = 0; k < it->job.target; k++)
+            av_frame_free(&it->job.slots[k]);
         pthread_mutex_lock(&m->lock);
+        m->frames_held -= held;
         it->job.done = 1;
-        pthread_cond_broadcast(&m->done_cv);
+        pthread_cond_broadcast(&m->dec_wake);
     }
     pthread_mutex_unlock(&m->lock);
     return NULL;
@@ -685,7 +636,7 @@ static uint32_t hdv_tag(const seqinfo_t *si)
     return 0;
 }
 
-static int make_silence(hdvmux_t *m)
+static int make_silence(hdvmux_t *m, int sr, int ch, int kbps)
 {
     const AVCodec *c = avcodec_find_encoder(AV_CODEC_ID_MP2);
     AVCodecContext *e = c ? avcodec_alloc_context3(c) : NULL;
@@ -694,19 +645,19 @@ static int make_silence(hdvmux_t *m)
     int ok = 0;
     if (!e || !f || !pkt)
         goto out;
-    e->sample_rate = m->a_sr;
+    e->sample_rate = sr;
     e->sample_fmt = AV_SAMPLE_FMT_S16;
-    e->bit_rate = (int64_t)m->a_kbps * 1000;
-    av_channel_layout_default(&e->ch_layout, m->a_ch);
+    e->bit_rate = (int64_t)kbps * 1000;
+    av_channel_layout_default(&e->ch_layout, ch);
     if (avcodec_open2(e, c, NULL) < 0)
         goto out;
     f->nb_samples = e->frame_size;
     f->format = AV_SAMPLE_FMT_S16;
-    f->sample_rate = m->a_sr;
+    f->sample_rate = sr;
     av_channel_layout_copy(&f->ch_layout, &e->ch_layout);
     if (av_frame_get_buffer(f, 0) < 0)
         goto out;
-    av_samples_set_silence(f->data, 0, f->nb_samples, m->a_ch, AV_SAMPLE_FMT_S16);
+    av_samples_set_silence(f->data, 0, f->nb_samples, ch, AV_SAMPLE_FMT_S16);
     f->pts = 0;
     if (avcodec_send_frame(e, f) < 0)
         goto out;
@@ -728,15 +679,8 @@ out:
     return ok;
 }
 
-static void set_error(hdvmux_t *m, pin_status_t err)
+static int write_header(hdvmux_t *m, const seqinfo_t *si)
 {
-    if (m->st.last_error == PIN_OK)
-        m->st.last_error = err;
-}
-
-static int write_header(hdvmux_t *m)
-{
-    const seqinfo_t *si = &m->seq;
     AVStream *v = avformat_new_stream(m->fmt, NULL);
     if (!v)
         return -1;
@@ -777,19 +721,22 @@ static int write_header(hdvmux_t *m)
             cp->extradata_size = si->hdr_len;
         }
     }
-    if (m->a_sr > 0) {
+    pthread_mutex_lock(&m->lock);
+    int sr = m->a_sr, ch = m->a_ch, kbps = m->a_kbps;
+    pthread_mutex_unlock(&m->lock);
+    if (sr > 0) {
         AVStream *a = avformat_new_stream(m->fmt, NULL);
         if (!a)
             return -1;
         m->ast = a;
         a->codecpar->codec_type = AVMEDIA_TYPE_AUDIO;
         a->codecpar->codec_id = AV_CODEC_ID_MP2;
-        a->codecpar->sample_rate = m->a_sr;
-        a->codecpar->bit_rate = (int64_t)m->a_kbps * 1000;
+        a->codecpar->sample_rate = sr;
+        a->codecpar->bit_rate = (int64_t)kbps * 1000;
         a->codecpar->frame_size = 1152;
-        av_channel_layout_default(&a->codecpar->ch_layout, m->a_ch);
-        a->time_base = (AVRational){ 1, m->a_sr };
-        make_silence(m);
+        av_channel_layout_default(&a->codecpar->ch_layout, ch);
+        a->time_base = (AVRational){ 1, sr };
+        make_silence(m, sr, ch, kbps);
     }
     if (m->params.title[0])
         av_dict_set(&m->fmt->metadata, "title", m->params.title, 0);
@@ -805,11 +752,44 @@ static void mux(hdvmux_t *m, AVPacket *pkt, AVStream *s, AVRational from)
     av_packet_rescale_ts(pkt, from, s->time_base);
     if (av_interleaved_write_frame(m->fmt, pkt) < 0)
         set_error(m, PIN_ERR_IO);
-    if (m->fmt->pb)
-        m->st.bytes_written = (uint64_t)avio_tell(m->fmt->pb);
+    if (m->fmt->pb) {
+        uint64_t b = (uint64_t)avio_tell(m->fmt->pb);
+        pthread_mutex_lock(&m->lock);
+        m->st.bytes_written = b;
+        pthread_mutex_unlock(&m->lock);
+    }
 }
 
-static void put_audio_frame(hdvmux_t *m, const uint8_t *d, int len)
+/* Output frames [a, b) are "with error" (re-encoded, or their audio silenced). */
+static void mark_error(hdvmux_t *m, int64_t a, int64_t b)
+{
+    if (a < 0)
+        a = 0;
+    if (b <= a)
+        return;
+    if ((size_t)b > m->eflag_cap) {
+        size_t cap = m->eflag_cap ? m->eflag_cap : 4096;
+        while (cap < (size_t)b)
+            cap *= 2;
+        uint8_t *e = realloc(m->eflag, cap);
+        if (!e)
+            return;
+        memset(e + m->eflag_cap, 0, cap - m->eflag_cap);
+        m->eflag = e;
+        m->eflag_cap = cap;
+    }
+    uint64_t n = 0;
+    for (int64_t i = a; i < b; i++)
+        if (!m->eflag[i]) {
+            m->eflag[i] = 1;
+            n++;
+        }
+    pthread_mutex_lock(&m->lock);
+    m->st.frames_error += n;
+    pthread_mutex_unlock(&m->lock);
+}
+
+static void put_audio_frame(hdvmux_t *m, const uint8_t *d, int len, int sr)
 {
     AVPacket *pkt = av_packet_alloc();
     if (!pkt || av_new_packet(pkt, len) < 0) {
@@ -820,73 +800,120 @@ static void put_audio_frame(hdvmux_t *m, const uint8_t *d, int len)
     pkt->pts = pkt->dts = m->a_pos;
     pkt->duration = 1152;
     pkt->flags = AV_PKT_FLAG_KEY;
-    mux(m, pkt, m->ast, (AVRational){ 1, m->a_sr });
+    mux(m, pkt, m->ast, (AVRational){ 1, sr });
     av_packet_free(&pkt);
     m->a_pos += 1152;
 }
 
-/* Writes the queued audio frames up to camera time cam_end (all of them if cam_end is NOPTS
- * and final), each where it falls on the video, silence where audio is missing. */
-static void drain_audio(hdvmux_t *m, int64_t cam_end, int final)
+/* n frames of silence where audio is missing. The video frames they play with are "with error",
+ * but at the very start and end of a file only beyond 2 audio frames (where the camera's audio
+ * just begins or ends a little after or before its video). */
+static void put_silence(hdvmux_t *m, int n, int sr, int edge, const seqinfo_t *si)
 {
-    if (!m->ast) {
-        for (int i = 0; i < m->aq_n; i++)
-            free(m->aq[i].data);
-        m->aq_n = 0;
+    if (n <= 0 || !m->silence)
         return;
-    }
-    int i = 0;
-    double fr_s = (double)m->seq.fps_den / m->seq.fps_num;
-    int64_t video_end_samples = (int64_t)llround(m->video_end * fr_s * m->a_sr);
-    for (; i < m->aq_n; i++) {
-        aframe_t *a = &m->aq[i];
-        if (!final && cam_end != NOPTS && a->cam >= cam_end)
+    int64_t a0 = m->a_pos;
+    for (int i = 0; i < n; i++)
+        put_audio_frame(m, m->silence, m->silence_len, sr);
+    pthread_mutex_lock(&m->lock);
+    m->st.audio_padded_samples += (uint64_t)n * 1152;
+    pthread_mutex_unlock(&m->lock);
+    if (edge && n <= 2)
+        return;
+    double spf = (double)sr * si->fps_den / si->fps_num;    /* samples per video frame */
+    int64_t f0 = (int64_t)floor(a0 / spf), f1 = (int64_t)ceil(m->a_pos / spf);
+    if (f1 > m->video_end)
+        f1 = m->video_end;
+    int64_t before = 0;
+    pthread_mutex_lock(&m->lock);
+    before = (int64_t)m->st.frames_error;
+    pthread_mutex_unlock(&m->lock);
+    mark_error(m, f0, f1);
+    pthread_mutex_lock(&m->lock);
+    m->frames_silenced += m->st.frames_error - (uint64_t)before;
+    pthread_mutex_unlock(&m->lock);
+}
+
+/* Writes the queued audio frames up to camera time cam_end (all of them if final), each where it
+ * falls on the video, silence where audio is missing. */
+static void drain_audio(hdvmux_t *m, int64_t cam_end, int final, const seqinfo_t *si)
+{
+    pthread_mutex_lock(&m->lock);
+    int sr = m->a_sr;
+    pthread_mutex_unlock(&m->lock);
+    double fr_s = (double)si->fps_den / si->fps_num;
+    int64_t video_end_samples = (int64_t)llround(m->video_end * fr_s * sr);
+    for (;;) {
+        pthread_mutex_lock(&m->lock);
+        if (m->aq_n == 0 || (!final && cam_end != NOPTS && m->aq[0].cam >= cam_end)) {
+            pthread_mutex_unlock(&m->lock);
             break;
+        }
+        aframe_t a = m->aq[0];
+        memmove(m->aq, m->aq + 1, (size_t)(--m->aq_n) * sizeof(*m->aq));
+        pthread_mutex_unlock(&m->lock);
+        if (!m->ast || !sr) {
+            free(a.data);
+            continue;
+        }
         int64_t t;
         if (m->anchor_valid)
-            t = (int64_t)llround((m->anchor_out * fr_s + (a->cam - m->anchor_cam) / 90000.0) * m->a_sr);
+            t = (int64_t)llround((m->anchor_out * fr_s + (a.cam - m->anchor_cam) / 90000.0) * sr);
         else
             t = m->a_pos;
         if (final && t >= video_end_samples) {
-            free(a->data);
+            free(a.data);
             continue;                /* past the end of the video */
         }
         int64_t d = t - m->a_pos;
-        if (m->a_pos > 0 && llabs(d) > 2LL * m->a_sr)
+        if (m->audio_started && llabs(d) > 2LL * sr)
             d = 0;                   /* a clock that makes no sense here: just go on */
         if (d < -576) {
-            free(a->data);           /* before the video's start, or overlaps what is written */
+            free(a.data);            /* before the video's start, or overlaps what is written */
             continue;
         }
-        while (d >= 576 && m->silence) {
-            put_audio_frame(m, m->silence, m->silence_len);
-            m->st.audio_padded_samples += 1152;
-            d -= 1152;
-        }
-        put_audio_frame(m, a->data, a->len);
-        free(a->data);
+        if (d >= 576)
+            put_silence(m, (int)((d + 576) / 1152), sr, !m->audio_started, si);
+        put_audio_frame(m, a.data, a.len, sr);
+        m->audio_started = 1;
+        free(a.data);
     }
-    memmove(m->aq, m->aq + i, (size_t)(m->aq_n - i) * sizeof(*m->aq));
-    m->aq_n -= i;
     /* the end: missing audio up to the end of the video is silence too (2 s at most) */
-    if (final && m->silence && m->a_pos > 0) {
-        while (m->a_pos + 576 < video_end_samples && video_end_samples - m->a_pos < 2LL * m->a_sr) {
-            put_audio_frame(m, m->silence, m->silence_len);
-            m->st.audio_padded_samples += 1152;
-        }
+    if (final && m->ast && m->silence && m->audio_started && video_end_samples > m->a_pos &&
+        video_end_samples - m->a_pos < 2LL * sr) {
+        int n = (int)((video_end_samples - m->a_pos + 575) / 1152);
+        if (m->a_pos + (int64_t)(n - 1) * 1152 + 576 >= video_end_samples)
+            n--;                     /* not past it by more than half a frame */
+        put_silence(m, n, sr, 1, si);
     }
 }
 
-/* Writes the items at the head of the queue that are ready. */
-static void drain(hdvmux_t *m, int final)
+static void free_item(item_t *it)
 {
-    while (m->head) {
+    pics_free(&it->pics);
+    for (int i = 0; i < it->job.nin; i++)
+        av_frame_free(&it->job.in[i].f);
+    free(it->job.in);
+    if (it->job.slots)
+        for (int k = 0; k < it->job.target; k++)
+            av_frame_free(&it->job.slots[k]);
+    free(it->job.slots);
+    for (int i = 0; i < it->job.nout; i++)
+        av_packet_free(&it->job.out[i]);
+    free(it->job.out);
+    free(it);
+}
+
+/* Writes the items at the head of the queue that are ready (final: waits for the repairs). */
+static void drain(hdvmux_t *m, int final, const seqinfo_t *si)
+{
+    while (m->head && get_error(m) == PIN_OK) {
         item_t *it = m->head;
         if (it->kind == ITEM_SPAN) {
             pthread_mutex_lock(&m->lock);
             if (final)
-                while (!it->job.done)
-                    pthread_cond_wait(&m->done_cv, &m->lock);
+                while (!it->job.done && !m->abort_)
+                    pthread_cond_wait(&m->dec_wake, &m->lock);
             int done = it->job.done;
             pthread_mutex_unlock(&m->lock);
             if (!done)
@@ -896,20 +923,23 @@ static void drain(hdvmux_t *m, int final)
             if (m->header_failed)
                 return;
             /* wait for the audio's parameters a little, as a demuxer probes */
-            double fr = (double)m->seq.fps_num / m->seq.fps_den;
+            double fr = (double)si->fps_num / si->fps_den;
             int64_t queued = m->frame_pos - it->out_start;
-            if (!m->a_sr && !final && queued < 2 * fr)
+            pthread_mutex_lock(&m->lock);
+            int have_audio = m->a_sr > 0;
+            pthread_mutex_unlock(&m->lock);
+            if (!have_audio && !final && queued < 2 * fr)
                 return;
-            if (write_header(m) < 0) {
+            if (write_header(m, si) < 0) {
                 m->header_failed = 1;
                 set_error(m, PIN_ERR_IO);
                 pin_logf(PIN_LOG_ERROR, "sink_hdvmux: writing the file header failed\n");
                 return;
             }
         }
-        AVRational vtb = { m->seq.fps_den, m->seq.fps_num };
-        AVPacket *pkt = av_packet_alloc();
+        AVRational vtb = { si->fps_den, si->fps_num };
         if (it->kind == ITEM_PASS) {
+            AVPacket *pkt = av_packet_alloc();
             for (int i = 0; i < it->pics.n && pkt; i++) {
                 pic_t *p = &it->pics.p[i];
                 if (av_new_packet(pkt, (int)p->len) < 0)
@@ -922,8 +952,9 @@ static void drain(hdvmux_t *m, int final)
                 mux(m, pkt, m->vst, vtb);
                 av_packet_unref(pkt);
             }
+            av_packet_free(&pkt);
         } else if (!it->job.failed) {
-            for (int i = 0; i < it->job.nout && pkt; i++) {
+            for (int i = 0; i < it->job.nout; i++) {
                 AVPacket *q = it->job.out[i];
                 q->pts += it->out_start;
                 q->dts = it->out_start + i - 1;
@@ -934,9 +965,15 @@ static void drain(hdvmux_t *m, int final)
             set_error(m, PIN_ERR_CODEC);
             pin_logf(PIN_LOG_ERROR, "sink_hdvmux: re-encoding damaged HDV pictures failed\n");
         }
-        av_packet_free(&pkt);
         m->any_written = 1;
         m->video_end = it->out_start + it->frames;
+        pthread_mutex_lock(&m->lock);
+        m->st.frames_out += (uint64_t)it->frames;
+        if (it->kind == ITEM_SPAN)
+            m->st.frames_repeated += (uint64_t)it->job.repeated;
+        pthread_mutex_unlock(&m->lock);
+        if (it->kind == ITEM_SPAN)
+            mark_error(m, it->out_start, it->out_start + it->frames);
 
         /* audio up to the end of this item, through its clock */
         if (it->cam0 != NOPTS) {
@@ -947,19 +984,13 @@ static void drain(hdvmux_t *m, int final)
         int64_t cam_end = NOPTS;
         if (m->anchor_valid)
             cam_end = m->anchor_cam + (int64_t)llround((m->video_end - m->anchor_out) * m->dur);
-        drain_audio(m, cam_end, 0);
+        drain_audio(m, cam_end, 0, si);
 
         m->head = it->next;
         if (!m->head)
             m->tail = NULL;
         m->pend_bytes -= it->bytes;
-        pics_free(&it->pics);
-        pics_free(&it->job.pics);
-        free(it->job.slot);
-        for (int i = 0; i < it->job.nout; i++)
-            av_packet_free(&it->job.out[i]);
-        free(it->job.out);
-        free(it);
+        free_item(it);
     }
 }
 
@@ -972,120 +1003,164 @@ static void enqueue(hdvmux_t *m, item_t *it)
         m->head = it;
     m->tail = it;
     m->pend_bytes += it->bytes;
+    if (m->pend_bytes > m->pend_limit)
+        behind(m, "writing the file behind a repair");
 }
 
 /* --------------------------------------------------------------- spans -- */
 
-/* The I and P pictures of a good GOP: what a span after it needs to decode its first B pictures. */
-static void keep_warm(hdvmux_t *m, const pics_t *g)
+static int sframe_push(job_t *j, AVFrame *f, int64_t pts, int64_t slot)
 {
-    pics_free(&m->warm);
-    for (int i = 0; i < g->n; i++) {
-        if (g->p[i].type == 3)
-            continue;
-        pic_t c;
-        if (pic_copy(&c, &g->p[i]) == 0 && pics_push(&m->warm, &c) < 0)
-            free(c.data);
+    if (j->nin == j->capin) {
+        int cap = j->capin ? j->capin * 2 : 64;
+        sframe_t *n = realloc(j->in, (size_t)cap * sizeof(*n));
+        if (!n)
+            return -1;
+        j->in = n;
+        j->capin = cap;
     }
+    j->in[j->nin++] = (sframe_t){ f, pts, slot };
+    return 0;
 }
 
-static int submit(hdvmux_t *m, item_t *it)
-{
-    pthread_mutex_lock(&m->lock);
-    int ok = m->jq_n < (int)(sizeof(m->jq) / sizeof(m->jq[0]));
-    if (ok) {
-        m->jq[m->jq_n++] = it;
-        pthread_cond_signal(&m->wake);
-    }
-    pthread_mutex_unlock(&m->lock);
-    return ok;
-}
-
-/* Ends the span being collected. next_cam: the camera time at which the next good GOP's
- * first frame is shown (NOPTS: none, or unknown). tail: that GOP's I picture and its
- * leading B pictures, which the span takes over (NULL none). */
-static void span_close(hdvmux_t *m, int64_t next_cam, const pic_t *tail, int ntail)
+/* Ends the repair being collected and hands it to a worker. next_cam: the camera time at which the
+ * next whole GOP's first frame is shown (NOPTS: none, or unknown). The leading B frames of that GOP,
+ * if the span takes them, are in the span already with their slot relative to `target`. */
+static void span_close(hdvmux_t *m, int64_t next_cam, const seqinfo_t *si)
 {
     item_t *it = m->span;
     if (!it)
         return;
     m->span = NULL;
     job_t *j = &it->job;
-    int nwarm = 0;
-    while (nwarm < j->pics.n && j->slot[nwarm] == TS_REF_ONLY)
-        nwarm++;
-    int nspan = j->pics.n - nwarm;
-    double fps = (double)m->seq.fps_num / m->seq.fps_den;
+    double fps = (double)si->fps_num / si->fps_den;
+    int npics = (int)it->bytes;   /* (the pictures, counted in bytes while collecting) */
+    it->bytes = 0;
+    int collected = j->nin;       /* frames counted in frames_held */
 
     /* where the span starts on the camera clock: where the file has got to, or (at the start
      * of a file) its earliest picture */
     int64_t origin = it->cam0;
-    if (origin == NOPTS) {
-        for (int i = nwarm; i < j->pics.n; i++)
-            if (j->pics.p[i].pts != NOPTS && (origin == NOPTS || j->pics.p[i].pts < origin))
-                origin = j->pics.p[i].pts;
-    }
-    /* its length: up to the next good GOP, if the clock says so plausibly */
-    int target = nspan;
+    if (origin == NOPTS)
+        for (int i = 0; i < j->nin; i++)
+            if (j->in[i].slot == NOPTS && j->in[i].pts != NOPTS && (origin == NOPTS || j->in[i].pts < origin))
+                origin = j->in[i].pts;
+    /* its length: up to the next good GOP if the clock says so plausibly, else its pictures,
+     * or up to its latest picture */
+    int target = npics;
     if (origin != NOPTS && next_cam != NOPTS) {
         int64_t t = llround((next_cam - origin) / m->dur);
-        if (t >= nspan / 2 && t <= nspan + (int64_t)ceil(fps))
+        if (t >= npics / 2 && t <= npics + (int64_t)ceil(fps))
             target = (int)t;
-    }
-    else if (origin != NOPTS && next_cam == NOPTS) {
-        /* no next GOP (the end, or a part of a long span): up to its latest picture */
+    } else if (origin != NOPTS) {
         int64_t last = NOPTS;
-        for (int i = nwarm; i < j->pics.n; i++)
-            if (j->pics.p[i].pts != NOPTS && (last == NOPTS || j->pics.p[i].pts > last))
-                last = j->pics.p[i].pts;
+        for (int i = 0; i < j->nin; i++)
+            if (j->in[i].slot == NOPTS && j->in[i].pts != NOPTS && (last == NOPTS || j->in[i].pts > last))
+                last = j->in[i].pts;
         if (last != NOPTS) {
             int64_t t = llround((last - origin) / m->dur) + 1;
-            if (t > target && t <= nspan + (int64_t)ceil(fps))
+            if (t > target && t <= npics + (int64_t)ceil(fps))
                 target = (int)t;
         }
     }
-    int lead = ntail > 1 ? ntail - 1 : 0;
-    /* each picture at its own time, if it has one that fits */
-    for (int i = nwarm; i < j->pics.n; i++) {
-        int64_t s = NOPTS;
-        if (origin != NOPTS && j->pics.p[i].pts != NOPTS) {
-            s = llround((j->pics.p[i].pts - origin) / m->dur);
+    int lead = 0;
+    for (int i = 0; i < j->nin; i++)
+        if (j->in[i].slot != NOPTS)
+            lead++;
+    int total = target + lead;
+
+    /* each frame where its picture's time puts it; a frame without one after the one before */
+    j->slots = calloc((size_t)total + 1, sizeof(*j->slots));
+    if (!j->slots) {
+        pthread_mutex_lock(&m->lock);
+        j->failed = j->done = 1;
+        pthread_mutex_unlock(&m->lock);
+        total = 0;
+    }
+    int cursor = 0;
+    for (int i = 0; i < j->nin && j->slots; i++) {
+        int64_t s = j->in[i].slot;
+        if (s != NOPTS)
+            s += target;                      /* a leading B of the next GOP */
+        else if (origin != NOPTS && j->in[i].pts != NOPTS) {
+            s = llround((j->in[i].pts - origin) / m->dur);
             if (s < 0 || s >= target)
                 s = NOPTS;
         }
-        j->slot[i] = s;
+        if (s == NOPTS)
+            s = cursor;
+        if (s >= 0 && s < total && !j->slots[s]) {
+            j->slots[s] = j->in[i].f;
+            j->in[i].f = NULL;
+            cursor = (int)s + 1;
+        }
+        av_frame_free(&j->in[i].f);
     }
-    /* the next GOP's leading B pictures, after its I picture (a reference only) */
-    for (int k = 0; k < ntail; k++) {
-        pic_t c;
-        if (pic_copy(&c, &tail[k]) < 0 || pics_push(&j->pics, &c) < 0)
-            continue;
-        int64_t *ns = realloc(j->slot, (size_t)j->pics.n * sizeof(*ns));
-        if (!ns)
-            continue;
-        j->slot = ns;
-        j->slot[j->pics.n - 1] = k == 0 ? TS_REF_ONLY : target + tail[k].tr;
-        it->bytes += c.len;
+    free(j->in);
+    j->in = NULL;
+    j->nin = j->capin = 0;
+    /* frames nothing landed on (pictures lost): the one before, or at the start the first */
+    AVFrame *last = NULL;
+    int repeated = 0, first = -1;
+    for (int k = 0; k < total; k++) {
+        if (j->slots[k]) {
+            last = j->slots[k];
+            if (first < 0)
+                first = k;
+        } else if (last) {
+            j->slots[k] = av_frame_clone(last);
+            repeated++;
+        }
     }
-    j->target = target + lead;
-    j->seq = m->seq;
+    for (int k = 0; k < first; k++) {
+        j->slots[k] = av_frame_clone(j->slots[first]);
+        repeated++;
+    }
+    for (int k = 0; k < total; k++) {
+        if (!j->slots[k]) {
+            j->slots[k] = black_frame(si);    /* nothing decoded at all */
+            repeated++;
+            if (!j->slots[k]) {
+                pthread_mutex_lock(&m->lock);
+                j->failed = 1;
+                pthread_mutex_unlock(&m->lock);
+                for (int q = 0; q < total; q++)
+                    av_frame_free(&j->slots[q]);
+                total = 0;
+                break;
+            }
+        }
+    }
+    j->target = total;
+    j->repeated = repeated;
+    j->seq = *si;
     j->gop_len = m->gop_len;
     it->out_start = m->frame_pos;
-    it->frames = j->target;
+    it->frames = total;
     it->cam0 = origin;
-    m->frame_pos += it->frames;
-    m->last_cam_end = origin != NOPTS ? origin + (int64_t)llround(it->frames * m->dur) : NOPTS;
+    m->frame_pos += total;
+    m->last_cam_end = origin != NOPTS ? origin + (int64_t)llround(total * m->dur) : NOPTS;
     m->spans++;
-    m->pics_reencoded += (uint64_t)nspan + (uint64_t)lead;
-    pin_logf(PIN_LOG_INFO, "sink_hdvmux: re-encoding %d damaged picture(s) as %d frame(s) at frame %lld\n",
-             nspan + lead, it->frames, (long long)it->out_start);
+    m->pics_reencoded += (uint64_t)npics + (uint64_t)lead;
+    pin_logf(PIN_LOG_INFO, "sink_hdvmux: re-encoding %d picture(s) as %d frame(s) at frame %lld "
+             "(%d repeated for lost pictures)\n", npics + lead, total, (long long)it->out_start,
+             repeated);
     enqueue(m, it);
-    if (!submit(m, it)) {
-        pthread_mutex_lock(&m->lock);
-        it->job.failed = 1;
-        it->job.done = 1;
-        pthread_mutex_unlock(&m->lock);
+    pthread_mutex_lock(&m->lock);
+    m->frames_held -= collected;  /* they are the job's slots now (or gone) */
+    if (j->done) {
+        /* nothing to encode */
+    } else if (m->jq_n < (int)(sizeof(m->jq) / sizeof(m->jq[0]))) {
+        m->jq[m->jq_n++] = it;
+        m->frames_held += total;
+        pthread_cond_signal(&m->enc_wake);
+    } else {
+        j->failed = j->done = 1;
     }
+    int held = m->frames_held;
+    pthread_mutex_unlock(&m->lock);
+    if (held > MAX_HELD_SECONDS * (double)si->fps_num / si->fps_den)
+        behind(m, "repairing damaged pictures");
 }
 
 static item_t *span_new(hdvmux_t *m)
@@ -1095,54 +1170,42 @@ static item_t *span_new(hdvmux_t *m)
         return NULL;
     it->kind = ITEM_SPAN;
     it->cam0 = m->last_cam_end;   /* where it starts on the camera clock (NOPTS: unknown yet) */
-    /* the references of the GOP before, to decode the span's first B pictures against */
-    if (m->prev_pass_ok) {
-        for (int i = 0; i < m->warm.n; i++) {
-            pic_t c;
-            if (pic_copy(&c, &m->warm.p[i]) == 0 && pics_push(&it->job.pics, &c) < 0)
-                free(c.data);
-        }
-    }
-    it->job.slot = malloc(((size_t)it->job.pics.n + 1) * sizeof(int64_t));
-    if (!it->job.slot) {
-        pics_free(&it->job.pics);
-        free(it);
-        return NULL;
-    }
-    for (int i = 0; i < it->job.pics.n; i++) {
-        it->job.slot[i] = TS_REF_ONLY;
-        it->bytes += it->job.pics.p[i].len;
-    }
     return it;
 }
 
-/* Moves the pictures of g into the open span (which takes their data). */
-static void span_add(hdvmux_t *m, pics_t *g)
+/* Moves the decoded frames of g into the open span. drop_lead: its leading B pictures have no
+ * reference here (the first GOP of a file): left out. */
+static void span_add(hdvmux_t *m, gop_t *g, int drop_lead)
 {
     job_t *j = &m->span->job;
-    for (int i = 0; i < g->n; i++) {
-        if (pics_push(&j->pics, &g->p[i]) < 0) {
-            free(g->p[i].data);
+    pics_t *p = &g->pics;
+    int lead = drop_lead && p->n && p->p[0].type == 1 ? p->p[0].tr : 0;
+    int64_t end = NOPTS;
+    int added = 0;
+    for (int i = 0; i < p->n; i++) {
+        if (i > 0 && p->p[i].type == 3 && p->p[i].tr < lead) {
+            av_frame_free(&g->frames[i]);
             continue;
         }
-        int64_t *ns = realloc(j->slot, (size_t)j->pics.n * sizeof(*ns));
-        if (ns) {
-            j->slot = ns;
-            j->slot[j->pics.n - 1] = NOPTS;
+        if (g->frames[i]) {
+            if (sframe_push(j, g->frames[i], p->p[i].pts, NOPTS) == 0) {
+                g->frames[i] = NULL;
+                added++;
+            } else
+                av_frame_free(&g->frames[i]);
         }
-        m->span->bytes += g->p[i].len;
+        m->span->bytes++;             /* pictures, until span_close() */
+        if (p->p[i].pts != NOPTS && (end == NOPTS || p->p[i].pts + (int64_t)llround(m->dur) > end))
+            end = p->p[i].pts + (int64_t)llround(m->dur);
     }
     /* where the camera clock has got to: the latest picture's time, else the pictures counted */
-    int64_t end = NOPTS;
-    for (int i = 0; i < g->n; i++)
-        if (g->p[i].pts != NOPTS && (end == NOPTS || g->p[i].pts + (int64_t)llround(m->dur) > end))
-            end = g->p[i].pts + (int64_t)llround(m->dur);
     if (end != NOPTS && (m->last_cam_end == NOPTS || end > m->last_cam_end))
         m->last_cam_end = end;
     else if (m->last_cam_end != NOPTS)
-        m->last_cam_end += (int64_t)llround(g->n * m->dur);
-    g->n = 0;
-    m->span_gops++;
+        m->last_cam_end += (int64_t)llround(p->n * m->dur);
+    pthread_mutex_lock(&m->lock);
+    m->frames_held += added;
+    pthread_mutex_unlock(&m->lock);
 }
 
 /* --------------------------------------------------------------- GOPs --- */
@@ -1168,31 +1231,45 @@ static void gop_drop_lead(pics_t *g, int lead)
     g->n = w;
 }
 
-static void gop_done(hdvmux_t *m)
+static void gop_free(gop_t *g)
 {
-    pics_t *g = &m->gop;
-    if (g->n == 0)
+    if (!g)
         return;
-    double fps = (double)m->seq.fps_num / m->seq.fps_den;
+    pics_free(&g->pics);
+    if (g->frames)
+        for (int i = 0; i < g->pics.cap; i++)
+            av_frame_free(&g->frames[i]);
+    free(g->frames);
+    free(g);
+}
+
+/* A GOP whose frames are all back from the decoder: passed through, or repaired. */
+static void gop_decide(hdvmux_t *m, gop_t *g)
+{
+    pics_t *gp = &g->pics;
+    const seqinfo_t *si = &g->seq;
+    m->dur = 90000.0 * si->fps_den / si->fps_num;
+    double fps = (double)si->fps_num / si->fps_den;
     int first_of_file = m->gops_seen++ == 0;
 
-    /* whole? an I picture first, temporal_references 0..n-1, decodable in this order */
-    int valid = m->seq.valid && g->p[0].type == 1;
+    /* whole? an I picture first, temporal_references 0..n-1, decodable in this order, no
+     * packet lost */
+    int valid = si->valid && gp->p[0].type == 1;
     unsigned char seen[MAX_GOP_PICS + 1];
     memset(seen, 0, sizeof(seen));
-    for (int i = 0; i < g->n && valid; i++) {
-        const pic_t *p = &g->p[i];
-        if (p->damaged || p->type < 1 || p->type > 3 || p->tr >= g->n || seen[p->tr] ||
+    for (int i = 0; i < gp->n && valid; i++) {
+        const pic_t *p = &gp->p[i];
+        if (p->damaged || p->type < 1 || p->type > 3 || p->tr >= gp->n || seen[p->tr] ||
             p->tr < i - 1 || (i > 0 && p->type == 1))
             valid = 0;
         else
             seen[p->tr] = 1;
     }
-    int lead = valid ? g->p[0].tr : 0;
+    int lead = valid ? gp->p[0].tr : 0;
     if (valid && !m->gop_len)
-        m->gop_len = g->n;
-    int closed = g->p[0].gop_off >= 0 && g->p[0].closed_gop;
-    int64_t cam = valid && g->p[0].pts != NOPTS ? g->p[0].pts - (int64_t)llround(lead * m->dur) : NOPTS;
+        m->gop_len = gp->n;
+    int closed = gp->p[0].gop_off >= 0 && gp->p[0].closed_gop;
+    int64_t cam = valid && gp->p[0].pts != NOPTS ? gp->p[0].pts - (int64_t)llround(lead * m->dur) : NOPTS;
 
     /* the clock against where the file has got to: pictures missing in front (a dropout that
      * took whole GOPs), or a jump (another recording; normally a new file anyway) */
@@ -1204,55 +1281,77 @@ static void gop_done(hdvmux_t *m)
         else if (d > fps + 0.5 || d < -0.5)
             jump = 1;
     }
+    /* the leading B pictures refer to a picture this file does not have: they will be left out,
+     * and the decoder (which had nothing before them, or another recording) is not asked about them */
+    int no_ref = first_of_file || jump || (!m->prev_pass_ok && !m->span);
+
+    /* what the decoder says: every picture back, none concealed */
+    int dec_bad = g->dec_error;
+    for (int i = 0; i < gp->n && !dec_bad; i++) {
+        int skip = no_ref && i > 0 && gp->p[i].type == 3 && gp->p[0].type == 1 && gp->p[i].tr < gp->p[0].tr;
+        const AVFrame *f = g->frames[i];
+        if (!skip && (!f || f->decode_error_flags || (f->flags & AV_FRAME_FLAG_CORRUPT)))
+            dec_bad = 1;
+    }
 
     {
         /* the --debug log: each GOP, its pictures in decode order (type, temporal_reference,
-         * ! damaged, ? no PTS) */
-        char t[MAX_GOP_PICS * 6 + 1];
+         * ! damaged, ? no PTS, - not decoded) */
+        char t[MAX_GOP_PICS * 7 + 1];
         size_t tl = 0;
-        for (int i = 0; i < g->n && tl + 7 < sizeof(t); i++)
-            tl += (size_t)snprintf(t + tl, sizeof(t) - tl, " %c%d%s%s", " IPB????"[g->p[i].type & 7],
-                                   g->p[i].tr, g->p[i].damaged ? "!" : "",
-                                   g->p[i].pts == NOPTS ? "?" : "");
+        for (int i = 0; i < gp->n && tl + 8 < sizeof(t); i++)
+            tl += (size_t)snprintf(t + tl, sizeof(t) - tl, " %c%d%s%s%s", " IPB????"[gp->p[i].type & 7],
+                                   gp->p[i].tr, gp->p[i].damaged ? "!" : "",
+                                   gp->p[i].pts == NOPTS ? "?" : "", g->frames[i] ? "" : "-");
         t[tl] = 0;
-        pin_logf(PIN_LOG_DEBUG, "sink_hdvmux: GOP %d at frame %lld:%s%s%s%s%s\n", m->gops_seen,
-                 (long long)m->frame_pos, t, valid ? "" : " (damaged)", gap ? " (pictures missing before)" : "",
-                 jump ? " (clock jump)" : "", closed ? " (closed)" : "");
+        pin_logf(PIN_LOG_DEBUG, "sink_hdvmux: GOP %d at frame %lld:%s%s%s%s%s%s\n", m->gops_seen,
+                 (long long)m->frame_pos, t, valid ? "" : " (damaged)", dec_bad ? " (decoder)" : "",
+                 gap ? " (pictures missing before)" : "", jump ? " (clock jump)" : "",
+                 closed ? " (closed)" : "");
     }
-    if (!valid || gap) {
+
+    if (!valid || gap || dec_bad) {
         if (!m->span) {
             m->span = span_new(m);
-            m->span_gops = 0;
             if (!m->span) {
-                pics_free(g);
                 set_error(m, PIN_ERR_NOMEM);
                 return;
             }
         }
-        span_add(m, g);
+        span_add(m, g, no_ref);
         m->prev_pass_ok = 0;
         /* a long run of damage goes to the workers in parts */
-        if (m->span->job.pics.n >= SPAN_MAX_SECONDS * fps)
-            span_close(m, NOPTS, NULL, 0);
+        if ((int64_t)m->span->bytes >= (int64_t)(SPAN_MAX_SECONDS * fps))
+            span_close(m, NOPTS, si);
         return;
     }
 
     int drop = 0;
     if (m->span) {
         if (!jump && lead > 0 && !closed) {
-            span_close(m, cam, g->p, lead + 1);  /* the I picture and the leading B pictures */
+            /* the leading B frames go into the repair: they refer to its last picture */
+            for (int i = 1; i < gp->n; i++)
+                if (gp->p[i].type == 3 && gp->p[i].tr < lead && g->frames[i]) {
+                    if (sframe_push(&m->span->job, g->frames[i], gp->p[i].pts, gp->p[i].tr) == 0) {
+                        g->frames[i] = NULL;
+                        pthread_mutex_lock(&m->lock);
+                        m->frames_held++;
+                        pthread_mutex_unlock(&m->lock);
+                    }
+                }
+            span_close(m, cam, si);
             drop = lead;
             m->span_took_lead = 1;
         } else {
-            span_close(m, jump ? NOPTS : cam, NULL, 0);
+            span_close(m, jump ? NOPTS : cam, si);
             if (lead > 0 && !closed)
                 drop = lead;
         }
-    } else if ((first_of_file || jump || !m->prev_pass_ok) && lead > 0 && !closed) {
+    } else if (no_ref && lead > 0 && !closed) {
         drop = lead;
     }
     if (drop) {
-        gop_drop_lead(g, drop);
+        gop_drop_lead(gp, drop);
         if (!m->span_took_lead)
             m->pics_dropped += (uint64_t)drop;
     }
@@ -1260,82 +1359,228 @@ static void gop_done(hdvmux_t *m)
 
     item_t *it = calloc(1, sizeof(*it));
     if (!it) {
-        pics_free(g);
         set_error(m, PIN_ERR_NOMEM);
         return;
     }
     it->kind = ITEM_PASS;
-    it->pics = *g;
-    memset(g, 0, sizeof(*g));
+    it->pics = *gp;
+    memset(gp, 0, sizeof(*gp));
     it->frames = it->pics.n;
     it->out_start = m->frame_pos;
     it->cam0 = cam != NOPTS ? cam + (int64_t)llround(drop * m->dur) : NOPTS;
     it->bytes = pics_bytes(&it->pics);
     m->frame_pos += it->frames;
     m->last_cam_end = it->cam0 != NOPTS ? it->cam0 + (int64_t)llround(it->frames * m->dur) : NOPTS;
-    keep_warm(m, &it->pics);
     m->prev_pass_ok = 1;
     enqueue(m, it);
 }
 
-/* The last GOP of a file may end in a picture the capture cut short, which no packet error
- * shows: decode it (after the references of the GOP before) and call it damaged if the decoder
- * had to conceal anything or gave fewer pictures back. */
-static void check_last_gop(hdvmux_t *m)
+/* ------------------------------------------------------- decode thread -- */
+
+static void route_frame(hdvmux_t *m, AVFrame *f)
 {
-    pics_t *g = &m->gop;
-    if (g->n == 0 || !m->seq.valid)
-        return;
-    const AVCodec *dc = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
-    AVCodecContext *d = dc ? avcodec_alloc_context3(dc) : NULL;
+    int64_t id = f->pts;
+    for (gop_t *g = m->inflight; g; g = g->next) {
+        if (id >= g->first_id && id < g->first_id + g->pics.n) {
+            int i = (int)(id - g->first_id);
+            if (!g->frames[i]) {
+                g->frames[i] = f;
+                f = NULL;
+            }
+            break;
+        }
+    }
+    if (id > m->max_out_id)
+        m->max_out_id = id;
+    av_frame_free(&f);
+}
+
+static void receive_frames(hdvmux_t *m)
+{
+    for (;;) {
+        AVFrame *f = av_frame_alloc();
+        if (!f || avcodec_receive_frame(m->dec, f) < 0) {
+            av_frame_free(&f);
+            return;
+        }
+        route_frame(m, f);
+    }
+}
+
+/* Decides the GOPs whose frames are all back: a frame of a later GOP came out (the decoder gives
+ * frames in display order), or the decoder was flushed (all). */
+static void decide_ready(hdvmux_t *m, int all)
+{
+    while (m->inflight) {
+        gop_t *g = m->inflight;
+        if (!all && m->max_out_id < g->first_id + g->pics.n)
+            return;
+        m->inflight = g->next;
+        gop_decide(m, g);
+        drain(m, 0, &g->seq);
+        gop_free(g);
+    }
+}
+
+static void feed_gop(hdvmux_t *m, gop_t *g)
+{
+    g->next = NULL;
+    gop_t **tail = &m->inflight;
+    while (*tail)
+        tail = &(*tail)->next;
+    *tail = g;
     AVPacket *pkt = av_packet_alloc();
-    AVFrame *fr = av_frame_alloc();
-    int bad = 0, got = 0, want = 0;
-    if (!d || !pkt || !fr || avcodec_open2(d, dc, NULL) < 0) {
-        bad = 1;
-        goto out;
+    for (int i = 0; i < g->pics.n && pkt; i++) {
+        const pic_t *p = &g->pics.p[i];
+        if (av_new_packet(pkt, (int)p->len) < 0)
+            break;
+        memcpy(pkt->data, p->data, p->len);
+        pkt->pts = g->first_id + i;
+        int rc = avcodec_send_packet(m->dec, pkt);
+        av_packet_unref(pkt);
+        if (rc < 0 && rc != AVERROR(EAGAIN))
+            g->dec_error = 1;      /* refused: it will not come back either */
+        receive_frames(m);
     }
-    int nw = m->prev_pass_ok ? m->warm.n : 0;
-    for (int i = 0; i <= nw + g->n; i++) {
-        if (i < nw + g->n) {
-            const pic_t *p = i < nw ? &m->warm.p[i] : &g->p[i - nw];
-            if (av_new_packet(pkt, (int)p->len) < 0) {
-                bad = 1;
-                goto out;
-            }
-            memcpy(pkt->data, p->data, p->len);
-            /* leading B pictures without the GOP before: not decodable, not counted */
-            int skip = i < nw || (!nw && p->type == 3 && g->p[0].type == 1 && p->tr < g->p[0].tr);
-            pkt->pts = skip ? TS_REF_ONLY : i;
-            want += !skip;
-            avcodec_send_packet(d, pkt);
-            av_packet_unref(pkt);
-        } else {
-            avcodec_send_packet(d, NULL);
-        }
-        while (avcodec_receive_frame(d, fr) == 0) {
-            if (fr->pts != TS_REF_ONLY) {
-                got++;
-                if (fr->decode_error_flags || (fr->flags & AV_FRAME_FLAG_CORRUPT))
-                    bad = 1;
-            }
-            av_frame_unref(fr);
-        }
-    }
-    if (got < want)
-        bad = 1;
-out:
-    if (bad)
-        g->p[g->n - 1].damaged = 1;
-    avcodec_free_context(&d);
     av_packet_free(&pkt);
-    av_frame_free(&fr);
+    decide_ready(m, 0);
+}
+
+static int open_decoder(hdvmux_t *m)
+{
+    const AVCodec *dc = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
+    m->dec = dc ? avcodec_alloc_context3(dc) : NULL;
+    if (!m->dec)
+        return -1;
+    m->dec->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
+    m->dec->thread_count = 2;
+    m->dec->thread_type = FF_THREAD_SLICE;   /* frames come back in order, without delay */
+    if (avcodec_open2(m->dec, dc, NULL) < 0) {
+        avcodec_free_context(&m->dec);
+        return -1;
+    }
+    return 0;
+}
+
+/* The decode thread: decodes every GOP (the check), decides, hands repairs to the workers and
+ * writes the file in order. */
+static void *dec_main(void *arg)
+{
+    hdvmux_t *m = arg;
+    seqinfo_t last_seq;
+    memset(&last_seq, 0, sizeof(last_seq));
+    int ended = 0;
+    item_t *blocked = NULL;
+    while (!ended) {
+        pthread_mutex_lock(&m->lock);
+        while (!m->gq_head && !m->abort_ && m->st.last_error == PIN_OK) {
+            /* a repair done (the item at the head may be ready now) also wakes it */
+            int ready = m->head && m->head != blocked && m->head->kind == ITEM_SPAN && m->head->job.done;
+            if (ready)
+                break;
+            pthread_cond_wait(&m->dec_wake, &m->lock);
+        }
+        gop_t *g = m->gq_head;
+        if (g) {
+            m->gq_head = g->next;
+            if (!m->gq_head)
+                m->gq_tail = NULL;
+            m->gq_bytes -= g->bytes;
+        }
+        int stop = m->abort_ || m->st.last_error != PIN_OK;
+        pthread_mutex_unlock(&m->lock);
+        if (stop) {
+            gop_free(g);
+            break;
+        }
+        if (!g) {
+            if (last_seq.valid)
+                drain(m, 0, &last_seq);
+            blocked = m->head;    /* still there: it waits for something else (the header) */
+            continue;
+        }
+        blocked = NULL;
+        if (g->eof) {
+            /* the end: the decoder's last frames, the last GOP, the last repair, everything out */
+            if (m->dec) {
+                avcodec_send_packet(m->dec, NULL);
+                receive_frames(m);
+            }
+            decide_ready(m, 1);
+            if (last_seq.valid) {
+                span_close(m, NOPTS, &last_seq);
+                pthread_mutex_lock(&m->lock);
+                m->dec_done = 1;
+                pthread_cond_broadcast(&m->enc_wake);
+                pthread_mutex_unlock(&m->lock);
+                drain(m, 1, &last_seq);
+                if (get_error(m) == PIN_OK)
+                    drain_audio(m, NOPTS, 1, &last_seq);
+            }
+            gop_free(g);
+            ended = 1;
+            break;
+        }
+        last_seq = g->seq;
+        if (!m->dec && open_decoder(m) < 0) {
+            set_error(m, PIN_ERR_CODEC);
+            gop_free(g);
+            break;
+        }
+        feed_gop(m, g);
+        drain(m, 0, &last_seq);
+    }
+    pthread_mutex_lock(&m->lock);
+    m->dec_done = 1;
+    pthread_cond_broadcast(&m->enc_wake);
+    pthread_mutex_unlock(&m->lock);
+    return NULL;
+}
+
+/* ------------------------------------------------ writer thread: GOPs out -- */
+
+/* Hands the GOP that was cut to the decode thread. */
+static void push_gop(hdvmux_t *m, int eof)
+{
+    gop_t *g = calloc(1, sizeof(*g));
+    if (!g) {
+        pics_free(&m->gop);
+        set_error(m, PIN_ERR_NOMEM);
+        return;
+    }
+    g->eof = eof;
+    if (!eof) {
+        g->pics = m->gop;
+        memset(&m->gop, 0, sizeof(m->gop));
+        g->seq = m->seq;
+        g->first_id = m->next_id;
+        m->next_id += g->pics.n;
+        g->frames = calloc((size_t)g->pics.cap + 1, sizeof(*g->frames));
+        g->bytes = pics_bytes(&g->pics);
+        if (!g->frames) {
+            gop_free(g);
+            set_error(m, PIN_ERR_NOMEM);
+            return;
+        }
+    }
+    pthread_mutex_lock(&m->lock);
+    if (m->gq_tail)
+        m->gq_tail->next = g;
+    else
+        m->gq_head = g;
+    m->gq_tail = g;
+    m->gq_bytes += g->bytes;
+    size_t waiting = m->gq_bytes;
+    pthread_cond_signal(&m->dec_wake);
+    pthread_mutex_unlock(&m->lock);
+    if (waiting > GQ_LIMIT)
+        behind(m, "checking the HDV pictures (decoding)");
 }
 
 static void on_picture(hdvmux_t *m, pic_t *p)
 {
     if (m->gop.n > 0 && (p->gop_off >= 0 || p->seq || p->type == 1 || m->gop.n >= MAX_GOP_PICS))
-        gop_done(m);
+        push_gop(m, 0);
     if (!m->seq.valid) {
         free(p->data);    /* nothing can be written before the first sequence header */
         return;
@@ -1370,8 +1615,6 @@ static void au_emit(hdvmux_t *m, size_t len)
             p.seq = 1;
             if (!m->seq.valid && !p.damaged) {
                 parse_seq(d + i, hdr_end - i, &m->seq);
-                if (m->seq.valid)
-                    m->dur = 90000.0 * m->seq.fps_den / m->seq.fps_num;
             }
         } else if (d[i + 3] == 0xB8 && p.gop_off < 0) {
             p.gop_off = (int)i;
@@ -1533,21 +1776,34 @@ static void video_pes_done(hdvmux_t *m)
     m->vpes.n = 0;
 }
 
-static void audio_frame(hdvmux_t *m, const uint8_t *d, int len, int64_t cam)
+/* An audio frame for the muxer (the decode thread). The first one sets the stream's parameters;
+ * a frame of other parameters is left out. */
+static void audio_frame(hdvmux_t *m, const uint8_t *d, int len, int64_t cam, int sr, int ch, int kbps)
 {
-    if (m->aq_n == m->aq_cap) {
-        int cap = m->aq_cap ? m->aq_cap * 2 : 64;
-        aframe_t *q = realloc(m->aq, (size_t)cap * sizeof(*q));
-        if (!q)
-            return;
-        m->aq = q;
-        m->aq_cap = cap;
-    }
     uint8_t *c = malloc((size_t)len);
     if (!c)
         return;
     memcpy(c, d, (size_t)len);
-    m->aq[m->aq_n++] = (aframe_t){ c, len, cam };
+    pthread_mutex_lock(&m->lock);
+    if (!m->a_sr) {
+        m->a_sr = sr;
+        m->a_ch = ch;
+        m->a_kbps = kbps;
+    }
+    if (sr == m->a_sr && ch == m->a_ch && m->aq_n == m->aq_cap) {
+        int cap = m->aq_cap ? m->aq_cap * 2 : 64;
+        aframe_t *q = realloc(m->aq, (size_t)cap * sizeof(*q));
+        if (q) {
+            m->aq = q;
+            m->aq_cap = cap;
+        }
+    }
+    if (sr == m->a_sr && ch == m->a_ch && m->aq_n < m->aq_cap) {
+        m->aq[m->aq_n++] = (aframe_t){ c, len, cam };
+        c = NULL;
+    }
+    pthread_mutex_unlock(&m->lock);
+    free(c);
 }
 
 static void audio_pes_done(hdvmux_t *m)
@@ -1602,13 +1858,8 @@ static void audio_pes_done(hdvmux_t *m)
             }
             break;
         }
-        if (!m->a_sr) {
-            m->a_sr = sr;
-            m->a_ch = ch;
-            m->a_kbps = kbps;
-        }
-        if (cam != NOPTS && sr == m->a_sr && ch == m->a_ch)
-            audio_frame(m, w.d + pos, fl, cam);
+        if (cam != NOPTS)
+            audio_frame(m, w.d + pos, fl, cam, sr, ch, kbps);
         if (cam != NOPTS)
             cam += 1152LL * 90000 / sr;
         pos += (size_t)fl;
@@ -1764,9 +2015,14 @@ static pin_status_t hdvmux_open(pin_sink_t *s, const char *path, const pin_sink_
     if (rc < 0)
         return PIN_ERR_IO;
 
+    /* the decode thread (it decodes every GOP with 2 slice threads), and the encoders: about
+     * one per two further cores, each with slice threads of its own */
     int cpus = av_cpu_count();
-    m->nthr = cpus >= 8 ? 4 : cpus >= 4 ? 2 : 1;
+    m->nthr = cpus >= 8 ? 3 : cpus >= 4 ? 2 : 1;
     m->enc_threads = cpus / m->nthr > 1 ? cpus / m->nthr : 1;
+    if (pthread_create(&m->dec_thr, NULL, dec_main, m) != 0)
+        return PIN_ERR_NOMEM;
+    m->dec_started = 1;
     for (int i = 0; i < m->nthr; i++) {
         if (pthread_create(&m->thr[i], NULL, worker_main, m) != 0) {
             m->nthr = i;
@@ -1781,59 +2037,57 @@ static pin_status_t hdvmux_open(pin_sink_t *s, const char *path, const pin_sink_
 static pin_status_t hdvmux_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
 {
     hdvmux_t *m = s->priv;
-    if (m->st.last_error != PIN_OK)
-        return m->st.last_error;
+    pin_status_t e = get_error(m);
+    if (e != PIN_OK)
+        return e;
     for (size_t i = 0; i + TSP <= len; i += TSP)
         ts_packet(m, data + i);
+    pthread_mutex_lock(&m->lock);
     m->st.units_written++;
-    drain(m, 0);
-    if (m->st.last_error == PIN_OK && m->pend_bytes > m->pend_limit) {
-        m->st.reencode_behind = 1;
-        set_error(m, PIN_ERR_CODEC);
-        pin_logf(PIN_LOG_ERROR, "sink_hdvmux: repairing damaged pictures cannot keep up with the "
-                                "capture (%.0f MB waiting)\n", m->pend_bytes / 1e6);
-    }
-    return m->st.last_error;
+    e = m->st.last_error;
+    pthread_mutex_unlock(&m->lock);
+    return e;
 }
 
-static void free_items(hdvmux_t *m)
+static void stop_threads(hdvmux_t *m, int abort_now)
 {
-    while (m->head) {
-        item_t *it = m->head;
-        m->head = it->next;
-        pics_free(&it->pics);
-        pics_free(&it->job.pics);
-        free(it->job.slot);
-        for (int i = 0; i < it->job.nout; i++)
-            av_packet_free(&it->job.out[i]);
-        free(it->job.out);
-        free(it);
-    }
-    m->tail = NULL;
+    pthread_mutex_lock(&m->lock);
+    if (abort_now)
+        m->abort_ = 1;
+    pthread_cond_broadcast(&m->dec_wake);
+    pthread_cond_broadcast(&m->enc_wake);
+    pthread_mutex_unlock(&m->lock);
+    if (m->dec_started)
+        pthread_join(m->dec_thr, NULL);
+    m->dec_started = 0;
+    pthread_mutex_lock(&m->lock);
+    m->dec_done = 1;
+    if (abort_now || m->st.last_error != PIN_OK)
+        m->abort_ = 1;
+    pthread_cond_broadcast(&m->enc_wake);
+    pthread_mutex_unlock(&m->lock);
+    for (int i = 0; i < m->nthr; i++)
+        pthread_join(m->thr[i], NULL);
+    m->nthr = 0;
 }
 
 static pin_status_t hdvmux_close(pin_sink_t *s)
 {
     hdvmux_t *m = s->priv;
-    if (m->fmt && m->st.last_error == PIN_OK) {
+    if (m->fmt && get_error(m) == PIN_OK && m->dec_started) {
+        /* the end of the stream: the last PES, picture and GOP, then the decode thread writes
+         * everything out and ends */
         video_pes_done(m);
         audio_pes_done(m);
         es_flush(m);
-        check_last_gop(m);
-        gop_done(m);
-        span_close(m, NOPTS, NULL, 0);
-        drain(m, 1);
-        drain_audio(m, NOPTS, 1);
+        if (m->gop.n)
+            push_gop(m, 0);
+        push_gop(m, 1);
+        stop_threads(m, 0);
+    } else {
+        stop_threads(m, 1);
     }
-    pthread_mutex_lock(&m->lock);
-    m->quit = 1;
-    pthread_cond_broadcast(&m->wake);
-    pthread_mutex_unlock(&m->lock);
-    for (int i = 0; i < m->nthr; i++)
-        pthread_join(m->thr[i], NULL);
-    m->nthr = 0;
 
-    pin_status_t rc = PIN_OK;
     if (m->fmt) {
         if (m->header_written && av_write_trailer(m->fmt) < 0)
             set_error(m, PIN_ERR_IO);
@@ -1847,26 +2101,47 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
             remove(m->path);
         }
     }
-    if (m->spans)
-        pin_logf(PIN_LOG_INFO, "sink_hdvmux: %s: %llu damaged span(s), %llu picture(s) re-encoded, "
-                               "%llu leading B picture(s) without their reference dropped\n",
+    if (m->spans || m->frames_silenced)
+        pin_logf(PIN_LOG_INFO, "sink_hdvmux: %s: %llu repair(s), %llu picture(s) re-encoded, "
+                               "%llu frame(s) repeated for lost pictures, %llu frame(s) with audio "
+                               "silenced, %llu leading B picture(s) without their reference dropped\n",
                  m->path, (unsigned long long)m->spans, (unsigned long long)m->pics_reencoded,
+                 (unsigned long long)m->st.frames_repeated, (unsigned long long)m->frames_silenced,
                  (unsigned long long)m->pics_dropped);
-    rc = m->st.last_error;
-    free_items(m);
+    pin_status_t rc = m->st.last_error;
+    if (s->final_status)
+        *s->final_status = m->st;
+    while (m->head) {
+        item_t *it = m->head;
+        m->head = it->next;
+        free_item(it);
+    }
+    if (m->span)
+        free_item(m->span);
+    while (m->inflight) {
+        gop_t *g = m->inflight;
+        m->inflight = g->next;
+        gop_free(g);
+    }
+    while (m->gq_head) {
+        gop_t *g = m->gq_head;
+        m->gq_head = g->next;
+        gop_free(g);
+    }
+    avcodec_free_context(&m->dec);
     for (int i = 0; i < m->aq_n; i++)
         free(m->aq[i].data);
     free(m->aq);
+    free(m->eflag);
     pics_free(&m->gop);
-    pics_free(&m->warm);
     buf_free(&m->vpes);
     buf_free(&m->apes);
     buf_free(&m->es);
     buf_free(&m->acarry);
     free(m->silence);
     pthread_mutex_destroy(&m->lock);
-    pthread_cond_destroy(&m->wake);
-    pthread_cond_destroy(&m->done_cv);
+    pthread_cond_destroy(&m->dec_wake);
+    pthread_cond_destroy(&m->enc_wake);
     free(m);
     free(s);
     return rc;
@@ -1875,8 +2150,9 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
 static void hdvmux_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     hdvmux_t *m = s->priv;
+    pthread_mutex_lock(&m->lock);
     *out = m->st;
-    out->units_damaged = m->pics_reencoded;
+    pthread_mutex_unlock(&m->lock);
 }
 
 pin_sink_t *sink_hdvmux_create(pin_format_t format)
@@ -1901,11 +2177,12 @@ pin_sink_t *sink_hdvmux_create(pin_format_t format)
     m->au_pts = NOPTS;
     m->last_cam_end = NOPTS;
     m->a_next_cam = NOPTS;
+    m->max_out_id = -1;
     m->dur = 3600;
     m->pend_limit = PEND_LIMIT;
     pthread_mutex_init(&m->lock, NULL);
-    pthread_cond_init(&m->wake, NULL);
-    pthread_cond_init(&m->done_cv, NULL);
+    pthread_cond_init(&m->dec_wake, NULL);
+    pthread_cond_init(&m->enc_wake, NULL);
     s->priv = m;
     s->open = hdvmux_open;
     s->write_unit = hdvmux_write_unit;

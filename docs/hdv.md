@@ -106,97 +106,92 @@ pictures would not decode at the start of the new file.
 ## MOV and MKV: written live, damaged GOPs repaired
 
 `PIN_FMT_HDV_MOV` / `PIN_FMT_HDV_MKV` (`--format hdv-mov`, `hdv-mkv`, or a `.mov` /
-`.mkv` name) are written by `src/sinks/sink_hdvmux.c` while the tape plays. Nothing is
-remuxed when the capture stops, and there is no temporary file. The aim is a file
-that an editor such as DaVinci Resolve takes without complaint, even from a tape with
-dropouts. Before this, the way to get one was to re-encode the whole capture (to ProRes,
-say); this sink re-encodes only the damaged parts.
+`.mkv` name) are written by `src/sinks/sink_hdvmux.c` while the tape plays: nothing is
+remuxed when the capture stops, and there is no temporary file. The aim is a file an
+editor such as DaVinci Resolve takes without complaint even from a tape with dropouts:
+before this, the way to get one was to re-encode the whole capture (to ProRes, say);
+this re-encodes only the damaged parts. Desktop only: Android does not offer them.
 
-**Demux.** The sink reads the PAT and PMT and puts the PES packets back together
-itself. It cuts the video into pictures at their start codes and the audio into MP2
-frames. A continuity-counter gap, a transport error bit or a lost sync byte marks
-the PES being assembled as damaged.
+**Threads.** The capture's writer thread demuxes: it reads the PAT and PMT, puts the
+PES packets back together, cuts the video into pictures at their start codes and GOPs
+(at a GOP or sequence header, or an I picture), and the audio into MP2 frames. A
+continuity-counter gap, a transport error bit or a lost sync byte marks the PES being
+assembled as damaged. The GOPs go to a **decode thread**, which decodes every picture
+with FFmpeg's MPEG-2 decoder (one decoder for the whole file, so open GOPs have their
+references), decides about each GOP once the decoder has given back all of its frames
+(a frame of a later GOP came out), and writes the file in order. Repairs go to 1-3
+**encode workers**.
 
-**Passthrough.** A GOP is copied bit for bit if all of these hold:
+**Passthrough.** A GOP is copied bit for bit if it starts with an I picture, its
+`temporal_reference`s are 0..n-1, no packet of it was lost or flagged, the camera clock
+shows no pictures missing in front of it, and the decoder gave back every picture
+without concealing anything (`decode_error_flags`, `AV_FRAME_FLAG_CORRUPT`). A clean tape
+gives a file whose MPEG-2 is the tape's. The packet checks stay next to the decoder's:
+they cost nothing and catch damage that still decodes as valid codes (a lost packet the
+decoder happens to read through); the decoder catches what the packets do not show (bits
+flipped on the tape, a picture cut short at the end of a capture).
 
-- it starts with an I picture;
-- its `temporal_reference`s are 0..n-1;
-- none of its pictures is damaged;
-- the camera clock shows no pictures missing in front of it.
+**Repair.** Damaged GOPs in a row make a repair. The decode thread hands their decoded
+pictures, error concealment and all, straight to an encode worker, which encodes them
+again with FFmpeg's MPEG-2 encoder: closed GOPs with the source's size, frame rate,
+aspect, field order, bit rate, VBV size, profile and level, `intra_dc_precision`,
+quantiser type, intra VLC and scan. Each picture lands on the frame its PES PTS says; a
+frame no picture landed on (lost in the dropout) repeats its neighbour, so the file keeps
+the tape's length and the audio its sync. The GOP after a repair: its leading B pictures
+refer to the repair's last picture; if it is open (whether cameras close their GOPs is
+not known), those B frames are encoded into the repair too and the GOP is made closed (the
+B pictures dropped, the `temporal_reference`s moved down, `closed_gop` set), so the repair
+ends at the next good GOP's I picture and goes no further. A repair longer than 2 s is
+handed over in parts.
 
-A clean tape gives a file whose MPEG-2 is the tape's.
+**The start of a file** is always a whole frame that refers to nothing: the first GOP's
+leading B pictures (which refer to a picture of the previous file or of nothing) are left
+out and the GOP made closed, so the first frame is its I picture. The same after a jump of
+the camera clock. A first GOP that is damaged is re-encoded as closed GOPs, which start
+with an I frame too.
 
-**Repair.** Damaged GOPs in a row make a span. A worker thread decodes the span with
-FFmpeg's MPEG-2 decoder (its error concealment fills what is lost), after the I and P
-pictures of the GOP before it. It then encodes the span again with FFmpeg's MPEG-2
-encoder: closed GOPs, the source's size, frame rate, aspect and field order, the same
-bit rate and VBV size, the same profile and level, `intra_dc_precision`, quantiser type,
-intra VLC and scan.
+**Keeping up.** If more than 64 MB of GOPs wait for the decode thread, more than 6 s of
+decoded frames wait for an encoder, or more than 160 MB wait in front of the muxer behind
+a repair, the computer cannot keep up: the capture stops with an error
+(`reencode_behind`, "checking and repairing the HDV stream could not keep up"); use `.m2t`
+for such a tape.
 
-- **Timing.** Each decoded picture goes to the frame its PES PTS says. A frame no
-  picture landed on (lost in the dropout) repeats its neighbour. So the file keeps the
-  tape's length and the audio stays in sync.
-- **The GOP after a span.** Its leading B pictures refer to the span's last picture,
-  which is now a re-encoded one. If it is open (it was not closed when made, and
-  whether cameras close GOPs is not known), those B pictures are decoded and encoded
-  into the span too. The GOP itself is made closed: the B pictures are dropped, the
-  `temporal_reference`s moved down and `closed_gop` set. So the repair ends at the next
-  good GOP's I picture and goes no further. ffmpeg's decoder drops such B pictures
-  (it skips B pictures of an open GOP without a reference, and ignores `broken_link`).
-- **The first GOP of a file**, or one after a jump of the clock, loses its leading B
-  pictures the same way.
-- **The last GOP of a file** is decoded once at close. If the decoder had to conceal
-  anything, which is what a picture cut short by the end of the capture looks like,
-  that GOP is repaired too.
-- **Long damage.** A span longer than 4 s goes to the workers in parts.
-- **Workers.** There are 1 to 4 of them, each encoder with slice threads; the muxer
-  writes in order. If more than 160 MB wait for a repair in front of the muxer, the
-  computer cannot keep up. The capture then stops with an error
-  (`reencode_behind`, "repairing the damaged parts of the HDV stream could not keep
-  up"): use `.m2t` for such a tape.
+**Timestamps.** The video counts frames from 0, the audio samples from 0, neither ever
+taken from the tape. The camera clock only says where things go: an audio frame goes where
+its PTS falls on the video, through the GOP it belongs to; missing audio (lost, damaged,
+or not there yet at the start or the end) is MP2 silence, made once with FFmpeg's MP2
+encoder; audio that would overlap is dropped. A PES with a gap keeps only the frames in
+front of it, and the next intact PES brings the audio back. A jump of the clock that does
+not split the file (a scene shorter than the split's minimum) is taken up: the output goes
+on without a gap.
 
-**Timestamps.** The video counts frames from 0 and the audio counts samples from 0.
-Neither is ever taken from the tape. The camera clock only says where things go:
+**Error counts.** For these formats the status's frames "with error" (`frames_error`,
+`clip_frames_error`, the GUIs' error count) are the files' own: every frame that was
+re-encoded, including frames repeated for lost pictures, and every frame that played with
+its audio replaced by silence (at the very start and end of a file only beyond 2 audio
+frames, where a camera's audio just begins or ends a little after or before its video).
+`frames_dropped` counts the repeated frames. They come from the sink
+(`pin_sink_status_t.frames_error`, `frames_repeated`; a closed file's last counts through
+`final_status` and the closer), so they lag the picture count by a GOP or a repair.
 
-- An audio frame goes where its PTS falls on the video, through the GOP it belongs to.
-- Missing audio (lost, damaged, or not there yet at the start or the end) is MP2
-  silence, made once with FFmpeg's MP2 encoder.
-- Audio that would overlap is dropped.
-- A PES with a gap keeps only the frames in front of the gap; the next intact PES
-  brings the audio back.
+**Containers.** MOV gets the HDV sample description Final Cut writes (`hdv3` 1080i50,
+`hdv2` 1080i60, `hdv1` / `hdv5` / `hdv9` / `hdva` 720p30/25/60/50, `hdv6`..`hdv8`
+1080p), not FFmpeg's choice, the XDCAM tag of the raster; Matroska the sequence header as
+CodecPrivate.
 
-A jump of the clock that does not split the file (a scene shorter than the split's
-minimum) is simply taken up: the output goes on without a gap.
-
-**Containers.** MOV gets the HDV sample description that Final Cut writes (`hdv3`
-1080i50, `hdv2` 1080i60, `hdv1` / `hdv5` / `hdv9` / `hdva` 720p30/25/60/50,
-`hdv6`..`hdv8` 1080p). FFmpeg's own choice would be the XDCAM tag of the raster.
-Matroska gets the sequence header as CodecPrivate.
-
-**Tested** by `test_hdv_repair` on ffmpeg-made streams damaged as a dropout damages
-them. Each case is decoded back and compared frame by frame and audio block by audio
-block with the clean source:
-
-- clean (identical output);
-- 40 packets lost;
-- 0.6 s lost (a GOP and more: frames repeated, 25 blocks of silence);
-- 500 garbled packets;
-- transport error bits;
-- audio packets lost alone (video untouched);
-- three dropouts in three GOPs;
-- a capture that starts mid-GOP and ends mid-picture;
-- a dropout in the first GOP;
-- closed GOPs;
-- a clock jump;
-- 720p;
-- damage everywhere;
-- the repair falling behind.
-
-`test_replay_hdv_mov` covers the whole capture: a clock jump without `--split` gives
-two clean files. Not tested with a camera's damaged tape yet, nor in Resolve. Not
-handled: a picture whose damage the transport stream does not show (no CC gap, no
-error bit) is passed through as it is, and the decoder conceals it on playback.
-Pulldown (`repeat_first_field`, 720p24 in 60p) is timed as one frame per picture.
+**Tested** by `test_hdv_repair` on ffmpeg-made streams damaged as a dropout damages them,
+each decoded back and compared frame by frame and audio block by audio block with the clean
+source, and the sink's error counts checked against what it re-encoded and silenced: clean
+(identical output, no error), 40 packets lost, 0.6 s lost (a GOP and more: frames repeated,
+silence), 500 garbled packets, transport error bits, bits flipped with no packet error
+(found by the decoder alone), audio packets lost alone (video untouched), three dropouts in
+three GOPs, a capture that starts mid-GOP and ends mid-picture, a dropout in the first GOP,
+closed GOPs, a clock jump, 720p, damage everywhere, and the repair falling behind.
+`test_replay_hdv_mov` covers the whole capture: a clock jump without `--split` gives two
+clean files, and a dropout shows in the status's error count. Not tested with a camera's
+damaged tape yet, nor in Resolve. Damage that decodes as valid codes and shows in no packet
+(a flipped coefficient) is passed through: nobody can see it without looking at the
+picture. Pulldown (`repeat_first_field`, 720p24 in 60p) is timed as one frame per picture.
 
 ## Tapes that mix DV and HDV, or HDV formats
 

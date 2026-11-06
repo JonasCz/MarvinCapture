@@ -130,6 +130,10 @@ struct pin_session {
      * opened. frames / frames_dropped above are the totals' other two. */
     uint64_t frames_error;
     uint64_t clip_frames, clip_frames_error, clip_frames_dropped;
+    /* HDV to MOV / MKV: the files' own counts (sink_hdvmux: frames re-encoded or with audio
+     * silenced, frames repeated for lost pictures) of the files closed so far; the open file's
+     * are asked from its sink. Its units are not "with error" at arrival. */
+    uint64_t sinkf_error, sinkf_repeated;
     uint64_t err_video_blocks, err_audio_blocks, err_missing_blocks;
     uint64_t bytes_closed;      /* bytes of this capture's finished files (bytes_written is the open one) */
     pin_rate_window_t rate_win; /* last 10 minutes of (time, total bytes) for the measured rate */

@@ -31,6 +31,7 @@ typedef struct job {
     char *path;
     int announced;
     uint64_t bytes, units, reserve;
+    pin_closer_frames_t frames;   /* counted by the caller at hand-over */
 } job_t;
 
 struct pin_closer {
@@ -42,6 +43,7 @@ struct pin_closer {
     int stop;
     uint64_t pending;         /* reserve of the queued jobs and the one being closed */
     int64_t more_bytes, more_units;
+    pin_closer_frames_t more_frames;
     pin_closer_done_fn done;
     void *user;
 };
@@ -50,7 +52,7 @@ struct pin_closer {
  * ended up with, which is not the submitted one if the lazy sink had to skip a taken number
  * only after the session handed the file over (sink_lazy.c, "Taken names"). */
 static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, uint64_t *final_units,
-                              char *final_path, size_t final_cap)
+                              pin_closer_frames_t *frames, char *final_path, size_t final_cap)
 {
     int wfail = j->writer ? pin_writer_stop(j->writer) != 0 : 0;
     if (pin_sink_lazy_renumbered(j->sink, final_path, final_cap) == 0)
@@ -66,7 +68,16 @@ static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, ui
         *bytes = *units = 0;
         *final_units = j->units;
     }
+    /* what a sink that counts its frames still wrote while closing (sink_hdvmux) */
+    pin_sink_status_t fst;
+    memset(&fst, 0, sizeof(fst));
+    j->sink->final_status = &fst;
     pin_status_t st = j->sink->close(j->sink);
+    if (fst.bytes_written > sst.bytes_written)
+        *bytes = (int64_t)fst.bytes_written - (int64_t)j->bytes;
+    frames->frames = (int64_t)fst.frames_out - j->frames.frames;
+    frames->error = (int64_t)fst.frames_error - j->frames.error;
+    frames->repeated = (int64_t)fst.frames_repeated - j->frames.repeated;
     return st == PIN_OK && wfail ? PIN_ERR_IO : st;
 }
 
@@ -97,13 +108,17 @@ static void *closer_thread(void *arg)
 
         int64_t bytes, units;
         uint64_t final_units;
+        pin_closer_frames_t fr;
         char final_path[PIN_PATH_MAX];
-        pin_status_t st = close_job(j, &bytes, &units, &final_units, final_path, sizeof(final_path));
+        pin_status_t st = close_job(j, &bytes, &units, &final_units, &fr, final_path, sizeof(final_path));
         report(c, j, st, final_units, final_path);
 
         pthread_mutex_lock(&c->lock);
         c->more_bytes += bytes;
         c->more_units += units;
+        c->more_frames.frames += fr.frames;
+        c->more_frames.error += fr.error;
+        c->more_frames.repeated += fr.repeated;
         c->pending -= j->reserve;
         c->busy = 0;
         free(j->path);
@@ -136,30 +151,38 @@ pin_closer_t *pin_closer_create(pin_closer_done_fn done, void *user)
 }
 
 void pin_closer_submit(pin_closer_t *c, pin_writer_t *writer, pin_sink_t *sink, const char *path,
-                       int announced, uint64_t bytes, uint64_t units, uint64_t reserve)
+                       int announced, uint64_t bytes, uint64_t units, uint64_t reserve,
+                       const pin_closer_frames_t *frames)
 {
+    pin_closer_frames_t counted = { 0, 0, 0 };
+    if (frames)
+        counted = *frames;
     job_t *j = calloc(1, sizeof(*j));
     char *p = strdup(path ? path : "");
     if (!c || !j || !p) {
         free(j);
         free(p);
         job_t now = { .writer = writer, .sink = sink, .path = (char *)(path ? path : ""),
-                      .announced = announced, .bytes = bytes, .units = units };
+                      .announced = announced, .bytes = bytes, .units = units, .frames = counted };
         int64_t b, u;
         uint64_t final_units;
+        pin_closer_frames_t fr;
         char final_path[PIN_PATH_MAX];
-        pin_status_t st = close_job(&now, &b, &u, &final_units, final_path, sizeof(final_path));
+        pin_status_t st = close_job(&now, &b, &u, &final_units, &fr, final_path, sizeof(final_path));
         if (c) {
             report(c, &now, st, final_units, final_path);
             pthread_mutex_lock(&c->lock);
             c->more_bytes += b;
             c->more_units += u;
+            c->more_frames.frames += fr.frames;
+            c->more_frames.error += fr.error;
+            c->more_frames.repeated += fr.repeated;
             pthread_mutex_unlock(&c->lock);
         }
         return;
     }
     *j = (job_t){ .writer = writer, .sink = sink, .path = p, .announced = announced,
-                  .bytes = bytes, .units = units, .reserve = reserve };
+                  .bytes = bytes, .units = units, .reserve = reserve, .frames = counted };
     pthread_mutex_lock(&c->lock);
     if (c->tail)
         c->tail->next = j;
@@ -191,14 +214,19 @@ int pin_closer_busy(pin_closer_t *c)
     return busy;
 }
 
-void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units)
+void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units, pin_closer_frames_t *frames)
 {
     *bytes = *units = 0;
+    if (frames)
+        memset(frames, 0, sizeof(*frames));
     if (!c)
         return;
     pthread_mutex_lock(&c->lock);
     *bytes = c->more_bytes;
     *units = c->more_units;
+    if (frames)
+        *frames = c->more_frames;
+    memset(&c->more_frames, 0, sizeof(c->more_frames));
     c->more_bytes = c->more_units = 0;
     pthread_mutex_unlock(&c->lock);
 }

@@ -735,9 +735,12 @@ static double learned_ffv1_bph(pin_session_t *s)
 static void closer_collect(pin_session_t *s)
 {
     int64_t bytes, units;
-    pin_closer_take(s->closer, &bytes, &units);
+    pin_closer_frames_t fr;
+    pin_closer_take(s->closer, &bytes, &units, &fr);
     s->bytes_closed = (uint64_t)((int64_t)s->bytes_closed + bytes);
     s->units_total = (uint64_t)((int64_t)s->units_total + units);
+    s->sinkf_error = (uint64_t)((int64_t)s->sinkf_error + fr.error);
+    s->sinkf_repeated = (uint64_t)((int64_t)s->sinkf_repeated + fr.repeated);
 }
 
 /* Every file handed over is closed and counted. Caller holds the lock (the
@@ -802,8 +805,14 @@ static void hand_over_file(pin_session_t *s)
     if (s->writer)
         pin_writer_get_stats(s->writer, &wst);
     uint64_t reserve = wst.backlog_bytes;
+    /* a file that counts its own frames (HDV MOV / MKV): what it has counted so far is the
+     * session's from now on; the closer adds what the close still brings */
+    s->sinkf_error += sst.frames_error;
+    s->sinkf_repeated += sst.frames_repeated;
+    pin_closer_frames_t fr = { (int64_t)sst.frames_out, (int64_t)sst.frames_error,
+                               (int64_t)sst.frames_repeated };
     pin_closer_submit(s->closer, s->writer, s->sink, s->current_file, s->file_announced,
-                      sst.bytes_written, sst.units_written, reserve);
+                      sst.bytes_written, sst.units_written, reserve, &fr);
     s->writer = NULL;
     s->sink = NULL;
 }
@@ -1169,12 +1178,18 @@ int pin_session_format_available(pin_format_t f)
 
 /* Formats this platform does not offer: pin_formats() leaves them out, pin_format_info() and
  * a capture still take them. The H.264 / HEVC formats only where their encoder opened (a
- * capture refuses them elsewhere). */
+ * capture refuses them elsewhere). Android: not HDV to MOV / MKV, which decode every GOP to
+ * check it and re-encode the damaged ones (sink_hdvmux.c): more than a phone is asked to do
+ * during a capture; the raw transport stream is offered there. */
 static int format_offered(pin_format_t f)
 {
     if (pin_fmt_is_hwenc(f))
         return pin_session_format_available(f);
+#if defined(__ANDROID__)
+    return f != PIN_FMT_HDV_MOV && f != PIN_FMT_HDV_MKV;
+#else
     return 1;
+#endif
 }
 
 void pin_session_format_warning(pin_format_t f, char *out, size_t cap)
@@ -1415,6 +1430,7 @@ static void reset_frame_counters(pin_session_t *s)
     s->write_dropped = 0;
     s->frames_error = 0;
     s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = 0;
+    s->sinkf_error = s->sinkf_repeated = 0;
     s->err_video_blocks = s->err_audio_blocks = s->err_missing_blocks = 0;
     s->hdv_err_reset = 1;
 }
@@ -2055,7 +2071,11 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 s->hdv_err_reset = 0;
             }
             hdv_error_analyze(&ctx->hdv_err, data, len / 188, vpid, &herr);
-            count_frame(s, herr.frame_error, 0);
+            /* into HDV MOV / MKV: whether it is "with error" is the file's to say (what it
+             * re-encoded or played with silence, sink_hdvmux.c), not the packets' */
+            int file_counts = s->sink && s->file_kind == PIN_KIND_HDV &&
+                              (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV);
+            count_frame(s, file_counts ? 0 : herr.frame_error, 0);
             s->err_video_blocks += herr.video_damaged || herr.tainted;
             s->err_missing_blocks += herr.cc_errors + herr.tei + herr.sync_lost;
         }
@@ -2383,9 +2403,9 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
             snprintf(detail, sizeof(detail), "the video encoder failed");
         } else if (sst.last_error == PIN_ERR_CODEC && sst.reencode_behind) {
             why = PIN_STOP_ERROR;
-            snprintf(detail, sizeof(detail), "repairing the damaged parts of the HDV stream could "
-                     "not keep up with the capture (too much damage for this computer); capture to "
-                     "the raw transport stream (.m2t) instead");
+            snprintf(detail, sizeof(detail), "checking and repairing the HDV stream could not keep "
+                     "up with the capture (too slow a computer, or too much damage); capture to the "
+                     "raw transport stream (.m2t) instead");
         } else if (sst.last_error == PIN_ERR_CODEC &&
                    (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV)) {
             why = PIN_STOP_ERROR;
@@ -4255,6 +4275,18 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->clip_frames = s->clip_frames;
     out->clip_frames_error = s->clip_frames_error;
     out->clip_frames_dropped = s->clip_frames_dropped;
+    {
+        /* HDV MOV / MKV count their frames with error themselves: the closed files', the open one's */
+        pin_sink_status_t fst;
+        memset(&fst, 0, sizeof(fst));
+        if (s->sink && s->sink->get_status && s->file_kind == PIN_KIND_HDV &&
+            (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV))
+            s->sink->get_status(s->sink, &fst);
+        out->frames_error += s->sinkf_error + fst.frames_error;
+        out->frames_dropped += s->sinkf_repeated + fst.frames_repeated;
+        out->clip_frames_error += fst.frames_error;
+        out->clip_frames_dropped += fst.frames_repeated;
+    }
     out->err_video_blocks = s->err_video_blocks;
     out->err_audio_blocks = s->err_audio_blocks;
     out->err_missing_blocks = s->err_missing_blocks;

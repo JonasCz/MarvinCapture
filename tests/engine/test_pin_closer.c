@@ -54,6 +54,7 @@ static void sleep_ms(int ms)
 typedef struct {
     uint64_t units, bytes;
     int close_ms;
+    int counts_frames;       /* as sink_hdvmux: frame counts, more of them written while closing */
     int *order, *norder;
 } fake_t;
 
@@ -77,7 +78,14 @@ static void fake_status(pin_sink_t *s, pin_sink_status_t *out)
 static pin_status_t fake_close(pin_sink_t *s)
 {
     fake_t *f = s->priv;
-    sleep_ms(f->close_ms);   /* a remux */
+    sleep_ms(f->close_ms);   /* a slow close */
+    if (f->counts_frames && s->final_status) {
+        fake_status(s, s->final_status);
+        s->final_status->bytes_written += 1000;   /* what closing wrote */
+        s->final_status->frames_out = 100;
+        s->final_status->frames_error = 12;
+        s->final_status->frames_repeated = 3;
+    }
     free(f);
     free(s);
     return PIN_OK;
@@ -137,9 +145,9 @@ int main(void)
     for (int i = 0; i < 10; i++)
         pin_writer_push(wa, PIN_UNIT_RAW, (uint64_t)i, buf, sizeof(buf));
     double t0 = now_s();
-    pin_closer_submit(c, wa, a, "scene1", 1, 200, 2, 5000);
+    pin_closer_submit(c, wa, a, "scene1", 1, 200, 2, 5000, NULL);
     pin_sink_t *b = fake_sink(0);
-    pin_closer_submit(c, NULL, b, "scene2", 0, 0, 0, 0);
+    pin_closer_submit(c, NULL, b, "scene2", 0, 0, 0, 0, NULL);
     CHECK(now_s() - t0 < 0.1, "handing over does not wait for the close");
     CHECK(pin_closer_pending_bytes(c) == 5000, "reserve counted while closing");
 
@@ -151,15 +159,28 @@ int main(void)
     CHECK(log.units[0] == 10, "the queue was drained into the file before it closed");
     CHECK(log.units[1] == 0, "an empty file reports no units");
     int64_t bytes, units;
-    pin_closer_take(c, &bytes, &units);
+    pin_closer_frames_t fr;
+    pin_closer_take(c, &bytes, &units, &fr);
     CHECK(bytes == 800 && units == 8, "only what the caller had not counted");
-    pin_closer_take(c, &bytes, &units);
+    CHECK(fr.frames == 0 && fr.error == 0 && fr.repeated == 0, "a sink that counts no frames");
+    pin_closer_take(c, &bytes, &units, NULL);
     CHECK(bytes == 0 && units == 0, "taken once");
 
+    /* a sink that counts its frames (HDV MOV / MKV): what it still counted and wrote while
+     * closing, beyond what was counted at hand-over */
+    pin_sink_t *h = fake_sink(0);
+    ((fake_t *)h->priv)->counts_frames = 1;
+    pin_closer_frames_t counted = { 90, 10, 3 };
+    pin_closer_submit(c, NULL, h, "hdv", 1, 0, 0, 0, &counted);
+    pin_closer_wait(c);
+    pin_closer_take(c, &bytes, &units, &fr);
+    CHECK(fr.frames == 10 && fr.error == 2 && fr.repeated == 0, "frames counted while closing");
+    CHECK(bytes == 1000, "bytes written while closing");
+
     /* destroy closes what is still queued */
-    pin_closer_submit(c, NULL, fake_sink(50), "scene3", 1, 0, 0, 0);
+    pin_closer_submit(c, NULL, fake_sink(50), "scene3", 1, 0, 0, 0, NULL);
     pin_closer_destroy(c);
-    CHECK(log.n == 3 && strcmp(log.order[2], "scene3") == 0, "closed on destroy");
+    CHECK(log.n == 4 && strcmp(log.order[3], "scene3") == 0, "closed on destroy");
 
     if (g_failures) {
         printf("test_pin_closer: %d failure(s)\n", g_failures);

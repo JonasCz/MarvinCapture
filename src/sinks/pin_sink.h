@@ -70,8 +70,14 @@ typedef struct {
     uint64_t audio_padded_samples; /* silence inserted to keep audio in sync with video */
     int encoder_behind;          /* sink_ffv1, sink_hwenc: the encode thread's queue is backing up */
     int pipe_closed;             /* stdout sinks: the reading program is gone (not a disk error) */
-    int reencode_behind;         /* sink_hdvmux: repairing damaged GOPs cannot keep up; the sink
-                                    failed with PIN_ERR_CODEC and the capture ends */
+    int reencode_behind;         /* sink_hdvmux: checking or repairing GOPs cannot keep up; the
+                                    sink failed with PIN_ERR_CODEC and the capture ends */
+    /* sink_hdvmux (HDV MOV / MKV), what the file got: frames written; of them, frames "with
+     * error" (re-encoded, or played with audio replaced by silence); and frames that repeat a
+     * neighbour because their picture was lost (they are "with error" too). Other sinks: 0. */
+    uint64_t frames_out;
+    uint64_t frames_error;
+    uint64_t frames_repeated;
     pin_status_t last_error;
 } pin_sink_status_t;
 
@@ -104,6 +110,10 @@ struct pin_sink {
     void (*get_status)(pin_sink_t *s, pin_sink_status_t *out);
 
     int supports_title;
+
+    /* Set by the closer before close(): a sink that counts frames itself (frames_out) stores its
+     * last status there, with what close() still wrote. NULL: nobody asks. */
+    pin_sink_status_t *final_status;
 
     void *priv;
 };

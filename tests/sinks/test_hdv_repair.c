@@ -418,8 +418,9 @@ static pin_sink_params_t params_for(int w, int h, int fps_num, int fps_den, int 
     return p;
 }
 
-/* Feeds ts to a sink in the units a capture would (here: runs of 1 to 400 packets). */
-static uint64_t feed(blob_t ts, pin_format_t fmt, const char *out, const pin_sink_params_t *p)
+/* Feeds ts to a sink in the units a capture would (here: runs of 1 to 400 packets); the sink's
+ * status after close (its frame counts). */
+static pin_sink_status_t feed(blob_t ts, pin_format_t fmt, const char *out, const pin_sink_params_t *p)
 {
     pin_sink_t *s = pin_sink_create(fmt);
     CHECK(s);
@@ -440,9 +441,11 @@ static uint64_t feed(blob_t ts, pin_format_t fmt, const char *out, const pin_sin
         k++;
     }
     pin_sink_status_t st;
-    s->get_status(s, &st);
+    memset(&st, 0, sizeof(st));
+    s->final_status = &st;
     CHECK_EQ_I(s->close(s), PIN_OK);
-    return st.units_damaged;
+    free(ts.d);
+    return st;
 }
 
 static void scenario(const char *name, blob_t ts, pin_format_t fmt, const pin_sink_params_t *p,
@@ -451,7 +454,7 @@ static void scenario(const char *name, blob_t ts, pin_format_t fmt, const pin_si
     char out[1024];
     snprintf(out, sizeof(out), "%s/repair-%s.%s", dir, name, fmt == PIN_FMT_HDV_MOV ? "mov" : "mkv");
     printf("== %s\n", name);
-    uint64_t reenc = feed(ts, fmt, out, p);
+    pin_sink_status_t fst = feed(ts, fmt, out, p);
     media_t m;
     decode(out, &m, 1);
 
@@ -507,8 +510,11 @@ static void scenario(const char *name, blob_t ts, pin_format_t fmt, const pin_si
     }
     double vdur = m.n / m.fps, adur = (double)m.an / (m.sr ? m.sr : 1);
     printf("   %d frames (source %d, from %d), %d below 25 dB, %d not identical, %d past the "
-           "source; %llu re-encoded; decode errors %d, timestamp steps off %d\n",
-           m.n, ref->n, off, bad, nonexact, beyond, (unsigned long long)reenc, m.errors, m.pts_bad);
+           "source; decode errors %d, timestamp steps off %d\n",
+           m.n, ref->n, off, bad, nonexact, beyond, m.errors, m.pts_bad);
+    printf("   the sink counted %llu frames, %llu with error, %llu repeated\n",
+           (unsigned long long)fst.frames_out, (unsigned long long)fst.frames_error,
+           (unsigned long long)fst.frames_repeated);
     printf("   audio %.3f s (video %.3f s): %d blocks, %d the source's, %d silent, %d neither\n",
            adur, vdur, blocks, match, silent, abad);
 
@@ -521,9 +527,17 @@ static void scenario(const char *name, blob_t ts, pin_format_t fmt, const pin_si
     if (e.full_length)
         CHECK_EQ_I(m.n + off, ref->n);
     if (e.reencoded == 0)
-        CHECK_EQ_I(reenc, 0);
+        CHECK_EQ_I(nonexact, 0);
     else if (e.reencoded == 1)
-        CHECK(nonexact > 0);   /* (a span made at close is not counted in reenc yet) */
+        CHECK(nonexact > 0);
+    /* the counts the UI shows: every frame written; with error every re-encoded one (none is
+     * identical to the source) and those whose audio was silenced, nothing else */
+    CHECK_EQ_I(fst.frames_out, m.n);
+    CHECK(fst.frames_error >= (uint64_t)nonexact);
+    CHECK(fst.frames_error <= (uint64_t)nonexact + 2u * (uint64_t)silent + 2u);
+    if (silent == 0 && nonexact == 0)
+        CHECK_EQ_I(fst.frames_error, 0);
+    CHECK(fst.frames_repeated <= fst.frames_error);
     CHECK(m.sr == 48000);
     CHECK(fabs(adur - vdur) <= 2 * 1152.0 / m.sr);
     CHECK(abad <= e.max_abad);
@@ -606,6 +620,24 @@ int main(int argc, char **argv)
         expect_t e = { .full_length = 1, .max_bad = 6, .reencoded = 1, .max_abad = 1,
                        .min_amatch = 0.95 };
         scenario("tei", b, PIN_FMT_HDV_MOV, &p1080, &ref, dir, e);
+    }
+    /* silent damage: bytes flipped inside the pictures of 20 video packets, with no lost packet
+     * and no error bit (nothing the transport stream shows): the decoder sees it, the GOP is
+     * repaired */
+    {
+        blob_t b = copy(src);
+        size_t k = 0;
+        for (size_t i = (N * 2) / 5; i < N && k < 20; i++) {
+            uint8_t *q = b.d + i * TSP;
+            if (pid_of(q) != VPID || (q[1] & 0x40) || (q[3] & 0x20))
+                continue;      /* only payload-only packets, not a PES start */
+            for (int j = 30; j < TSP; j += 11)
+                q[j] ^= 0xA5;
+            k++;
+        }
+        expect_t e = { .full_length = 1, .max_bad = 6, .reencoded = 1, .max_abad = 1,
+                       .min_amatch = 0.95 };
+        scenario("silent", b, PIN_FMT_HDV_MOV, &p1080, &ref, dir, e);
     }
     /* audio packets lost alone: the video passes through untouched, silence fills the gap
      * and the audio is back right after it */
@@ -695,12 +727,15 @@ int main(int argc, char **argv)
         pin_status_t rc = PIN_OK;
         for (size_t i = 0; i < npk(b) && rc == PIN_OK; i += 200)
             rc = s->write_unit(s, b.d + i * TSP, (i + 200 <= npk(b) ? 200 : npk(b) - i) * TSP);
+        /* the decode thread finds it while the writes go on, or at close at the latest */
         pin_sink_status_t st;
-        s->get_status(s, &st);
-        printf("   write_unit: %d, reencode_behind %d\n", rc, st.reencode_behind);
-        CHECK_EQ_I(rc, PIN_ERR_CODEC);
+        memset(&st, 0, sizeof(st));
+        s->final_status = &st;
+        pin_status_t crc = s->close(s);
+        printf("   write_unit: %d, close: %d, reencode_behind %d\n", rc, crc, st.reencode_behind);
+        CHECK(rc == PIN_OK || rc == PIN_ERR_CODEC);
+        CHECK_EQ_I(crc, PIN_ERR_CODEC);
         CHECK_EQ_I(st.reencode_behind, 1);
-        CHECK_EQ_I(s->close(s), PIN_ERR_CODEC);
         free(b.d);
     }
 

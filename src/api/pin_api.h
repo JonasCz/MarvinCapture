@@ -391,10 +391,12 @@ typedef struct {
  * appear only where their encoder opened in pin_encoders_probe() (which the first call runs if
  * nobody did: see there). pin_format_info() answers for every format.
  *
- * PIN_FMT_HDV_MOV / PIN_FMT_HDV_MKV are written live: undamaged GOPs are copied, damaged ones
- * (tape dropouts) are decoded with error concealment and encoded again as MPEG-2 of the same
- * size and bit rate; the files' timestamps start at 0 and run without gaps, and they always
- * split into scenes (scene_split_forced). See docs/hdv.md ("MOV and MKV"). */
+ * PIN_FMT_HDV_MOV / PIN_FMT_HDV_MKV are written live: every GOP is decoded to check it;
+ * undamaged GOPs are copied, damaged ones (tape dropouts: a packet lost or flagged, or anything
+ * the decoder had to conceal) are encoded again from the decoded, concealed pictures as MPEG-2
+ * of the same size and bit rate; the files' timestamps start at 0 and run without gaps, and
+ * they always split into scenes (scene_split_forced). Not offered on Android (a capture still
+ * takes them). See docs/hdv.md ("MOV and MKV"). */
 PIN_API int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 PIN_API pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out);
 
@@ -751,10 +753,16 @@ typedef struct {
      *           that re-encoded the whole frame (STA 14, Samsung quirk);
      *   HDV:    transport_error_indicator, a continuity gap, a missing PES /
      *           picture header; and any B / P picture that depends on a
-     *           damaged I / P picture of the same GOP;
+     *           damaged I / P picture of the same GOP. Into HDV MOV / MKV
+     *           instead the files' own count: every frame re-encoded (a
+     *           damaged GOP, decoded with concealment and encoded again,
+     *           including frames that repeat a neighbour for a lost picture)
+     *           or played with its audio replaced by silence; it lags the
+     *           picture count by a GOP or a repair;
      *   analog: a repeated (dropped) frame.
      * frames_dropped: DV frames with >= 90 % of their blocks missing, analog
-     * repeated frames; HDV has no frame-level drop notion (always 0).
+     * repeated frames; HDV MOV / MKV frames that repeat a neighbour because
+     * their picture was lost (also "with error"); raw HDV 0.
      * err_*_blocks: running totals behind the verdicts (DV: video blocks with
      * STA != 0, audio blocks bad or muted, blocks missing; HDV: damaged
      * pictures in err_video_blocks, TEI + continuity gaps + sync losses in

@@ -45,7 +45,7 @@ Two ways in, both on the same core library:
   stores no aspect: raw `.dv` and `.m2t` files carry no aspect flag of their own, players
   take it from the video itself. Auto applies then, to the file and the preview; the
   choice is kept and comes back when an AVI, MOV or MKV format is picked. "Split into
-  scenes" is checked and disabled for HDV MOV / MKV, which always split
+  scenes" is checked and disabled for HDV MOV / MKV (desktop only), which always split
   (`pin_format_info_t.scene_split_forced`); the user's own choice is kept for the other
   formats. The tooltips come from the core (`pin_format_title_help`,
   `pin_format_aspect_help`, `pin_format_scene_split_help`).
@@ -312,7 +312,7 @@ capture starts (not for the user's own stop).
 | `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
 | `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued. Checked once a second. Also an analog file on a FAT32 drive that reached its 4 GiB limit (see "Long captures") |
 | `WRITE_ERROR` | writing a file failed, or the next file (split, pass, format change) could not be created. The file keeps what reached the drive: a raw `.dv` / `.m2t` ends with a cut frame or picture, an AVI or MOV has no index (it could not be written; players read the file without one or offer to repair it). A drive that is full gives `DISK_FULL` instead, before writing fails |
-| `ERROR` | any other error: a USB failure, a failed video encoder, HDV to MOV / MKV whose repair of damaged GOPs cannot keep up with the capture ([hdv.md](hdv.md#mov-and-mkv-written-live-damaged-gops-repaired)), and standard output seeing the tape change between DV and HDV |
+| `ERROR` | any other error: a USB failure, a failed video encoder, HDV to MOV / MKV whose checking (decoding every GOP) or repair of damaged GOPs cannot keep up with the capture ([hdv.md](hdv.md#mov-and-mkv-written-live-damaged-gops-repaired)), and standard output seeing the tape change between DV and HDV |
 | `DISK_SLOW` | the output drive could not keep up and the disk writer's queue filled (64 MB for DV / HDV, ~18 s; 512 MB for analog, ~25 s). The file ends cleanly before the first unit that did not fit, rather than going on with a hole: the sinks count frames, so a lost analog frame would shift the audio against the video for the rest of the file |
 
 A capture that drives the deck (`start_deck`) stops the tape when it ends for

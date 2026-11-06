@@ -219,7 +219,13 @@ static void lazy_get_status(pin_sink_t *s, pin_sink_status_t *out)
 static pin_status_t lazy_close(pin_sink_t *s)
 {
     lazy_priv_t *p = s->priv;
+    p->inner->final_status = p->opened ? s->final_status : NULL;
     pin_status_t rc = p->inner->close(p->inner);
+    if (s->final_status) {
+        if (!p->opened)
+            memset(s->final_status, 0, sizeof(*s->final_status));
+        s->final_status->units_written = p->units;
+    }
     if (!p->opened)
         rc = PIN_OK;        /* nothing on disk, the inner sink was only freed */
     if (p->opened && p->units == 0)

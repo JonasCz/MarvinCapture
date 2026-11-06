@@ -52,6 +52,12 @@ typedef struct {
     const char *path;
 } pin_closer_done_t;
 
+/* Frame counts of a sink that counts what its file got (sink_hdvmux: frames_out, frames_error,
+ * frames_repeated of pin_sink_status_t). */
+typedef struct {
+    int64_t frames, error, repeated;
+} pin_closer_frames_t;
+
 /* Called on the closer thread, without its lock, after each file. */
 typedef void (*pin_closer_done_fn)(void *user, const pin_closer_done_t *d);
 
@@ -59,13 +65,15 @@ pin_closer_t *pin_closer_create(pin_closer_done_fn done, void *user);
 
 /* Hands over a file: stops `writer` (it delivers what is queued, to `sink`
  * only: its consumer must not look the sink up anywhere else), takes the
- * sink's final counts and closes it. bytes / units: what the caller has
- * already counted for it; the rest is added to pin_closer_take()'s totals.
+ * sink's final counts and closes it. bytes / units / frames (NULL: none): what the
+ * caller has already counted for it; the rest is added to pin_closer_take()'s totals
+ * (the frames from the status the sink leaves in final_status when it closes).
  * reserve: disk space the close still needs (the queued data); counted in
  * pin_closer_pending_bytes() until the file is closed. If the job cannot be
  * queued, the file is closed here and now. */
 void pin_closer_submit(pin_closer_t *c, pin_writer_t *writer, pin_sink_t *sink, const char *path,
-                       int announced, uint64_t bytes, uint64_t units, uint64_t reserve);
+                       int announced, uint64_t bytes, uint64_t units, uint64_t reserve,
+                       const pin_closer_frames_t *frames);
 
 /* Returns once every file handed over is closed. */
 void pin_closer_wait(pin_closer_t *c);
@@ -73,9 +81,9 @@ void pin_closer_wait(pin_closer_t *c);
 /* A file handed over is not closed yet. */
 int pin_closer_busy(pin_closer_t *c);
 
-/* Bytes and video units the closed files had beyond what submit() was told,
- * since the last call (then zeroed). */
-void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units);
+/* Bytes, video units and (frames != NULL) frame counts the closed files had beyond what
+ * submit() was told, since the last call (then zeroed). */
+void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units, pin_closer_frames_t *frames);
 
 /* Disk space the files not yet closed still need. */
 uint64_t pin_closer_pending_bytes(pin_closer_t *c);

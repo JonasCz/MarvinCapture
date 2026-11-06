@@ -41,6 +41,14 @@ Traps (all learned the hard way):
 - The HDV replay (`replay_run_ts()`) hands what precedes the first video PES
   (SDT, PAT, PMT) to the write callback only, like the reassembler's PAT/PMT
   unit: on `dv_on_unit()` it would count as a picture with a PES error.
+- HDV into MOV / MKV is different: its frames are not "with error" at arrival
+  (`dv_on_unit()` counts them with err 0); the file's sink counts them itself
+  (`sink_hdvmux.c`: re-encoded frames, frames repeated for lost pictures, frames whose
+  audio was replaced by silence; `pin_sink_status_t.frames_error` / `frames_repeated`).
+  The status adds the closed files' counts (`sinkf_error` / `sinkf_repeated`, topped up by
+  the closer from the sink's `final_status`) and the open sink's (asked in the snapshot).
+  `frames_dropped` there = the repeated frames. `test_hdv_repair` checks the sink's counts,
+  `test_replay_hdv_mov` the status.
 - The only shipped views of these counters are the status line / snapshot fields
   of `MarvinCaptureCLI` and the GUI; the old CIP/DBC continuity line of `pincli` is
   gone (`dbc_gaps` / `dbc_joins` still live in `dv_reassembler.h` and the replay

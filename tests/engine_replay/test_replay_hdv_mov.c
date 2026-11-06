@@ -107,6 +107,55 @@ static void probe(const char *path, int *frames, int *errors, double *v0, double
     avformat_close_input(&fc);
 }
 
+/* Plays tape `src` from its start on the replay device and captures it as HDV MOV, files `base`-NNNN.mov
+ * (no scene split asked for); *out: the status when the capture has ended. */
+static void capture(const char *src, const char *base, pin_status_snapshot_t *out)
+{
+    pin_session_t *s = pin_test_open_replay(src);
+    pin_test_prepare_dv(s);
+    pin_status_snapshot_t snap;
+    int is_hdv = 0;
+    for (int i = 0; i < 100 && !is_hdv; i++) {
+        pin_get_status(s, &snap);
+        is_hdv = snap.stream_kind == PIN_KIND_HDV;
+        if (!is_hdv)
+            pin_test_sleep_ms(50);
+    }
+    CHECK(is_hdv);
+    CHECK(pin_deck(s, PIN_DECK_CMD_REW) == PIN_OK);
+    int stopped = 0;
+    for (int i = 0; i < 300 && !stopped; i++) {
+        pin_test_sleep_ms(20);
+        pin_get_status(s, &snap);
+        stopped = snap.deck == PIN_DECK_STOPPED;
+    }
+    CHECK(stopped);
+
+    char path[64];
+    for (int i = 0; i <= 3; i++) {
+        if (i)
+            snprintf(path, sizeof(path), "%s-%04d.mov", base, i);
+        else
+            snprintf(path, sizeof(path), "%s.mov", base);
+        remove(path);
+    }
+    pin_capture_opts_t opts;
+    pin_capture_opts_defaults(&opts);
+    strncpy(opts.path, base, sizeof(opts.path) - 1);
+    opts.format_hdv = PIN_FMT_HDV_MOV;
+    opts.scene_split = 0;              /* the format splits all the same */
+    CHECK(pin_deck(s, PIN_DECK_CMD_PLAY) == PIN_OK);
+    CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
+    pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 3000, &snap);
+    CHECK(snap.state == PIN_STATE_CAPTURING);
+    pin_test_wait_state(s, PIN_STATE_READY, PIN_STATE_ERROR, 30000, &snap);
+    CHECK(snap.state == PIN_STATE_READY);
+    CHECK_EQ_I(snap.stop_reason, PIN_STOP_END_OF_TAPE);
+    *out = snap;
+    pin_close(s);
+
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);
@@ -140,46 +189,11 @@ int main(int argc, char **argv)
     free(b);
     free(tape);
 
-    pin_session_t *s = pin_test_open_replay(src);
-    pin_test_prepare_dv(s);
     pin_status_snapshot_t snap;
-    int is_hdv = 0;
-    for (int i = 0; i < 100 && !is_hdv; i++) {
-        pin_get_status(s, &snap);
-        is_hdv = snap.stream_kind == PIN_KIND_HDV;
-        if (!is_hdv)
-            pin_test_sleep_ms(50);
-    }
-    CHECK(is_hdv);
-    CHECK(pin_deck(s, PIN_DECK_CMD_REW) == PIN_OK);
-    int stopped = 0;
-    for (int i = 0; i < 300 && !stopped; i++) {
-        pin_test_sleep_ms(20);
-        pin_get_status(s, &snap);
-        stopped = snap.deck == PIN_DECK_STOPPED;
-    }
-    CHECK(stopped);
-
-    remove("hdv_mov-0001.mov");
-    remove("hdv_mov-0002.mov");
-    remove("hdv_mov-0003.mov");
-    remove("hdv_mov.mov");
-    pin_capture_opts_t opts;
-    pin_capture_opts_defaults(&opts);
-    strncpy(opts.path, "hdv_mov", sizeof(opts.path) - 1);
-    opts.format_hdv = PIN_FMT_HDV_MOV;
-    opts.scene_split = 0;              /* the format splits all the same */
-    CHECK(pin_deck(s, PIN_DECK_CMD_PLAY) == PIN_OK);
-    CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
-    pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 3000, &snap);
-    CHECK(snap.state == PIN_STATE_CAPTURING);
-    pin_test_wait_state(s, PIN_STATE_READY, PIN_STATE_ERROR, 30000, &snap);
-    CHECK(snap.state == PIN_STATE_READY);
-    CHECK_EQ_I(snap.stop_reason, PIN_STOP_END_OF_TAPE);
+    capture(src, "hdv_mov", &snap);
     printf("captured: %llu picture(s), %llu with errors\n", (unsigned long long)snap.frames,
            (unsigned long long)snap.frames_error);
-    CHECK(snap.frames_error == 0);
-    pin_close(s);
+    CHECK(snap.frames_error == 0 && snap.frames_dropped == 0);
 
     CHECK(pin_test_file_exists("hdv_mov-0001.mov"));
     CHECK(pin_test_file_exists("hdv_mov-0002.mov"));
@@ -199,5 +213,32 @@ int main(int argc, char **argv)
     CHECK(fr1 >= 60 && fr1 <= 75);
     CHECK(fr2 >= 35 && fr2 <= 38);
     printf("OK: HDV MOV split at the clock jump without --split, both files clean\n");
+
+    /* the same tape with a dropout in the first recording (40 packets lost): the status the
+     * GUIs and the CLI show counts the frames the file got re-encoded or with audio silenced */
+    {
+        size_t n;
+        uint8_t *t = read_ts(src, &n);
+        size_t at = na / 2, cut = 40;
+        memmove(t + at * TS, t + (at + cut) * TS, (n - at - cut) * TS);
+        const char *bad = "hdv_mov_bad_tape.ts";
+        FILE *fb = fopen(bad, "wb");
+        CHECK(fb && fwrite(t, TS, n - cut, fb) == n - cut);
+        fclose(fb);
+        free(t);
+        capture(bad, "hdv_bad", &snap);
+        printf("damaged tape: %llu picture(s), %llu with errors, %llu dropped\n",
+               (unsigned long long)snap.frames, (unsigned long long)snap.frames_error,
+               (unsigned long long)snap.frames_dropped);
+        /* one GOP (10 pictures) re-encoded, maybe a picture lost and repeated, a frame or two
+         * with audio silenced */
+        CHECK(snap.frames_error >= 10 && snap.frames_error <= 16);
+        CHECK(snap.frames_dropped <= 2);
+        int fb1, eb1;
+        double tb1, vdb1, adb1;
+        probe("hdv_bad-0001.mov", &fb1, &eb1, &tb1, &vdb1, &adb1);
+        CHECK(eb1 == 0);
+        printf("OK: the damaged GOP repaired, and counted as with error\n");
+    }
     return 0;
 }
