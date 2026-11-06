@@ -19,39 +19,45 @@
 /*
  * HDV (MPEG-2 transport stream) to MOV or MKV, written live, every GOP checked by decoding it,
  * damaged GOPs repaired (PIN_FMT_HDV_MOV, PIN_FMT_HDV_MKV). docs/hdv.md ("MOV and MKV") has the
- * whole story; in short:
+ * whole story; hdv_demux.h the three stages of the HDV pipeline, of which this file is the
+ * third, the MPEG-2 output:
  *
- * Writer thread (write_unit): demuxes the transport stream itself (PAT, PMT, PES per PID; a
- * continuity gap, a transport error bit or a lost sync byte marks the PES damaged), cuts the
- * video into pictures at their start codes (a sequence or GOP header goes with the picture
- * after it; two field pictures make one frame) and those into GOPs, and the audio into MP2
- * frames. GOPs go to the decode thread, audio frames to the muxer's queue.
+ * Writer thread (write_unit): stage 1, hdv_demux_t: the transport stream cut into GOPs of
+ * pictures (with the damage the packets show and the camera clock) and MP2 frames. GOPs go to
+ * the decode thread's queue (on_gop()), audio frames to the muxer's queue (on_audio()).
  *
- * Decode thread: decodes every picture with one MPEG-2 decoder (so open GOPs have their
- * references) and decides about a GOP once all its frames are back (a frame of a later GOP came
- * out: the decoder gives them in display order). A GOP is passed through bit for bit when it
- * begins with an I picture, its temporal_references are 0..n-1, no packet of it was lost or
- * flagged, the camera clock shows no pictures missing in front of it, and the decoder gave every
- * picture back without concealing anything. Otherwise its decoded pictures (concealment and all)
- * go into a repair, which an encode worker encodes again as closed MPEG-2 GOPs of the source's
- * size, rate, aspect, field order and bit rate; each picture lands on the frame its PES PTS
- * says, a frame no picture landed on repeats a neighbour. The open GOP after a repair gives its
- * leading B frames to the repair and is made closed; the first GOP of a file (and one after a
- * clock jump) loses its leading B pictures, so a file always starts on an I frame. The decode
- * thread also writes the file, in order, waiting for a repair's result before anything after it.
+ * Decode thread (dec_main()): stage 2, hdv_decoder_t: every picture decoded; a GOP comes back
+ * once all its frames are back. Then this file's part: gop_decide() passes a GOP through bit for
+ * bit when it begins with an I picture, its temporal_references are 0..n-1, no packet of it
+ * was lost or flagged, the camera clock shows no pictures missing in front of it, and the
+ * decoder gave every picture back without concealing anything (hdv_pic_ok()). Otherwise its
+ * decoded pictures (concealment and all) go into a repair (span_add(), span_close()), which an
+ * encode worker (run_job()) encodes again as closed MPEG-2 GOPs of the source's size, rate,
+ * aspect, field order and bit rate; each picture lands on the frame its PES PTS says, a frame
+ * no picture landed on repeats a neighbour. The open GOP after a repair gives its leading B
+ * frames to the repair and is made closed; the first GOP of a file (and one after a clock jump)
+ * loses its leading B pictures, so a file always starts on an I frame. The decode thread also
+ * writes the file (drain()), in order, waiting for a repair's result before anything after it.
  *
  * Timestamps are the file's own (frames and samples from 0); the camera clock only places
- * things: audio by its PTS through the GOP it belongs to, silence (made once with the MP2
- * encoder) where audio is missing or damaged, overlapping audio dropped.
+ * things: audio by its PTS through the GOP it belongs to (drain_audio()), silence (made once
+ * with the MP2 encoder) where audio is missing or damaged, overlapping audio dropped.
  *
  * Counts (pin_sink_status_t): frames_out, frames_error (re-encoded, or played with silenced
  * audio), frames_repeated; final_status gets them at close. Too much waiting in front of the
  * decoder, the encoders or the muxer: the sink fails (PIN_ERR_CODEC, reencode_behind) and the
  * capture ends.
+ *
+ * Shared with a future HDV to H.264 / HEVC sink, and to move out of here then (hdv_demux.h):
+ * the timeline (span_close()'s placement by PTS and repeats, the leading-B and clock-jump rules
+ * of gop_decide()), the audio placement (drain_audio()) and the error counts (mark_error()).
+ * What stays here: the passthrough / repair decision, the MPEG-2 encoder and the muxing.
  */
 
 #include "pin_sink.h"
 #include "sinks_internal.h"
+#include "hdv_demux.h"
+#include "hdv_decode.h"
 #include "../core/pin_log.h"
 
 #include <libavformat/avformat.h>
@@ -67,204 +73,14 @@
 #include <string.h>
 #include <math.h>
 
-#define TSP 188
 #define NOPTS AV_NOPTS_VALUE
-#define TS_REF_ONLY (-(1LL << 40))   /* decoder packet pts: a reference, its picture not output */
-#define MAX_GOP_PICS 120             /* a "GOP" this long lost its headers: cut it anyway */
 #define SPAN_MAX_SECONDS 2.0         /* a longer span is handed to a worker in parts */
 #define PEND_LIMIT (160ull << 20)    /* bytes waiting in front of the muxer: the repair is behind */
 #define GQ_LIMIT (64ull << 20)       /* bytes waiting for the decode thread: the check is behind */
 #define MAX_HELD_SECONDS 6.0         /* decoded frames waiting for an encoder: the repair is behind */
 #define MAX_WORKERS 3
 
-/* ------------------------------------------------------------- buffers -- */
-
-typedef struct {
-    uint8_t *d;
-    size_t n, cap;
-} buf_t;
-
-static int buf_add(buf_t *b, const uint8_t *src, size_t len)
-{
-    if (b->n + len > b->cap) {
-        size_t cap = b->cap ? b->cap : 4096;
-        while (cap < b->n + len)
-            cap *= 2;
-        uint8_t *d = realloc(b->d, cap);
-        if (!d)
-            return -1;
-        b->d = d;
-        b->cap = cap;
-    }
-    if (len)
-        memcpy(b->d + b->n, src, len);
-    b->n += len;
-    return 0;
-}
-
-static void buf_free(buf_t *b)
-{
-    free(b->d);
-    memset(b, 0, sizeof(*b));
-}
-
-/* ------------------------------------------------------------ pictures -- */
-
-typedef struct {
-    uint8_t *data;
-    size_t len;
-    int type;          /* 1 I, 2 P, 3 B, 0 unknown */
-    int tr;            /* temporal_reference */
-    int damaged;
-    int pic_off;       /* offset of the (first) picture start code in data */
-    int gop_off;       /* offset of a GOP header in data, -1 none */
-    int seq;           /* a sequence header is in front of it */
-    int closed_gop, broken_link;
-    int64_t pts;       /* camera clock, 90 kHz, unwrapped; NOPTS */
-} pic_t;
-
-typedef struct {
-    pic_t *p;
-    int n, cap;
-} pics_t;
-
-static int pics_push(pics_t *l, const pic_t *pic)
-{
-    if (l->n == l->cap) {
-        int cap = l->cap ? l->cap * 2 : 32;
-        pic_t *p = realloc(l->p, (size_t)cap * sizeof(*p));
-        if (!p)
-            return -1;
-        l->p = p;
-        l->cap = cap;
-    }
-    l->p[l->n++] = *pic;
-    return 0;
-}
-
-static int pic_copy(pic_t *dst, const pic_t *src)
-{
-    *dst = *src;
-    dst->data = malloc(src->len ? src->len : 1);
-    if (!dst->data)
-        return -1;
-    memcpy(dst->data, src->data, src->len);
-    return 0;
-}
-
-static void pics_free(pics_t *l)
-{
-    for (int i = 0; i < l->n; i++)
-        free(l->p[i].data);
-    free(l->p);
-    memset(l, 0, sizeof(*l));
-}
-
-static size_t pics_bytes(const pics_t *l)
-{
-    size_t b = 0;
-    for (int i = 0; i < l->n; i++)
-        b += l->p[i].len;
-    return b;
-}
-
-/* ------------------------------------------------------- stream values -- */
-
-/* The sequence header (and its extension) the file is made of. */
-typedef struct {
-    int valid;
-    int width, height;
-    int aspect_code, frame_rate_code;
-    int fps_num, fps_den;
-    int64_t bit_rate;          /* bit/s, 0 = variable */
-    int vbv_bits;
-    int profile_level;         /* profile_and_level_indication, 0 unknown */
-    int progressive_seq;
-    int chroma;                /* 1 = 4:2:0 */
-    /* from the first picture coding extension */
-    int intra_dc, q_scale_type, intra_vlc, alt_scan, tff;
-    uint8_t hdr[256];          /* sequence header + extensions, for Matroska */
-    int hdr_len;
-} seqinfo_t;
-
-static const int k_fr[9][2] = { { 0, 1 }, { 24000, 1001 }, { 24, 1 }, { 25, 1 }, { 30000, 1001 },
-                                { 30, 1 }, { 50, 1 }, { 60000, 1001 }, { 60, 1 } };
-
-/* Parses the sequence header at d (its start code) and the extensions after it, up to end. */
-static void parse_seq(const uint8_t *d, size_t end, seqinfo_t *si)
-{
-    if (end < 12)
-        return;
-    seqinfo_t s = *si;
-    s.width = (d[4] << 4) | (d[5] >> 4);
-    s.height = ((d[5] & 0x0F) << 8) | d[6];
-    s.aspect_code = d[7] >> 4;
-    s.frame_rate_code = d[7] & 0x0F;
-    int64_t br = ((int64_t)d[8] << 10) | (d[9] << 2) | (d[10] >> 6);
-    int vbv = ((d[10] & 0x1F) << 5) | (d[11] >> 3);
-    s.progressive_seq = 0;
-    s.chroma = 1;
-    int fr_n = 0, fr_d = 0;
-    size_t stop = end;
-    for (size_t i = 12; i + 4 <= end; i++) {
-        if (d[i] || d[i + 1] || d[i + 2] != 1)
-            continue;
-        if (d[i + 3] != 0xB5) {
-            stop = i;         /* the sequence header and its extensions only */
-            break;
-        }
-        const uint8_t *e = d + i;
-        if (i + 10 <= end && (e[4] >> 4) == 1) {
-            s.profile_level = ((e[4] & 0x0F) << 4) | (e[5] >> 4);
-            s.progressive_seq = (e[5] >> 3) & 1;
-            s.chroma = (e[5] >> 1) & 3;
-            s.width |= (((e[5] & 1) << 1) | (e[6] >> 7)) << 12;
-            s.height |= ((e[6] >> 5) & 3) << 12;
-            br |= (int64_t)(((e[6] & 0x1F) << 7) | (e[7] >> 1)) << 18;
-            vbv |= e[8] << 10;
-            fr_n = (e[9] >> 5) & 3;
-            fr_d = e[9] & 0x1F;
-        }
-    }
-    if (s.frame_rate_code < 1 || s.frame_rate_code > 8 || s.width <= 0 || s.height <= 0)
-        return;
-    s.fps_num = k_fr[s.frame_rate_code][0] * (fr_n + 1);
-    s.fps_den = k_fr[s.frame_rate_code][1] * (fr_d + 1);
-    s.bit_rate = br == 0x3FFFF ? 0 : br * 400;
-    s.vbv_bits = vbv * 16 * 1024;
-    size_t hl = stop < sizeof(s.hdr) ? stop : sizeof(s.hdr);
-    memcpy(s.hdr, d, hl);
-    s.hdr_len = (int)hl;
-    s.valid = 1;
-    *si = s;
-}
-
-/* The picture coding extension after the picture header at d (len bytes from it). Returns
- * picture_structure (3 frame), or 3 if there is none; the other fields only if found. */
-static int parse_picext(const uint8_t *d, size_t len, int *dc, int *qst, int *ivlc, int *alt,
-                        int *tff)
-{
-    for (size_t i = 4; i + 9 <= len; i++) {
-        if (d[i] || d[i + 1] || d[i + 2] != 1)
-            continue;
-        if (d[i + 3] != 0xB5)
-            return 3;
-        const uint8_t *e = d + i;
-        if ((e[4] >> 4) != 8)
-            continue;
-        if (dc) {
-            *dc = (e[6] >> 2) & 3;
-            *tff = e[7] >> 7;
-            *qst = (e[7] >> 4) & 1;
-            *ivlc = (e[7] >> 3) & 1;
-            *alt = (e[7] >> 2) & 1;
-        }
-        return e[6] & 3 ? e[6] & 3 : 3;
-    }
-    return 3;
-}
-
-/* ------------------------------------------------------------- audio --- */
+/* --------------------------------------------------------- the output -- */
 
 typedef struct {
     uint8_t *data;
@@ -272,36 +88,6 @@ typedef struct {
     int64_t cam;          /* camera time of the frame, 90 kHz */
 } aframe_t;
 
-static const int k_mp2_br[15] = { 0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384 };
-static const int k_mp2_sr[3] = { 44100, 48000, 32000 };
-
-/* An MPEG-1 Layer II frame header at d: its size, sample rate, channels, bit rate. 0 if not one. */
-static int mp2_header(const uint8_t *d, int *sr, int *ch, int *kbps)
-{
-    if (d[0] != 0xFF || (d[1] & 0xFE) != 0xFC)    /* sync, MPEG-1, Layer II */
-        return 0;
-    int bri = d[2] >> 4, sri = (d[2] >> 2) & 3, pad = (d[2] >> 1) & 1;
-    if (bri == 0 || bri == 15 || sri == 3)
-        return 0;
-    *sr = k_mp2_sr[sri];
-    *kbps = k_mp2_br[bri];
-    *ch = (d[3] >> 6) == 3 ? 1 : 2;
-    return 144000 * *kbps / *sr + pad;
-}
-
-/* --------------------------------------------------------- the output -- */
-
-/* A GOP on its way from the writer thread to the decode thread, and while it is decoded. */
-typedef struct gop {
-    pics_t pics;
-    seqinfo_t seq;        /* the stream's values when it was cut (the decode thread's copy) */
-    int64_t first_id;     /* the decoder's id of pics.p[0]; picture i is first_id + i */
-    AVFrame **frames;     /* what the decoder gave back, per picture (NULL: nothing) */
-    int dec_error;        /* the decoder concealed something, or refused a picture */
-    int eof;              /* no picture: the end of the file */
-    size_t bytes;
-    struct gop *next;
-} gop_t;
 
 /* A decoded frame for a repair, and the camera time of its picture. */
 typedef struct {
@@ -318,7 +104,7 @@ typedef struct {
     AVFrame **slots;      /* the frames to encode, one per output frame */
     int target;           /* frames to produce */
     int repeated;         /* of them, repeats of a neighbour (pictures lost) */
-    seqinfo_t seq;        /* the stream's values (the workers' own) */
+    hdv_seq_t seq;        /* the stream's values (the workers' own) */
     int gop_len;
     AVPacket **out;       /* the result, in decode order */
     int nout;
@@ -331,7 +117,7 @@ typedef struct item {
     int64_t out_start;    /* first frame */
     int frames;
     int64_t cam0;         /* camera time of out_start, NOPTS unknown */
-    pics_t pics;          /* ITEM_PASS: the GOP */
+    hdv_pics_t pics;          /* ITEM_PASS: the GOP */
     job_t job;            /* ITEM_SPAN */
     size_t bytes;
     struct item *next;
@@ -342,30 +128,14 @@ typedef struct {
     pin_sink_params_t params;
     char path[1200];
 
-    /* ---- the writer thread (write_unit): demux, pictures, GOPs */
-    int pmt_pid, vpid, apid;
-    int cc[8192];         /* last continuity counter per PID (-1 none); only vpid/apid used */
-    buf_t vpes, apes;
-    int vpes_on, apes_on;
-    int vpes_loss;
-    long apes_loss_at;    /* payload bytes before the first loss, -1 none */
-    int64_t last_ts;      /* the clock unwrap */
-    buf_t es;
-    size_t es_scan;       /* scanned up to here */
-    int au_dmg, au_has_pic, au_fields, au_pic_off;
-    int64_t au_pts;
-    seqinfo_t seq;        /* the first good sequence header */
-    int picext_seen;
-    pics_t gop;           /* the GOP being cut */
-    int64_t next_id;      /* decoder ids handed out */
-    buf_t acarry;         /* an audio frame cut by the end of a PES */
-    int64_t a_next_cam;   /* camera time of the next audio frame, NOPTS */
+    /* ---- the writer thread (write_unit) */
+    hdv_demux_t *dmx;          /* stage 1: transport stream -> GOPs, audio frames (hdv_demux.h) */
 
     /* ---- shared, under lock */
     pthread_mutex_t lock;
     pthread_cond_t dec_wake;   /* a GOP for the decode thread, a repair done, or the end */
     pthread_cond_t enc_wake;   /* a repair for the workers, or the end */
-    gop_t *gq_head, *gq_tail;  /* GOPs waiting for the decode thread */
+    hdv_gop_t *gq_head, *gq_tail;  /* GOPs waiting for the decode thread */
     size_t gq_bytes;
     item_t *jq[64];            /* repairs waiting for a worker */
     int jq_n;
@@ -378,9 +148,7 @@ typedef struct {
     pin_sink_status_t st;
 
     /* ---- the decode thread: decode, decide, mux */
-    AVCodecContext *dec;
-    gop_t *inflight;           /* fed to the decoder, not decided yet (in order) */
-    int64_t max_out_id;        /* the latest picture the decoder gave back */
+    hdv_decoder_t *dec;        /* stage 2: every picture decoded (hdv_decode.h) */
     int gops_seen;
     int64_t last_cam_end;      /* camera time after the last frame given out */
     int prev_pass_ok;          /* the last item is a whole GOP on the same clock */
@@ -452,7 +220,7 @@ static void behind(hdvmux_t *m, const char *what)
 
 /* ------------------------------------------------------------- workers -- */
 
-static AVFrame *black_frame(const seqinfo_t *si)
+static AVFrame *black_frame(const hdv_seq_t *si)
 {
     AVFrame *f = av_frame_alloc();
     if (!f)
@@ -475,7 +243,7 @@ static AVFrame *black_frame(const seqinfo_t *si)
 
 static AVCodecContext *open_encoder(const hdvmux_t *m, const job_t *j)
 {
-    const seqinfo_t *si = &j->seq;
+    const hdv_seq_t *si = &j->seq;
     const AVCodec *c = avcodec_find_encoder(AV_CODEC_ID_MPEG2VIDEO);
     if (!c)
         return NULL;
@@ -615,7 +383,7 @@ static void *worker_main(void *arg)
 
 /* -------------------------------------------------------------- muxing -- */
 
-static uint32_t hdv_tag(const seqinfo_t *si)
+static uint32_t hdv_tag(const hdv_seq_t *si)
 {
     int rate = (int)lrint((double)si->fps_num / si->fps_den);
     if (si->width == 1440 && si->height == 1080) {
@@ -679,7 +447,7 @@ out:
     return ok;
 }
 
-static int write_header(hdvmux_t *m, const seqinfo_t *si)
+static int write_header(hdvmux_t *m, const hdv_seq_t *si)
 {
     AVStream *v = avformat_new_stream(m->fmt, NULL);
     if (!v)
@@ -808,7 +576,7 @@ static void put_audio_frame(hdvmux_t *m, const uint8_t *d, int len, int sr)
 /* n frames of silence where audio is missing. The video frames they play with are "with error",
  * but at the very start and end of a file only beyond 2 audio frames (where the camera's audio
  * just begins or ends a little after or before its video). */
-static void put_silence(hdvmux_t *m, int n, int sr, int edge, const seqinfo_t *si)
+static void put_silence(hdvmux_t *m, int n, int sr, int edge, const hdv_seq_t *si)
 {
     if (n <= 0 || !m->silence)
         return;
@@ -836,7 +604,7 @@ static void put_silence(hdvmux_t *m, int n, int sr, int edge, const seqinfo_t *s
 
 /* Writes the queued audio frames up to camera time cam_end (all of them if final), each where it
  * falls on the video, silence where audio is missing. */
-static void drain_audio(hdvmux_t *m, int64_t cam_end, int final, const seqinfo_t *si)
+static void drain_audio(hdvmux_t *m, int64_t cam_end, int final, const hdv_seq_t *si)
 {
     pthread_mutex_lock(&m->lock);
     int sr = m->a_sr;
@@ -890,7 +658,7 @@ static void drain_audio(hdvmux_t *m, int64_t cam_end, int final, const seqinfo_t
 
 static void free_item(item_t *it)
 {
-    pics_free(&it->pics);
+    hdv_pics_free(&it->pics);
     for (int i = 0; i < it->job.nin; i++)
         av_frame_free(&it->job.in[i].f);
     free(it->job.in);
@@ -905,7 +673,7 @@ static void free_item(item_t *it)
 }
 
 /* Writes the items at the head of the queue that are ready (final: waits for the repairs). */
-static void drain(hdvmux_t *m, int final, const seqinfo_t *si)
+static void drain(hdvmux_t *m, int final, const hdv_seq_t *si)
 {
     while (m->head && get_error(m) == PIN_OK) {
         item_t *it = m->head;
@@ -941,7 +709,7 @@ static void drain(hdvmux_t *m, int final, const seqinfo_t *si)
         if (it->kind == ITEM_PASS) {
             AVPacket *pkt = av_packet_alloc();
             for (int i = 0; i < it->pics.n && pkt; i++) {
-                pic_t *p = &it->pics.p[i];
+                hdv_pic_t *p = &it->pics.p[i];
                 if (av_new_packet(pkt, (int)p->len) < 0)
                     break;
                 memcpy(pkt->data, p->data, p->len);
@@ -1026,7 +794,7 @@ static int sframe_push(job_t *j, AVFrame *f, int64_t pts, int64_t slot)
 /* Ends the repair being collected and hands it to a worker. next_cam: the camera time at which the
  * next whole GOP's first frame is shown (NOPTS: none, or unknown). The leading B frames of that GOP,
  * if the span takes them, are in the span already with their slot relative to `target`. */
-static void span_close(hdvmux_t *m, int64_t next_cam, const seqinfo_t *si)
+static void span_close(hdvmux_t *m, int64_t next_cam, const hdv_seq_t *si)
 {
     item_t *it = m->span;
     if (!it)
@@ -1175,10 +943,10 @@ static item_t *span_new(hdvmux_t *m)
 
 /* Moves the decoded frames of g into the open span. drop_lead: its leading B pictures have no
  * reference here (the first GOP of a file): left out. */
-static void span_add(hdvmux_t *m, gop_t *g, int drop_lead)
+static void span_add(hdvmux_t *m, hdv_gop_t *g, int drop_lead)
 {
     job_t *j = &m->span->job;
-    pics_t *p = &g->pics;
+    hdv_pics_t *p = &g->pics;
     int lead = drop_lead && p->n && p->p[0].type == 1 ? p->p[0].tr : 0;
     int64_t end = NOPTS;
     int added = 0;
@@ -1211,11 +979,11 @@ static void span_add(hdvmux_t *m, gop_t *g, int drop_lead)
 /* --------------------------------------------------------------- GOPs --- */
 
 /* Drops the leading B pictures of a GOP (first `lead` in display order) and makes it closed. */
-static void gop_drop_lead(pics_t *g, int lead)
+static void gop_drop_lead(hdv_pics_t *g, int lead)
 {
     int w = 0;
     for (int i = 0; i < g->n; i++) {
-        pic_t *p = &g->p[i];
+        hdv_pic_t *p = &g->p[i];
         if (p->type == 3 && p->tr < lead && i > 0) {
             free(p->data);
             continue;
@@ -1231,23 +999,11 @@ static void gop_drop_lead(pics_t *g, int lead)
     g->n = w;
 }
 
-static void gop_free(gop_t *g)
-{
-    if (!g)
-        return;
-    pics_free(&g->pics);
-    if (g->frames)
-        for (int i = 0; i < g->pics.cap; i++)
-            av_frame_free(&g->frames[i]);
-    free(g->frames);
-    free(g);
-}
-
 /* A GOP whose frames are all back from the decoder: passed through, or repaired. */
-static void gop_decide(hdvmux_t *m, gop_t *g)
+static void gop_decide(hdvmux_t *m, hdv_gop_t *g)
 {
-    pics_t *gp = &g->pics;
-    const seqinfo_t *si = &g->seq;
+    hdv_pics_t *gp = &g->pics;
+    const hdv_seq_t *si = &g->seq;
     m->dur = 90000.0 * si->fps_den / si->fps_num;
     double fps = (double)si->fps_num / si->fps_den;
     int first_of_file = m->gops_seen++ == 0;
@@ -1255,10 +1011,10 @@ static void gop_decide(hdvmux_t *m, gop_t *g)
     /* whole? an I picture first, temporal_references 0..n-1, decodable in this order, no
      * packet lost */
     int valid = si->valid && gp->p[0].type == 1;
-    unsigned char seen[MAX_GOP_PICS + 1];
+    unsigned char seen[HDV_MAX_GOP_PICS + 1];
     memset(seen, 0, sizeof(seen));
     for (int i = 0; i < gp->n && valid; i++) {
-        const pic_t *p = &gp->p[i];
+        const hdv_pic_t *p = &gp->p[i];
         if (p->damaged || p->type < 1 || p->type > 3 || p->tr >= gp->n || seen[p->tr] ||
             p->tr < i - 1 || (i > 0 && p->type == 1))
             valid = 0;
@@ -1289,15 +1045,14 @@ static void gop_decide(hdvmux_t *m, gop_t *g)
     int dec_bad = g->dec_error;
     for (int i = 0; i < gp->n && !dec_bad; i++) {
         int skip = no_ref && i > 0 && gp->p[i].type == 3 && gp->p[0].type == 1 && gp->p[i].tr < gp->p[0].tr;
-        const AVFrame *f = g->frames[i];
-        if (!skip && (!f || f->decode_error_flags || (f->flags & AV_FRAME_FLAG_CORRUPT)))
+        if (!skip && !hdv_pic_ok(g, i))
             dec_bad = 1;
     }
 
     {
         /* the --debug log: each GOP, its pictures in decode order (type, temporal_reference,
          * ! damaged, ? no PTS, - not decoded) */
-        char t[MAX_GOP_PICS * 7 + 1];
+        char t[HDV_MAX_GOP_PICS * 7 + 1];
         size_t tl = 0;
         for (int i = 0; i < gp->n && tl + 8 < sizeof(t); i++)
             tl += (size_t)snprintf(t + tl, sizeof(t) - tl, " %c%d%s%s%s", " IPB????"[gp->p[i].type & 7],
@@ -1368,7 +1123,7 @@ static void gop_decide(hdvmux_t *m, gop_t *g)
     it->frames = it->pics.n;
     it->out_start = m->frame_pos;
     it->cam0 = cam != NOPTS ? cam + (int64_t)llround(drop * m->dur) : NOPTS;
-    it->bytes = pics_bytes(&it->pics);
+    it->bytes = hdv_pics_bytes(&it->pics);
     m->frame_pos += it->frames;
     m->last_cam_end = it->cam0 != NOPTS ? it->cam0 + (int64_t)llround(it->frames * m->dur) : NOPTS;
     m->prev_pass_ok = 1;
@@ -1377,89 +1132,15 @@ static void gop_decide(hdvmux_t *m, gop_t *g)
 
 /* ------------------------------------------------------- decode thread -- */
 
-static void route_frame(hdvmux_t *m, AVFrame *f)
+/* Decides the GOPs the decoder has given back all frames of, and writes what is ready. */
+static void decide_ready(hdvmux_t *m)
 {
-    int64_t id = f->pts;
-    for (gop_t *g = m->inflight; g; g = g->next) {
-        if (id >= g->first_id && id < g->first_id + g->pics.n) {
-            int i = (int)(id - g->first_id);
-            if (!g->frames[i]) {
-                g->frames[i] = f;
-                f = NULL;
-            }
-            break;
-        }
-    }
-    if (id > m->max_out_id)
-        m->max_out_id = id;
-    av_frame_free(&f);
-}
-
-static void receive_frames(hdvmux_t *m)
-{
-    for (;;) {
-        AVFrame *f = av_frame_alloc();
-        if (!f || avcodec_receive_frame(m->dec, f) < 0) {
-            av_frame_free(&f);
-            return;
-        }
-        route_frame(m, f);
-    }
-}
-
-/* Decides the GOPs whose frames are all back: a frame of a later GOP came out (the decoder gives
- * frames in display order), or the decoder was flushed (all). */
-static void decide_ready(hdvmux_t *m, int all)
-{
-    while (m->inflight) {
-        gop_t *g = m->inflight;
-        if (!all && m->max_out_id < g->first_id + g->pics.n)
-            return;
-        m->inflight = g->next;
+    hdv_gop_t *g;
+    while ((g = hdv_decoder_ready(m->dec)) != NULL) {
         gop_decide(m, g);
         drain(m, 0, &g->seq);
-        gop_free(g);
+        hdv_gop_free(g);
     }
-}
-
-static void feed_gop(hdvmux_t *m, gop_t *g)
-{
-    g->next = NULL;
-    gop_t **tail = &m->inflight;
-    while (*tail)
-        tail = &(*tail)->next;
-    *tail = g;
-    AVPacket *pkt = av_packet_alloc();
-    for (int i = 0; i < g->pics.n && pkt; i++) {
-        const pic_t *p = &g->pics.p[i];
-        if (av_new_packet(pkt, (int)p->len) < 0)
-            break;
-        memcpy(pkt->data, p->data, p->len);
-        pkt->pts = g->first_id + i;
-        int rc = avcodec_send_packet(m->dec, pkt);
-        av_packet_unref(pkt);
-        if (rc < 0 && rc != AVERROR(EAGAIN))
-            g->dec_error = 1;      /* refused: it will not come back either */
-        receive_frames(m);
-    }
-    av_packet_free(&pkt);
-    decide_ready(m, 0);
-}
-
-static int open_decoder(hdvmux_t *m)
-{
-    const AVCodec *dc = avcodec_find_decoder(AV_CODEC_ID_MPEG2VIDEO);
-    m->dec = dc ? avcodec_alloc_context3(dc) : NULL;
-    if (!m->dec)
-        return -1;
-    m->dec->flags |= AV_CODEC_FLAG_OUTPUT_CORRUPT;
-    m->dec->thread_count = 2;
-    m->dec->thread_type = FF_THREAD_SLICE;   /* frames come back in order, without delay */
-    if (avcodec_open2(m->dec, dc, NULL) < 0) {
-        avcodec_free_context(&m->dec);
-        return -1;
-    }
-    return 0;
 }
 
 /* The decode thread: decodes every GOP (the check), decides, hands repairs to the workers and
@@ -1467,7 +1148,7 @@ static int open_decoder(hdvmux_t *m)
 static void *dec_main(void *arg)
 {
     hdvmux_t *m = arg;
-    seqinfo_t last_seq;
+    hdv_seq_t last_seq;
     memset(&last_seq, 0, sizeof(last_seq));
     int ended = 0;
     item_t *blocked = NULL;
@@ -1480,7 +1161,7 @@ static void *dec_main(void *arg)
                 break;
             pthread_cond_wait(&m->dec_wake, &m->lock);
         }
-        gop_t *g = m->gq_head;
+        hdv_gop_t *g = m->gq_head;
         if (g) {
             m->gq_head = g->next;
             if (!m->gq_head)
@@ -1490,7 +1171,7 @@ static void *dec_main(void *arg)
         int stop = m->abort_ || m->st.last_error != PIN_OK;
         pthread_mutex_unlock(&m->lock);
         if (stop) {
-            gop_free(g);
+            hdv_gop_free(g);
             break;
         }
         if (!g) {
@@ -1503,10 +1184,9 @@ static void *dec_main(void *arg)
         if (g->eof) {
             /* the end: the decoder's last frames, the last GOP, the last repair, everything out */
             if (m->dec) {
-                avcodec_send_packet(m->dec, NULL);
-                receive_frames(m);
+                hdv_decoder_flush(m->dec);
+                decide_ready(m);
             }
-            decide_ready(m, 1);
             if (last_seq.valid) {
                 span_close(m, NOPTS, &last_seq);
                 pthread_mutex_lock(&m->lock);
@@ -1517,17 +1197,19 @@ static void *dec_main(void *arg)
                 if (get_error(m) == PIN_OK)
                     drain_audio(m, NOPTS, 1, &last_seq);
             }
-            gop_free(g);
+            hdv_gop_free(g);
             ended = 1;
             break;
         }
         last_seq = g->seq;
-        if (!m->dec && open_decoder(m) < 0) {
+        if (!m->dec && !(m->dec = hdv_decoder_create(2))) {
+            pin_logf(PIN_LOG_ERROR, "sink_hdvmux: the MPEG-2 decoder does not open\n");
             set_error(m, PIN_ERR_CODEC);
-            gop_free(g);
+            hdv_gop_free(g);
             break;
         }
-        feed_gop(m, g);
+        hdv_decoder_feed(m->dec, g);
+        decide_ready(m);
         drain(m, 0, &last_seq);
     }
     pthread_mutex_lock(&m->lock);
@@ -1537,32 +1219,11 @@ static void *dec_main(void *arg)
     return NULL;
 }
 
-/* ------------------------------------------------ writer thread: GOPs out -- */
+/* ------------------------------------- writer thread: what stage 1 gives -- */
 
-/* Hands the GOP that was cut to the decode thread. */
-static void push_gop(hdvmux_t *m, int eof)
+/* A GOP (or the end marker) for the decode thread. */
+static void queue_gop(hdvmux_t *m, hdv_gop_t *g)
 {
-    gop_t *g = calloc(1, sizeof(*g));
-    if (!g) {
-        pics_free(&m->gop);
-        set_error(m, PIN_ERR_NOMEM);
-        return;
-    }
-    g->eof = eof;
-    if (!eof) {
-        g->pics = m->gop;
-        memset(&m->gop, 0, sizeof(m->gop));
-        g->seq = m->seq;
-        g->first_id = m->next_id;
-        m->next_id += g->pics.n;
-        g->frames = calloc((size_t)g->pics.cap + 1, sizeof(*g->frames));
-        g->bytes = pics_bytes(&g->pics);
-        if (!g->frames) {
-            gop_free(g);
-            set_error(m, PIN_ERR_NOMEM);
-            return;
-        }
-    }
     pthread_mutex_lock(&m->lock);
     if (m->gq_tail)
         m->gq_tail->next = g;
@@ -1577,209 +1238,17 @@ static void push_gop(hdvmux_t *m, int eof)
         behind(m, "checking the HDV pictures (decoding)");
 }
 
-static void on_picture(hdvmux_t *m, pic_t *p)
+static void on_gop(void *user, hdv_gop_t *g)
 {
-    if (m->gop.n > 0 && (p->gop_off >= 0 || p->seq || p->type == 1 || m->gop.n >= MAX_GOP_PICS))
-        push_gop(m, 0);
-    if (!m->seq.valid) {
-        free(p->data);    /* nothing can be written before the first sequence header */
-        return;
-    }
-    if (pics_push(&m->gop, p) < 0)
-        free(p->data);
-}
-
-/* --------------------------------------------- elementary stream -> AUs -- */
-
-static void au_emit(hdvmux_t *m, size_t len)
-{
-    const uint8_t *d = m->es.d;
-    pic_t p;
-    memset(&p, 0, sizeof(p));
-    p.gop_off = -1;
-    p.damaged = m->au_dmg;
-    p.pts = m->au_pts;
-    p.pic_off = m->au_has_pic ? m->au_pic_off : -1;
-    if (p.pic_off < 0 || (size_t)p.pic_off + 6 > len) {
-        p.damaged = 1;
-        p.type = 0;
-    } else {
-        p.tr = (d[p.pic_off + 4] << 2) | (d[p.pic_off + 5] >> 6);
-        p.type = (d[p.pic_off + 5] >> 3) & 7;
-    }
-    size_t hdr_end = p.pic_off >= 0 ? (size_t)p.pic_off : len;
-    for (size_t i = 0; i + 8 <= hdr_end; i++) {
-        if (d[i] || d[i + 1] || d[i + 2] != 1)
-            continue;
-        if (d[i + 3] == 0xB3) {
-            p.seq = 1;
-            if (!m->seq.valid && !p.damaged) {
-                parse_seq(d + i, hdr_end - i, &m->seq);
-            }
-        } else if (d[i + 3] == 0xB8 && p.gop_off < 0) {
-            p.gop_off = (int)i;
-            p.closed_gop = (d[i + 7] >> 6) & 1;
-            p.broken_link = (d[i + 7] >> 5) & 1;
-        }
-    }
-    if (m->seq.valid && !m->picext_seen && !p.damaged && p.pic_off >= 0) {
-        int dc = 0, qst = 0, ivlc = 0, alt = 0, tff = 1;
-        parse_picext(d + p.pic_off, len - p.pic_off, &dc, &qst, &ivlc, &alt, &tff);
-        m->seq.intra_dc = dc;
-        m->seq.q_scale_type = qst;
-        m->seq.intra_vlc = ivlc;
-        m->seq.alt_scan = alt;
-        m->seq.tff = m->params.interlaced ? m->params.top_field_first : tff;
-        m->picext_seen = 1;
-    }
-    p.data = malloc(len ? len : 1);
-    if (!p.data) {
-        set_error(m, PIN_ERR_NOMEM);
-        return;
-    }
-    memcpy(p.data, d, len);
-    p.len = len;
-    on_picture(m, &p);
-}
-
-/* Appends a PES payload of the video PID and cuts pictures off the front. */
-static void es_feed(hdvmux_t *m, const uint8_t *data, size_t len, int loss, int64_t pts)
-{
-    size_t old = m->es.n;         /* this payload starts here */
-    if (buf_add(&m->es, data, len) < 0) {
-        set_error(m, PIN_ERR_NOMEM);
-        return;
-    }
-    int in_cur = 1;               /* the AU being assembled gets bytes of this payload */
-    int ts_pending = pts != NOPTS;
-    size_t from = m->es_scan;
-    size_t cut = 0;               /* the current AU starts here in es */
-    uint8_t *d = m->es.d;
-    for (size_t i = from; i + 3 < m->es.n; i++) {
-        if (d[i] || d[i + 1] || d[i + 2] != 1)
-            continue;
-        uint8_t code = d[i + 3];
-        int boundary = 0;
-        if (code == 0xB3 || code == 0xB8) {
-            boundary = m->au_has_pic;
-        } else if (code == 0x00) {
-            if (m->au_has_pic) {
-                /* the second field of a field-picture frame stays with the first */
-                int st = parse_picext(d + cut + m->au_pic_off, i - cut - m->au_pic_off, NULL, NULL,
-                                      NULL, NULL, NULL);
-                if (st != 3 && m->au_fields == 1)
-                    m->au_fields = 2;
-                else
-                    boundary = 1;
-            }
-        }
-        if (boundary) {
-            size_t au_len = i - cut;
-            if (in_cur && i > old)
-                m->au_dmg |= loss;    /* it ends inside this payload */
-            in_cur = 0;
-            /* emit d[cut..i): move it to the front temporarily */
-            if (cut) {
-                memmove(d, d + cut, m->es.n - cut);
-                m->es.n -= cut;
-                i -= cut;
-                old = old > cut ? old - cut : 0;
-                cut = 0;
-            }
-            au_emit(m, au_len);
-            d = m->es.d;
-            cut = au_len;
-            m->au_has_pic = 0;
-            m->au_fields = 0;
-            m->au_pts = NOPTS;
-            m->au_dmg = loss;   /* it ends in this payload */
-        }
-        if (code == 0x00 && !m->au_has_pic) {
-            m->au_has_pic = 1;
-            m->au_fields = 1;
-            m->au_pic_off = (int)(i - cut);
-            if (ts_pending) {     /* the PES's PTS is the first picture's starting in it */
-                m->au_pts = pts;
-                ts_pending = 0;
-            }
-        }
-        i += 3;
-    }
-    if (in_cur)
-        m->au_dmg |= loss;
-    if (cut) {
-        memmove(m->es.d, m->es.d + cut, m->es.n - cut);
-        m->es.n -= cut;
-    }
-    m->es_scan = m->es.n > 3 ? m->es.n - 3 : 0;
-}
-
-static void es_flush(hdvmux_t *m)
-{
-    if (m->es.n && m->au_has_pic)
-        au_emit(m, m->es.n);
-    m->es.n = 0;
-    m->es_scan = 0;
-    m->au_has_pic = 0;
-    m->au_dmg = 0;
-    m->au_pts = NOPTS;
-}
-
-/* ----------------------------------------------------------------- PES -- */
-
-static int64_t unwrap(hdvmux_t *m, int64_t v)
-{
-    if (m->last_ts == NOPTS) {
-        m->last_ts = v;
-        return v;
-    }
-    int64_t d = (v - m->last_ts) & ((1LL << 33) - 1);
-    if (d >= (1LL << 32))
-        d -= 1LL << 33;
-    m->last_ts += d;
-    return m->last_ts;
-}
-
-/* The PES header at d: its payload offset, and its PTS (NOPTS none). -1 if it is not one. */
-static int pes_header(const uint8_t *d, size_t n, int64_t *pts)
-{
-    *pts = NOPTS;
-    if (n < 9 || d[0] || d[1] || d[2] != 1)
-        return -1;
-    int hl = d[8];
-    if ((size_t)9 + hl > n)
-        return -1;
-    if ((d[7] & 0x80) && hl >= 5) {
-        const uint8_t *t = d + 9;
-        *pts = ((int64_t)(t[0] & 0x0E) << 29) | (t[1] << 22) | ((t[2] & 0xFE) << 14) | (t[3] << 7) |
-               (t[4] >> 1);
-    }
-    return 9 + hl;
-}
-
-static void video_pes_done(hdvmux_t *m)
-{
-    if (!m->vpes_on)
-        return;
-    m->vpes_on = 0;
-    int64_t pts;
-    int off = pes_header(m->vpes.d, m->vpes.n, &pts);
-    if (off < 0) {
-        /* no usable header: the picture it held is lost; what is assembled so far is damaged */
-        m->au_dmg = 1;
-        m->vpes.n = 0;
-        return;
-    }
-    if (pts != NOPTS)
-        pts = unwrap(m, pts);
-    es_feed(m, m->vpes.d + off, m->vpes.n - (size_t)off, m->vpes_loss, pts);
-    m->vpes.n = 0;
+    g->next = NULL;
+    queue_gop(user, g);
 }
 
 /* An audio frame for the muxer (the decode thread). The first one sets the stream's parameters;
  * a frame of other parameters is left out. */
-static void audio_frame(hdvmux_t *m, const uint8_t *d, int len, int64_t cam, int sr, int ch, int kbps)
+static void on_audio(void *user, const uint8_t *d, int len, int64_t cam, int sr, int ch, int kbps)
 {
+    hdvmux_t *m = user;
     uint8_t *c = malloc((size_t)len);
     if (!c)
         return;
@@ -1806,189 +1275,9 @@ static void audio_frame(hdvmux_t *m, const uint8_t *d, int len, int64_t cam, int
     free(c);
 }
 
-static void audio_pes_done(hdvmux_t *m)
+static void on_error(void *user, pin_status_t err)
 {
-    if (!m->apes_on)
-        return;
-    m->apes_on = 0;
-    int64_t pts;
-    int off = pes_header(m->apes.d, m->apes.n, &pts);
-    long limit = (long)m->apes.n;
-    if (m->apes_loss_at >= 0 && m->apes_loss_at < limit)
-        limit = m->apes_loss_at;      /* only the frames in front of a gap */
-    if (off < 0 || off > limit) {
-        m->acarry.n = 0;
-        m->a_next_cam = NOPTS;
-        m->apes.n = 0;
-        return;
-    }
-    if (pts != NOPTS)
-        pts = unwrap(m, pts);
-    /* a frame cut by the end of the last PES goes on here (only if nothing was lost) */
-    buf_t w;
-    memset(&w, 0, sizeof(w));
-    int64_t cam = NOPTS;
-    if (m->acarry.n && m->a_next_cam != NOPTS) {
-        buf_add(&w, m->acarry.d, m->acarry.n);
-        cam = m->a_next_cam;
-    }
-    size_t carried = w.n;
-    buf_add(&w, m->apes.d + off, (size_t)(limit - off));
-    m->acarry.n = 0;
-    m->a_next_cam = NOPTS;
-    size_t pos = 0;
-    int pts_used = 0;
-    while (pos + 4 <= w.n) {
-        int sr, ch, kbps;
-        int fl = mp2_header(w.d + pos, &sr, &ch, &kbps);
-        if (!fl) {
-            pos++;
-            cam = NOPTS;     /* not a frame where one should be: no time for what follows */
-            continue;
-        }
-        if (pos >= carried && !pts_used) {
-            pts_used = 1;
-            if (pts != NOPTS)
-                cam = pts;   /* the PES's PTS is its first frame's */
-        }
-        if (pos + (size_t)fl > w.n) {
-            if (limit == (long)m->apes.n && cam != NOPTS) {
-                buf_add(&m->acarry, w.d + pos, w.n - pos);
-                m->a_next_cam = cam;
-            }
-            break;
-        }
-        if (cam != NOPTS)
-            audio_frame(m, w.d + pos, fl, cam, sr, ch, kbps);
-        if (cam != NOPTS)
-            cam += 1152LL * 90000 / sr;
-        pos += (size_t)fl;
-    }
-    buf_free(&w);
-    m->apes.n = 0;
-}
-
-static void parse_psi(hdvmux_t *m, const uint8_t *pkt, int pid)
-{
-    if (!(pkt[1] & 0x40))
-        return;
-    int off = 4;
-    if (pkt[3] & 0x20)
-        off += 1 + pkt[4];
-    if (off >= TSP)
-        return;
-    off += 1 + pkt[off];          /* pointer field */
-    if (off + 8 > TSP)
-        return;
-    const uint8_t *s = pkt + off;
-    int slen = ((s[1] & 0x0F) << 8) | s[2];
-    int end = off + 3 + slen - 4; /* without the CRC */
-    if (end > TSP)
-        end = TSP;
-    if (pid == 0 && s[0] == 0x00) {
-        for (int i = off + 8; i + 4 <= end; i += 4) {
-            int prog = (pkt[i] << 8) | pkt[i + 1];
-            if (prog != 0) {
-                m->pmt_pid = ((pkt[i + 2] & 0x1F) << 8) | pkt[i + 3];
-                break;
-            }
-        }
-    } else if (pid == m->pmt_pid && s[0] == 0x02 && off + 12 <= TSP) {
-        int pil = ((s[10] & 0x0F) << 8) | s[11];
-        int vpid = -1, apid = -1;
-        for (int i = off + 12 + pil; i + 5 <= end;) {
-            int type = pkt[i], epid = ((pkt[i + 1] & 0x1F) << 8) | pkt[i + 2];
-            int eil = ((pkt[i + 3] & 0x0F) << 8) | pkt[i + 4];
-            if (type == 0x02 && vpid < 0)
-                vpid = epid;
-            else if ((type == 0x03 || type == 0x04) && apid < 0)
-                apid = epid;
-            i += 5 + eil;
-        }
-        if (vpid > 0 && vpid != m->vpid) {
-            m->vpid = vpid;
-            m->vpes_on = 0;
-            m->vpes.n = 0;
-        }
-        if (apid > 0 && apid != m->apid) {
-            m->apid = apid;
-            m->apes_on = 0;
-            m->apes.n = 0;
-        }
-    }
-}
-
-static void ts_packet(hdvmux_t *m, const uint8_t *pkt)
-{
-    if (pkt[0] != 0x47) {
-        /* a lost sync: whatever PID it was, both streams may have lost a packet */
-        m->vpes_loss = 1;
-        if (m->apes_loss_at < 0)
-            m->apes_loss_at = (long)m->apes.n;
-        return;
-    }
-    int pid = ((pkt[1] & 0x1F) << 8) | pkt[2];
-    int tei = pkt[1] & 0x80, pusi = pkt[1] & 0x40;
-    int afc = (pkt[3] >> 4) & 3, cc = pkt[3] & 0x0F;
-    if (pid == 0 || (m->pmt_pid > 0 && pid == m->pmt_pid)) {
-        if (!tei)
-            parse_psi(m, pkt, pid);
-        return;
-    }
-    int is_v = pid == m->vpid, is_a = pid == m->apid;
-    if (!is_v && !is_a)
-        return;
-    int off = 4;
-    if (afc & 2)
-        off += 1 + pkt[4];
-    int has_payload = (afc & 1) && off < TSP;
-    int loss = tei != 0;
-    if (has_payload) {
-        int last = m->cc[pid];
-        if (last >= 0 && cc == last && !tei)
-            return;                   /* a duplicate packet */
-        if (last >= 0 && cc != ((last + 1) & 0x0F))
-            loss = 1;
-        m->cc[pid] = cc;
-    }
-    if (tei) {
-        /* its payload cannot be trusted: as if it were lost */
-        if (is_v)
-            m->vpes_loss = 1;
-        else if (m->apes_loss_at < 0)
-            m->apes_loss_at = (long)m->apes.n;
-        return;
-    }
-    if (!has_payload)
-        return;
-    if (is_v) {
-        if (loss)
-            m->vpes_loss = 1;
-        if (pusi) {
-            video_pes_done(m);
-            m->vpes_on = 1;
-            m->vpes_loss = 0;
-            m->vpes.n = 0;
-        } else if (!m->vpes_on) {
-            m->au_dmg = 1;            /* the start of this PES is lost */
-            return;
-        }
-        if (buf_add(&m->vpes, pkt + off, (size_t)(TSP - off)) < 0)
-            set_error(m, PIN_ERR_NOMEM);
-    } else {
-        if (loss && m->apes_loss_at < 0)
-            m->apes_loss_at = (long)m->apes.n;
-        if (pusi) {
-            audio_pes_done(m);
-            m->apes_on = 1;
-            m->apes_loss_at = -1;
-            m->apes.n = 0;
-        } else if (!m->apes_on) {
-            return;
-        }
-        if (buf_add(&m->apes, pkt + off, (size_t)(TSP - off)) < 0)
-            set_error(m, PIN_ERR_NOMEM);
-    }
+    set_error(user, err);
 }
 
 /* --------------------------------------------------------------- sink --- */
@@ -2014,6 +1303,10 @@ static pin_status_t hdvmux_open(pin_sink_t *s, const char *path, const pin_sink_
     }
     if (rc < 0)
         return PIN_ERR_IO;
+    hdv_demux_cb_t cb = { on_gop, on_audio, on_error, m };
+    m->dmx = hdv_demux_create(&cb, params->interlaced ? params->top_field_first != 0 : -1);
+    if (!m->dmx)
+        return PIN_ERR_NOMEM;
 
     /* the decode thread (it decodes every GOP with 2 slice threads), and the encoders: about
      * one per two further cores, each with slice threads of its own */
@@ -2040,8 +1333,7 @@ static pin_status_t hdvmux_write_unit(pin_sink_t *s, const uint8_t *data, size_t
     pin_status_t e = get_error(m);
     if (e != PIN_OK)
         return e;
-    for (size_t i = 0; i + TSP <= len; i += TSP)
-        ts_packet(m, data + i);
+    hdv_demux_feed(m->dmx, data, len);
     pthread_mutex_lock(&m->lock);
     m->st.units_written++;
     e = m->st.last_error;
@@ -2077,13 +1369,16 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
     if (m->fmt && get_error(m) == PIN_OK && m->dec_started) {
         /* the end of the stream: the last PES, picture and GOP, then the decode thread writes
          * everything out and ends */
-        video_pes_done(m);
-        audio_pes_done(m);
-        es_flush(m);
-        if (m->gop.n)
-            push_gop(m, 0);
-        push_gop(m, 1);
-        stop_threads(m, 0);
+        hdv_demux_flush(m->dmx);
+        hdv_gop_t *eof = calloc(1, sizeof(*eof));
+        if (eof) {
+            eof->eof = 1;
+            queue_gop(m, eof);
+            stop_threads(m, 0);
+        } else {
+            set_error(m, PIN_ERR_NOMEM);
+            stop_threads(m, 1);
+        }
     } else {
         stop_threads(m, 1);
     }
@@ -2118,26 +1413,17 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
     }
     if (m->span)
         free_item(m->span);
-    while (m->inflight) {
-        gop_t *g = m->inflight;
-        m->inflight = g->next;
-        gop_free(g);
-    }
     while (m->gq_head) {
-        gop_t *g = m->gq_head;
+        hdv_gop_t *g = m->gq_head;
         m->gq_head = g->next;
-        gop_free(g);
+        hdv_gop_free(g);
     }
-    avcodec_free_context(&m->dec);
+    hdv_decoder_free(m->dec);
+    hdv_demux_free(m->dmx);
     for (int i = 0; i < m->aq_n; i++)
         free(m->aq[i].data);
     free(m->aq);
     free(m->eflag);
-    pics_free(&m->gop);
-    buf_free(&m->vpes);
-    buf_free(&m->apes);
-    buf_free(&m->es);
-    buf_free(&m->acarry);
     free(m->silence);
     pthread_mutex_destroy(&m->lock);
     pthread_cond_destroy(&m->dec_wake);
@@ -2167,17 +1453,7 @@ pin_sink_t *sink_hdvmux_create(pin_format_t format)
         return NULL;
     }
     m->format = format;
-    m->pmt_pid = -1;
-    m->vpid = -1;
-    m->apid = -1;
-    for (int i = 0; i < 8192; i++)
-        m->cc[i] = -1;
-    m->apes_loss_at = -1;
-    m->last_ts = NOPTS;
-    m->au_pts = NOPTS;
     m->last_cam_end = NOPTS;
-    m->a_next_cam = NOPTS;
-    m->max_out_id = -1;
     m->dur = 3600;
     m->pend_limit = PEND_LIMIT;
     pthread_mutex_init(&m->lock, NULL);

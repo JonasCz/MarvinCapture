@@ -395,8 +395,8 @@ typedef struct {
  * undamaged GOPs are copied, damaged ones (tape dropouts: a packet lost or flagged, or anything
  * the decoder had to conceal) are encoded again from the decoded, concealed pictures as MPEG-2
  * of the same size and bit rate; the files' timestamps start at 0 and run without gaps, and
- * they always split into scenes (scene_split_forced). Not offered on Android (a capture still
- * takes them). See docs/hdv.md ("MOV and MKV"). */
+ * they always split into scenes (scene_split_forced). If the machine cannot keep up with the
+ * checking or the repairs, the capture ends with an error. See docs/hdv.md ("MOV and MKV"). */
 PIN_API int pin_formats(pin_kind_t kind, pin_format_info_t *out, int max);
 PIN_API pin_status_t pin_format_info(pin_format_t f, pin_format_info_t *out);
 

@@ -93,6 +93,8 @@ add_library(pinnacle_sinks STATIC
     sink_ffv1.c
     sink_rewrap.c
     sink_hdvmux.c
+    hdv_demux.c
+    hdv_decode.c
     sink_lazy.c
     sink_avlog.c
     sink_hwenc.c

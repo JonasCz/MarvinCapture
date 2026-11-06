@@ -37,6 +37,14 @@
  * instead of blocking the writer for good, and the capture ends with an
  * error.
  *
+ * HDV (not done yet; PIN_FMT_HDV_H264_MKV / _HEVC_MKV would be the formats): the shared
+ * HDV stages do the input side (hdv_demux.h has the plan). write_unit feeds an hdv_demux_t;
+ * its GOPs go to an hdv_decoder_t on the encoder thread, in place of the DV decode here, whose
+ * frames (4:2:0 already, 1440x1080 or 1280x720, interlaced or not) go through the same
+ * deinterlace / convert / encode path; its MP2 frames are decoded to PCM for the FLAC thread.
+ * Frame timing, lost pictures, audio placement and the error counts follow sink_hdvmux.c's
+ * rules, which should move into a shared HDV timeline piece then, not be copied.
+ *
  * The encoder is opened, used and freed on the encoder thread only: Media
  * Foundation ties COM to the thread that opens it. open() waits for that
  * thread to report whether the encoder opened, so a missing encoder fails

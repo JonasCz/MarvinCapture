@@ -63,6 +63,12 @@ add_test(NAME test_hdv_repair COMMAND test_hdv_repair
     "${PIN_TEST_DATA}/hdv-repair-jump.ts" "${PIN_TEST_DATA}/hdv-720p.ts" "${CMAKE_CURRENT_BINARY_DIR}")
 set_tests_properties(test_hdv_repair PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
+# The two shared stages of the HDV pipeline (hdv_demux, hdv_decode) on their own
+add_executable(test_hdv_stages test_hdv_stages.c)
+target_link_libraries(test_hdv_stages PRIVATE pinnacle_sinks)
+add_test(NAME test_hdv_stages COMMAND test_hdv_stages "${PIN_TEST_DATA}/hdv-repair.ts")
+set_tests_properties(test_hdv_stages PROPERTIES FIXTURES_REQUIRED pin_test_data)
+
 add_executable(test_stdout_sinks test_stdout_sinks.c)
 target_link_libraries(test_stdout_sinks PRIVATE pinnacle_sinks)
 add_test(NAME test_stdout_sinks COMMAND test_stdout_sinks)

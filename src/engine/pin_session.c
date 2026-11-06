@@ -1178,18 +1178,14 @@ int pin_session_format_available(pin_format_t f)
 
 /* Formats this platform does not offer: pin_formats() leaves them out, pin_format_info() and
  * a capture still take them. The H.264 / HEVC formats only where their encoder opened (a
- * capture refuses them elsewhere). Android: not HDV to MOV / MKV, which decode every GOP to
- * check it and re-encode the damaged ones (sink_hdvmux.c): more than a phone is asked to do
- * during a capture; the raw transport stream is offered there. */
+ * capture refuses them elsewhere). HDV to MOV / MKV everywhere, Android too: a phone that
+ * cannot keep up with decoding every GOP (or with the repairs) ends the capture with an error
+ * (sink_hdvmux.c, reencode_behind), as a computer would. */
 static int format_offered(pin_format_t f)
 {
     if (pin_fmt_is_hwenc(f))
         return pin_session_format_available(f);
-#if defined(__ANDROID__)
-    return f != PIN_FMT_HDV_MOV && f != PIN_FMT_HDV_MKV;
-#else
     return 1;
-#endif
 }
 
 void pin_session_format_warning(pin_format_t f, char *out, size_t cap)

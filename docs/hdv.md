@@ -110,7 +110,15 @@ pictures would not decode at the start of the new file.
 remuxed when the capture stops, and there is no temporary file. The aim is a file an
 editor such as DaVinci Resolve takes without complaint even from a tape with dropouts:
 before this, the way to get one was to re-encode the whole capture (to ProRes, say);
-this re-encodes only the damaged parts. Desktop only: Android does not offer them.
+this re-encodes only the damaged parts. Offered everywhere, Android too: a machine that cannot
+keep up ends the capture with an error (below).
+
+**Stages.** Three, the first two shared with any HDV output that decodes (a future HDV to
+H.264 / HEVC one): `hdv_demux` (transport stream to GOPs and audio frames), `hdv_decode`
+(every picture decoded, a verdict per picture) and the output, here `sink_hdvmux.c`.
+`src/sinks/hdv_demux.h` says how they fit together and what of `sink_hdvmux.c` (the
+timeline, the audio placement, the error counts) a second output should share rather than
+copy; `test_hdv_stages` tests the first two on their own.
 
 **Threads.** The capture's writer thread demuxes: it reads the PAT and PMT, puts the
 PES packets back together, cuts the video into pictures at their start codes and GOPs

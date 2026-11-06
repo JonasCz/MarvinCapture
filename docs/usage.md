@@ -45,7 +45,7 @@ Two ways in, both on the same core library:
   stores no aspect: raw `.dv` and `.m2t` files carry no aspect flag of their own, players
   take it from the video itself. Auto applies then, to the file and the preview; the
   choice is kept and comes back when an AVI, MOV or MKV format is picked. "Split into
-  scenes" is checked and disabled for HDV MOV / MKV (desktop only), which always split
+  scenes" is checked and disabled for HDV MOV / MKV, which always split
   (`pin_format_info_t.scene_split_forced`); the user's own choice is kept for the other
   formats. The tooltips come from the core (`pin_format_title_help`,
   `pin_format_aspect_help`, `pin_format_scene_split_help`).

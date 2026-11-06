@@ -206,8 +206,8 @@ stops. The aspect setting is disabled while its format stores no aspect (`Core.F
 not set: raw `.dv`, HDV `.m2t`), with the core's reason under it (`pin_format_aspect_help`);
 the choice is kept, but Auto goes to the capture and the preview (`Settings.effectiveAspect`).
 Scene split is on and disabled for a format that always splits (`Core.FMT_SPLIT_FORCED`: HDV
-MOV / MKV, which the core does not offer on Android, as they decode every GOP during the
-capture), with the core's text under it (`pin_format_scene_split_help`); the saved choice is
+MOV / MKV, which decode every GOP during the capture; a phone that cannot keep up ends the
+capture with the core's error), with the core's text under it (`pin_format_scene_split_help`); the saved choice is
 kept for the other formats.
 Each file of a capture gets its own kind's aspect: `OPT_ASPECT` from the analog or DV
 setting, `OPT_ASPECT_HDV` (`aspect_hdv`) from the HDV one. The help under the file name
