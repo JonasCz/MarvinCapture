@@ -23,7 +23,7 @@
 #
 # Runs scripts/build.sh --skip-gui first (unless --skip-build), then stages:
 #
-#   /usr/lib/marvincapture/        MarvinCaptureCLI, libmarvin-core.so, firmware/
+#   /usr/lib/marvincapture/        MarvinCaptureCLI, MarvinPlayout, libmarvin-core.so, firmware/
 #   /usr/bin/MarvinCaptureCLI      symlink to the above (rpath $ORIGIN and the
 #                                  core's firmware lookup both use real paths)
 #   /usr/lib/udev/rules.d/         packaging/linux/*.rules (device access for the
@@ -87,7 +87,7 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     step "Building (scripts/build.sh ${BUILD_ARGS[*]})"
     "${ROOT}/scripts/build.sh" "${BUILD_ARGS[@]}"
 fi
-for f in MarvinCaptureCLI libmarvin-core.so firmware/fpga-ohci.bin firmware/fpga-capture.bin \
+for f in MarvinCaptureCLI MarvinPlayout libmarvin-core.so firmware/fpga-ohci.bin firmware/fpga-capture.bin \
          firmware/fx2-marvin.bin firmware/README.md; do
     [[ -e "${DIST}/${f}" ]] || die "build/linux-${ARCH}/dist/${f} is missing (run scripts/build.sh --skip-gui)"
 done
@@ -102,11 +102,12 @@ DOCDIR="${STAGE}/usr/share/doc/${PKG}"
 install -d -m 755 "${LIBDIR}/firmware" "${STAGE}/usr/bin" "${STAGE}/usr/lib/udev/rules.d" \
                   "${DOCDIR}" "${STAGE}/DEBIAN"
 
-install -m 755 "${DIST}/MarvinCaptureCLI" "${DIST}/libmarvin-core.so" "${LIBDIR}/"
-strip --strip-unneeded "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/libmarvin-core.so"
+install -m 755 "${DIST}/MarvinCaptureCLI" "${DIST}/MarvinPlayout" "${DIST}/libmarvin-core.so" "${LIBDIR}/"
+strip --strip-unneeded "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/MarvinPlayout" "${LIBDIR}/libmarvin-core.so"
 install -m 644 "${DIST}/firmware/"* "${LIBDIR}/firmware/"
 # Relative link: the loader resolves $ORIGIN, and the core resolves firmware/, via the real path.
 ln -s "../lib/${PKG}/MarvinCaptureCLI" "${STAGE}/usr/bin/MarvinCaptureCLI"
+ln -s "../lib/${PKG}/MarvinPlayout" "${STAGE}/usr/bin/MarvinPlayout"   # finds firmware/ next to its real path
 for r in "${RULES[@]}"; do
     install -m 644 "${ROOT}/packaging/linux/${r}" "${STAGE}/usr/lib/udev/rules.d/${r}"
 done
@@ -114,7 +115,7 @@ done
 # --- Dependencies -----------------------------------------------------------------
 # Only libc (+ libm/libdl/libpthread/librt, all in libc6), libgcc_s and libusb may be
 # linked dynamically; anything else would need its own Depends entry.
-for bin in "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/libmarvin-core.so"; do
+for bin in "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/MarvinPlayout" "${LIBDIR}/libmarvin-core.so"; do
     while read -r lib; do
         case "${lib}" in
             libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|librt.so.*|libgcc_s.so.*|ld-linux*|libusb-1.0.so.*|libmarvin-core.so) ;;
@@ -123,7 +124,7 @@ for bin in "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/libmarvin-core.so"; do
     done < <(objdump -p "${bin}" | awk '/^  NEEDED/ {print $2}')
 done
 # glibc: the highest versioned symbol the binaries import.
-GLIBC="$(objdump -T "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/libmarvin-core.so" \
+GLIBC="$(objdump -T "${LIBDIR}/MarvinCaptureCLI" "${LIBDIR}/MarvinPlayout" "${LIBDIR}/libmarvin-core.so" \
     | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/^GLIBC_//' | sort -uV | tail -n1 || true)"
 [[ -n "${GLIBC}" ]] || GLIBC="2.31"
 # libusb: 1.0.23 (Ubuntu 20.04 / Debian 11) is the oldest supported baseline. A core built

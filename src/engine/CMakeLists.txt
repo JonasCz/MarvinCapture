@@ -42,6 +42,7 @@ add_library(pinnacle_engine_pure STATIC
     pin_pace.c
     pin_ui_text.c
     pin_update.c
+    pin_exe_dir.c
 )
 
 target_include_directories(pinnacle_engine_pure PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

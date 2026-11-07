@@ -25,9 +25,10 @@
 #
 #   MarvinCapture.app      -> /Applications/MarvinCapture.app
 #   command-line tool      -> /usr/local/lib/marvincapture/{MarvinCaptureCLI,
-#                             libmarvin-core.dylib, libusb-1.0.0.dylib,
+#                             MarvinPlayout, libmarvin-core.dylib, libusb-1.0.0.dylib,
 #                             firmware/, uninstall.sh}
-#                             and a symlink /usr/local/bin/MarvinCaptureCLI
+#                             and symlinks /usr/local/bin/MarvinCaptureCLI and
+#                             /usr/local/bin/MarvinPlayout
 #
 # The package is neither signed nor notarised, so Gatekeeper blocks it when it
 # was downloaded (see README). Static inputs are in packaging/macos/. Uses
@@ -93,7 +94,7 @@ if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     step "Building (scripts/build.sh --config ${CONFIG} ${BUILD_ARGS[*]:-})"
     "${ROOT}/scripts/build.sh" --config "${CONFIG}" ${BUILD_ARGS[@]+"${BUILD_ARGS[@]}"}
 fi
-for f in MarvinCapture.app MarvinCaptureCLI libmarvin-core.dylib libusb-1.0.0.dylib firmware; do
+for f in MarvinCapture.app MarvinCaptureCLI MarvinPlayout libmarvin-core.dylib libusb-1.0.0.dylib firmware; do
     [[ -e "${DIST}/${f}" ]] || die "${DIST}/${f} is missing; run scripts/build.sh (or leave out --skip-build)"
 done
 codesign --verify --deep --strict "${DIST}/MarvinCapture.app" || die "MarvinCapture.app has no valid signature"
@@ -112,17 +113,18 @@ codesign --force --sign - "${STAGE}/app/MarvinCapture.app"
 codesign --verify --deep --strict "${STAGE}/app/MarvinCapture.app"
 
 LIBDIR="${STAGE}/cli/lib/marvincapture"
-for f in MarvinCaptureCLI libmarvin-core.dylib libusb-1.0.0.dylib; do
+for f in MarvinCaptureCLI MarvinPlayout libmarvin-core.dylib libusb-1.0.0.dylib; do
     ditto --norsrc --noextattr "${DIST}/${f}" "${LIBDIR}/${f}"
 done
 ditto --norsrc --noextattr "${DIST}/firmware" "${LIBDIR}/firmware"
 install -m 755 "${RES}/uninstall.sh" "${LIBDIR}/uninstall.sh"
 # arm64 needs a signature on every binary; ad-hoc is enough (build.sh's output already has one).
-for f in MarvinCaptureCLI libmarvin-core.dylib libusb-1.0.0.dylib; do
+for f in MarvinCaptureCLI MarvinPlayout libmarvin-core.dylib libusb-1.0.0.dylib; do
     codesign --force --sign - "${LIBDIR}/${f}" 2>/dev/null
 done
 # relative symlink: the CLI resolves @loader_path and firmware/ through the real path
 ln -s ../lib/marvincapture/MarvinCaptureCLI "${STAGE}/cli/bin/MarvinCaptureCLI"
+ln -s ../lib/marvincapture/MarvinPlayout "${STAGE}/cli/bin/MarvinPlayout"
 find "${STAGE}" -name .DS_Store -delete
 chmod -R u=rwX,go=rX "${STAGE}"
 # com.apple.provenance etc. would end up in the payload as ._ AppleDouble files

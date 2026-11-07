@@ -58,25 +58,11 @@
 #ifndef POUT_DECK_H
 #define POUT_DECK_H
 
-#include "pin_script.h"     /* pin_tc_t */
+#include "pout_tape.h"     /* pout_tape_ops_t, pin_tc_t */
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
-#endif
-
-/* The deck's view of the tape. Defined byte for byte as in pout_tape.h
- * (src/playout, written by another module); whichever header comes first
- * defines it. */
-#ifndef POUT_TAPE_OPS_DEFINED
-#define POUT_TAPE_OPS_DEFINED
-typedef struct {
-    void *ctx;
-    int64_t frames;
-    double fps;
-    int (*tc_of_frame)(void *ctx, int64_t frame, pin_tc_t *tc);
-    int64_t (*frame_of_tc)(void *ctx, const pin_tc_t *tc);
-} pout_tape_ops_t;
 #endif
 
 typedef struct {

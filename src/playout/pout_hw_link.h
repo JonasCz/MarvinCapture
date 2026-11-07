@@ -67,6 +67,8 @@ typedef struct {
     const char *device_id;        /* "usb:1-4" as pinnacle_enumerate() reports it; NULL = the first Marvin found */
     const char *bitstream_path;   /* the OHCI design: firmware/fpga-ohci.bin (pin_session_firmware_path() finds it) */
     unsigned max_packet;          /* bytes per isochronous packet: 488 DV, 584 HDV; sizes oPCR payload and the RAM ring */
+    unsigned speed;               /* OHCI spd code of the stream (0 S100 .. 2 S400): oPCR's initial data rate and what a local connection sends at */
+    unsigned channel;             /* a local connection's channel: 63 = the broadcast channel (no IRM allocation), else allocated at the IRM */
     void (*progress)(void *user, const char *step, int percent);
     void *progress_user;
     pout_link_avc_fn avc;
@@ -87,7 +89,11 @@ int pout_link_node_count(const pout_link_t *k);
  * stops the IT context and renumbers the nodes: the session should stop, call
  * pout_link_rescan(), and restart. */
 int pout_link_bus_generation(pout_link_t *k);
-int pout_link_rescan(pout_link_t *k);            /* re-reads our node ID / node count after a bus reset */
+/* Re-reads our node ID / node count after a bus reset and resets the plugs: connections do not
+ * survive a bus reset (IEC 61883-1), and the IRM frees the channel and bandwidth, so a local
+ * connection has to be made again (pout_link_local_connect) and a controller reconnects by itself.
+ * The stream must have been stopped (pout_link_it_stop) before. */
+int pout_link_rescan(pout_link_t *k);
 
 /* Reads EP 0x84 once (up to timeout_ms), then answers the requests that arrived: plug register
  * reads and locks, FCP writes (with the AV/C callback). Returns the number of requests handled,
@@ -110,7 +116,9 @@ unsigned pout_link_bandwidth_units(unsigned max_packet, unsigned speed);
  * Returns the channel or -1. */
 int pout_link_irm_alloc(pout_link_t *k, unsigned bandwidth_units);
 void pout_link_irm_release(pout_link_t *k, unsigned channel, unsigned bandwidth_units);
-/* on = 1: irm_alloc + the broadcast connection in oPCR0 (pout_csr_local_connect); on = 0: back. Returns the channel / 0 / -1. */
+/* on = 1: the broadcast connection in oPCR0 (pout_csr_local_connect) on cfg.channel, after allocating
+ * that channel and the bandwidth at the IRM unless it is 63 (the broadcast channel needs neither; a
+ * receiver listens on it by default); on = 0: back. Returns the channel / 0 / -1. */
 int pout_link_local_connect(pout_link_t *k, int on);
 
 /* --- isochronous transmit --- */

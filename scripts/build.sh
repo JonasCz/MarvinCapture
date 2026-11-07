@@ -23,10 +23,12 @@
 #
 #   1. (first time only) builds the minimal static FFmpeg into third_party/.
 #   2. Configures and builds the native core (libmarvin-core.dylib/.so,
-#      MarvinCaptureCLI) into build/<os>-<arch>/core, and runs the ctest suite.
+#      MarvinCaptureCLI, MarvinPlayout) into build/<os>-<arch>/core, and runs the ctest suite.
 #   3. Assembles build/<os>-<arch>/dist:
 #
 #        MarvinCaptureCLI           the command-line program
+#        MarvinPlayout              plays DV/HDV files out as a virtual deck (docs/playout.md); it
+#                                   links the core statically and finds firmware/ next to itself
 #        libmarvin-core.dylib       the core library (.so on Linux)
 #        libusb-1.0.0.dylib         macOS only: bundled libusb (Linux uses the
 #                                   system's libusb-1.0)
@@ -153,7 +155,7 @@ fi
 # --- 3. Assemble build/<os>-<arch>/dist ----------------------------------------------
 step "Assembling build/${PLATFORM}/dist"
 mkdir -p "${DIST}"
-cp -f "${CORE}/MarvinCaptureCLI" "${DIST}/"
+cp -f "${CORE}/MarvinCaptureCLI" "${CORE}/MarvinPlayout" "${DIST}/"
 cp -f "${CORE}/${CORE_LIB}" "${DIST}/"
 [[ -n "${LIBUSB_LIB}" ]] && cp -f "${CORE}/${LIBUSB_LIB}" "${DIST}/"
 # After the libraries are in dist: the CLI loads them (a clean tree has no dist yet).
@@ -236,7 +238,7 @@ fi
 
 # --- Check ---------------------------------------------------------------------------
 step "Checking build/${PLATFORM}/dist"
-expect=(MarvinCaptureCLI "${CORE_LIB}" ${LIBUSB_LIB}
+expect=(MarvinCaptureCLI MarvinPlayout "${CORE_LIB}" ${LIBUSB_LIB}
         firmware/fpga-ohci.bin firmware/fpga-capture.bin firmware/fx2-marvin.bin firmware/README.md)
 [[ "${OS}" == macos && "${SKIP_GUI}" -eq 0 ]] && expect+=(MarvinCapture.app/Contents/MacOS/MarvinCapture
         MarvinCapture.app/Contents/Info.plist MarvinCapture.app/Contents/Resources/AppIcon.icns

@@ -89,6 +89,13 @@ Examples:
 -h, --help, or no arguments at all: this text, followed by the device list.
 ```
 
+## MarvinPlayout
+
+`MarvinPlayout` is a separate program installed next to `MarvinCaptureCLI`. It plays DV or HDV
+files out over FireWire as a virtual deck, with the same left-to-right syntax
+(`--rew --wait --play --wait timecode=... --stop`) and wait conditions. See
+[playout.md](playout.md).
+
 ## Android (Termux)
 
 The CLI from the Android build (`scripts/build-android-native.sh`: `MarvinCaptureCLI` and

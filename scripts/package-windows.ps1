@@ -142,7 +142,7 @@ if (-not $SkipBuild) {
     & (Join-Path $PSScriptRoot 'build.ps1') @a
     if (-not $?) { throw 'build.ps1 failed' }
 }
-$expect = @('MarvinCaptureGUI.exe', 'MarvinCaptureCLI.exe', 'marvin-core.dll', 'libusb-1.0.dll',
+$expect = @('MarvinCaptureGUI.exe', 'MarvinCaptureCLI.exe', 'MarvinPlayout.exe', 'marvin-core.dll', 'libusb-1.0.dll',
             'libwinpthread-1.dll', 'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin', 'firmware\fx2-marvin.bin')
 $missing = $expect | Where-Object { -not (Test-Path (Join-Path $dist $_)) }
 if ($missing) { throw "missing from $dist (run without -SkipBuild): $($missing -join ', ')" }

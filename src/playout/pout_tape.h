@@ -64,10 +64,8 @@
 extern "C" {
 #endif
 
-/* The deck's view of the tape. Defined here, guarded, so pout_deck.h can
- * include this header for it (see docs/handoff/playout-plan.md). */
-#ifndef POUT_TAPE_OPS_DEFINED
-#define POUT_TAPE_OPS_DEFINED
+/* The deck's view of the tape: the only definition of this type (pout_deck.h includes this
+ * header for it). */
 typedef struct {
     void *ctx;
     int64_t frames;
@@ -75,7 +73,6 @@ typedef struct {
     int (*tc_of_frame)(void *ctx, int64_t frame, pin_tc_t *tc);
     int64_t (*frame_of_tc)(void *ctx, const pin_tc_t *tc);
 } pout_tape_ops_t;
-#endif
 
 typedef enum { POUT_MEDIA_DV = 0, POUT_MEDIA_HDV } pout_media_t;
 typedef struct pout_tape pout_tape_t;

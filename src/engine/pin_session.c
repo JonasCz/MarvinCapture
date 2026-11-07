@@ -32,6 +32,7 @@
 #include "pin_vidfmt.h"
 #include "pin_naming.h"
 #include "pin_settings.h"
+#include "pin_exe_dir.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_cfg.h"
 #include "../core/pin_log.h"
@@ -247,55 +248,6 @@ static void session_progress(void *user, const char *step, int percent)
 static char g_firmware_dir[PIN_PATH_MAX];
 static pthread_mutex_t g_fw_mtx = PTHREAD_MUTEX_INITIALIZER;
 
-static int exe_dir(char *out, size_t cap)
-{
-#if defined(_WIN32)
-    wchar_t wpath[MAX_PATH];
-    DWORD n = GetModuleFileNameW(NULL, wpath, MAX_PATH);
-    if (n == 0 || n == MAX_PATH)
-        return -1;
-    char path[MAX_PATH * 4];
-    int len = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)n, path, (int)sizeof(path), NULL, NULL);
-    if (len <= 0)
-        return -1;
-    path[len] = 0;
-    char *slash = strrchr(path, '\\');
-    char *slash2 = strrchr(path, '/');
-    if (slash2 && (!slash || slash2 > slash))
-        slash = slash2;
-    if (!slash)
-        return -1;
-    size_t n2 = (size_t)(slash - path);
-    if (n2 + 1 > cap)
-        return -1;
-    memcpy(out, path, n2);
-    out[n2] = 0;
-    return 0;
-#else
-    char path[4096];
-#if defined(__APPLE__)
-    char raw[4096];
-    uint32_t raw_size = sizeof(raw);
-    if (_NSGetExecutablePath(raw, &raw_size) != 0 || !realpath(raw, path))
-        return -1;
-#else
-    ssize_t n = readlink("/proc/self/exe", path, sizeof(path) - 1);
-    if (n <= 0)
-        return -1;
-    path[n] = 0;
-#endif
-    char *slash = strrchr(path, '/');
-    if (!slash)
-        return -1;
-    size_t n2 = (size_t)(slash - path);
-    if (n2 + 1 > cap)
-        return -1;
-    memcpy(out, path, n2);
-    out[n2] = 0;
-    return 0;
-#endif
-}
-
 pin_status_t pin_session_set_app_dirs(const char *config_dir, const char *runtime_dir,
                                       const char *temp_dir)
 {
@@ -467,7 +419,7 @@ pin_status_t pin_session_firmware_path(const pinnacle_model_t *model, pin_kind_t
     char base[PIN_PATH_MAX];
     if (lib_dir(base, sizeof(base)) == 0)
         snprintf(dirs[ndirs++], PIN_PATH_MAX, "%s" DIR_SEP "firmware", base);
-    if (exe_dir(base, sizeof(base)) == 0) {
+    if (pin_exe_dir(base, sizeof(base)) == 0) {
         char d[PIN_PATH_MAX];
         snprintf(d, sizeof(d), "%s" DIR_SEP "firmware", base);
         int dup = 0;

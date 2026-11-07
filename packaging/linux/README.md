@@ -7,8 +7,8 @@ there is no Linux GUI) into `build/linux-<arch>/installer/`. It runs
 
 | Installed | |
 |---|---|
-| `/usr/lib/marvincapture/` | `MarvinCaptureCLI`, `libmarvin-core.so`, `firmware/` |
-| `/usr/bin/MarvinCaptureCLI` | symlink to the above (`$ORIGIN` rpath and the core's firmware lookup both use the real path) |
+| `/usr/lib/marvincapture/` | `MarvinCaptureCLI`, `MarvinPlayout`, `libmarvin-core.so`, `firmware/` |
+| `/usr/bin/MarvinCaptureCLI`, `/usr/bin/MarvinPlayout` | symlinks to the above (`$ORIGIN` rpath and the firmware lookup both use the real path) |
 | `/usr/lib/udev/rules.d/60-marvincapture.rules` | device access for the five Marvin PIDs |
 | `/usr/lib/udev/rules.d/60-marvincapture-cpu-dma-latency.rules` | `/dev/cpu_dma_latency` access |
 | `/usr/share/doc/marvincapture/copyright` | DEP-5 |

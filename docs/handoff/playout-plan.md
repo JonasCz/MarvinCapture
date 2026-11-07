@@ -1,9 +1,10 @@
 # MarvinPlayout: implementation plan (DV/HDV)
 
 Written 2026-11-07, from [playout-feasibility.md](playout-feasibility.md). This is
-the contract the modules were built against. Nothing has run on hardware yet:
-everything that touches the device is a best guess from the decompiled vendor
-driver and must be checked once a device is attached.
+the contract the modules were built against, updated to what was built (the
+user documentation is [../playout.md](../playout.md)). Nothing has run on
+hardware yet: everything that touches the device is a best guess from the
+decompiled vendor driver and must be checked once a device is attached.
 
 ## What it is
 
@@ -45,11 +46,15 @@ small hook for incoming requests).
 | `pout_it.[ch]` | EP 0x06 message builder (OHCI IT program, vendor sequence bits, type 11) | — |
 | `pout_csr.[ch]` | target side of the 1394 link: plug registers (oMPR/oPCR/iMPR), incoming read/lock/FCP requests → responses, the AV/C config ROM | — |
 | `pout_out.h`, `pout_out_file.c` | output interface; the file/loopback output (no device) | `pout_cip` |
-| `pout_hw_*.c` | everything that needs the device: link glue, 1394 output, session loop | `pinnacle_core` |
-| `marvin_playout.c` | `main()` | all |
+| `pout_session.[ch]` | the playout loop: deck -> tape -> cip -> output once per frame period, the script sequencer, status; simulated or wall clock, hooks for the device | all of the above |
+| `pout_hw_link.[ch]` | the device: open, link, request hook, IRM, EP 0x06 queue and sender thread | `pinnacle_core`, `pout_csr`, `pout_it` |
+| `pout_hw_session.[ch]` | the device-backed run: hooks for `pout_session` (pump the link, AV/C callback into `pout_avc`, tx on/off from the plug state, bus reset), the IT output as a `pout_out_t`, firmware lookup | `pout_hw_link`, `pout_session`, `pout_avc` |
+| `marvin_playout.c` | `main()`: arguments, tape, Ctrl-C, `--dry-run` or the device | all |
 
 `src/playout/CMakeLists.txt` builds `pout_*.c` except `pout_hw_*.c` into
-`pinnacle_playout_pure` (no libusb), the rest into `MarvinPlayout`, and every
+`pinnacle_playout_pure` (no libusb), the rest into `MarvinPlayout` (statically
+linked against `pinnacle_core`, not `marvin-core`; written to the build
+directory next to `firmware/`), and every
 `tests/playout/test_*.c` into a ctest test linked against
 `pinnacle_playout_pure` and `pinnacle_core` (the loopback tests use the
 capture side's `dv_reassembler` as the checker).
@@ -83,7 +88,7 @@ int64_t pout_tape_play_start(const pout_tape_t *t, int64_t frame);  /* HDV: GOP 
 void    pout_tape_ops(pout_tape_t *t, pout_tape_ops_t *ops);  /* fills the deck's view */
 ```
 
-### Deck's view of the tape (`pout_deck.h`)
+### Deck's view of the tape (`pout_tape.h`, included by `pout_deck.h`)
 
 ```c
 typedef struct {
@@ -110,13 +115,36 @@ typedef struct pout_out {
     int  (*packet)(struct pout_out *o, const uint8_t *pkt, unsigned len); /* one isochronous packet */
     void (*stop)(struct pout_out *o);
     void (*destroy)(struct pout_out *o);
+    void *priv;
 } pout_out_t;
 ```
 
-Implementations: the 1394 IT output (`pout_hw_out1394.c`, EP 0x06) and the
+Implementations: the 1394 IT output (an adapter in `pout_hw_session.c` over `pout_link_it_*`, EP 0x06) and the
 file/loopback output (`pout_out_file.c`: wraps packets in the EP 0x88
 buffer-fill format and feeds `dv_reassembler`, writing `.dv`/`.m2t`, for
 `--dry-run`). An analog output would be a third, taking frames, not packets.
+
+### Session (`pout_session.h`)
+
+`pout_session_run()` is the one loop for both the dry run and the device. Per frame period: hooks
+(interrupt, fatal error, tx wanted), the sequencer (`pout_seq_step`, commands applied to the deck),
+`pout_deck_next_output` -> `pout_tape_read_frame` -> `pout_cip_frame`/`pout_cip_blank` into the
+output, `period_end`, then `between` (the device pumps the link there; with `--realtime` it sleeps).
+Without a device the clock is simulated: it advances one frame period per period. HDV starts playing
+at `pout_tape_play_start()` and keeps that lag for the run of consecutive frames. When nobody
+receives (`tx_wanted` 0) the deck keeps running but nothing is read or sent.
+
+### Notes on the integration
+
+- `pout_tape_ops_t` is defined once, in `pout_tape.h`; `pout_deck.h` includes it.
+- `pout_hw_link` takes `speed` and `channel` in its config (oPCR rate; a local connection's channel,
+  63 = broadcast channel without IRM allocation) and resets the plugs on `pout_link_rescan()`.
+- The firmware directory resolver of `pin_session.c` is part of the engine library that
+  `MarvinPlayout` does not link, so only its small shared piece, `pin_exe_dir()` (new
+  `src/engine/pin_exe_dir.[ch]`, in `pinnacle_engine_pure`), is reused; `pout_hw_find_bitstream()` looks in
+  the settings key `Paths/firmware_dir`, `firmware/` next to the executable, `./firmware`.
+- Not done: Android packaging (the Android build compiles `MarvinPlayout` along with the rest but
+  `build-android-native.sh` does not ship it).
 
 ## Timing model (guesses, all adjustable on the command line)
 

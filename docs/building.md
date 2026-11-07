@@ -100,6 +100,7 @@ MarvinCaptureGUI.exe, *.dll, *.xbf ...   the GUI (self-contained, unpackaged)
 marvin-core.dll, libusb-1.0.dll          the native core
 libwinpthread-1.dll                      runtime DLL the core imports
 MarvinCaptureCLI.exe                     the command-line program (shares the DLL and firmware\)
+MarvinPlayout.exe                        plays files out as a virtual deck (docs/playout.md; links the core statically)
 firmware\                                FPGA bitstreams
 ```
 
@@ -108,6 +109,7 @@ firmware\                                FPGA bitstreams
 ```
 MarvinCapture.app/                       macOS only: the GUI (see below), ad-hoc signed
 MarvinCaptureCLI                         the command-line program
+MarvinPlayout                            plays files out as a virtual deck (docs/playout.md; links the core statically)
 libmarvin-core.dylib                     the native core (libmarvin-core.so on Linux)
 libusb-1.0.0.dylib                       macOS only: libusb, bundled from Homebrew
 firmware/                                FPGA bitstreams
@@ -126,7 +128,8 @@ MarvinCapture.app/Contents/
   _CodeSignature/                        ad-hoc signature
 ```
 
-The CLI and the core in `dist/` find `firmware/` next to the core library, and
+The CLI and the core in `dist/` find `firmware/` next to the core library
+(`MarvinPlayout`, which has the core built in, looks next to itself), and
 `MarvinCaptureCLI` finds the core library next to itself (rpath `@loader_path`
 on macOS, `$ORIGIN` on Linux), so `dist/` can be copied anywhere. The app brings
 its own copies of the core, libusb and firmware. A downloaded copy of the app is
@@ -311,6 +314,7 @@ src/engine/    session engine: state machine, deck, preview, scene split, settin
 src/sinks/     file writers (raw, AVI, MOV/MKV rewrap, FFV1)
 src/api/       pin_api.h / pin_api.c, the flat C API the GUI links
 src/cli/       MarvinCaptureCLI
+src/playout/   MarvinPlayout: virtual tape/deck, IEC 61883 packetizer, AV/C target, 1394 transmit (docs/playout.md)
 gui/windows/   WinUI 3 app
 gui/macos/     SwiftUI/AppKit app (SwiftPM)
 tests/         unit and replay tests (their recordings are made at test time, see tests/data/)

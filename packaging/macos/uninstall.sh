@@ -20,7 +20,7 @@
 #   sudo /usr/local/lib/marvincapture/uninstall.sh
 #   sudo /Applications/MarvinCapture.app/Contents/Resources/uninstall.sh
 #
-# Removes /Applications/MarvinCapture.app, /usr/local/bin/MarvinCaptureCLI and
+# Removes /Applications/MarvinCapture.app, /usr/local/bin/MarvinCaptureCLI, MarvinPlayout and
 # /usr/local/lib/marvincapture, then makes the Installer forget the packages.
 # Your recordings and settings are left alone.
 # (The installer puts a copy in both places, so whichever part was installed has one.)
@@ -33,10 +33,10 @@ set -euo pipefail
 [[ $EUID -eq 0 ]] || { echo "uninstall.sh: run with sudo" >&2; exit 1; }
 
 rm -rf /Applications/MarvinCapture.app
-# only remove the symlink if it is ours
-if [[ -L /usr/local/bin/MarvinCaptureCLI ]]; then
-    rm -f /usr/local/bin/MarvinCaptureCLI
-fi
+# only remove the symlinks if they are ours (a link in /usr/local/bin that is not one is left)
+for tool in MarvinCaptureCLI MarvinPlayout; do
+    [[ -L /usr/local/bin/${tool} ]] && rm -f /usr/local/bin/${tool}
+done
 rm -rf /usr/local/lib/marvincapture
 
 for id in jonascz.MarvinCapture.app jonascz.MarvinCapture.cli; do

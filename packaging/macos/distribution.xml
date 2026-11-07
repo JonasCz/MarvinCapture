@@ -22,7 +22,7 @@
         <pkg-ref id="jonascz.MarvinCapture.app"/>
     </choice>
     <choice id="cli" title="Command-line tool"
-            description="MarvinCaptureCLI, linked into /usr/local/bin so it is on your PATH. The files are in /usr/local/lib/marvincapture.">
+            description="MarvinCaptureCLI and MarvinPlayout, linked into /usr/local/bin so it is on your PATH. The files are in /usr/local/lib/marvincapture.">
         <pkg-ref id="jonascz.MarvinCapture.cli"/>
     </choice>
 

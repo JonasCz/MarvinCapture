@@ -8,6 +8,13 @@ terminal the CLI wraps it to the window width; piped, it is left unwrapped.
 
 @CLI_HELP@
 
+## MarvinPlayout
+
+`MarvinPlayout` is a separate program installed next to `MarvinCaptureCLI`. It plays DV or HDV
+files out over FireWire as a virtual deck, with the same left-to-right syntax
+(`--rew --wait --play --wait timecode=... --stop`) and wait conditions. See
+[playout.md](playout.md).
+
 ## Android (Termux)
 
 The CLI from the Android build (`scripts/build-android-native.sh`: `MarvinCaptureCLI` and

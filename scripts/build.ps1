@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   1. (first time only) builds the minimal static FFmpeg into third_party\.
-  2. Configures and builds the native core (marvin-core.dll, MarvinCaptureCLI)
+  2. Configures and builds the native core (marvin-core.dll, MarvinCaptureCLI, MarvinPlayout)
      with MSYS2 (x64: UCRT64 gcc, arm64: CLANGARM64 clang) into
      build\windows-<arch>\core, and runs the ctest suite.
   3. Builds the WinUI 3 app against that core (intermediates in
@@ -16,6 +16,7 @@
 
        MarvinCaptureGUI.exe       the GUI
        MarvinCaptureCLI.exe       the command-line program
+       MarvinPlayout.exe          plays DV/HDV files out as a virtual deck (docs\playout.md)
        marvin-core.dll            the core library (+ libusb-1.0.dll,
                                   libwinpthread-1.dll)
        firmware\                  FPGA bitstreams
@@ -115,6 +116,7 @@ Step "Assembling build\$platform\dist"
 if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $core 'MarvinCaptureCLI.exe') $dist -Force
+Copy-Item (Join-Path $core 'MarvinPlayout.exe') $dist -Force   # links the core statically, finds firmware\ next to itself
 # The help text lives in src\engine\pin_script.c; docs\cli.md is generated from docs\cli.md.template.
 $helpText = (& (Join-Path $dist 'MarvinCaptureCLI.exe') --help-text) -join "`n"
 $tmpl = [IO.File]::ReadAllText((Join-Path $root 'docs\cli.md.template'))
@@ -144,7 +146,7 @@ if (-not $SkipGui) {
 
 # --- Check ---------------------------------------------------------------------
 Step "Checking build\$platform\dist"
-$expect = @('MarvinCaptureCLI.exe', 'marvin-core.dll', 'libusb-1.0.dll', 'libwinpthread-1.dll',
+$expect = @('MarvinCaptureCLI.exe', 'MarvinPlayout.exe', 'marvin-core.dll', 'libusb-1.0.dll', 'libwinpthread-1.dll',
             'firmware\fpga-ohci.bin', 'firmware\fpga-capture.bin', 'firmware\fx2-marvin.bin')
 if (-not $SkipGui) {
     $expect += 'MarvinCaptureGUI.exe'

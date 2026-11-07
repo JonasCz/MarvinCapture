@@ -227,6 +227,11 @@ int pout_link_bus_generation(pout_link_t *k)
 int pout_link_rescan(pout_link_t *k)
 {
     k->irm = 0;
+    /* GUESS: IEC 61883-1 clears the point-to-point and broadcast counters on a bus reset, and the
+     * IRM forgets the allocations that are not renewed within a second */
+    k->have_res = 0;
+    pout_csr_cfg_t pc = k->csr.cfg;
+    pout_csr_init(&k->csr, &pc);
     return p1394_read_topology(&k->l);
 }
 
@@ -336,6 +341,7 @@ int pout_link_open(pout_link_t **out, const pout_link_cfg_t *cfg, char *err, siz
 
     pout_csr_cfg_t pc;
     pout_csr_cfg_default(&pc, k->cfg.max_packet);
+    pc.rate = k->cfg.speed > 2 ? 2 : k->cfg.speed;
     pout_csr_init(&k->csr, &pc);
 
     pthread_mutex_init(&k->it_mtx, NULL);
@@ -421,7 +427,7 @@ unsigned pout_link_bandwidth_units(unsigned max_packet, unsigned speed)
     return (max_packet / 4 + 3) * (16u >> (speed > 2 ? 2 : speed)) + 512u;
 }
 
-int pout_link_irm_alloc(pout_link_t *k, unsigned bw)
+static int irm_alloc_ch(pout_link_t *k, unsigned bw, int want)
 {
     if (find_irm(k) != 0)
         return -1;
@@ -432,7 +438,7 @@ int pout_link_irm_alloc(pout_link_t *k, unsigned bw)
         if (irm_read(k, k->irm, IRM_CHANNELS_HI, &hi) != 0 || irm_read(k, k->irm, IRM_CHANNELS_LO, &lo) != 0)
             return -1;
         int ch = -1;
-        for (int c = 0; c < 63 && ch < 0; c++) {
+        for (int c = want >= 0 ? want : 0; c < (want >= 0 ? want + 1 : 63) && ch < 0; c++) {
             uint32_t w = c < 32 ? hi : lo;
             if (w & (0x80000000u >> (c & 31)))
                 ch = c;
@@ -465,6 +471,8 @@ int pout_link_irm_alloc(pout_link_t *k, unsigned bw)
     return channel;
 }
 
+int pout_link_irm_alloc(pout_link_t *k, unsigned bw) { return irm_alloc_ch(k, bw, -1); }
+
 void pout_link_irm_release(pout_link_t *k, unsigned channel, unsigned bw)
 {
     if (!k->irm)
@@ -488,18 +496,19 @@ void pout_link_irm_release(pout_link_t *k, unsigned channel, unsigned bw)
 int pout_link_local_connect(pout_link_t *k, int on)
 {
     if (on) {
-        if (k->have_res)
-            return (int)k->res_channel;
+        unsigned ch = k->cfg.channel > 63 ? 63 : k->cfg.channel;
         unsigned sp = (k->csr.opcr & POUT_PCR_RATE_MASK) >> POUT_PCR_RATE_SHIFT;
-        unsigned bw = pout_link_bandwidth_units(k->cfg.max_packet, sp);
-        int ch = pout_link_irm_alloc(k, bw);
-        if (ch < 0)
-            return -1;
-        k->have_res = 1;
-        k->res_channel = (unsigned)ch;
-        k->res_bw = bw;
-        pout_csr_local_connect(&k->csr, (unsigned)ch, 1);
-        return ch;
+        if (ch != 63 && !k->have_res) {
+            unsigned bw = pout_link_bandwidth_units(k->cfg.max_packet, sp);
+            int got = irm_alloc_ch(k, bw, (int)ch);
+            if (got < 0)
+                return -1;
+            k->have_res = 1;
+            k->res_channel = (unsigned)got;
+            k->res_bw = bw;
+        }
+        pout_csr_local_connect(&k->csr, ch, 1);
+        return (int)ch;
     }
     pout_csr_local_connect(&k->csr, 0, 0);
     if (k->have_res)
@@ -621,9 +630,15 @@ int pout_link_it_start(pout_link_t *k, unsigned channel, unsigned speed)
     if (p1394_reg_write(&k->l, POUT_IT_REG_CTRL_CLR, POUT_IT_CTX_RUN) != 0)
         return -1;
     pout_it_init(&k->it, channel, speed, k->cfg.max_packet);
+    /* GUESS/TODO: the vendor's HDV layout (4 buffers of 584 bytes from 0x1770) ends at 0x20b0, past
+     * the start of our self-ID buffer at 0x2000 (pinnacle_1394.c link init). The vendor driver has
+     * the same overlap with its own self-ID area, which suggests the FPGA does not care or that the
+     * area is idle after the bus has settled, but nobody has checked. pout_it has no knob for the
+     * buffer base (POUT_IT_RAM_BUFFERS is the vendor's); if a bus reset or the stream misbehaves
+     * with HDV, move the self-ID buffer (link init) below the ring or shrink max_packet. */
     if (pout_it_ram_end(&k->it) > 0x2000)
-        pin_logf(PIN_LOG_DEBUG, "playout: the IT ring reaches RAM 0x%x, past the self-ID buffer at 0x2000\n",
-                 pout_it_ram_end(&k->it));
+        pin_logf(PIN_LOG_WARN, "playout: the IT payload buffers reach RAM 0x%x, past the self-ID buffer at "
+                 "0x2000 (as in the vendor driver; untested)\n", pout_it_ram_end(&k->it));
 
     pthread_mutex_lock(&k->it_mtx);
     k->q_head = k->q_count = 0;

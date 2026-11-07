@@ -48,6 +48,23 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/marvin_playout.c)
     if(WIN32)
         target_link_options(MarvinPlayout PRIVATE -static-libgcc -Wl,-Bstatic -lwinpthread -Wl,-Bdynamic)
     endif()
+    # Next to MarvinCaptureCLI, marvin-core and firmware/ (the top-level build puts them all in
+    # the build directory; the program looks for firmware/ next to itself, see
+    # pout_hw_find_bitstream()), and libusb-1.0.dll beside it on Windows.
+    set_target_properties(MarvinPlayout PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+    if(ANDROID)
+        # 16 KB pages, as for marvin-core and MarvinCaptureCLI (see the top-level CMakeLists.txt)
+        target_link_options(MarvinPlayout PRIVATE -Wl,-z,max-page-size=16384)
+    endif()
+    if(APPLE AND DEFINED _pin_libusb_id AND DEFINED _pin_libusb_name)
+        # The same libusb copy marvin-core bundles (top-level CMakeLists.txt): point this
+        # program at it too instead of Homebrew's, so dist/ needs no Homebrew at run time.
+        add_custom_command(TARGET MarvinPlayout POST_BUILD
+            COMMAND install_name_tool -change ${_pin_libusb_id}
+                @loader_path/${_pin_libusb_name} $<TARGET_FILE:MarvinPlayout>
+            COMMAND codesign --force --sign - $<TARGET_FILE:MarvinPlayout>
+            VERBATIM)
+    endif()
 endif()
 
 if(PIN_BUILD_TESTS)
