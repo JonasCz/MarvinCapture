@@ -22,7 +22,7 @@ order, exactly one of the packets the vendor driver sends.
 
 ### The command word
 
-Everything on EP 0x02 / EP 0x84 / EP 0x88 is a stream of messages sharing
+Everything on EP 0x02 / EP 0x84 / EP 0x88 (and EP 0x06, the isochronous transmit path) is a stream of messages sharing
 one little-endian `u32` header:
 
 ```
@@ -43,6 +43,7 @@ bits 15:0   device RAM address    (payload messages)
 | 8 | block write to device RAM (`len` bytes follow) |
 | 9 | block read / device→host data (`len` bytes follow) |
 | 10 | OHCI `IntEvent` report |
+| 11 | isochronous transmit only (EP 0x06): `0xb0000000 \| first<<26 \| seq&0x3f`, most likely "wait until transmit packet `seq` has gone out"; see [handoff/playout-feasibility.md](handoff/playout-feasibility.md) |
 
 So the sequences we had been replaying blind are readable now. For example
 `00 04 01 20 | 00 90 00 00` is "write OHCI `0x400`

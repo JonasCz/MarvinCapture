@@ -95,7 +95,7 @@ transport, and WinUSB/libusb support is straightforward.
 |---|---|---|
 | 0 | 0x01 OUT, 0x81 IN, 0x02 OUT | idle / config channel and bitstream upload |
 | 1 | 0x01, 0x81, 0x02, **0x84 IN, 0x06 OUT, 0x88 IN** | **DV/HDV**: the operational setting for the OHCI design |
-| 2 | 0x01, 0x81, 0x02, 0x06 OUT | output to the camera (not used) |
+| 2 | 0x01, 0x81, 0x02, 0x06 OUT | not used (the vendor transmits DV/HDV on EP 0x06 in alt 1; see [handoff/playout-feasibility.md](handoff/playout-feasibility.md)) |
 | 3 | 0x01, 0x81, **0x82 IN, 0x86 IN** | **analog capture**: video on 0x82, audio on 0x86 |
 
 The endpoint numbers 1, 2, 4, 6, 8 are exactly the FX2's endpoint set (EP1 plus

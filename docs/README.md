@@ -36,6 +36,8 @@
 - [handoff/macos-cpu-usage.md](handoff/macos-cpu-usage.md): macOS GUI CPU results and what remains.
 - [handoff/dv-timecode-warning.md](handoff/dv-timecode-warning.md): the DV "invalid timecode" warning.
 - [handoff/android-plan.md](handoff/android-plan.md): feasibility and plan for an Android GUI (not started).
+- [handoff/playout-feasibility.md](handoff/playout-feasibility.md): DV/HDV playout and a virtual deck over a file
+  (isochronous transmit on EP 0x06, AV/C target), analog playout; from the vendor driver, not started.
 
 **Elsewhere**
 
