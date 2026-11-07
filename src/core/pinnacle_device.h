@@ -48,6 +48,7 @@ extern "C" {
 #define PINNACLE_EP_CMD_OUT    0x02 /* FPGA bitstream at init, then the 1394/stream command channel */
 #define PINNACLE_EP_CMD_IN     0x84 /* replies/status for the command channel */
 #define PINNACLE_EP_DV_IN      0x88 /* the DV stream, nothing else */
+#define PINNACLE_EP_IT_OUT     0x06 /* isochronous transmit (playout): same messages as EP 0x02, see docs/handoff/playout-feasibility.md; untested */
 
 typedef enum {
     PINNACLE_OK = 0,

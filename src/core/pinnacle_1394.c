@@ -157,6 +157,9 @@ static void handle_ar_packet(pinnacle_1394_t *l, uint16_t ram, const uint8_t *d,
         l->fcp_len[slot] = (int)len;
         l->fcp_seq++;
     } else if (tcode != 0xe) {   /* 0xe: PHY packets (self-IDs) */
+        /* target side (virtual deck): the handler owns the request and answers it */
+        if (l->req_fn && l->req_fn(l->req_user, d, n, ack))
+            return;
         pin_logf(PIN_LOG_DEBUG, "p1394: unexpected request tcode=%x from %04x to %04x%08x\n",
                 tcode, src, q1 & 0xffff, q2);
     }
@@ -253,6 +256,24 @@ int p1394_send(pinnacle_1394_t *l, const uint8_t *msg, int len)
         return -1;
     }
     return 0;
+}
+
+void p1394_set_request_handler(pinnacle_1394_t *l, p1394_request_fn fn, void *user)
+{
+    l->req_fn = fn;
+    l->req_user = user;
+}
+
+int p1394_send_it(pinnacle_1394_t *l, const uint8_t *buf, int len, unsigned timeout_ms)
+{
+    int n = 0;
+    int rc = libusb_bulk_transfer(l->dev->handle, PINNACLE_EP_IT_OUT, (uint8_t *)buf, len, &n,
+                                  timeout_ms);
+    if (rc != 0) {
+        l->last_usb_rc = rc;
+        return -1;
+    }
+    return n;
 }
 
 static int put_reg_write(uint8_t *p, uint16_t off, uint32_t val)
@@ -771,22 +792,47 @@ int p1394_avc_cancel(pinnacle_1394_t *l)
  * byte-identical to the vendor driver's. */
 #define ROM_GUID_HI 3
 #define ROM_GUID_LO 4
-#define ROM_WORDS   38
+#define ROM_WORDS   P1394_ROM_WORDS
 
+static uint16_t crc16_step(uint16_t c, unsigned byte)
+{
+    c ^= (uint16_t)(byte << 8);
+    for (int b = 0; b < 8; b++)
+        c = (uint16_t)(c & 0x8000 ? (c << 1) ^ 0x1021 : c << 1);
+    return c;
+}
+
+/* the vendor's: bytes of each quadlet least significant first */
 static uint16_t rom_crc(const uint32_t *q, unsigned n)
 {
     uint16_t c = 0;
     for (unsigned i = 0; i < n; i++)
-        for (unsigned byte = 0; byte < 4; byte++) {         /* little-endian byte order */
-            c ^= (uint16_t)(((q[i] >> (8 * byte)) & 0xff) << 8);
-            for (int b = 0; b < 8; b++)
-                c = (uint16_t)(c & 0x8000 ? (c << 1) ^ 0x1021 : c << 1);
-        }
+        for (unsigned byte = 0; byte < 4; byte++)
+            c = crc16_step(c, (q[i] >> (8 * byte)) & 0xff);
     return c;
 }
 
-static void build_config_rom(uint32_t rom[ROM_WORDS], uint32_t guid_hi, uint32_t guid_lo)
+/* IEEE 1212: most significant byte first */
+uint16_t p1394_rom_crc16(const uint32_t *q, unsigned n)
 {
+    uint16_t c = 0;
+    for (unsigned i = 0; i < n; i++)
+        for (int byte = 3; byte >= 0; byte--)
+            c = crc16_step(c, (q[i] >> (8 * byte)) & 0xff);
+    return c;
+}
+
+/* avc_unit: the unit directory that controllers look for (1394TA AV/C:
+ * Unit_Spec_ID 0x00A02D, Unit_SW_Version 0x010001) instead of Pinnacle's
+ * own specifier, so a virtual deck is recognised as an AV/C unit. The
+ * layout and offsets stay the same (the unit directory keeps its model ID
+ * and the "Marvin Series" text leaf). The CRCs of that variant follow the
+ * standard (GUESS: a strict controller would reject the vendor's byte order;
+ * a lenient one, like the vendor's ROM, never checks). */
+void p1394_config_rom_build(uint32_t rom[ROM_WORDS], uint32_t guid_hi, uint32_t guid_lo,
+                            int avc_unit)
+{
+    uint16_t (*crc)(const uint32_t *, unsigned) = avc_unit ? p1394_rom_crc16 : rom_crc;
     uint32_t vendor = guid_hi >> 8;                   /* node_vendor_ID = GUID bits 63:40 */
     static const uint32_t text_pinnacle[] = {         /* "Pinnacle Systems", UTF-16LE */
         0x80000000, 0x00000409, 0x50006900, 0x6e006e00, 0x61006300, 0x6c006500,
@@ -804,26 +850,26 @@ static void build_config_rom(uint32_t rom[ROM_WORDS], uint32_t guid_hi, uint32_t
     rom[i++] = 0xf000a002;
     rom[i++] = guid_hi;
     rom[i++] = guid_lo;
-    rom[0] |= rom_crc(&rom[1], 4);
+    rom[0] |= crc(&rom[1], 4);
     /* root directory */
     rom[i++] = 0x00040000;
     rom[i++] = 0x0c0083c0;                            /* node capabilities */
     rom[i++] = 0x03000000 | vendor;                   /* module vendor ID */
     rom[i++] = 0x81000007;                            /* text leaf, +7 quadlets */
     rom[i++] = 0xd1000001;                            /* unit directory, +1 quadlet */
-    rom[5] |= rom_crc(&rom[6], 4);
+    rom[5] |= crc(&rom[6], 4);
     /* unit directory */
     rom[i++] = 0x00040000;
-    rom[i++] = 0x12000000 | vendor;                   /* specifier ID */
-    rom[i++] = 0x13000000;                            /* version 0 */
+    rom[i++] = avc_unit ? 0x1200a02du : 0x12000000 | vendor;   /* specifier ID */
+    rom[i++] = avc_unit ? 0x13010001u : 0x13000000;            /* version */
     rom[i++] = 0x17000000;                            /* model 0 */
     rom[i++] = 0x8100000d;                            /* text leaf, +13 quadlets */
-    rom[10] |= rom_crc(&rom[11], 4);
+    rom[10] |= crc(&rom[11], 4);
     /* text leaves */
-    rom[i] = 0x000b0000 | rom_crc(text_pinnacle, 11);
+    rom[i] = 0x000b0000 | crc(text_pinnacle, 11);
     memcpy(&rom[i + 1], text_pinnacle, sizeof(text_pinnacle));
     i += 12;
-    rom[i] = 0x000a0000 | rom_crc(text_marvin, 10);
+    rom[i] = 0x000a0000 | crc(text_marvin, 10);
     memcpy(&rom[i + 1], text_marvin, sizeof(text_marvin));
 }
 
@@ -1042,7 +1088,7 @@ int p1394_link_init(pinnacle_1394_t *l)
     if (!l->dev->have_guid)
         pin_logf(PIN_LOG_WARN, "p1394: device GUID not read; publishing the development unit's\n");
     uint32_t rom[ROM_WORDS], be[ROM_WORDS];
-    build_config_rom(rom, guid_hi, guid_lo);
+    p1394_config_rom_build(rom, guid_hi, guid_lo, l->rom_avc_unit);
     {
         char line[32 + 9 * ROM_WORDS];
         int off = snprintf(line, sizeof(line), "p1394: config ROM");

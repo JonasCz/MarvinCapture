@@ -57,6 +57,18 @@ extern "C" {
 
 #define P1394_FCP_SLOTS 16
 
+/* Incoming asynchronous request hook (target side). rec is the whole OHCI AR
+ * record as handle_ar_packet() got it: header quadlets in host order (12
+ * bytes for a quadlet read, 16 otherwise), payload in wire order, then the
+ * trailer quadlet whose bits 20:16 are the ack our link sent (also passed as
+ * ack). Called from inside p1394_pump()/p1394_parse_ep84(), for every request
+ * except FCP responses to us and PHY packets. Return 1 if the request is
+ * handled: the core then logs nothing and sends no write response, the
+ * handler answers (later, not from inside this call: p1394_submit() would
+ * re-enter p1394_pump()). Return 0 to get the old behaviour. rec is only valid
+ * during the call, copy it. */
+typedef int (*p1394_request_fn)(void *user, const uint8_t *rec, unsigned len, unsigned ack);
+
 typedef struct {
     pinnacle_device_t *dev;
     uint16_t local_node;       /* 0xffc0 | our node number, from NodeID */
@@ -91,9 +103,34 @@ typedef struct {
     int avc_fcp_seq0;
     unsigned avc_status_addr;
     unsigned long long avc_deadline_ms;
+
+    /* target side (MarvinPlayout's virtual deck); all unused by the capture path */
+    p1394_request_fn req_fn;   /* see p1394_set_request_handler(); NULL = log requests as unexpected */
+    void *req_user;
+    int rom_avc_unit;          /* 1: publish the AV/C unit directory (set after p1394_init, before p1394_link_init) */
 } pinnacle_1394_t;
 
 void p1394_init(pinnacle_1394_t *l, pinnacle_device_t *dev);
+
+void p1394_set_request_handler(pinnacle_1394_t *l, p1394_request_fn fn, void *user);
+
+/* Writes a buffer of EP 0x06 messages (isochronous transmit, see
+ * src/playout/pout_it.h) as one bulk transfer; blocks until the device took
+ * it all (it NAKs while its transmit FIFO is full). Returns the bytes written
+ * or -1 (l->last_usb_rc set). Touches no other state, so another thread may
+ * call it while the link is pumped. */
+int p1394_send_it(pinnacle_1394_t *l, const uint8_t *buf, int len, unsigned timeout_ms);
+
+/* Our configuration ROM: P1394_ROM_WORDS host-order quadlets for the given
+ * GUID. avc_unit 0 is the Pinnacle layout the capture path publishes (CRCs
+ * computed the vendor's way, little-endian byte order); 1 replaces its unit
+ * directory with the AV/C one (specifier 0x00A02D, version 0x010001) and uses
+ * the IEEE 1212 CRC-16 everywhere. */
+#define P1394_ROM_WORDS 38
+void p1394_config_rom_build(uint32_t rom[P1394_ROM_WORDS], uint32_t guid_hi, uint32_t guid_lo,
+                            int avc_unit);
+/* IEEE 1212 CRC-16 (CRC-CCITT 0x1021, each quadlet most significant byte first) of n quadlets. */
+uint16_t p1394_rom_crc16(const uint32_t *q, unsigned n);
 
 /* Reads EP 0x84 once (up to timeout_ms) and processes what arrived.
  * Returns the number of bytes read, 0 on timeout, <0 on a USB error. */
