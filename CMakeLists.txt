@@ -267,6 +267,10 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
             INSTALL_RPATH "${_pin_cli_rpath}")
     endif()
 
+    # MarvinPlayout: DV/HDV playout and the virtual deck, a separate program
+    # (src/playout, docs/playout.md).
+    add_subdirectory(src/playout)
+
     # Hardware-free ctest coverage of the session engine, driven through
     # pin_api.h against the replay (virtual device) source -- see
     # tests/engine_replay/replay_test_util.h.
