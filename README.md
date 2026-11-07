@@ -87,7 +87,7 @@ To uninstall: if you only installed the app, drag it to the Trash. Otherwise run
 
 ### Windows
 
-Download and run the installer, which will install the GUI, CLI, and associate the libusb driver with the device.
+Download and run the installer, which will install the GUI, CLI, and associate the libusb driver with the device. The manufacturer's driver or software is not required.
 
 <details>
 <summary>Notes for installing unsigned apps ("Windows protected your PC", "Unknown publisher", etc.), and manual driver installation.</summary>
