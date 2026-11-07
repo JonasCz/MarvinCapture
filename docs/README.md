@@ -25,10 +25,10 @@
 
 **Testing**
 
-- [testing-required.md](testing-required.md): what was fixed and tested in code so far
-  (HDV format detection and scene split, mixed-format tapes, disk and FAT32 limits) and
-  what is still untested or likely broken (24p, other cameras/decks, real mixed tapes),
-  tagged by whether it needs hardware, a FireWire PC as a source, or only code.
+- [testing-required.md](testing-required.md): what still needs testing, grouped by the
+  input that tests it: HDV 1080i, 720p and 24p sources, DV variants, mixed tapes, other
+  cameras and decks, a FireWire PC or second Marvin as the source, analog, drives, hosts,
+  and what is left to test in code.
 
 **Handoff notes**
 
