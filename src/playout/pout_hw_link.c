@@ -235,6 +235,16 @@ int pout_link_rescan(pout_link_t *k)
     return p1394_read_topology(&k->l);
 }
 
+int pout_link_bus_reset(pout_link_t *k)
+{
+    return p1394_bus_reset(&k->l);
+}
+
+void pout_link_set_packet_size(pout_link_t *k, unsigned max_packet)
+{
+    pout_csr_set_payload(&k->csr, max_packet);
+}
+
 /* --- open / close ----------------------------------------------------------- */
 
 static void fail(char *err, size_t cap, const char *what, const char *detail)

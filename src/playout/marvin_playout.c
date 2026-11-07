@@ -27,6 +27,7 @@
 #include "pout_out.h"
 #include "pout_script.h"
 #include "pout_session.h"
+#include "pout_switch.h"
 #include "pout_tape.h"
 
 #include <signal.h>
@@ -116,7 +117,15 @@ static int dry_run(const pout_script_t *sc, pout_tape_t *tape, char *err, size_t
         return POUT_EXIT_DEVICE;
     }
     int code = pout_session_run(s, err, err_cap);
-    fprintf(stderr, "%lu frames sent to %s\n", pout_session_frames_sent(s), sc->dry_run);
+    int nf = pout_out_file_count(out);
+    if (nf > 1) {
+        fprintf(stderr, "%lu frames sent to %d files:", pout_session_frames_sent(s), nf);
+        for (int i = 0; i < nf; i++)
+            fprintf(stderr, "%s %s", i ? "," : "", pout_out_file_name(out, i));
+        fprintf(stderr, "\n");
+    } else {
+        fprintf(stderr, "%lu frames sent to %s\n", pout_session_frames_sent(s), sc->dry_run);
+    }
     pout_session_destroy(s);
     out->destroy(out);
     return code;
@@ -150,6 +159,13 @@ int main(int argc, char **argv)
         pout_script_destroy(sc);
         return POUT_EXIT_USAGE;
     }
+
+    for (int i = 0; i < sc->nswitches; i++)
+        if (pout_switch_set(sc->switches[i], err, sizeof(err)) != 0) {
+            fprintf(stderr, "error: %s\n", err);
+            pout_script_destroy(sc);
+            return POUT_EXIT_USAGE;
+        }
 
     pout_tape_t *tape = NULL;
     if (pout_tape_open(&tape, (const char *const *)sc->files, sc->nfiles, err, sizeof(err)) != 0) {

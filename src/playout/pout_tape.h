@@ -42,6 +42,19 @@
  * files each restart their PCR clock, so the stream has a PCR discontinuity
  * where two files meet, like a real tape between recordings.
  *
+ * Mixed tapes: the files may be of different formats (DV with HDV, PAL with
+ * NTSC, 1080i with 720p), like a real tape with mixed recordings. Every file
+ * is indexed and read in its own format; pout_tape_frame_fmt() tells which
+ * format a frame is in, and what the player does at the change is the
+ * session's business (pout_switch.h). A tape frame is always one output
+ * period (1/25 or 1/29.97 s of the file it is from), the deck counts them.
+ * Timecode: each file keeps its own base (25 or 30) and drop-frame flag; a file
+ * without timecode continues from the label after the previous file's last
+ * frame, its frame number rescaled to the new base (PAL 00:10:00:12 goes on as
+ * NTSC 00:10:00:14), a dropped label moved to :02. A timecode search reads the
+ * label in each file's own base, so one label can exist in a PAL and an NTSC
+ * file; the earliest in tape order wins.
+ *
  * Design note, analog playout later: this module is a *bitstream* source
  * (read_frame gives DV frames or TS packets). An analog output needs decoded
  * pictures, so a MOV/MKV source (demuxed and decoded by FFmpeg) would sit beside
@@ -77,16 +90,37 @@ typedef struct {
 typedef enum { POUT_MEDIA_DV = 0, POUT_MEDIA_HDV } pout_media_t;
 typedef struct pout_tape pout_tape_t;
 
-/* Opens and indexes the files (all must be the same media and standard: DV 625
- * or 525; HDV with the same picture size and frame rate). Returns 0, or -1
- * with a message naming the file in err. */
+/* Largest isochronous packet of a format (CIP header included): DV 8 + 480, HDV 8 + 3 * 192. */
+#define POUT_DV_MAX_PACKET 488u
+#define POUT_HDV_MAX_PACKET 584u
+
+/* The format of a stretch of tape. Two frames are in the same format when media, is_625 and
+ * hdv_720p are equal (fps and max_packet follow from them). */
+typedef struct {
+    pout_media_t media;
+    int is_625;         /* PAL / 50 Hz family */
+    double fps;         /* 25 or 30000/1001 (HDV 720p counted in 25 / 29.97 slots, as pout_tape_fps) */
+    int hdv_720p;       /* HDV only: 720p, else 1080i (any other size) */
+    unsigned max_packet;/* POUT_DV_MAX_PACKET or POUT_HDV_MAX_PACKET */
+} pout_frame_fmt_t;
+
+/* Opens and indexes the files, which may be of different formats (DV 625 or 525, HDV of either
+ * picture size and rate). Returns 0, or -1 with a message naming the file in err (a file that is
+ * empty, unreadable or neither DV nor HDV). */
 int pout_tape_open(pout_tape_t **out, const char *const *paths, int n, char *err, size_t err_cap);
 void pout_tape_close(pout_tape_t *t);
 
+/* media, is_625 and fps are those of the FIRST file; they are all there is to say about a tape of
+ * one format. For a mixed tape use pout_tape_frame_fmt(). The deck's wind speed uses the first file's
+ * fps (approximate for the rest). */
 pout_media_t pout_tape_media(const pout_tape_t *t);
 int pout_tape_is_625(const pout_tape_t *t); /* PAL / 50 Hz family */
 /* 25 or 30000/1001 (HDV 720p50/59.94 are counted in 25 / 29.97 slots). */
 double pout_tape_fps(const pout_tape_t *t);
+/* The format of a frame; 0, or -1 outside the tape. */
+int pout_tape_frame_fmt(const pout_tape_t *t, int64_t frame, pout_frame_fmt_t *out);
+/* 1 if the files are not all of one format (pout_tape_frame_fmt differs somewhere). */
+int pout_tape_mixed(const pout_tape_t *t);
 int64_t pout_tape_frames(const pout_tape_t *t);
 
 /* Timecode of a frame; sep is ';' (drop frame) or ':' . Returns 0, or -1 if
@@ -105,7 +139,7 @@ int64_t pout_tape_frame_of_tc(const pout_tape_t *t, const pin_tc_t *tc);
  * (n * 188 bytes, M2TS prefixes dropped) whose position falls in this
  * frame's 1/fps slot; the slots of all frames together hold every packet of
  * the files once, in order. May be empty. Returns 0 on success. buf must hold
- * pout_tape_max_frame_bytes(). */
+ * pout_tape_max_frame_bytes() (the largest frame of any file). */
 int pout_tape_read_frame(pout_tape_t *t, int64_t frame, uint8_t *buf, size_t cap, size_t *len);
 size_t pout_tape_max_frame_bytes(const pout_tape_t *t);
 /* Where to start playing to show frame: HDV the frame holding the start of the
@@ -119,7 +153,8 @@ void pout_tape_ops(pout_tape_t *t, pout_tape_ops_t *ops);
 int pout_tape_file_count(const pout_tape_t *t);
 int pout_tape_file_of_frame(const pout_tape_t *t, int64_t frame, int *index); /* 0, or -1 */
 const char *pout_tape_file_path(const pout_tape_t *t, int i);                 /* NULL if out of range */
-/* One line, e.g. "DV PAL, 3 files, 00:02:00:00" (the last item is the length). */
+/* One line, e.g. "DV PAL, 3 files, 00:02:00:00" or "mixed DV PAL + HDV 1080i50, 3 files, 00:02:00:00"
+ * (the last item is the length, counted in tape frames at the first file's base). */
 void pout_tape_describe(const pout_tape_t *t, char *buf, size_t cap);
 
 #ifdef __cplusplus

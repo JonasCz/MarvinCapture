@@ -65,6 +65,8 @@ typedef struct {
 } pout_avc_t;
 
 void pout_avc_init(pout_avc_t *t, pout_avc_media_t media);
+/* The tape changed format (pout_switch.h): the output plug signal format answers follow from now on. */
+void pout_avc_set_media(pout_avc_t *t, pout_avc_media_t media);
 
 /* Handles one command frame (ctype 0 CONTROL, 1 STATUS, 2 SPECIFIC INQUIRY,
  * 3 NOTIFY, 4 GENERAL INQUIRY; subunit 0xFF = unit, 0x20 = tape recorder #0)

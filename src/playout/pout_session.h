@@ -31,6 +31,11 @@
  * frame (DV; HDV sends empty packets, nothing repeats in a transport stream), STOP and winding
  * send empty packets. The stream keeps its cycle count going in all cases.
  *
+ * Mixed tapes: when the next frame is in another format than the stream, the switch policy of
+ * pout_switch.h is applied (a gap without packets, then empty packets of the new format, then
+ * frames); the deck keeps playing through it, so those tape frames are lost. An HDV frame after a
+ * switch starts at its GOP like after a search (the lag below).
+ *
  * HDV lag (GUESS): a receiver needs a GOP start. When the deck starts to play at frame f the
  * player starts at pout_tape_play_start(f) instead and keeps that distance (the "lag") for the
  * whole run of consecutive frames, so what goes out is up to a GOP behind the deck's timecode and
@@ -47,6 +52,7 @@
 #include "pout_deck.h"
 #include "pout_out.h"
 #include "pout_script.h"
+#include "pout_switch.h"
 #include "pout_tape.h"
 
 #ifdef __cplusplus
@@ -71,6 +77,14 @@ typedef struct {
      * realtime: sleep until the deadline; simulated: nothing. tx says whether a period was sent.
      * The device uses this to pump the link instead (its output queue paces the loop). */
     void (*between)(void *u, double deadline, int tx);
+    /* The tape changes format (pout_switch.h). phase 0: the switch begins and the stream goes dark
+     * for pol->gap_s; the device stops the IT context (restart_stream) and/or initiates a bus
+     * reset here. phase 1: the new format begins (cip is already initialized for it, the cycle
+     * running on): the device updates the AV/C output plug format and the oPCR payload, and
+     * restarts the IT context and re-syncs cip's cycle when `streaming` and pol->restart_stream
+     * (streaming is 0 when the switch is cut short because the stream stopped). */
+    void (*format_switch)(void *u, int phase, const pout_frame_fmt_t *to, const pout_switch_policy_t *pol,
+                          int streaming, pout_cip_t *cip);
     /* One status line a second (wall time), without a newline. */
     void (*status)(void *u, const char *line);
     /* Appended to the status line ("controller node 1"). */

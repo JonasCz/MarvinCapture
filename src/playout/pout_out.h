@@ -30,6 +30,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "pout_tape.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -39,6 +41,10 @@ typedef struct pout_out {
     int  (*packet)(struct pout_out *o, const uint8_t *pkt, unsigned len); /* one isochronous packet */
     void (*stop)(struct pout_out *o);
     void (*destroy)(struct pout_out *o);
+    /* Optional (NULL = ignore): the stream is in this format from now on. Called after start() with
+     * the first format, and at every format switch of a mixed tape once the gap is over, before
+     * the first packet of the new format. The file output starts a new file at a DV <-> HDV change. */
+    int  (*format)(struct pout_out *o, const pout_frame_fmt_t *fmt);
     void *priv;
 } pout_out_t;
 
@@ -55,6 +61,12 @@ static inline int pout_out_send(void *user, const uint8_t *pkt, unsigned len)
  * (NULL on failure, with the reason in err); start() may be called once, stop() finishes the
  * file (HDV: the picture in progress is dropped), destroy() stops if needed and frees. */
 pout_out_t *pout_out_file_create(const char *path, char *err, size_t err_cap);
+/* The files a file output has written: `path`, then at each DV <-> HDV switch of the format a new
+ * one named like a capture's scenes (NAME-0002.dv / NAME-0003.m2t: the number of the file, the
+ * extension of its kind). PAL <-> NTSC stays in one .dv (raw DV allows it). 0 / NULL for an output
+ * that is not a file output. */
+int pout_out_file_count(const pout_out_t *o);
+const char *pout_out_file_name(const pout_out_t *o, int i);
 
 #ifdef __cplusplus
 }

@@ -60,6 +60,12 @@ void pout_csr_cfg_default(pout_csr_cfg_t *cfg, unsigned max_packet_bytes)
     cfg->n_in_plugs = 0;
 }
 
+void pout_csr_set_payload(pout_csr_t *c, unsigned max_packet_bytes)
+{
+    c->cfg.payload_quadlets = pout_csr_payload(max_packet_bytes);
+    c->opcr = (c->opcr & ~POUT_PCR_PAYLOAD_MASK) | (c->cfg.payload_quadlets & POUT_PCR_PAYLOAD_MASK);
+}
+
 void pout_csr_init(pout_csr_t *c, const pout_csr_cfg_t *cfg)
 {
     memset(c, 0, sizeof(*c));

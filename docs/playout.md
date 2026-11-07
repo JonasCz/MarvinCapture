@@ -14,8 +14,8 @@ end of this page.
 ## What it does
 
 - The files you name are one **tape**, in the order given; each file is one recording and keeps its
-  own timecode (a file without one continues the previous file's). All files must be the same kind
-  (DV PAL, DV NTSC, or HDV with the same picture size and rate).
+  own timecode (a file without one continues the previous file's). The files may be of different
+  formats, like a tape with mixed recordings: see [Tapes that mix formats](#tapes-that-mix-formats).
 - The **virtual deck** behaves like a camcorder in VCR mode: PLAY, PAUSE, STOP, FF, REW and timecode
   search take time, the tape runs at a speed, and a search ends paused at its target.
 - It **answers AV/C commands** from the node on the other end of the cable (a capture program, or
@@ -45,6 +45,7 @@ run left to right as in `MarvinCaptureCLI`:
 | `--no-virtual-deck` | do not answer AV/C; only the command line drives the deck |
 | `--stay` | keep serving after the actions, until Ctrl-C |
 | `--dry-run OUT`, `--realtime` | no device: write the stream to a file; paced like the bus with `--realtime` |
+| `--switch KIND=gap:SEC,blank:SEC,reset:0\|1,restart:0\|1` | experiments: change what happens when the tape changes format (below) |
 | `--debug` | debug log: raw AV/C traffic, bring-up details |
 
 Exit codes: 0 ok, 1 usage error, 2 device or bring-up error (also: no device, no firmware), 3 a wait
@@ -113,6 +114,59 @@ device's EP 0x88 stream takes), so the file is what a capture program would reco
 DV: byte for byte the tape's frames (plus repeats while paused). HDV: PAT/PMT first, then the stream from
 the first GOP on; the picture in progress at the end is dropped. This is what `tests/playout` checks.
 
+## Tapes that mix formats
+
+A tape may hold DV and HDV, DV PAL and NTSC, HDV 1080i and 720p, in any order. Every file is played in
+its own format and keeps its own timecode base and drop-frame flag (a file without timecode continues
+from the label after the previous file's last frame, its frame number rescaled to the new base: PAL
+`00:10:00:12` goes on as NTSC `00:10:00:14`; a timecode search reads the label in each file's own base,
+earliest file first). The deck counts tape frames, one per output period, and its wind speed uses the
+first file's frame rate, so winding past a format change is only approximately 30 times real time.
+
+**What a real camera sends over FireWire when its tape switches format has not been observed yet.**
+MarvinPlayout implements a best guess, kept in one small table (`src/playout/pout_switch.c`) so it is
+easy to change once a camera has been seen ([testing-required.md](testing-required.md#3-tapes-that-mix-dv-and-hdv-or-pal-and-ntsc)).
+When the next frame to send is in another format than the stream:
+
+1. **gap**: the stream stops, no isochronous packets at all, for `gap_s`. The deck keeps playing, so the
+   tape frames under the head in that time (and in the blank time) are lost, like a real tape running.
+2. The stream starts again in the new format (the CIP header, DBC from 0; the bus cycle count runs on) and
+   sends **blank** time of empty packets of the new format.
+3. Then the frames go on. An HDV frame after a switch starts at its GOP, like after a search.
+
+On the device, the switch can also **restart the IT context** (needed when the packet size and CIP format
+change) and **initiate a bus reset** (off by default; the stream then restarts as after any bus reset, which
+ends the switch). From the switch on, the AV/C OUTPUT PLUG SIGNAL FORMAT answer and the oPCR payload follow
+the new format. For a mixed tape bandwidth and the IT ring are sized for the larger HDV packets (584 bytes) up
+front, so the IRM allocation does not change mid-stream. If nobody receives during a switch (no
+connection, bus reset) it ends at once.
+
+| switch | gap | blank | bus reset | restart IT | why |
+|---|---|---|---|---|---|
+| DV <-> HDV (`kind`) | 1.0 s | 0.2 s | no | yes | camcorders with an "i.LINK conversion: off / AUTO" setting switch the i.LINK stream with the tape and warn that the signal is interrupted at the change; packet size and CIP format change |
+| DV PAL <-> NTSC (`std`; also HDV 50 <-> 60 Hz) | 0 | 0.5 s | no | no | the stream goes on; the deck re-locks its servo to the new frame rate |
+| HDV 1080i <-> 720p (`hdv-format`) | 0.5 s | 0.2 s | no | no | same CIP format, the encoder chain restarts on a new sequence |
+
+**This is a guess.** For experiments the table can be changed on the command line, several times if wanted:
+
+```sh
+MarvinPlayout --switch kind=gap:2,blank:0,reset:1 --switch std=blank:0.1 dv.dv hdv.m2t ntsc.dv
+```
+
+`KIND` is `std`, `hdv-format` or `kind`; keys not mentioned keep their value. `--switch kind=gap:0,blank:0`
+loses no frames. With `--dry-run` there is no device, so `reset` and `restart` do nothing; the output
+file is what is checked: one `.dv` holds PAL and NTSC together, but a DV <-> HDV change starts a new file
+(`out-0002.m2t`, `out-0003.dv`, numbered as a capture numbers scenes) and the summary lists the files:
+
+```
+$ MarvinPlayout --dry-run out.dv dv-pal.dv hdv.ts dv-ntsc.dv --switch kind=gap:0.4,blank:0.2
+Tape: mixed DV PAL + HDV 1080i50 + DV NTSC, 3 files, 00:00:05:05
+playout: the tape changes from DV PAL to HDV 1080i50 (kind): 0.40 s without packets, then 0.20 s of empty ones
+playout: the format changes, continuing in out-0002.m2t
+...
+99 frames sent to 3 files: out.dv, out-0002.m2t, out-0003.dv
+```
+
 ## What is a guess
 
 - **Everything on the device**: EP 0x06 descriptor and message layout (`pout_it.h`), when the IT context
@@ -125,6 +179,8 @@ the first GOP on; the picture in progress at the end is dropped. This is what `t
   for a moment and restarts; a local connection is made again, a controller must reconnect.
 - **AV/C answers** (`pout_avc.h`): what has no recorded camera answer behind it. The UNIT INFO company ID
   is 0, which some controllers dislike.
+- **Format switches** of a mixed tape: everything above (`pout_switch.h`): whether the stream stops at all,
+  for how long, whether empty packets follow, bus reset or not, when the plug and AV/C answers change.
 - **HDV**: timecode comes from the GOP headers (not the aux stream), a "frame" is a slot of 1/fps on the
   PCR timeline (720p50/60 gives two pictures per slot), and playing starts at the GOP start before the
   requested frame, so what goes out is up to a GOP behind the deck's timecode and the last frames of the
@@ -156,4 +212,7 @@ detail, with `--debug` and the exit code, each step only if the previous worked:
 5. **Two Marvins**: one runs `MarvinPlayout tape.dv`, the other `MarvinCaptureCLI --rew --wait --play
    --capture cap.dv --wait nosignal=00:00:05`; the capture should equal the tape.
 6. **HDV**: the same with a `.m2t` and the Canon HDV camcorder as receiver; then the RAM-overlap TODO above.
-7. Recording to tape: AV/C RECORD to the camcorder while playing ("export to tape").
+7. **Mixed tape**: `dv-pal.dv hdv.m2t dv-ntsc.dv` to a capture program: it should follow the switches (a new file
+   per kind); try `--switch kind=reset:1` and other values, and compare with what a real camera does
+   ([testing-required.md](testing-required.md#31-dv-and-hdv-on-one-tape)).
+8. Recording to tape: AV/C RECORD to the camcorder while playing ("export to tape").

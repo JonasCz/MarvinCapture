@@ -60,6 +60,11 @@ void pout_avc_init(pout_avc_t *t, pout_avc_media_t media)
     t->company_id = 0x000000;
 }
 
+void pout_avc_set_media(pout_avc_t *t, pout_avc_media_t media)
+{
+    t->media = media;
+}
+
 static int is_inquiry(unsigned ctype)
 {
     return ctype == CT_SPECIFIC_INQUIRY || ctype == CT_GENERAL_INQUIRY;

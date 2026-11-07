@@ -286,19 +286,162 @@ static void test_mixed(void)
     fixture(hdv, sizeof(hdv), "hdv.ts");
     fixture(hdv720, sizeof(hdv720), "hdv-720p.ts");
     const char *pn[2] = {pal, ntsc}, *dh[2] = {pal, hdv}, *hh[2] = {hdv, hdv720}, *hd[3] = {hdv, hdv, pal};
-    pout_tape_t *t = NULL;
+    pout_tape_t *t = NULL, *one = NULL;
+    pout_frame_fmt_t ff;
+    char desc[200];
     err[0] = 0;
-    CHECK(pout_tape_open(&t, pn, 2, err, sizeof(err)) != 0 && t == NULL, "PAL + NTSC rejected");
-    CHECK(strstr(err, "dv-ntsc.dv") != NULL, err);
-    err[0] = 0;
-    CHECK(pout_tape_open(&t, dh, 2, err, sizeof(err)) != 0, "DV + HDV rejected");
-    CHECK(strstr(err, "hdv.ts") != NULL, err);
-    err[0] = 0;
-    CHECK(pout_tape_open(&t, hh, 2, err, sizeof(err)) != 0, "1080i + 720p rejected");
-    CHECK(strstr(err, "hdv-720p.ts") != NULL, err);
-    err[0] = 0;
-    CHECK(pout_tape_open(&t, hd, 3, err, sizeof(err)) != 0, "HDV, HDV, DV rejected");
-    CHECK(strstr(err, "dv-pal.dv") != NULL, err);
+
+    /* PAL + NTSC: 50 + 30 frames, each in its own format and timecode base */
+    t = open_n(pn, 2, err, sizeof(err));
+    CHECK(t != NULL, err);
+    if (t) {
+        CHECK(pout_tape_mixed(t), "PAL + NTSC is mixed");
+        CHECK(pout_tape_frames(t) == 80, "PAL + NTSC frames");
+        CHECK(pout_tape_is_625(t) && pout_tape_media(t) == POUT_MEDIA_DV && pout_tape_fps(t) == 25.0,
+              "global accessors are the first file's");
+        CHECK(pout_tape_max_frame_bytes(t) == 144000, "max frame over all files");
+        CHECK(pout_tape_frame_fmt(t, 49, &ff) == 0 && ff.media == POUT_MEDIA_DV && ff.is_625 && !ff.hdv_720p &&
+                  ff.max_packet == 488,
+              "PAL format");
+        CHECK(pout_tape_frame_fmt(t, 50, &ff) == 0 && ff.media == POUT_MEDIA_DV && !ff.is_625 &&
+                  ff.max_packet == 488 && ff.fps < 29.98 && ff.fps > 29.96,
+              "NTSC format");
+        CHECK(pout_tape_frame_fmt(t, 80, &ff) != 0 && pout_tape_frame_fmt(t, -1, &ff) != 0, "format outside");
+        pout_tape_describe(t, desc, sizeof(desc));
+        CHECK(strstr(desc, "mixed DV PAL + DV NTSC, 2 files") == desc, desc);
+        one = open_n(&pn[1], 1, err, sizeof(err));
+        CHECK(one != NULL && !pout_tape_mixed(one), "single file is not mixed");
+        if (one) {
+            pin_tc_t a, b;
+            CHECK(pout_tape_tc_of_frame(one, 0, &a) == 0 && pout_tape_tc_of_frame(t, 50, &b) == 0 &&
+                      a.h == b.h && a.m == b.m && a.s == b.s && a.f == b.f && a.sep == b.sep,
+                  "the NTSC file keeps its own timecode");
+            CHECK(pout_tape_tc_of_frame(one, 29, &a) == 0 && pout_tape_tc_of_frame(t, 79, &b) == 0 &&
+                      a.h == b.h && a.m == b.m && a.s == b.s && a.f == b.f,
+                  "NTSC last frame");
+            uint8_t *x = (uint8_t *)malloc(144000), *y = (uint8_t *)malloc(144000);
+            size_t lx = 0, ly = 0;
+            CHECK(pout_tape_read_frame(one, 3, x, 144000, &lx) == 0 && pout_tape_read_frame(t, 53, y, 144000, &ly) == 0 &&
+                      lx == 120000 && ly == 120000 && memcmp(x, y, lx) == 0,
+                  "NTSC frame read from the mixed tape");
+            CHECK(pout_tape_read_frame(t, 3, y, 144000, &ly) == 0 && ly == 144000, "PAL frame length");
+            free(x);
+            free(y);
+            pout_tape_close(one);
+        }
+        pout_tape_close(t);
+    }
+
+    /* DV + HDV: frames of both kinds, the HDV part holds every packet once */
+    t = open_n(dh, 2, err, sizeof(err));
+    CHECK(t != NULL, err);
+    if (t) {
+        size_t hn = 0;
+        uint8_t *h = slurp(hdv, &hn);
+        CHECK(pout_tape_mixed(t) && pout_tape_frames(t) == 100, "DV + HDV");
+        CHECK(pout_tape_frame_fmt(t, 0, &ff) == 0 && ff.media == POUT_MEDIA_DV && ff.max_packet == 488, "DV part");
+        CHECK(pout_tape_frame_fmt(t, 99, &ff) == 0 && ff.media == POUT_MEDIA_HDV && ff.is_625 && !ff.hdv_720p &&
+                  ff.max_packet == 584,
+              "HDV part");
+        CHECK(pout_tape_max_frame_bytes(t) >= 144000, "max frame covers the DV frame");
+        pout_tape_describe(t, desc, sizeof(desc));
+        CHECK(strstr(desc, "mixed DV PAL + HDV 1080i50, 2 files") == desc, desc);
+        uint8_t *buf = (uint8_t *)malloc(pout_tape_max_frame_bytes(t));
+        size_t total = 0, len = 0;
+        int ok = buf != NULL && h != NULL;
+        for (int64_t k = 50; ok && k < 100; k++) {
+            ok = pout_tape_read_frame(t, k, buf, pout_tape_max_frame_bytes(t), &len) == 0 && len % 188 == 0 &&
+                 total + len <= hn && memcmp(buf, h + total, len) == 0;
+            total += len;
+        }
+        CHECK(ok && total == hn / 188 * 188, "the HDV frames of a mixed tape hold the file once, in order");
+        /* a play start in the HDV part stays in it */
+        CHECK(pout_tape_play_start(t, 75) >= 50 && pout_tape_play_start(t, 75) <= 75, "HDV play start in its file");
+        CHECK(pout_tape_play_start(t, 20) == 20, "DV play start");
+        free(buf);
+        free(h);
+        pout_tape_close(t);
+    }
+
+    /* 1080i + 720p */
+    t = open_n(hh, 2, err, sizeof(err));
+    CHECK(t != NULL, err);
+    if (t) {
+        CHECK(pout_tape_mixed(t), "1080i + 720p is mixed");
+        CHECK(pout_tape_frame_fmt(t, 0, &ff) == 0 && ff.media == POUT_MEDIA_HDV && !ff.hdv_720p && ff.is_625,
+              "1080i50");
+        CHECK(pout_tape_frame_fmt(t, 50, &ff) == 0 && ff.media == POUT_MEDIA_HDV && ff.hdv_720p && !ff.is_625,
+              "720p60");
+        pout_tape_describe(t, desc, sizeof(desc));
+        CHECK(strstr(desc, "mixed HDV 1080i50 + HDV 720p60") == desc, desc);
+        pout_tape_close(t);
+    }
+
+    /* HDV, HDV, DV */
+    t = open_n(hd, 3, err, sizeof(err));
+    CHECK(t != NULL, err);
+    if (t) {
+        CHECK(pout_tape_frame_fmt(t, 99, &ff) == 0 && ff.media == POUT_MEDIA_HDV, "second HDV");
+        CHECK(pout_tape_frame_fmt(t, 100, &ff) == 0 && ff.media == POUT_MEDIA_DV, "DV after HDV");
+        pout_tape_describe(t, desc, sizeof(desc));
+        CHECK(strstr(desc, "mixed HDV 1080i50 + DV PAL, 3 files") == desc, desc);
+        pout_tape_close(t);
+    }
+    t = open_n(pn, 1, err, sizeof(err));
+    CHECK(t != NULL && !pout_tape_mixed(t), "one file is not mixed");
+    pout_tape_close(t);
+
+    /* synthetic files without timecode: PAL 13, NTSC 60, PAL 5 frames. The timecode continues
+     * across the rate changes from the label after the previous file's last frame. */
+    {
+        char s1[600], s2[600], s3[600];
+        snprintf(s1, sizeof(s1), "%s/pout_tape_m1.dv", g_dir);
+        snprintf(s2, sizeof(s2), "%s/pout_tape_m2.dv", g_dir);
+        snprintf(s3, sizeof(s3), "%s/pout_tape_m3.dv", g_dir);
+        if (write_dv(s1, 1, 13) == 0 && write_dv(s2, 0, 60) == 0 && write_dv(s3, 1, 5) == 0) {
+            const char *p[3] = {s1, s2, s3};
+            pin_tc_t tc;
+            t = open_n(p, 3, err, sizeof(err));
+            CHECK(t != NULL, err);
+            if (t) {
+                CHECK(pout_tape_frames(t) == 78, "synthetic mixed frames");
+                CHECK(tc_is(t, 12, 0, 0, 0, 12), "PAL part");
+                CHECK(tc_is(t, 13, 0, 0, 0, 15), "NTSC continues: 00:00:00:13 PAL is :15 at 30");
+                pout_tape_tc_of_frame(t, 13, &tc);
+                CHECK(tc.sep == ';', "the NTSC part counts in drop frame");
+                CHECK(tc_is(t, 27, 0, 0, 0, 29) && tc_is(t, 28, 0, 0, 1, 0), "NTSC counts 30 frames a second");
+                CHECK(tc_is(t, 72, 0, 0, 2, 14), "NTSC end");
+                CHECK(tc_is(t, 73, 0, 0, 2, 12), "PAL again: :15 at 30 is :12 at 25");
+                pout_tape_tc_of_frame(t, 73, &tc);
+                CHECK(tc.sep == ':', "PAL is not drop frame");
+                CHECK(frame_of(t, 0, 0, 1, 0) == 28, "frame_of_tc reads the label in each file's base");
+                CHECK(frame_of(t, 0, 0, 0, 5) == 5, "frame_of_tc, first file");
+                pout_tape_close(t);
+            }
+        } else {
+            printf("SKIP synthetic mixed files cannot be written\n");
+        }
+        remove(s1);
+        remove(s2);
+        remove(s3);
+    }
+
+    /* what is still refused: a file that is not DV or HDV */
+    {
+        char junk[600];
+        snprintf(junk, sizeof(junk), "%s/pout_tape_junk.dv", g_dir);
+        FILE *jf = fopen(junk, "wb");
+        if (jf) {
+            for (int i = 0; i < 4000; i++)
+                fputc(i * 7, jf);
+            fclose(jf);
+            const char *j[2] = {pal, junk};
+            err[0] = 0;
+            CHECK(pout_tape_open(&t, j, 2, err, sizeof(err)) != 0 && t == NULL && strstr(err, "pout_tape_junk") != NULL,
+                  "an unreadable file is still refused");
+            remove(junk);
+        }
+    }
 
     char empty[600], nofile[600];
     snprintf(empty, sizeof(empty), "%s/pout_tape_empty.dv", g_dir);

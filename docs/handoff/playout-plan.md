@@ -12,7 +12,9 @@ decompiled vendor driver and must be checked once a device is attached.
 
 - **A virtual deck** that plays a "tape" made of one or more `.dv` or
   `.m2t`/`.ts` files, concatenated in the order given (each file is one
-  recording; timecode comes from the files, or is made up where they have none).
+  recording; timecode comes from the files, or is made up where they have none). The files may
+  be of different formats (DV with HDV, PAL with NTSC, 1080i with 720p): what the player does at
+  a change is the guess in `pout_switch.h` (docs/playout.md, "Tapes that mix formats").
 - It answers **AV/C deck commands** from another node (PLAY, PAUSE, STOP,
   FF, REW, TIME CODE search, status queries), so a capture program on the
   other side can drive it like a real VCR.
@@ -71,13 +73,16 @@ frame indexes from 0.
 typedef enum { POUT_MEDIA_DV = 0, POUT_MEDIA_HDV } pout_media_t;
 typedef struct pout_tape pout_tape_t;
 
-/* Opens and indexes the files (all must be the same media and standard). */
+/* Opens and indexes the files; they may be of different formats (a tape with mixed recordings). */
 int  pout_tape_open(pout_tape_t **out, const char *const *paths, int n, char *err, size_t err_cap);
 void pout_tape_close(pout_tape_t *t);
 pout_media_t pout_tape_media(const pout_tape_t *t);
 int     pout_tape_is_625(const pout_tape_t *t);   /* PAL/50 Hz */
 double  pout_tape_fps(const pout_tape_t *t);      /* 25 or 30000/1001 (HDV 720p: 50/59.94 shown as 25/29.97 units) */
 int64_t pout_tape_frames(const pout_tape_t *t);
+/* media/is_625/fps above are the FIRST file's. For a mixed tape: */
+int pout_tape_frame_fmt(const pout_tape_t *t, int64_t frame, pout_frame_fmt_t *out);
+int pout_tape_mixed(const pout_tape_t *t);
 int     pout_tape_tc_of_frame(const pout_tape_t *t, int64_t frame, pin_tc_t *tc);
 int64_t pout_tape_frame_of_tc(const pout_tape_t *t, const pin_tc_t *tc);  /* -1 if not on the tape */
 /* DV: one DIF frame. HDV: the TS packets (n*188 bytes) whose time falls in

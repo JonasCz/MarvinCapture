@@ -31,7 +31,7 @@ const char *pout_script_help_text(void)
     return
         "Usage: MarvinPlayout [settings] FILE... [settings and actions...]\n"
         "\n"
-        "Plays DV (.dv) or HDV (.m2t, .ts) files out over FireWire as a tape in a virtual deck. The files are one tape, in the order given, one recording each. The deck answers AV/C commands from the device on the other end (PLAY, PAUSE, STOP, FF, REW, timecode search) and can also be driven by actions on this command line. With no actions it serves as a deck until Ctrl-C (with --dry-run: plays the whole tape once and exits).\n"
+        "Plays DV (.dv) or HDV (.m2t, .ts) files out over FireWire as a tape in a virtual deck. The files are one tape, in the order given, one recording each; they may be of different formats (DV, HDV, PAL, NTSC), like a tape with mixed recordings. The deck answers AV/C commands from the device on the other end (PLAY, PAUSE, STOP, FF, REW, timecode search) and can also be driven by actions on this command line. With no actions it serves as a deck until Ctrl-C (with --dry-run: plays the whole tape once and exits).\n"
         "Arguments are processed left to right, as in MarvinCaptureCLI. Files and settings come before the first action. An action's argument is the next word unless it starts with --; --wait=idle also works.\n"
         "Transport actions return as soon as the deck has taken the command; like a real deck, the tape needs time: a mode change takes a moment, winding runs at a fixed multiple of real time. Use a wait to wait for the action to complete (for example --rew --wait).\n"
         "\n"
@@ -48,6 +48,8 @@ const char *pout_script_help_text(void)
         "  --dry-run OUT            no device: write what would be sent to the file OUT (.dv or .m2t) through the loopback output\n"
         "  --realtime               with --dry-run: pace like the bus instead of as fast as possible\n"
         "  --stay                   keep serving the virtual deck after the actions, until Ctrl-C\n"
+        "  --switch KIND=gap:SEC,blank:SEC,reset:0|1,restart:0|1\n"
+        "                           for experiments: change what the player does when the tape changes format (KIND: std = DV PAL/NTSC, hdv-format = 1080i/720p, kind = DV/HDV; gap = seconds without packets, blank = seconds of empty packets after it, reset = initiate a bus reset, restart = restart the stream). Can be given several times; docs/playout.md.\n"
         "\n"
         "Actions:\n"
         "  --play --pause --stop --ff --rew\n"
@@ -139,19 +141,24 @@ static pout_action_t *action_add(pout_script_t *sc, int *cap)
     return a;
 }
 
-static int file_add(pout_script_t *sc, const char *path)
+static int str_add(char ***list, int *count, const char *str)
 {
-    char **f = (char **)realloc(sc->files, (size_t)(sc->nfiles + 1) * sizeof(*f));
+    char **f = (char **)realloc(*list, (size_t)(*count + 1) * sizeof(*f));
     if (!f)
         return 0;
-    sc->files = f;
-    size_t n = strlen(path) + 1;
-    f[sc->nfiles] = (char *)malloc(n);
-    if (!f[sc->nfiles])
+    *list = f;
+    size_t n = strlen(str) + 1;
+    f[*count] = (char *)malloc(n);
+    if (!f[*count])
         return 0;
-    memcpy(f[sc->nfiles], path, n);
-    sc->nfiles++;
+    memcpy(f[*count], str, n);
+    (*count)++;
     return 1;
+}
+
+static int file_add(pout_script_t *sc, const char *path)
+{
+    return str_add(&sc->files, &sc->nfiles, path);
 }
 
 void pout_script_destroy(pout_script_t *sc)
@@ -161,6 +168,9 @@ void pout_script_destroy(pout_script_t *sc)
     for (int i = 0; i < sc->nfiles; i++)
         free(sc->files[i]);
     free(sc->files);
+    for (int i = 0; i < sc->nswitches; i++)
+        free(sc->switches[i]);
+    free(sc->switches);
     free(sc->actions);
     free(sc);
 }
@@ -193,7 +203,7 @@ pin_status_t pout_script_parse(int argc, const char *const *argv, pout_script_t 
     }
 
     static const char *const value_opts[] = { "--device", "--file", "--channel", "--speed", "--wind-speed",
-        "--start-delay", "--search-settle", "--dry-run" };
+        "--start-delay", "--search-settle", "--dry-run", "--switch" };
     pin_status_t rc = PIN_OK;
     int acap = 0;
     for (int i = 0; i < argc; i++) {
@@ -278,6 +288,11 @@ pin_status_t pout_script_parse(int argc, const char *const *argv, pout_script_t 
             if (!parse_double(val, &dv) || dv < 0 || dv > 60.0)
                 FAIL("--search-settle: expected seconds from 0 to 60, got \"%s\"", val);
             sc->timing.search_settle = dv;
+        } else if (strcmp(name, "--switch") == 0) {
+            char why[160];
+            if (pout_switch_parse(val, NULL, NULL, why, sizeof why) != 0)
+                FAIL("%s", why);
+            if (!str_add(&sc->switches, &sc->nswitches, val)) { rc = PIN_ERR_NOMEM; goto parse_end; }
         } else if (strcmp(name, "--dry-run") == 0) {
             if (!*val || strlen(val) >= sizeof(sc->dry_run))
                 FAIL("--dry-run needs an output file name");

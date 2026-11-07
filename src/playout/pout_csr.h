@@ -132,6 +132,9 @@ typedef struct {
 void pout_csr_cfg_default(pout_csr_cfg_t *cfg, unsigned max_packet_bytes);
 /* oPCR payload field for packets of up to n bytes (CIP header included): n / 4, at most 1023. */
 unsigned pout_csr_payload(unsigned max_packet_bytes);
+/* The output format changed (a mixed tape): the oPCR payload field follows (a controller that
+ * reads the plug afterwards sees the new packet size). */
+void pout_csr_set_payload(pout_csr_t *c, unsigned max_packet_bytes);
 
 void pout_csr_init(pout_csr_t *c, const pout_csr_cfg_t *cfg);
 

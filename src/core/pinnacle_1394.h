@@ -202,6 +202,12 @@ int p1394_avc_cancel(pinnacle_1394_t *l);
  * and a topology read. docs/startup.md explains every step. */
 int p1394_link_init(pinnacle_1394_t *l);
 
+/* Initiates a bus reset (PHY register 1, IBR bit 6; the gap count is left as it is). The reset
+ * stops the transmit contexts, renumbers the nodes and clears connections; the caller sees it as
+ * a change of the self-ID generation and has to read the topology again (p1394_read_topology).
+ * Does not wait for the bus to settle. 0, or -1 on a USB error. */
+int p1394_bus_reset(pinnacle_1394_t *l);
+
 /* Finds the first other node that has an output master plug register. */
 int p1394_find_camera(pinnacle_1394_t *l, uint16_t *node, uint32_t *ompr);
 

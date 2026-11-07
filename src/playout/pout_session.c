@@ -19,7 +19,9 @@
 #include "pout_session.h"
 
 #include "pin_log.h"
+#include "pout_switch.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -40,7 +42,15 @@ struct pout_session {
     pout_seq_t seq;
     uint8_t *buf;
     size_t cap;
-    int hdv;
+    int hdv;                    /* the stream's current format is HDV */
+    pout_frame_fmt_t fmt;       /* the format the stream (cip) is in now */
+    struct {                    /* a format switch under way, see switch_step() */
+        int active;
+        int phase;              /* SW_GAP or SW_BLANK */
+        long remain;            /* bus cycles left in the phase */
+        pout_frame_fmt_t to;
+        pout_switch_policy_t pol;
+    } sw;
     double t;                   /* simulated clock */
     double wall0;
     int64_t last_frame;         /* frame sent last, -1 none/discontinuity */
@@ -122,8 +132,15 @@ pout_session_t *pout_session_create(const pout_session_cfg_t *cfg, char *err, si
         free(s);
         goto nomem;
     }
-    s->hdv = pout_tape_media(cfg->tape) == POUT_MEDIA_HDV;
-    pout_cip_init(&s->cip, s->hdv ? POUT_CIP_HDV : POUT_CIP_DV, pout_tape_is_625(cfg->tape), 0);
+    if (pout_tape_frame_fmt(cfg->tape, 0, &s->fmt) != 0) {
+        free(s->buf);
+        free(s);
+        if (err && err_cap)
+            snprintf(err, err_cap, "the tape has no frames");
+        return NULL;
+    }
+    s->hdv = s->fmt.media == POUT_MEDIA_HDV;
+    pout_cip_init(&s->cip, s->hdv ? POUT_CIP_HDV : POUT_CIP_DV, s->fmt.is_625, 0);
     s->last_frame = -1;
     return s;
 nomem:
@@ -176,6 +193,109 @@ static int read_and_send(pout_session_t *s, int64_t frame)
     return n;
 }
 
+/* ---- format switches ------------------------------------------------------------------------- */
+
+/* When the next frame to send is in another format than the stream (pout_switch.h), the stream
+ * goes dark for the policy's gap_s (nothing is produced, only the bus cycles pass), then the cip is
+ * started again in the new format and sends blank_s of empty packets, then the frames go on. The
+ * deck plays on throughout (pout_deck_next_output is called every period as always): the tape
+ * frames of the gap and the blank time are lost, like a real tape running under the heads. The
+ * cycle count of the stream runs on through the switch; the DBC starts from 0 in the new format. */
+enum { SW_GAP = 1, SW_BLANK };
+
+static int discard_cb(void *user, const uint8_t *pkt, unsigned len)
+{
+    (void)user;
+    (void)pkt;
+    (void)len;
+    return 0;
+}
+
+static void fmt_name(const pout_frame_fmt_t *f, char *buf, size_t cap)
+{
+    if (f->media == POUT_MEDIA_DV)
+        snprintf(buf, cap, "DV %s", f->is_625 ? "PAL" : "NTSC");
+    else
+        snprintf(buf, cap, "HDV %s%d", f->hdv_720p ? "720p" : "1080i", f->is_625 ? 50 : 60);
+}
+
+static long cycles_of(double seconds)
+{
+    return seconds <= 0 ? 0 : (long)floor(seconds / CYCLE_SECONDS + 0.5);
+}
+
+static void switch_begin(pout_session_t *s, const pout_frame_fmt_t *to, pout_switch_kind_t kind)
+{
+    const pout_switch_policy_t *pol = pout_switch_policy(kind);
+    char a[32], b[32];
+    fmt_name(&s->fmt, a, sizeof a);
+    fmt_name(to, b, sizeof b);
+    pin_logf(PIN_LOG_INFO, "playout: the tape changes from %s to %s (%s): %.2f s without packets, then %.2f s "
+             "of empty ones\n", a, b, pout_switch_name(kind), pol->gap_s, pol->blank_s);
+    s->sw.active = 1;
+    s->sw.phase = SW_GAP;
+    s->sw.remain = cycles_of(pol->gap_s);
+    s->sw.to = *to;
+    s->sw.pol = *pol;
+    s->last_frame = -1;
+    if (s->cfg.hooks.format_switch)
+        s->cfg.hooks.format_switch(s->cfg.user, 0, to, pol, 1, &s->cip);
+}
+
+/* The stream is in the new format from here on. streaming 0: the switch is cut short because the
+ * stream stopped (nobody receiving, bus reset); the hook then does not restart anything. */
+static void switch_apply(pout_session_t *s, int streaming)
+{
+    uint32_t cyc = pout_cip_cycle(&s->cip);
+    unsigned sid = s->cip.sid;
+    const pout_frame_fmt_t *to = &s->sw.to;
+    pout_cip_init(&s->cip, to->media == POUT_MEDIA_HDV ? POUT_CIP_HDV : POUT_CIP_DV, to->is_625, sid);
+    pout_cip_set_cycle(&s->cip, cyc);
+    s->fmt = *to;
+    s->hdv = to->media == POUT_MEDIA_HDV;
+    s->last_frame = -1;
+    if (s->cfg.hooks.format_switch)
+        s->cfg.hooks.format_switch(s->cfg.user, 1, to, &s->sw.pol, streaming, &s->cip);
+    if (s->cfg.out->format)
+        s->cfg.out->format(s->cfg.out, to);
+    s->sw.phase = SW_BLANK;
+    s->sw.remain = cycles_of(s->sw.pol.blank_s);
+}
+
+/* One period of a switch under way. *consumed = 0: the switch is over and this period is free for
+ * a frame. Returns the cycles of the period (or -1 if the output failed). */
+static int switch_step(pout_session_t *s, int *consumed)
+{
+    *consumed = 1;
+    if (s->sw.phase == SW_GAP) {
+        if (s->sw.remain > 0) {
+            int n = pout_cip_blank(&s->cip, discard_cb, NULL);   /* the cycles pass, nothing is sent */
+            s->sw.remain -= n;
+            return n;
+        }
+        switch_apply(s, 1);
+    }
+    if (s->sw.remain > 0) {
+        int n = blank_period(s);
+        if (n > 0)
+            s->sw.remain -= n;
+        return n;
+    }
+    s->sw.active = 0;
+    *consumed = 0;
+    return 0;
+}
+
+/* The stream stops (nobody receiving): a switch under way ends at once. */
+static void switch_abort(pout_session_t *s)
+{
+    if (!s->sw.active)
+        return;
+    if (s->sw.phase == SW_GAP)
+        switch_apply(s, 0);
+    s->sw.active = 0;
+}
+
 /* Returns packets sent (or 0 when tx is off), -1 if the output failed. */
 static int player_period(pout_session_t *s, double now, int tx)
 {
@@ -183,6 +303,24 @@ static int player_period(pout_session_t *s, double now, int tx)
     pout_out_kind_t k = pout_deck_next_output(&s->deck, now, &f);
     if (!tx)
         return 0;
+    pout_frame_fmt_t ff;
+    int is_frame = 0;
+    if ((k == POUT_OUT_FRAME || k == POUT_OUT_REPEAT) && pout_tape_frame_fmt(s->cfg.tape, f, &ff) == 0)
+        is_frame = k == POUT_OUT_FRAME || ff.media == POUT_MEDIA_DV;
+    for (int again = 0; again < 2; again++) {
+        if (!s->sw.active && is_frame) {
+            pout_switch_kind_t kind = pout_switch_classify(&s->fmt, &ff);
+            if (kind != POUT_SWITCH_NONE)
+                switch_begin(s, &ff, kind);
+        }
+        if (!s->sw.active)
+            break;
+        int consumed;
+        int n = switch_step(s, &consumed);
+        if (consumed || n < 0)
+            return n;
+        /* the switch ended with this period: check the frame against the new format */
+    }
     switch (k) {
     case POUT_OUT_FRAME: {
         int64_t src = f;
@@ -307,6 +445,7 @@ static void tx_off(pout_session_t *s)
 {
     if (!s->tx)
         return;
+    switch_abort(s);
     s->cfg.out->stop(s->cfg.out);
     if (s->cfg.hooks.tx_changed)
         s->cfg.hooks.tx_changed(s->cfg.user, 0, &s->cip);
@@ -355,6 +494,8 @@ int pout_session_run(pout_session_t *s, char *err, size_t err_cap)
             }
             s->tx = 1;
             s->last_frame = -1;
+            if (s->cfg.out->format)
+                s->cfg.out->format(s->cfg.out, &s->fmt);
         } else if (!want && s->tx) {
             tx_off(s);
         }
@@ -373,8 +514,11 @@ int pout_session_run(pout_session_t *s, char *err, size_t err_cap)
             break;      /* the tape has played to its end */
         }
 
-        double dt = (double)pout_cip_next_period(&s->cip) * CYCLE_SECONDS;
+        unsigned predicted = pout_cip_next_period(&s->cip);
         int n = player_period(s, now, s->tx);
+        int dark = s->sw.active && s->sw.phase == SW_GAP;
+        /* the cycles the period really took (a switch can change the frame rate in mid-period) */
+        double dt = (double)(n > 0 ? (unsigned)n : predicted) * CYCLE_SECONDS;
         if (n < 0) {
             snprintf(err, err_cap, "the output failed");
             code = POUT_EXIT_DEVICE;
@@ -405,6 +549,15 @@ int pout_session_run(pout_session_t *s, char *err, size_t err_cap)
             h->between(s->cfg.user, deadline, s->tx);
         else if (s->cfg.realtime)
             pout_sleep_seconds(deadline - pout_session_time(s));
+        /* no packets go out in a gap, so nothing else paces the loop (the device's queue does that
+         * otherwise): wait for the deadline here, serving the hook meanwhile */
+        if (dark && s->tx && s->cfg.realtime && h->between) {
+            while (pout_session_time(s) < deadline) {
+                h->between(s->cfg.user, deadline, 1);
+                if (h->interrupted && h->interrupted(s->cfg.user))
+                    break;
+            }
+        }
     }
 
     tx_off(s);

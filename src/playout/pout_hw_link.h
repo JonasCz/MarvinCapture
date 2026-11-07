@@ -94,6 +94,13 @@ int pout_link_bus_generation(pout_link_t *k);
  * connection has to be made again (pout_link_local_connect) and a controller reconnects by itself.
  * The stream must have been stopped (pout_link_it_stop) before. */
 int pout_link_rescan(pout_link_t *k);
+/* Initiates a bus reset ourselves (a format switch of a mixed tape, if its policy says so). It is
+ * seen like any other: the generation changes, the session stops the stream, rescans and restarts.
+ * 0, or -1 on a USB error. */
+int pout_link_bus_reset(pout_link_t *k);
+/* The packet size of the format now sent: the oPCR payload field (and what a rescan restores).
+ * The IT ring and the bandwidth stay sized for cfg.max_packet (the largest format of the tape). */
+void pout_link_set_packet_size(pout_link_t *k, unsigned max_packet);
 
 /* Reads EP 0x84 once (up to timeout_ms), then answers the requests that arrived: plug register
  * reads and locks, FCP writes (with the AV/C callback). Returns the number of requests handled,

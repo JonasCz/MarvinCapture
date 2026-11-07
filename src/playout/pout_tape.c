@@ -60,7 +60,9 @@ typedef struct {
     uint64_t size;
     pout_media_t media;
     int is625;
-    int sig; /* standard signature, to compare files */
+    int nominal;  /* 25 or 30: the base of the file's timecode */
+    double fps;   /* 25 or 30000/1001 */
+    int hdv720;   /* HDV: 720p, else 1080i (or any other size) */
     char fmt[24];
     int64_t frames; /* in this file */
     int64_t base;   /* first tape frame of this file */
@@ -87,10 +89,10 @@ struct pout_tape {
     file_t *files;
     int nfiles;
     pout_media_t media;
-    int is625;
+    int is625;   /* media, is625, fps and nominal are those of the FIRST file */
     double fps;
     int nominal; /* 25 or 30 */
-    int drop;    /* tape timecode is drop frame */
+    int mixed;   /* the files are not all of one format */
     int64_t frames;
     size_t max_bytes;
     uint8_t *scratch; /* DV frame buffer for timecode probes; HDV M2TS read buffer */
@@ -707,7 +709,9 @@ static int hdv_open_file(file_t *f, FILE *fp, const uint8_t *head, size_t head_n
         goto done;
     }
     f->is625 = (frc == 2 || frc == 3 || frc == 6);
-    f->sig = (h << 8) | frc;
+    f->hdv720 = (h == 720);
+    f->nominal = f->is625 ? 25 : 30;
+    f->fps = f->is625 ? 25.0 : 30000.0 / 1001.0;
     if (h >= 1000) {
         snprintf(f->fmt, sizeof(f->fmt), "HDV 1080i%d", f->is625 ? 50 : 60);
     } else if (h == 720) {
@@ -717,7 +721,7 @@ static int hdv_open_file(file_t *f, FILE *fp, const uint8_t *head, size_t head_n
         snprintf(f->fmt, sizeof(f->fmt), "HDV %dx%d", w, h);
     }
     {
-        double fps = f->is625 ? 25.0 : 30000.0 / 1001.0;
+        double fps = f->fps;
         double dur = f->stl[f->ns - 1] / PCR_HZ;
         f->frames = (int64_t)(dur * fps + 0.5);
         if (f->frames < 1)
@@ -829,7 +833,8 @@ static int open_file(pout_tape_t *t, file_t *f, char *err, size_t cap)
         f->is625 = is625;
         f->frame_bytes = is625 ? 144000 : 120000;
         f->frames = (int64_t)(f->size / f->frame_bytes);
-        f->sig = is625;
+        f->nominal = is625 ? 25 : 30;
+        f->fps = is625 ? 25.0 : 30000.0 / 1001.0;
         snprintf(f->fmt, sizeof(f->fmt), "DV %s", is625 ? "PAL" : "NTSC");
         if (f->frames < 1) {
             set_err(err, cap, "%s: shorter than one %s DV frame (%zu bytes)", f->path, f->fmt, f->frame_bytes);
@@ -887,37 +892,43 @@ int pout_tape_open(pout_tape_t **out, const char *const *paths, int n, char *err
             pout_tape_close(t);
             return -1;
         }
-        if (i > 0) {
-            const file_t *f0 = &t->files[0];
-            if (f->media != f0->media || f->sig != f0->sig) {
-                set_err(err, err_cap, "%s: is %s, but %s is %s: a tape holds one kind of video", f->path,
-                        f->fmt, f0->path, f0->fmt);
-                pout_tape_close(t);
-                return -1;
-            }
-        }
         f->base = t->frames;
         t->frames += f->frames;
     }
     const file_t *f0 = &t->files[0];
     t->media = f0->media;
     t->is625 = f0->is625;
-    t->nominal = f0->is625 ? 25 : 30;
-    t->fps = f0->is625 ? 25.0 : 30000.0 / 1001.0;
+    t->nominal = f0->nominal;
+    t->fps = f0->fps;
+    for (int i = 1; i < n; i++) {
+        const file_t *f = &t->files[i];
+        if (f->media != f0->media || f->is625 != f0->is625 || f->hdv720 != f0->hdv720)
+            t->mixed = 1;
+    }
 
-    /* Tape timecode: drop frame as the first file that has a timecode says (a
-     * 29.97 tape without any is drop frame); files without one continue the
-     * previous file's. */
-    t->drop = (t->nominal == 30);
-    for (int i = 0; i < n; i++)
-        if (t->files[i].has_tc) {
-            t->drop = t->files[i].fdrop;
-            break;
-        }
-    int64_t day = day_frames(t->nominal, t->drop), next = 0;
+    /* Timecode, per file: each file counts in its own base (25 or 30) and drop-frame flag. A file
+     * without a timecode continues the previous file's last label: the label after the previous
+     * file's last frame, its frame number rescaled to the new base when the rates differ (PAL
+     * 00:10:00:12 continues as NTSC 00:10:00:14), a dropped label moved to :02. The drop flag of
+     * such a file is the previous file's if that was 29.97 too, else drop frame (29.97 only). */
+    int64_t next = 0;
+    int pnom = 0, pdrop = 0;
     for (int i = 0; i < n; i++) {
         file_t *f = &t->files[i];
+        int nominal = f->nominal;
+        int64_t day;
         if (!f->has_tc) {
+            f->fdrop = nominal == 30 ? (pnom == 30 ? pdrop : 1) : 0;
+            int64_t start = 0;
+            if (i > 0) {
+                int h, m, s, fr;
+                count_to_label(next, pnom, pdrop, &h, &m, &s, &fr);
+                if (nominal != pnom)
+                    fr = fr * nominal / pnom;
+                if (f->fdrop && nominal == 30 && fr < 2 && s == 0 && m % 10 != 0)
+                    fr = 2;
+                start = label_to_count(h, m, s, fr, nominal, f->fdrop);
+            }
             free(f->segs);
             f->segs = (seg_t *)malloc(sizeof(seg_t));
             if (!f->segs) {
@@ -926,17 +937,10 @@ int pout_tape_open(pout_tape_t **out, const char *const *paths, int n, char *err
                 return -1;
             }
             f->segs[0].first = 0;
-            f->segs[0].count = next;
+            f->segs[0].count = start;
             f->nseg = f->capseg = 1;
-            f->fdrop = t->drop;
-        } else if (f->fdrop != t->drop) {
-            for (int s = 0; s < f->nseg; s++) {
-                int h, m, sec, fr;
-                count_to_label(f->segs[s].count, t->nominal, f->fdrop, &h, &m, &sec, &fr);
-                f->segs[s].count = label_to_count(h, m, sec, fr, t->nominal, t->drop);
-            }
-            f->fdrop = t->drop;
         }
+        day = day_frames(nominal, f->fdrop);
         f->minc = INT64_MAX;
         f->maxc = INT64_MIN;
         f->range_ok = 1;
@@ -952,31 +956,42 @@ int pout_tape_open(pout_tape_t **out, const char *const *paths, int n, char *err
         }
         const seg_t *ls = &f->segs[f->nseg - 1];
         next = mod64(ls->count + (f->frames - ls->first), day);
+        pnom = nominal;
+        pdrop = f->fdrop;
     }
 
-    if (t->media == POUT_MEDIA_DV) {
-        t->max_bytes = f0->frame_bytes;
-    } else {
-        size_t mx = 0;
-        for (int i = 0; i < n; i++) {
-            const file_t *f = &t->files[i];
-            uint64_t a = 0;
-            for (int64_t k = 0; k < f->frames; k++) {
-                uint64_t b = hdv_boundary(f, k + 1, t->fps);
-                if ((size_t)(b - a) * 188 > mx)
-                    mx = (size_t)(b - a) * 188;
-                a = b;
-            }
+    /* Largest frame over all files, and a scratch buffer for the biggest read. */
+    size_t mx = 0, scratch = DV_MAX_FRAME;
+    for (int i = 0; i < n; i++) {
+        const file_t *f = &t->files[i];
+        if (f->media == POUT_MEDIA_DV) {
+            if (f->frame_bytes > mx)
+                mx = f->frame_bytes;
+            continue;
         }
-        t->max_bytes = mx;
-        t->scratch_cap = mx / 188 * TS_MAX_STRIDE + TS_MAX_STRIDE;
-        uint8_t *s = (uint8_t *)realloc(t->scratch, t->scratch_cap);
-        if (!s) {
+        size_t hm = 0;
+        uint64_t a = 0;
+        for (int64_t k = 0; k < f->frames; k++) {
+            uint64_t b = hdv_boundary(f, k + 1, f->fps);
+            if ((size_t)(b - a) * 188 > hm)
+                hm = (size_t)(b - a) * 188;
+            a = b;
+        }
+        if (hm > mx)
+            mx = hm;
+        if (hm / 188 * TS_MAX_STRIDE + TS_MAX_STRIDE > scratch)
+            scratch = hm / 188 * TS_MAX_STRIDE + TS_MAX_STRIDE;
+    }
+    t->max_bytes = mx;
+    if (scratch > t->scratch_cap) {
+        uint8_t *sb = (uint8_t *)realloc(t->scratch, scratch);
+        if (!sb) {
             set_err(err, err_cap, "out of memory");
             pout_tape_close(t);
             return -1;
         }
-        t->scratch = s;
+        t->scratch = sb;
+        t->scratch_cap = scratch;
     }
     *out = t;
     return 0;
@@ -1029,13 +1044,13 @@ static FILE *use_file(pout_tape_t *t, int i)
     return t->cur;
 }
 
-static void fill_tc(const pout_tape_t *t, int h, int m, int s, int f, pin_tc_t *tc)
+static void fill_tc(const file_t *file, int h, int m, int s, int f, pin_tc_t *tc)
 {
     tc->h = h;
     tc->m = m;
     tc->s = s;
     tc->f = f;
-    tc->sep = t->drop ? ';' : ':';
+    tc->sep = file->fdrop ? ';' : ':';
 }
 
 /* Model timecode (runs) of a frame as a count. */
@@ -1059,32 +1074,35 @@ int pout_tape_tc_of_frame(const pout_tape_t *ct, int64_t frame, pin_tc_t *tc)
         return -1;
     int fi = file_index(t, frame);
     const file_t *f = &t->files[fi];
-    int64_t local = frame - f->base, day = day_frames(t->nominal, t->drop);
+    int64_t local = frame - f->base, day = day_frames(f->nominal, f->fdrop);
     int h, m, s, fr;
-    if (t->media == POUT_MEDIA_DV && f->has_tc) {
+    if (f->media == POUT_MEDIA_DV && f->has_tc) {
         FILE *fp = use_file(t, fi);
         int drop;
-        if (fp && dv_tc_at(fp, f, t->scratch, local, t->nominal, &h, &m, &s, &fr, &drop) == 1) {
-            fill_tc(t, h, m, s, fr, tc);
+        if (fp && dv_tc_at(fp, f, t->scratch, local, f->nominal, &h, &m, &s, &fr, &drop) == 1) {
+            fill_tc(f, h, m, s, fr, tc);
             return 0;
         }
     }
-    count_to_label(model_count(f, local, day), t->nominal, t->drop, &h, &m, &s, &fr);
-    fill_tc(t, h, m, s, fr, tc);
+    count_to_label(model_count(f, local, day), f->nominal, f->fdrop, &h, &m, &s, &fr);
+    fill_tc(f, h, m, s, fr, tc);
     return 0;
 }
 
 int64_t pout_tape_frame_of_tc(const pout_tape_t *ct, const pin_tc_t *tc)
 {
     pout_tape_t *t = (pout_tape_t *)ct;
-    if (!tc || !label_ok(tc->h, tc->m, tc->s, tc->f, t->nominal))
+    if (!tc)
         return -1;
-    int64_t day = day_frames(t->nominal, t->drop);
-    int64_t want = mod64(label_to_count(tc->h, tc->m, tc->s, tc->f, t->nominal, t->drop), day);
     int64_t found = -1;
     int found_file = -1;
+    /* the label is read in each file's own base and drop-frame flag */
     for (int i = 0; i < t->nfiles && found < 0; i++) {
         const file_t *f = &t->files[i];
+        if (!label_ok(tc->h, tc->m, tc->s, tc->f, f->nominal))
+            continue;
+        int64_t day = day_frames(f->nominal, f->fdrop);
+        int64_t want = mod64(label_to_count(tc->h, tc->m, tc->s, tc->f, f->nominal, f->fdrop), day);
         for (int s = 0; s < f->nseg; s++) {
             int64_t len = (s + 1 < f->nseg ? f->segs[s + 1].first : f->frames) - f->segs[s].first;
             int64_t d = mod64(want - f->segs[s].count, day);
@@ -1098,12 +1116,16 @@ int64_t pout_tape_frame_of_tc(const pout_tape_t *ct, const pin_tc_t *tc)
     if (found < 0) { /* no exact match: the earliest file whose range holds it */
         for (int i = 0; i < t->nfiles; i++) {
             const file_t *f = &t->files[i];
+            if (!label_ok(tc->h, tc->m, tc->s, tc->f, f->nominal))
+                continue;
+            int64_t want = mod64(label_to_count(tc->h, tc->m, tc->s, tc->f, f->nominal, f->fdrop),
+                                 day_frames(f->nominal, f->fdrop));
             if (f->range_ok && want >= f->minc && want <= f->maxc)
                 return f->base;
         }
         return -1;
     }
-    if (t->media == POUT_MEDIA_DV && t->files[found_file].has_tc) {
+    if (t->files[found_file].media == POUT_MEDIA_DV && t->files[found_file].has_tc) {
         /* verify against the frame's own timecode, +-DV_VERIFY_WINDOW around it */
         const file_t *f = &t->files[found_file];
         FILE *fp = use_file(t, found_file);
@@ -1114,11 +1136,11 @@ int64_t pout_tape_frame_of_tc(const pout_tape_t *ct, const pin_tc_t *tc)
         if (hi >= f->frames)
             hi = f->frames - 1;
         int h, m, s, fr, drop, ok = 0;
-        if (fp && dv_tc_at(fp, f, t->scratch, cl, t->nominal, &h, &m, &s, &fr, &drop) == 1 &&
+        if (fp && dv_tc_at(fp, f, t->scratch, cl, f->nominal, &h, &m, &s, &fr, &drop) == 1 &&
             h == tc->h && m == tc->m && s == tc->s && fr == tc->f)
             ok = 1;
         for (int64_t i = lo; fp && !ok && i <= hi; i++)
-            if (dv_tc_at(fp, f, t->scratch, i, t->nominal, &h, &m, &s, &fr, &drop) == 1 && h == tc->h &&
+            if (dv_tc_at(fp, f, t->scratch, i, f->nominal, &h, &m, &s, &fr, &drop) == 1 && h == tc->h &&
                 m == tc->m && s == tc->s && fr == tc->f) {
                 found = f->base + i;
                 ok = 1;
@@ -1139,7 +1161,7 @@ int pout_tape_read_frame(pout_tape_t *t, int64_t frame, uint8_t *buf, size_t cap
     FILE *fp = use_file(t, fi);
     if (!fp)
         return -1;
-    if (t->media == POUT_MEDIA_DV) {
+    if (f->media == POUT_MEDIA_DV) {
         if (cap < f->frame_bytes || seek64(fp, (uint64_t)local * f->frame_bytes) != 0 ||
             fread(buf, 1, f->frame_bytes, fp) != f->frame_bytes)
             return -1;
@@ -1147,7 +1169,7 @@ int pout_tape_read_frame(pout_tape_t *t, int64_t frame, uint8_t *buf, size_t cap
             *len = f->frame_bytes;
         return 0;
     }
-    uint64_t a = hdv_boundary(f, local, t->fps), b = hdv_boundary(f, local + 1, t->fps);
+    uint64_t a = hdv_boundary(f, local, f->fps), b = hdv_boundary(f, local + 1, f->fps);
     size_t n = (size_t)(b - a);
     if (n * 188 > cap)
         return -1;
@@ -1175,9 +1197,9 @@ int64_t pout_tape_play_start(const pout_tape_t *t, int64_t frame)
         return 0;
     if (frame >= t->frames)
         frame = t->frames - 1;
-    if (t->media == POUT_MEDIA_DV)
-        return frame;
     const file_t *f = &t->files[file_index(t, frame)];
+    if (f->media == POUT_MEDIA_DV)
+        return frame;
     int64_t local = frame - f->base, best = 0;
     int lo = 0, hi = f->ngop - 1;
     while (lo <= hi) { /* last GOP slot <= local */
@@ -1211,13 +1233,47 @@ void pout_tape_ops(pout_tape_t *t, pout_tape_ops_t *ops)
     ops->frame_of_tc = ops_frame_of_tc;
 }
 
+int pout_tape_frame_fmt(const pout_tape_t *t, int64_t frame, pout_frame_fmt_t *out)
+{
+    if (!out || frame < 0 || frame >= t->frames)
+        return -1;
+    const file_t *f = &t->files[file_index(t, frame)];
+    out->media = f->media;
+    out->is_625 = f->is625;
+    out->fps = f->fps;
+    out->hdv_720p = f->media == POUT_MEDIA_HDV && f->hdv720;
+    out->max_packet = f->media == POUT_MEDIA_DV ? POUT_DV_MAX_PACKET : POUT_HDV_MAX_PACKET;
+    return 0;
+}
+
+int pout_tape_mixed(const pout_tape_t *t) { return t->mixed; }
+
+/* "HDV 1080i50 + DV PAL": the distinct formats in tape order (each once, up to 4 shown). */
 void pout_tape_describe(const pout_tape_t *t, char *buf, size_t cap)
 {
     if (!buf || cap == 0)
         return;
     int64_t n = t->frames;
     int nom = t->nominal;
-    snprintf(buf, cap, "%s, %d file%s, %02d:%02d:%02d:%02d", t->files[0].fmt, t->nfiles,
+    char kinds[160] = "";
+    size_t kl = 0;
+    int shown = 0;
+    for (int i = 0; i < t->nfiles; i++) {
+        int seen = 0;
+        for (int j = 0; j < i && !seen; j++)
+            seen = strcmp(t->files[j].fmt, t->files[i].fmt) == 0;
+        if (seen)
+            continue;
+        if (shown == 4) {
+            kl += (size_t)snprintf(kinds + kl, sizeof(kinds) - kl, " + ...");
+            break;
+        }
+        kl += (size_t)snprintf(kinds + kl, sizeof(kinds) - kl, "%s%s", shown ? " + " : "", t->files[i].fmt);
+        shown++;
+        if (kl >= sizeof(kinds))
+            break;
+    }
+    snprintf(buf, cap, "%s%s, %d file%s, %02d:%02d:%02d:%02d", t->mixed ? "mixed " : "", kinds, t->nfiles,
              t->nfiles == 1 ? "" : "s", (int)(n / ((int64_t)nom * 3600)), (int)(n / ((int64_t)nom * 60) % 60),
              (int)(n / nom % 60), (int)(n % nom));
 }

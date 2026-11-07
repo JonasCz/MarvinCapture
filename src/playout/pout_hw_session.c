@@ -273,6 +273,48 @@ static void hk_between(void *u, double deadline, int tx)
         h->usb_error = 1;
 }
 
+static pout_avc_media_t avc_media_of(const pout_frame_fmt_t *f)
+{
+    return f->media == POUT_MEDIA_HDV ? POUT_AVC_HDV : f->is_625 ? POUT_AVC_DV_625 : POUT_AVC_DV_525;
+}
+
+/* A format switch of a mixed tape (pout_switch.h). The defaults are our guess at a camera's
+ * behaviour; every step here is switched by the policy so that a measured one can be put in. */
+static void hk_format_switch(void *u, int phase, const pout_frame_fmt_t *to, const pout_switch_policy_t *pol,
+                             int streaming, pout_cip_t *cip)
+{
+    hw_t *h = (hw_t *)u;
+    if (phase == 0) {
+        /* the stream stops: the IT context is stopped for the gap (otherwise its queue just runs dry),
+         * and/or the bus is reset; a reset is seen by check_bus_reset() like any other */
+        if (pol->restart_stream && !pol->bus_reset)
+            pout_link_it_stop(h->link);
+        if (pol->bus_reset) {
+            pin_logf(PIN_LOG_INFO, "playout: initiating a bus reset for the format switch\n");
+            if (pout_link_bus_reset(h->link) != 0)
+                h->usb_error = 1;
+        }
+        return;
+    }
+    /* the new format: what the plug and AV/C say follows it from here on */
+    pout_avc_set_media(&h->avc, avc_media_of(to));
+    pout_link_set_packet_size(h->link, to->max_packet);
+    if (!streaming || !pol->restart_stream || pol->bus_reset)
+        return;     /* with a bus reset the stream is restarted by the reset handling */
+    unsigned ch = 63, sp = 0;
+    uint32_t cyc = 0;
+    unsigned off = 0;
+    pout_link_tx(h->link, &ch, &sp);
+    if (pout_link_it_start(h->link, ch, sp) != 0) {
+        fail_note(h, "cannot restart the isochronous transmit stream for the new format");
+        return;
+    }
+    if (pout_link_cycle_timer(h->link, &cyc, &off) != 0)
+        h->usb_error = 1;
+    else
+        pout_cip_set_cycle(cip, (cyc + START_LEAD_CYCLES) % POUT_CIP_CYCLES_WRAP);
+}
+
 static void hk_status(void *u, const char *line)
 {
     (void)u;
@@ -304,7 +346,8 @@ int pout_hw_run(const pout_script_t *sc, pout_tape_t *tape, int (*interrupted)(v
     h.out.destroy = it_destroy;
     h.out.priv = &h;
 
-    int hdv = pout_tape_media(tape) == POUT_MEDIA_HDV;
+    pout_frame_fmt_t first;
+    pout_tape_frame_fmt(tape, 0, &first);
     char path[PIN_PATH_MAX], why[400];
     if (pout_hw_find_bitstream(path, sizeof(path), why, sizeof(why)) != 0) {
         snprintf(err, err_cap, "%s", why);
@@ -315,7 +358,9 @@ int pout_hw_run(const pout_script_t *sc, pout_tape_t *tape, int (*interrupted)(v
     memset(&lc, 0, sizeof(lc));
     lc.device_id = sc->has_device ? sc->device : NULL;
     lc.bitstream_path = path;
-    lc.max_packet = hdv ? 584 : 488;
+    /* a mixed tape: bandwidth and the IT ring are sized for the larger packets up front, so the IRM
+     * allocation does not change at a format switch (a DV stretch just uses less of it) */
+    lc.max_packet = pout_tape_mixed(tape) ? POUT_HDV_MAX_PACKET : first.max_packet;
     lc.speed = sc->speed >= 400 ? 2 : sc->speed >= 200 ? 1 : 0;
     lc.channel = (unsigned)sc->channel;
     lc.progress = on_progress;
@@ -324,10 +369,11 @@ int pout_hw_run(const pout_script_t *sc, pout_tape_t *tape, int (*interrupted)(v
         lc.avc = on_avc;
         lc.avc_user = &h;
     }
-    pout_avc_init(&h.avc, hdv ? POUT_AVC_HDV : pout_tape_is_625(tape) ? POUT_AVC_DV_625 : POUT_AVC_DV_525);
+    pout_avc_init(&h.avc, avc_media_of(&first));
 
     if (pout_link_open(&h.link, &lc, err, err_cap) != 0)
         return POUT_EXIT_DEVICE;
+    pout_link_set_packet_size(h.link, first.max_packet);
     h.gen = pout_link_bus_generation(h.link);
     h.gen_checked = pout_wall_seconds();
 
@@ -344,6 +390,7 @@ int pout_hw_run(const pout_script_t *sc, pout_tape_t *tape, int (*interrupted)(v
     cfg.hooks.failed = hk_failed;
     cfg.hooks.tx_wanted = hk_tx_wanted;
     cfg.hooks.tx_changed = hk_tx_changed;
+    cfg.hooks.format_switch = hk_format_switch;
     cfg.hooks.period_end = hk_period_end;
     cfg.hooks.between = hk_between;
     cfg.hooks.status = hk_status;

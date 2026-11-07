@@ -24,10 +24,15 @@
  *  - a pause repeats the frame it froze on (DV);
  *  - a timecode that is not on the tape fails with POUT_EXIT_DECK; an interrupt ends with 130;
  *  - tx_wanted off: the deck runs on but nothing is sent;
- *  - HDV: what comes out is a contiguous piece of the input (after PAT/PMT) and the run ends.
+ *  - HDV: what comes out is a contiguous piece of the input (after PAT/PMT) and the run ends;
+ *  - mixed tapes (DV PAL + HDV + DV NTSC, ...): the format switch policy of pout_switch.h: no packets
+ *    in the gap, empty packets of the new format in the blank time, the tape frames of both lost,
+ *    a new output file at each DV <-> HDV change, PAL <-> NTSC in one .dv, overrides, a switch cut
+ *    short by a stream stop, pause on both sides.
  */
 
 #include "pout_session.h"
+#include "pout_switch.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -131,6 +136,303 @@ static int run(const char *const *argv, int argc, int serve, ctx_t *ctx, uint8_t
     pout_tape_close(tape);
     pout_script_destroy(sc);
     return code;
+}
+
+/* ---- mixed tapes ---------------------------------------------------------------------------- */
+
+#define MAXF 4
+
+typedef struct {
+    pout_out_t base;
+    pout_out_t *in;                 /* the file output behind it */
+    unsigned long pkts, empty;      /* packets that reached the output, those of them without payload */
+    unsigned long empty_after_sw;   /* empty packets since the last phase 1 ... */
+    unsigned long first_data_empties; /* ... up to the first data packet (kept) */
+    int counting_after_sw;
+} cnt_out_t;
+
+static int c_start(pout_out_t *o) { return ((cnt_out_t *)o)->in->start(((cnt_out_t *)o)->in); }
+static void c_stop(pout_out_t *o) { ((cnt_out_t *)o)->in->stop(((cnt_out_t *)o)->in); }
+static void c_destroy(pout_out_t *o) { ((cnt_out_t *)o)->in->destroy(((cnt_out_t *)o)->in); }
+static int c_format(pout_out_t *o, const pout_frame_fmt_t *f)
+{
+    cnt_out_t *c = (cnt_out_t *)o;
+    return c->in->format ? c->in->format(c->in, f) : 0;
+}
+static int c_packet(pout_out_t *o, const uint8_t *pkt, unsigned len)
+{
+    cnt_out_t *c = (cnt_out_t *)o;
+    c->pkts++;
+    if (len == 8) {
+        c->empty++;
+        if (c->counting_after_sw)
+            c->empty_after_sw++;
+    } else if (c->counting_after_sw) {
+        c->first_data_empties = c->empty_after_sw;
+        c->counting_after_sw = 0;
+    }
+    return c->in->packet(c->in, pkt, len);
+}
+
+typedef struct {
+    cnt_out_t *co;
+    int periods, tx_off_from, tx_off_to;
+    int begins, applies, apply_streaming;
+    unsigned long pkts_at_begin, pkts_at_apply;
+    uint32_t cycle_at_begin, cycle_at_apply;
+    pout_cip_kind_t kind_at_apply;
+} mctx_t;
+
+static int m_tx_wanted(void *u)
+{
+    mctx_t *c = (mctx_t *)u;
+    c->periods++;
+    return !(c->tx_off_to && c->periods >= c->tx_off_from && c->periods < c->tx_off_to);
+}
+static void m_switch(void *u, int phase, const pout_frame_fmt_t *to, const pout_switch_policy_t *pol, int streaming,
+                     pout_cip_t *cip)
+{
+    mctx_t *c = (mctx_t *)u;
+    (void)pol;
+    if (phase == 0) {
+        c->begins++;
+        c->pkts_at_begin = c->co->pkts;
+        c->cycle_at_begin = pout_cip_cycle(cip);
+    } else {
+        c->applies++;
+        c->apply_streaming = streaming;
+        c->pkts_at_apply = c->co->pkts;
+        c->cycle_at_apply = pout_cip_cycle(cip);
+        c->kind_at_apply = cip->kind;
+        c->co->empty_after_sw = 0;
+        c->co->counting_after_sw = 1;
+        CHECK((to->media == POUT_MEDIA_HDV) == (cip->kind == POUT_CIP_HDV));
+    }
+}
+
+typedef struct {
+    int code;
+    char err[256];
+    unsigned long sent;
+    int nfiles;
+    uint8_t *data[MAXF];
+    size_t len[MAXF];
+    mctx_t m;
+} mres_t;
+
+/* switches: NULL or one --switch spec */
+static void mrun(const char *const *argv, int argc, const char *sw, int tx_off_from, int tx_off_to, mres_t *r)
+{
+    memset(r, 0, sizeof *r);
+    pout_script_t *sc = NULL;
+    char perr[256] = "";
+    pout_switch_reset();
+    if (pout_script_parse(argc, argv, &sc, perr, sizeof perr) != PIN_OK) {
+        fprintf(stderr, "parse: %s\n", perr);
+        failures++;
+        return;
+    }
+    if (sw && pout_switch_set(sw, perr, sizeof perr) != 0) {
+        fprintf(stderr, "switch: %s\n", perr);
+        failures++;
+    }
+    pout_tape_t *tape = NULL;
+    if (pout_tape_open(&tape, (const char *const *)sc->files, sc->nfiles, perr, sizeof perr) != 0) {
+        fprintf(stderr, "tape: %s\n", perr);
+        failures++;
+        pout_script_destroy(sc);
+        return;
+    }
+    cnt_out_t *co = (cnt_out_t *)calloc(1, sizeof *co);
+    co->in = pout_out_file_create(tmp_name(".mix"), perr, sizeof perr);
+    CHECK(co->in != NULL);
+    co->base.start = c_start;
+    co->base.packet = c_packet;
+    co->base.stop = c_stop;
+    co->base.destroy = c_destroy;
+    co->base.format = c_format;
+    r->m.co = co;
+    r->m.tx_off_from = tx_off_from;
+    r->m.tx_off_to = tx_off_to;
+    pout_session_cfg_t cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.tape = tape;
+    cfg.sc = sc;
+    cfg.out = &co->base;
+    cfg.user = &r->m;
+    cfg.hooks.tx_wanted = m_tx_wanted;
+    cfg.hooks.format_switch = m_switch;
+    pout_session_t *se = pout_session_create(&cfg, perr, sizeof perr);
+    CHECK(se != NULL);
+    r->code = pout_session_run(se, r->err, sizeof r->err);
+    r->sent = pout_session_frames_sent(se);
+    pout_session_destroy(se);
+    r->nfiles = pout_out_file_count(co->in);
+    char names[MAXF][1100];
+    for (int i = 0; i < r->nfiles && i < MAXF; i++)
+        snprintf(names[i], sizeof names[i], "%s", pout_out_file_name(co->in, i));
+    co->base.destroy(&co->base);        /* closes the files */
+    for (int i = 0; i < r->nfiles && i < MAXF; i++) {
+        r->data[i] = slurp(names[i], &r->len[i]);
+        remove(names[i]);
+    }
+    pout_tape_close(tape);
+    pout_script_destroy(sc);
+    pout_switch_reset();
+}
+
+static void mfree(mres_t *r)
+{
+    for (int i = 0; i < MAXF; i++)
+        free(r->data[i]);
+    free(r->m.co);
+}
+
+/* out (after the reassembler's PAT and PMT) is a contiguous run of whole packets of h */
+static int is_piece_of(const uint8_t *out, size_t out_len, const uint8_t *h, size_t hlen, size_t *at)
+{
+    if (out_len < 3 * 188 || out_len % 188 || out[0] != 0x47)
+        return 0;
+    size_t body = out_len - 2 * 188;
+    for (size_t off = 0; off + body <= hlen; off += 188)
+        if (memcmp(h + off, out + 2 * 188, body) == 0) {
+            if (at)
+                *at = off;
+            return 1;
+        }
+    return 0;
+}
+
+static void test_mixed(const char *pal, const char *hdv, const char *ntsc)
+{
+    size_t pal_len = 0, hdv_len = 0, ntsc_len = 0;
+    uint8_t *pd = slurp(pal, &pal_len), *hd = slurp(hdv, &hdv_len), *nd = slurp(ntsc, &ntsc_len);
+    if (!pd || !hd || !nd) {
+        free(pd);
+        free(hd);
+        free(nd);
+        return;
+    }
+    mres_t r;
+    size_t at;
+
+    /* 1. DV PAL + HDV + DV NTSC with a short policy: kind=gap:0.4,blank:0.2.
+     *    PAL -> HDV: the gap is 3200 cycles = 10 PAL periods, the blank 1600 cycles = 5 HDV (25 fps)
+     *    periods: tape frames 50..64 are lost, HDV plays from 65 (its GOP start at or before).
+     *    HDV -> NTSC: the gap is 10 HDV periods, the blank 6 NTSC periods: 16 of the 30 NTSC frames
+     *    are lost, the third file holds frames 16..29. */
+    {
+        const char *a[] = { pal, hdv, ntsc };
+        char sw[] = "kind=gap:0.4,blank:0.2";
+        mrun(a, 3, sw, 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK);
+        CHECK(r.nfiles == 3);
+        CHECK(r.m.begins == 2 && r.m.applies == 2 && r.m.apply_streaming == 1);
+        if (r.nfiles == 3) {
+            CHECK(r.len[0] == pal_len && r.data[0] && memcmp(r.data[0], pd, pal_len) == 0);   /* DV before the gap, whole */
+            CHECK(is_piece_of(r.data[1], r.len[1], hd, hdv_len, &at));
+            CHECK(r.len[1] > 188 * 100 && r.len[1] < hdv_len);          /* the first 15 frames' worth is lost */
+            CHECK(r.len[2] == 14 * 120000u && memcmp(r.data[2], nd + 16 * 120000u, r.len[2]) == 0);
+        }
+        mfree(&r);
+    }
+
+    /* 2. the same without any loss: gap and blank 0 */
+    {
+        const char *a[] = { pal, hdv, ntsc };
+        mrun(a, 3, "kind=gap:0,blank:0", 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK && r.nfiles == 3);
+        if (r.nfiles == 3) {
+            CHECK(r.len[0] == pal_len && memcmp(r.data[0], pd, pal_len) == 0);
+            CHECK(is_piece_of(r.data[1], r.len[1], hd, hdv_len, &at) && r.len[1] >= hdv_len * 9 / 10);   /* from the first GOP to the last whole picture */
+            CHECK(r.len[2] == ntsc_len && memcmp(r.data[2], nd, ntsc_len) == 0);
+        }
+        mfree(&r);
+    }
+
+    /* 3. the defaults, DV -> HDV: nothing in the gap (the cycle count runs on by 8000), then empty
+     *    packets of the new format for the blank time (5 HDV periods = 1600 cycles) */
+    {
+        const char *a[] = { pal, hdv };
+        mrun(a, 2, NULL, 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK && r.nfiles == 2);
+        CHECK(r.m.begins == 1 && r.m.applies == 1);
+        CHECK(r.m.pkts_at_apply == r.m.pkts_at_begin);               /* no packets at all in the gap */
+        CHECK(r.m.cycle_at_apply - r.m.cycle_at_begin == 8000u);     /* 1.0 s of bus cycles went by */
+        CHECK(r.m.kind_at_apply == POUT_CIP_HDV);
+        /* from the new format on: at least the blank time of empty packets, then the frame's own */
+        CHECK(r.m.co->first_data_empties >= 1600 && r.m.co->first_data_empties < 1600 + 320);
+        if (r.nfiles == 2)
+            CHECK(r.len[0] == pal_len && is_piece_of(r.data[1], r.len[1], hd, hdv_len, &at));
+        mfree(&r);
+    }
+
+    /* 4. the empty packets between the gap and the first frame: exactly the blank time (HDV -> DV,
+     *    0.2 s = 1600 cycles = 6 NTSC periods of 266 or 267 cycles = 1601) before the first data packet */
+    {
+        const char *a[] = { hdv, ntsc };
+        mrun(a, 2, "kind=gap:0.2,blank:0.2", 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK && r.nfiles == 2);
+        CHECK(r.m.pkts_at_apply == r.m.pkts_at_begin);
+        CHECK(r.m.cycle_at_apply - r.m.cycle_at_begin == 1600u);
+        /* a DV frame period starts with a data packet: all the empty packets before it are the blank time */
+        CHECK(r.m.co->first_data_empties == 1601);
+        mfree(&r);
+    }
+
+    /* 5. PAL + NTSC: one .dv, the STD default (no gap, 0.5 s blank = 4000 cycles = 15 NTSC periods) */
+    {
+        const char *a[] = { pal, ntsc };
+        mrun(a, 2, NULL, 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK);
+        CHECK(r.nfiles == 1);
+        CHECK(r.m.begins == 1 && r.m.pkts_at_apply == r.m.pkts_at_begin);   /* no gap: nothing is skipped */
+        CHECK(r.m.cycle_at_apply == r.m.cycle_at_begin);
+        if (r.nfiles == 1) {
+            CHECK(r.len[0] == pal_len + 15 * 120000u);
+            CHECK(memcmp(r.data[0], pd, pal_len) == 0);
+            CHECK(memcmp(r.data[0] + pal_len, nd + 15 * 120000u, 15 * 120000u) == 0);
+        }
+        mfree(&r);
+    }
+
+    /* 6. nobody receiving during a gap: the switch is cut short (streaming 0), the tape goes on in
+     *    the new format when the receiver is back */
+    {
+        const char *a[] = { pal, hdv };
+        mrun(a, 2, NULL, 85, 95, &r);
+        CHECK(r.code == POUT_EXIT_OK && r.nfiles == 2);
+        CHECK(r.m.begins == 1 && r.m.applies == 1 && r.m.apply_streaming == 0);
+        if (r.nfiles == 2)
+            CHECK(is_piece_of(r.data[1], r.len[1], hd, hdv_len, &at));
+        mfree(&r);
+    }
+
+    /* 7. pause after the switch to DV (HDV + PAL): the DV frame repeats; and in the HDV part (PAL + HDV)
+     *    a pause sends nothing and the run still ends */
+    {
+        const char *a[] = { hdv, pal, "--play", "--wait", "wallclock=00:00:04", "--pause", "--wait", "wallclock=00:00:02",
+                            "--stop" };
+        mrun(a, 9, "kind=gap:0.2,blank:0", 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK && r.nfiles == 2);
+        if (r.nfiles == 2 && r.len[1] >= 3 * 144000u && r.len[1] % 144000u == 0) {
+            size_t n = r.len[1] / 144000u;
+            CHECK(memcmp(r.data[1] + (n - 1) * 144000u, r.data[1] + (n - 2) * 144000u, 144000u) == 0);   /* repeated */
+        } else {
+            CHECK(0 && "DV part after HDV");
+        }
+        mfree(&r);
+        const char *b[] = { pal, hdv, "--play", "--wait", "wallclock=00:00:04", "--pause", "--wait", "wallclock=00:00:02",
+                            "--stop" };
+        mrun(b, 9, "kind=gap:0.2,blank:0", 0, 0, &r);
+        CHECK(r.code == POUT_EXIT_OK && r.nfiles == 2);
+        CHECK(r.nfiles == 2 && r.len[0] == pal_len && r.len[1] > 188 * 20);
+        mfree(&r);
+    }
+
+    free(pd);
+    free(hd);
+    free(nd);
 }
 
 int main(void)
@@ -287,6 +589,12 @@ int main(void)
             free(out);
             free(h);
         }
+    }
+
+    {
+        char ntsc[1024];
+        snprintf(ntsc, sizeof ntsc, "%s/dv-ntsc.dv", dir);
+        test_mixed(pal, hdv, ntsc);
     }
 
     free(src);

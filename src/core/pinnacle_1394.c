@@ -996,6 +996,14 @@ static int ar_start(pinnacle_1394_t *l, uint16_t desc, uint32_t buf, uint16_t cm
     return b_send(l, &m, 16);
 }
 
+int p1394_bus_reset(pinnacle_1394_t *l)
+{
+    uint8_t phy = 0;
+    if (phy_read(l, 1, &phy) != 0)
+        return -1;
+    return phy_write(l, 1, (uint8_t)(phy | 0x40), 4);
+}
+
 int p1394_link_init(pinnacle_1394_t *l)
 {
     struct batch m = { .n = 0 };

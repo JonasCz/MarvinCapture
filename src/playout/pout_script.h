@@ -34,6 +34,7 @@
 #define POUT_SCRIPT_H
 
 #include "pout_deck.h"
+#include "pout_switch.h"
 #include "pin_script.h"
 #include "pin_script_eval.h"
 #include <stddef.h>
@@ -78,6 +79,8 @@ typedef struct pout_script {
     int stay;                   /* keep serving the virtual deck after the actions */
     char **files;               /* the tape, in the order given */
     int nfiles;
+    char **switches;            /* --switch specs (validated); the caller applies them with pout_switch_set() */
+    int nswitches;
     pout_action_t *actions;
     int nactions;
 } pout_script_t;

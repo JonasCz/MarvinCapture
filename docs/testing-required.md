@@ -48,7 +48,7 @@ have never seen, with the tests that cover the logic.
 | LP, 12-bit or 4-channel DV | 32 kHz 12-bit audio, a change of audio mode mid-tape | [2.3](#23-dv-with-32-khz-12-bit-or-4-channel-audio) |
 | DV 24p (DVX100, Canon 24F) | 24p and 24pA pulldown in 29.97 DV | [2.4](#24-dv-24p) |
 | DVCAM, DVCPRO25, Digital8 | the variants and their decks | [2.5](#25-dvcam-dvcpro25-digital8) |
-| A tape with DV and HDV, or PAL and NTSC | what a camera sends at the switch; the files | [3](#3-tapes-that-mix-dv-and-hdv-or-pal-and-ntsc) |
+| A tape with DV and HDV, or PAL and NTSC | what a camera sends at the switch (also MarvinPlayout's guess); the files | [3](#3-tapes-that-mix-dv-and-hdv-or-pal-and-ntsc) |
 | A tape with gaps, blank stretches, stills | gaps, blank tape, REC START, frozen timecode | [4](#4-tapes-with-gaps-blank-stretches-and-stills) |
 | Cameras and decks from other makers | deck control over AV/C | [5](#5-deck-control-cameras-and-decks-from-other-makers) |
 | Any FireWire source, plus a second node | bus reset, plugs and channels, two nodes, S400 | [6](#6-the-firewire-bus) |
@@ -281,7 +281,14 @@ A tape recorded in both modes, played in an HDV camera or deck (the Canon, if it
 DV). Check:
 
 - **what the camera sends at the switch**: a bus reset (which ends the capture with
-  `PIN_STOP_CAMERA_LOST`, section 6), a gap, or a burst of garbage. Unknown;
+  `PIN_STOP_CAMERA_LOST`, section 6), a gap, or a burst of garbage. Unknown. Note: how long the gap
+  is, whether empty packets of the new format follow, and when the oPCR payload and the AV/C
+  OUTPUT PLUG SIGNAL FORMAT answer change;
+- **MarvinPlayout guesses this** (`src/playout/pout_switch.c`, [playout.md](playout.md#tapes-that-mix-formats)):
+  DV <-> HDV: no packets for 1.0 s, then 0.2 s of empty packets of the new format, no bus reset, the
+  IT context restarts. **Once a real camera has been observed (bus reset? gap length? garbage?
+  oPCR/format change timing?), change the playout's defaults to match it** (and use `--switch` to try
+  a measured value first);
 - the files: each in its tab's format, with its tab's aspect and the title;
 - to a pipe: the capture ends at the switch with the reason, the CLI with exit code 4.
 
@@ -293,6 +300,10 @@ Rare, but it is what a multi-standard deck or a re-used tape produces. Check the
 at the change in every DV format, and a pipe that goes on through it. Untested even in
 code: damaged frames right at the switch, which take the confirmed standard.
 
+MarvinPlayout guesses this too: no gap, 0.5 s of empty packets of the new standard, no bus reset,
+no restart (`pout_switch.c`, `std`). Once a real deck has been observed (does a multi-standard deck
+reset the bus, stop the stream, change the FDF at once?), change the playout's defaults to match it.
+
 Also from a sender: PAL then NTSC DV back to back.
 
 ### 3.3 An HDV format or PID change within a tape
@@ -300,6 +311,10 @@ Also from a sender: PAL then NTSC DV back to back.
 Unknown whether any camera changes the video PID, or switches between 1080i and 720p,
 within a tape. If one does: the picture in progress and the new PID's first GOP are lost,
 and a new file starts at the GOP where the change began, with PAT and PMT in front.
+
+MarvinPlayout guesses this too: no packets for 0.5 s, then 0.2 s of empty packets, no bus reset, no
+restart (`pout_switch.c`, `hdv-format`). Once a real camera has been observed, change the playout's
+defaults to match it.
 
 Also from a sender: 1080i then 720p on another PID (`ep88-hdv-pid.bin` models it).
 
