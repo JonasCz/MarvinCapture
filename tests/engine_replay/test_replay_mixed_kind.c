@@ -180,8 +180,15 @@ static void check_ts_title(const char *path, const char *title)
     AVDictionaryEntry *p = av_dict_get(fc->programs[0]->metadata, "service_provider", NULL, 0);
     printf("%s: service_name \"%s\", service_provider \"%s\"\n", path, n ? n->value : "",
            p ? p->value : "");
-    CHECK(n && strcmp(n->value, title) == 0);
-    CHECK(p && strcmp(p->value, "MarvinCapture") == 0);
+    /* The SDT text starts with the DVB character table selector 0x15 (UTF-8); FFmpeg 6 drops it
+     * while decoding, FFmpeg 8 hands the byte through. Either way what follows is the text. */
+    const char *name = n ? n->value : "", *prov = p ? p->value : "";
+    if (name[0] == 0x15)
+        name++;
+    if (prov[0] == 0x15)
+        prov++;
+    CHECK(n && strcmp(name, title) == 0);
+    CHECK(p && strcmp(prov, "MarvinCapture") == 0);
     avformat_close_input(&fc);
 }
 

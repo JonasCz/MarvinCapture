@@ -214,8 +214,7 @@ int pin_writer_stop(pin_writer_t *w)
     pthread_mutex_unlock(&w->lock);
     pthread_join(w->thread, NULL);
 
-    /* a queue that overflowed in the fatal mode left a hole in what reached the file */
-    int failed = w->failed || w->overflowed;
+    int failed = w->failed;
     if (w->stats.overflow_count)
         pin_logf(PIN_LOG_WARN, "pin_writer: dropped %llu unit(s), disk fell behind "
                                 "(high-water %.1f MB of %.1f MB)\n",

@@ -626,6 +626,9 @@ static pin_status_t ffv1_close(pin_sink_t *s)
     avcodec_free_context(&p->venc);
     avcodec_free_context(&p->aenc);
     free(p->aring);
+    /* the queue, the encoder's lookahead and the trailer reached the file only in this close */
+    if (s->final_status)
+        *s->final_status = p->st;
     if (p->st.last_error != PIN_OK)
         rc = p->st.last_error;
 

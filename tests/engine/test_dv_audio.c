@@ -242,12 +242,53 @@ static void test_12bit_4channel_pair_routing(void)
     printf("OK: 4-channel 12-bit routing: L=%d R=%d in both pairs\n", even1, odd1);
 }
 
+/* 12-bit nonlinear in 2-channel mode: only the first half of the segments carries audio (one
+ * stereo pair). The second half must neither be read for a pair 2 nor be taken for more of
+ * pair 1: its codes (and the shuffle rows past the table it would index) stay out. */
+static void test_12bit_2channel_second_half_ignored(void)
+{
+    static uint8_t frame[(size_t)DV_SEQ_COUNT_NTSC * DV_SEQ_SIZE];
+    build_ntsc_skeleton(frame, 0x00 /* 2ch */, 1 /* 12-bit */, 0 /* 48000: 12-bit at 32 kHz would be 4-channel */);
+
+    const uint16_t code_a = 0x123, code_b = 0x0AB;    /* the first half */
+    const uint16_t code_c = 0x7F1, code_d = 0x5C3;    /* the second half */
+    for (unsigned i = 0; i < DV_SEQ_COUNT_NTSC; i++) {
+        uint16_t l = i < DV_SEQ_COUNT_NTSC / 2 ? code_a : code_c;
+        uint16_t r = i < DV_SEQ_COUNT_NTSC / 2 ? code_b : code_d;
+        for (unsigned j = 0; j < 9; j++) {
+            uint8_t *payload = audio_block(frame, i, j) + 8;
+            for (int g = 0; g < 24; g++) {
+                payload[g * 3 + 0] = (uint8_t)(l >> 4);
+                payload[g * 3 + 1] = (uint8_t)(r >> 4);
+                payload[g * 3 + 2] = (uint8_t)(((l & 0xF) << 4) | (r & 0xF));
+            }
+        }
+    }
+
+    dv_audio_pcm_t pcm;
+    CHECK(dv_audio_extract(frame, sizeof(frame), &pcm) == 0, "dv_audio_extract succeeds on a 2-channel 12-bit frame");
+    CHECK(pcm.valid && !pcm.four_channel && pcm.pair2_samples == 0, "one pair");
+    int16_t a = 0, b = 0;
+    int seen_a = 0, seen_b = 0, foreign = 0;
+    for (int i = 0; i < pcm.pair1_samples * 2; i += 2) {
+        if (pcm.pair1[i] == 0 && pcm.pair1[i + 1] == 0)
+            continue;
+        if (!seen_a) { a = pcm.pair1[i]; b = pcm.pair1[i + 1]; seen_a = 1; }
+        if (pcm.pair1[i] != a || pcm.pair1[i + 1] != b)
+            foreign++;
+        seen_b++;
+    }
+    CHECK(seen_a && seen_b > 0, "pair 1 has samples");
+    CHECK(foreign == 0, "no sample of the second half of the segments reached pair 1");
+}
+
 int main(void)
 {
     test_16bit_real_shuffle();
     test_no_audio_pack_is_not_an_error();
     test_bad_length_rejected();
     test_12bit_4channel_pair_routing();
+    test_12bit_2channel_second_half_ignored();
 
     if (g_failures == 0) {
         printf("test_dv_audio: all tests passed\n");

@@ -130,7 +130,7 @@ double pin_est_default_rate(pin_est_kind_t kind, int width, int height, int is_6
 double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, double learned_bph,
                     double measured_bps, int *source);
 
-/* free_bytes / rate, or 0 when the rate is unknown. */
+/* free_bytes / rate, or -1 when the rate is unknown. */
 double pin_est_seconds_left(uint64_t free_bytes, double bytes_per_s);
 
 /* Settings persistence of the learned FFV1 rate. load returns bytes/hour, or 0

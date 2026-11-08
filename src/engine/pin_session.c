@@ -145,12 +145,19 @@ static void evq_push(pin_event_t *q, unsigned *head, unsigned *count, pthread_mu
 static int evq_poll(pin_event_t *q, unsigned *head, unsigned *count, pthread_mutex_t *mtx,
                     pin_event_t *out)
 {
+    /* a caller built against an older, shorter pin_event_t gets those fields only (0: no size set) */
+    size_t n = out->size;
+    if (n == 0 || n > sizeof(*out))
+        n = sizeof(*out);
+    if (n < sizeof(uint32_t))
+        return 0;
     pthread_mutex_lock(mtx);
     if (*count == 0) {
         pthread_mutex_unlock(mtx);
         return 0;
     }
-    *out = q[*head];
+    memcpy(out, &q[*head], n);
+    out->size = (uint32_t)n;
     *head = (*head + 1) % PIN_EVQ_CAP;
     (*count)--;
     pthread_mutex_unlock(mtx);
@@ -643,18 +650,24 @@ static int resolve_device_id(const char *want, char *out, size_t out_size)
  * scene-split hold-back FIFO (pin_holdback.h) and split lookahead (pin_split.h)
  * ==================================================================== */
 
+static double unit_seconds(const pin_session_t *s);
+
 static void writer_commit(void *user, const uint8_t *data, size_t len)
 {
     pin_session_t *s = user;
     if (!s->writer)
         return;
-    if (!pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len))
+    if (!pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len)) {
         s->write_dropped++;
+        s->clip_write_dropped++;
+        s->captured_s -= unit_seconds(s);   /* counted on arrival, but never reached the file */
+    }
 }
 
 static void open_sink_for_scene(pin_session_t *s);
 static void deck_send(pin_session_t *s, uint16_t node, pin_deck_cmd_t cmd);
 static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const char *detail);
+static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out);
 
 /* Saves the FFV1 rate of the running capture (average of the last 10 minutes)
  * into the core settings as core.ffv1_bytes_per_hour, when it has run long
@@ -764,10 +777,19 @@ static void hand_over_file(pin_session_t *s)
         sst.bytes_written = s->bytes_written;
     s->bytes_closed += sst.bytes_written;
     s->units_total += sst.units_written;
+    /* The file now counts in bytes_closed; until the next tick the new file would be added
+     * on top of the old one's bytes_written in the total. */
+    s->bytes_written = 0;
     pin_writer_stats_t wst;
     memset(&wst, 0, sizeof(wst));
     if (s->writer)
         pin_writer_get_stats(s->writer, &wst);
+    /* A queue that overflowed ends its file where it overflowed, which is the normal DISK_SLOW
+     * end. A cut (scene, size, format) that hands the file over before capture_guard() saw the
+     * overflow would go on in a new file with the refused units missing between the two: the
+     * capture ends instead. A pipe cannot cut; its overflow is PIPE_SLOW. */
+    if (wst.overflowed && !wst.failed && !pin_path_is_stdout(s->capture_opts.path))
+        s->disk_slow_pending = 1;
     uint64_t reserve = wst.backlog_bytes;
     /* a file that counts its own frames (HDV MOV / MKV): what it has counted so far is the
      * session's from now on; the closer adds what the close still brings */
@@ -1465,9 +1487,10 @@ static unsigned first_scene_number(const pin_session_t *s)
 static void reset_frame_counters(pin_session_t *s)
 {
     s->frames = s->frames_dropped = s->frames_damaged = s->lost_blocks = s->ts_errors = 0;
-    s->write_dropped = 0;
+    s->captured_s = 0;
+    s->write_dropped = s->audio_write_dropped = 0;
     s->frames_error = 0;
-    s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = 0;
+    s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = s->clip_write_dropped = 0;
     s->sinkf_error = s->sinkf_repeated = 0;
     s->err_video_blocks = s->err_audio_blocks = s->err_missing_blocks = 0;
     s->hdv_err_reset = 1;
@@ -1478,6 +1501,11 @@ static void count_frame(pin_session_t *s, int err, int dropped)
 {
     s->frames++;
     s->clip_frames++;
+    /* the length is summed per unit, at the rate it came in: a tape can change from PAL to NTSC,
+     * and a unit that arrives with no file open (after a pass ended, before the rewind took
+     * effect) is not in any file */
+    if (s->sink)
+        s->captured_s += unit_seconds(s);
     if (err) { s->frames_error++; s->clip_frames_error++; }
     if (dropped) { s->frames_dropped++; s->clip_frames_dropped++; }
 }
@@ -1667,7 +1695,7 @@ static void open_sink_for_scene(pin_session_t *s)
     pin_split_new_file(&s->split);
     /* the clip counters restart with every file (frames still held back by a
      * pending split were counted into the previous clip: at most ~1 s) */
-    s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = 0;
+    s->clip_frames = s->clip_frames_error = s->clip_frames_dropped = s->clip_write_dropped = 0;
     /* a file is announced when its first unit has been written; stdout has no file to wait for */
     s->file_announced = to_stdout;
     if (to_stdout)
@@ -1868,6 +1896,10 @@ static void stream_status_from_format(pin_session_t *s)
         s->hdv_seq_h = f->height;
     }
     if (f->fps_num > 0 && f->fps_den > 0) {
+        /* a capture that starts mid-GOP has set the scene detector up with the default rate before
+         * the first sequence header said which one it is */
+        if (s->hdv_fps_num != f->fps_num || s->hdv_fps_den != f->fps_den)
+            s->scene_det_ready = 0;
         s->hdv_fps_num = f->fps_num;
         s->hdv_fps_den = f->fps_den;
     }
@@ -2323,18 +2355,13 @@ static void dir_of(const char *path, char *dir, size_t cap)
     if (slash) *slash = 0; else snprintf(dir, cap, ".");
 }
 
-/* Length of what this capture recorded (all passes), from its frame count. */
+/* Length of what this capture recorded (all passes), summed over the units that went into a
+ * file (count_frame()). */
 static double captured_seconds(const pin_session_t *s)
 {
     if (!s->capture_began)
         return 0;
-    double fps = s->is_60hz ? 30000.0 / 1001.0 : 25.0;
-    if (s->stream_kind == PIN_KIND_HDV) {
-        int num, den;
-        hdv_frame_rate(s, &num, &den);
-        fps = (double)num / den;
-    }
-    return (double)s->frames / fps;
+    return s->captured_s > 0 ? s->captured_s : 0;
 }
 
 /* Records why the capture ended and tells the GUI (PIN_EVT_CAPTURE_ENDED).
@@ -2374,11 +2401,19 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
         if (!pin_stop_abnormal(why))
             s->stop_reason = why = PIN_STOP_WRITE_ERROR;
     }
+    /* the totals as they stand now: a script may start the next capture (and reset them) before
+     * the caller has read these */
+    status_fill_locked(s, &s->end_status);
+    s->have_end_status = 1;
+    if (s->audio_write_dropped)
+        pin_logf(PIN_LOG_WARN, "session: %llu audio block(s) were refused by the full writer queue\n",
+                 (unsigned long long)s->audio_write_dropped);
     pin_logf(why == PIN_STOP_USER ? PIN_LOG_INFO : PIN_LOG_WARN, "session: %s\n", s->stop_text);
     pin_session_push_event(s, PIN_EVT_CAPTURE_ENDED, (int32_t)why, s->stop_text);
     if (say_no_video)
         pin_session_push_event(s, PIN_EVT_NO_VIDEO, (int32_t)why, s->stop_text);
     s->capture_began = 0;
+    s->disk_slow_pending = 0;
     s->capture_end_seq++;
 }
 
@@ -2446,6 +2481,11 @@ static uint16_t auto_stop_node(const pin_session_t *s, uint16_t node)
  * the lock. Returns 1 if it ended the capture. */
 static int capture_guard(pin_session_t *s, uint16_t deck_node)
 {
+    if (s->disk_slow_pending && s->state == PIN_STATE_CAPTURING) {
+        capture_end(s, PIN_STOP_DISK_SLOW, NULL, deck_node);
+        set_state(s, PIN_STATE_READY);
+        return 1;
+    }
     if (s->sink && s->state == PIN_STATE_CAPTURING && pin_closer_failures(s->closer) > 0) {
         /* a finished file could not be written completely (a scene split's old file): the drive
          * is failing, so the capture ends; its report says which file */
@@ -2666,6 +2706,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     /* the capture exists before its first file does: a failed open ends it and stops the deck
      * (open_failed()) */
     s->capture_began = 1;
+    s->disk_slow_pending = 0;
     s->opening_first_file = 1;
     open_sink_for_scene(s);
     s->opening_first_file = 0;
@@ -2906,7 +2947,11 @@ static void dv_tick(void *user)
                 if ((prev == PIN_DECK_REWINDING || prev == PIN_DECK_FAST_FORWARD) &&
                     s->deck != PIN_DECK_REWINDING && s->deck != PIN_DECK_FAST_FORWARD)
                     s->tc_after_wind = 1;
-                pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
+                /* the poll answers once or twice a second: an event per answer would fill the
+                 * queue with the same state and push the rare ones (a file closed, the capture
+                 * ended) out of it */
+                if (s->deck != prev)
+                    pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
             }
             if (s->deck_q_valid) {
                 s->deck_q_valid = 0;
@@ -3206,8 +3251,11 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
     pin_previewer_push_analog(s->preview, f->yuyv, f->width, f->height, !s->is_60hz);
 
     if (s->writer && !pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
-                                      (size_t)f->width * f->height * 2))
+                                      (size_t)f->width * f->height * 2)) {
         s->write_dropped++;
+        s->clip_write_dropped++;
+        s->captured_s -= unit_seconds(s);
+    }
 
     if (kind_newly_known)
         maybe_begin_capture(s, 0); /* analog has no deck/camera_node */
@@ -3353,14 +3401,15 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
     if (b->samples && !b->silence)
         feed_audio_locked(s, (const int16_t *)b->pcm, b->samples);
     if (b->silence) {
-        /* a lost audio packet is an error frame, as a DV frame with audio blocks missing */
-        s->frames_error++;
-        s->clip_frames_error++;
+        /* A lost audio packet is not a frame: the video side already counts the frames it had to
+         * stand in for as errors, and a second error per outage frame would push the share of
+         * frames with errors past 100 %. It is counted as the audio block it is. */
+        s->err_audio_blocks++;
     }
     if (s->writer && b->samples &&
         !pin_writer_push(s->writer, PIN_UNIT_AUDIO, b->seq, (const uint8_t *)b->pcm,
                          (size_t)b->samples * 4))
-        s->write_dropped++;
+        s->audio_write_dropped++;   /* not a frame: kept apart from the "Dropped" count */
     pin_session_unlock(s);
     return 0;
 }
@@ -4279,6 +4328,15 @@ static double nominal_bytes_per_second(pin_session_t *s, pin_kind_t kind, pin_fo
     return rate;
 }
 
+/* The kind whose data rate the free-space estimate uses: what is arriving, and before the first
+ * frame the input's (a DV / HDV input with the camera off is not analog, its rate is a fifth). */
+static pin_kind_t estimate_kind(const pin_session_t *s)
+{
+    if (s->input == PIN_INPUT_DV && s->stream_kind != PIN_KIND_HDV)
+        return PIN_KIND_DV;
+    return s->stream_kind;
+}
+
 pin_format_t pin_session_format_for(const pin_session_t *s, const pin_capture_opts_t *o)
 {
     if (s->input != PIN_INPUT_DV)
@@ -4304,9 +4362,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     if (!pin_naming_folder_exists(o->path, out->message, sizeof(out->message)))
         return PIN_ERR_ARG;
 
-    pin_kind_t kind = s->stream_kind;
-    if (s->input == PIN_INPUT_DV && kind != PIN_KIND_HDV)
-        kind = PIN_KIND_DV; /* DV / HDV input, nothing arriving yet: as for DV */
+    pin_kind_t kind = estimate_kind(s);
     pin_format_t fmt = kind == PIN_KIND_HDV ? o->format_hdv
                        : kind == PIN_KIND_DV ? o->format_dv : o->format_analog;
     char ext[16];
@@ -4342,14 +4398,14 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     if (slash) *slash = 0; else strcpy(dir, ".");
 
     uint64_t free_bytes = 0;
-    fat32_and_free(dir, &free_bytes, &out->fat32);
+    int free_known = fat32_and_free(dir, &free_bytes, &out->fat32) == 0;
     uint64_t file_limit = test_seam("PIN_TEST_FAT32_LIMIT");
     if (file_limit)
         out->fat32 = 1;
     else if (out->fat32)
         file_limit = PIN_FAT32_FILE_MAX;
     out->free_bytes = free_bytes;
-    out->low_space = pin_output_space_low(free_bytes);
+    out->low_space = free_known && pin_output_space_low(free_bytes);
 
     double bytes_per_s = nominal_bytes_per_second(s, kind, fmt, o, 0, NULL);
     out->minutes_left = bytes_per_s > 0 ? (uint64_t)(free_bytes / bytes_per_s / 60.0) : 0;
@@ -4418,12 +4474,11 @@ pin_status_t pin_session_capture_stop(pin_session_t *s, pin_stop_deck_t stop_dec
     return PIN_OK;
 }
 
-pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out)
+/* The whole snapshot, into a zeroed *out. Caller holds the lock. */
+static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
 {
-    if (!s || !out) return PIN_ERR_ARG;
     memset(out, 0, sizeof(*out));
     out->size = sizeof(*out);
-    pin_session_lock(s);
     out->state = visible_state(s);
     out->last_error = s->last_error;
     strncpy(out->error_text, s->error_text, sizeof(out->error_text) - 1);
@@ -4455,7 +4510,7 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     out->frames_error = s->frames_error;
     out->clip_frames = s->clip_frames;
     out->clip_frames_error = s->clip_frames_error;
-    out->clip_frames_dropped = s->clip_frames_dropped;
+    out->clip_frames_dropped = s->clip_frames_dropped + s->clip_write_dropped;
     {
         /* HDV MOV / MKV count their frames with error themselves: the closed files', the open one's */
         pin_sink_status_t fst;
@@ -4546,8 +4601,9 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
      * path while CAPTURING, else from pin_set_output_hint()'s path/format
      * while READY, else left zeroed. */
     const char *hint_path = NULL;
-    pin_kind_t hint_kind = s->stream_kind;
+    pin_kind_t hint_kind = estimate_kind(s);
     pin_format_t hint_fmt = PIN_FMT_DV_RAW;
+    out->est_seconds_left = -1;   /* unknown until there is a volume and a rate */
     if (s->state == PIN_STATE_CAPTURING && pin_path_is_stdout(s->capture_opts.path)) {
         /* a pipe: no disk to report on */
     } else if (s->state == PIN_STATE_CAPTURING && s->current_file[0]) {
@@ -4563,16 +4619,19 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         char dir[PIN_PATH_MAX];
         dir_of(hint_path, dir, sizeof(dir));
         uint64_t free_bytes = 0;
+        int free_known;
         /* Status is polled 40 times a second by the GUIs and statvfs/statfs are real syscalls (visible in
          * the macOS GUI's profile): ask again after a second, or when the directory changed. */
         double now_s = pin_previewer_clock();
         if (strcmp(s->free_cache_dir, dir) == 0 && s->free_cache_t > 0 && now_s - s->free_cache_t < 1.0) {
             free_bytes = s->free_cache_bytes;
+            free_known = s->free_cache_known;
         } else {
             int fat32_unused = 0;
-            fat32_and_free(dir, &free_bytes, &fat32_unused);
+            free_known = fat32_and_free(dir, &free_bytes, &fat32_unused) == 0;
             snprintf(s->free_cache_dir, sizeof(s->free_cache_dir), "%s", dir);
             s->free_cache_bytes = free_bytes;
+            s->free_cache_known = free_known;
             s->free_cache_t = now_s;
         }
         out->disk_free_bytes = free_bytes;
@@ -4583,11 +4642,51 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
         double rate = nominal_bytes_per_second(s, hint_kind, hint_fmt, rate_opts, measured, &src);
         out->est_bytes_per_hour = rate * 3600.0;
         out->est_rate_source = src;
-        out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
-        out->disk_low = out->est_seconds_left < 3600.0 || free_bytes < (50ull << 30);
+        /* a volume that cannot be asked (a folder not made yet, a network drive gone) has no
+         * free space to judge: no estimate and no low-space warning */
+        if (free_known) {
+            out->est_seconds_left = pin_est_seconds_left(free_bytes, rate);
+            out->disk_low = (out->est_seconds_left >= 0 && out->est_seconds_left < 3600.0) ||
+                            free_bytes < (50ull << 30);
+        }
     }
-    pin_session_unlock(s);
+}
+
+/* Hands a snapshot to a caller that built against an older, shorter struct: only the fields it
+ * knows are copied, the rest of its memory is not touched. A size of 0 is a caller that never
+ * set one. */
+static pin_status_t status_copy_out(pin_status_snapshot_t *out, const pin_status_snapshot_t *full)
+{
+    uint32_t n = out->size;
+    if (n == 0 || n > sizeof(*full))
+        n = sizeof(*full);
+    if (n < sizeof(uint32_t))
+        return PIN_ERR_ABI;
+    memcpy(out, full, n);
+    out->size = n;
     return PIN_OK;
+}
+
+pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out)
+{
+    if (!s || !out) return PIN_ERR_ARG;
+    pin_status_snapshot_t full;
+    pin_session_lock(s);
+    status_fill_locked(s, &full);
+    pin_session_unlock(s);
+    return status_copy_out(out, &full);
+}
+
+pin_status_t pin_session_get_capture_end_status(pin_session_t *s, pin_status_snapshot_t *out)
+{
+    if (!s || !out) return PIN_ERR_ARG;
+    pin_session_lock(s);
+    int have = s->have_end_status;
+    pin_status_snapshot_t full;
+    if (have)
+        full = s->end_status;
+    pin_session_unlock(s);
+    return have ? status_copy_out(out, &full) : PIN_ERR_STATE;
 }
 
 void pin_session_set_aspect(pin_session_t *s, pin_aspect_t aspect)

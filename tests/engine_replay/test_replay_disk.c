@@ -234,6 +234,7 @@ static void test_disk_slow(const char *trace)
     CHECK(strstr(r.snap.stop_text, "could not keep up") != NULL);
     CHECK(r.closed_status == PIN_OK);
     CHECK(r.snap.write_dropped > 0);
+    CHECK_EQ_I(r.snap.clip_frames_dropped, r.snap.frames_dropped + r.snap.write_dropped);   /* the clip counts them too */
 
     long n, src_n;
     unsigned char *out = read_file("disk_slow_raw.dv", &n);
@@ -247,7 +248,7 @@ static void test_disk_slow(const char *trace)
     CHECK(first >= 0);
     for (long i = 0; i < frames; i++)   /* frame after frame of the source: no hole */
         CHECK(memcmp(out + i * PAL_FRAME, src + ((first + i) % src_frames) * PAL_FRAME, PAL_FRAME) == 0);
-    CHECK((unsigned long long)frames + r.snap.write_dropped == r.frames);   /* the rest was refused */
+    CHECK((unsigned long long)frames == r.frames);   /* the captured length counts the frames in the file only */
     printf("  disk_slow_raw.dv: %ld frame(s) from source frame %ld on, in order\n", frames, first);
     free(out);
     free(src);

@@ -73,7 +73,7 @@ double pin_est_rate(pin_est_kind_t kind, int width, int height, int is_60hz, dou
 
 double pin_est_seconds_left(uint64_t free_bytes, double bytes_per_s)
 {
-    return bytes_per_s > 0 ? (double)free_bytes / bytes_per_s : 0.0;
+    return bytes_per_s > 0 ? (double)free_bytes / bytes_per_s : -1.0;
 }
 
 #define FFV1_SECTION "core"

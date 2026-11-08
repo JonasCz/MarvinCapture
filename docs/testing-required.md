@@ -761,30 +761,10 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 
 ### 17.4 Wrong numbers on screen
 
-- **R24. The misnamed counters `ts_errors` and `frames_damaged`.** Low. Fix required.
-  - `ts_errors` is documented as HDV continuity errors. It counts adaptation-field `discontinuity_indicator` flags (`hdv_ts_discontinuity_count()`).
-  - `frames_damaged` is documented as zero-padded DV sequences, but it counts only units that cannot be parsed.
-- **R25. `hdv_error_analyze()` counts a flagged discontinuity as an error.** Low. Fix required.
-  - `hdv_error.c` counts the CC error before it checks `discontinuity_indicator`; the branch for that check is empty.
-  - The reassembler honours the flag, so the two disagree on a legitimate CC jump. Does the Canon set it at recording boundaries (1.1)?
-  - Second pass: `own = tei || sync_lost || ...` counts a TEI or bad sync byte on any PID, so one on an audio or PSI packet taints the following P and B pictures. The skill file says an audio-only gap does not spread; that holds for CC gaps only. Probably never set on FireWire HDV. Testing required.
-- **R26. Free-space estimate.** Low-medium. Fix required.
-  - The core memsets the status, so `est_seconds_left` is 0 when there is no estimate. `pin_api.h` says "0 if no hint" and `NativeStructs.cs` says "< 0 = unknown".
-  - `pin_format_storage_free()` and `pin_format_storage_detail()` test `>= 0`, so they show "0 min left". `test_pin_ui_api.c` sets -1 by hand and misses it.
-  - When `fat32_and_free()` fails (folder not yet created, network volume gone), free space is 0. `disk_low` is then set, and the GUIs show a false "Low disk space" warning and a yellow bar.
-- **R27. Total and clip dropped counts disagree.** Low, cosmetic. Fix required.
-  - The total adds `write_dropped`, but `clip_frames_dropped` does not. `write_dropped` is reset once per capture, not per file.
-  - `write_dropped` counts audio blocks too, so "Dropped" mixes frames and audio blocks.
-  - In practice only a burst before a DISK_SLOW end.
-  - Second pass: in the encoder sinks a writer-ring drop also shifts A/V. Video frames and audio blocks are dropped independently, and the sinks ignore the unit index, so each dropped video frame moves later video one frame early against audio (and the reverse for audio). Same burst-before-DISK_SLOW window.
-- **R28. Byte totals are wrong at file cuts and for encoder sinks.** Low. Fix required.
-  - `hand_over_file()` adds the old file to `bytes_closed`, but `s->bytes_written` is refreshed only in the next `dv_tick()`. For up to 50 ms the total counts the previous file twice.
-  - `close_job()` reads the bytes before `sink->close`. Only hdvmux corrects them through `final_status`. For ffv1 and hwenc, the queue, the FLAC ring, the encoder lookahead and the trailer are missing, and a short DV H.264 clip can report 0 bytes.
-- **R30. The event queue drops the oldest events.** Low. Fix required.
-  - `pin_session.c` pushes PIN_EVT_DECK on every transport-state poll answer (1-2 Hz), not only on a change.
-  - The queue holds 256 events (`PIN_EVQ_CAP`) and drops the oldest of any kind. A consumer that does not poll for about 4 minutes therefore loses FILE_OPENED, FILE_CLOSED and CAPTURE_ENDED.
-  - All three GUIs keep polling while minimised or in the background, so this needs a stalled consumer.
-  - Fix: push on change only, or keep slots for important events.
+- **R25. TEI or a bad sync byte on any PID taints the following pictures.** Low. Testing required.
+  - `own = tei || sync_lost || ...` counts a TEI or bad sync byte on any PID, so one on an audio or PSI packet taints the following P and B pictures. The skill file says an audio-only gap does not spread; that holds for CC gaps only. Probably never set on FireWire HDV. Testing required.
+- **R27. Encoder sinks: a writer-ring drop shifts A/V.** Low. Testing required.
+  - In the encoder sinks a writer-ring drop also shifts A/V. Video frames and audio blocks are dropped independently, and the sinks ignore the unit index, so each dropped video frame moves later video one frame early against audio (and the reverse for audio). Same burst-before-DISK_SLOW window.
 - **R31. Thread status read without a lock.** Low. Testing required.
   - `hand_over_file()`, `file_bytes_due()`, `capture_guard()` and `pin_session_get_status()` read `sink->get_status` while the writer thread updates it. Values can be stale or torn; no crash path was found.
   - Relevant to the TSan item in 13.
@@ -799,9 +779,6 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 
 ### 17.6 Smaller items
 
-- **`dv_audio_extract()`, 12-bit audio not in 4-channel mode** (`dv_audio.c`). Low. Fix required.
-  - The code reads `shuffle[i + half_ch]` past the end of the table for `i >= half_ch`, and the result can overwrite pair 1.
-  - This affects the meter and the monitor only (2.3).
 - **Thread priority inheritance** (Linux). Medium. Testing required.
   - `pin_thread_boost()` sets SCHED_FIFO 10 or nice -10 on the USB thread. The writer and encoder threads are created from that thread with default attributes, so they inherit the boost.
   - CPU-heavy encoders could then delay the USB reaper or starve the GUI.
@@ -901,21 +878,11 @@ items are marked "Second pass" under those items.
 
 - **N33. `lost_blocks` is wrong for holes of 256 or more blocks** (`check_dbc()` sees the DBC modulo 256). Low-medium (it is the only loss figure for HDV). Fix required (reproduced).
   - 256 or more lost packets wrap (300 -> 44); exactly 256 is not seen at all, and two missing frames go uncounted. DV frame counting is not affected (`frames_between()` resolves the wrap from the DIF numbering); HDV has no such check.
-- **N34. Analog: a silence block adds an error on top of the stand-in video frame** (`analog_audio_cb()`: `if (b->silence) { frames_error++; clip_frames_error++; }`, without `frames++`). Low. Fix required.
-  - A 750-frame outage gives 750 frames and 1500 error frames (200 %). Whether audio should count separately is a product decision; the percentage must not exceed 100.
-- **N35. "Captured" length uses the final frame rate and counts unwritten units** (`captured_seconds()`, `apply_unit_counts()` runs with no file open). Low. Fix required.
-  - 10 min PAL then 1 min NTSC shows 560 s instead of 660 s. Frames the deck sends after a time-limit pass end (before REW takes effect) and units a sink drops are counted.
-- **N36. Free-space estimate uses the analog rate before the first frame** (`pin_session_get_status()`: `hint_kind = s->stream_kind`, which is 0 = ANALOG until data arrives). Low-medium. Fix required.
-  - A DV / HDV session with the camera off estimates at the analog rate: 200 GB shows about 2.7 h instead of 15 h, and `disk_low` can be set. `pin_session_check_output()` already corrects for `s->input`; `get_status` does not. Related to R26.
-- **N37. CLI capture summary can show the next capture's counts** (`print_capture_summary()` calls `pin_get_status()` when it handles CAPTURE_ENDED, from 6f94979). Low-medium. Fix required.
-  - In `--capture a --wait .. --capture b` the script thread starts b at once and `reset_frame_counters()` runs before the CLI loop wakes (up to 50 ms), so a's summary prints b's near-zero numbers. Fix: store the final totals in `capture_report_end()`.
 - **N38. DV audio error detection reads 16-bit words in 12-bit mode** (`dv_error.c` `dv_error_analyze()`). Low. Testing required.
   - The 12-bit error fill 0x800 (bytes `80 80 00`) is not uniform in 16-bit words, so `audio_err` stays 0 on 32 kHz / 12-bit tapes. A block of 36 identical non-zero words (silence with a DC offset, all 0xFFFF) counts as an error on every frame of the passage.
 - **N39. HDV damage can leave a damaged reference marked clean** (`hdv_error.c` propagation). Low-medium. Testing required.
   - An I picture that loses its tail charges the CC gap to the next unit, an open-GOP leading B, which updates no reference state, so the following P and the rest of the GOP read clean. An I picture that loses its PES start never becomes a unit, so one error frame is counted instead of about 15.
-- **N40. HDV scene detector set to 29.97 fps when the capture starts mid-GOP** (`capture_unit()` initialises with `hdv_frame_rate()` while `hdv_fps_num` is 0; never re-initialised). Low. Fix required. On PAL HDV a forward jump of 1.0-1.2 s is missed.
 - **N41. AV/C PLAY operands 0x65 and 0x6d look swapped** (`pin_deck_state_from_avc()`). Low (status text and script conditions only). Fix required once a camera confirms: reverse play shows Paused, reverse pause shows Playing.
-- **N42. `pin_get_status()` and `pin_poll_event()` ignore the caller's struct size** (`memset(out, 0, sizeof(*out))` also clears `out->size`; `evq_poll()` copies the whole struct). Low. Fix required if the ABI promise in `pin_api.h` is meant: a caller built against an older, shorter struct gets a buffer overflow.
 
 ### 18.4 Options, names and stop conditions
 

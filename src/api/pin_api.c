@@ -659,6 +659,11 @@ pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out)
     return pin_session_get_status(s, out);
 }
 
+pin_status_t pin_get_capture_end_status(pin_session_t *s, pin_status_snapshot_t *out)
+{
+    return pin_session_get_capture_end_status(s, out);
+}
+
 void pin_format_remaining(double seconds, char *out, size_t cap)
 {
     if (!out || !cap)

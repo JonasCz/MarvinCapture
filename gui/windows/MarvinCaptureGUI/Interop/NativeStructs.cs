@@ -277,9 +277,9 @@ public unsafe struct PinStatusSnapshot
     public double ElapsedS;
     public ulong Frames;
     public ulong FramesDropped;
-    public ulong FramesDamaged;
+    public ulong FramesDamaged;     // analog: dropped frames that arrived short; DV: units that could not be parsed as a frame (not the frames with errors)
     public ulong LostBlocks;
-    public ulong TsErrors;
+    public ulong TsErrors;          // HDV: packets that set discontinuity_indicator (not continuity errors)
     public ulong BytesWritten;
     public ulong WriterBacklog;
     public ulong WriterBacklogMax;

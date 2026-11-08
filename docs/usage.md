@@ -262,7 +262,8 @@ error" when:
   an all-zero or unused pair is silence, not an error), or ~every video block
   is STA 14 (a Samsung camera that re-encoded the frame). A frame with >= 90 %
   of its blocks missing is also "dropped".
-- **HDV**: transport_error_indicator, a continuity-counter gap on any PID, a
+- **HDV**: transport_error_indicator, a continuity-counter gap on any PID (not one on a
+  packet that sets discontinuity_indicator), a
   video PES that does not start properly or has no picture header. A B or P
   picture that depends on a damaged I/P picture of the same GOP counts as damaged
   too (a damaged I/P damages the P pictures after it up to the next I, and the

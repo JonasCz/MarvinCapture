@@ -52,12 +52,13 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
         if (afc & 1) {
             int cc = p[3] & 15;
             int last = st->cc[pid];
-            if (last >= 0 && cc != last && cc != ((last + 1) & 15)) {
+            /* a packet that flags a discontinuity announces the jump: it is the camera's own
+             * break (the reassembler honours the flag the same way), not a loss */
+            int flagged = (afc & 2) && p[4] > 0 && (p[5] & 0x80);
+            if (last >= 0 && cc != last && cc != ((last + 1) & 15) && !flagged) {
                 out->cc_errors++;
                 if (pid == video_pid) video_cc_err = 1;
             }
-            /* an adaptation discontinuity resets the expectation legitimately */
-            if (afc & 2 && p[4] > 0 && (p[5] & 0x80)) { /* keep cc, just no error */ }
             st->cc[pid] = (int16_t)cc;
         }
         if (pid != video_pid || !(afc & 1))

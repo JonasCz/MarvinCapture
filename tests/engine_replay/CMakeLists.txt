@@ -144,6 +144,14 @@ add_test(NAME test_replay_mixed_kind COMMAND test_replay_mixed_kind "${PIN_TEST_
 pin_engine_replay_test_env(test_replay_mixed_kind)
 set_tests_properties(test_replay_mixed_kind PROPERTIES TIMEOUT 90)
 
+# The numbers the status shows: the estimate before data, a caller's shorter struct, the
+# captured length over a PAL -> NTSC tape, byte totals, the ended capture's status.
+add_executable(test_replay_status_numbers test_replay_status_numbers.c)
+target_link_libraries(test_replay_status_numbers PRIVATE marvin-core)
+add_test(NAME test_replay_status_numbers COMMAND test_replay_status_numbers "${PIN_TEST_DATA}")
+pin_engine_replay_test_env(test_replay_status_numbers)
+set_tests_properties(test_replay_status_numbers PROPERTIES TIMEOUT 60)
+
 # The output drive gets full, fails or is slow (the test seams PIN_TEST_FREE_SPACE,
 # PIN_TEST_WRITE_FAIL_AFTER, PIN_TEST_SINK_DELAY_MS, PIN_TEST_WRITER_QUEUE): DISK_FULL,
 # WRITE_ERROR, DISK_SLOW, and the file finished (libavformat reads it).
@@ -181,7 +189,7 @@ endif()
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
     test_replay_hdv test_replay_hdv_split test_replay_hdv_mov test_replay_unplug test_replay_hwenc
-    test_replay_mixed_dv test_replay_mixed_kind test_replay_dv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe
+    test_replay_mixed_dv test_replay_status_numbers test_replay_mixed_kind test_replay_dv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

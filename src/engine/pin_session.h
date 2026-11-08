@@ -59,6 +59,7 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
 pin_status_t pin_session_capture_stop(pin_session_t *s, pin_stop_deck_t stop_deck);
 
 pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out);
+pin_status_t pin_session_get_capture_end_status(pin_session_t *s, pin_status_snapshot_t *out);
 int pin_session_poll_event(pin_session_t *s, pin_event_t *out);
 
 /* Command-line script runner (pin_script_run.c); wrapped by pin_api.c. */

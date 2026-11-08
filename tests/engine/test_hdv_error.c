@@ -126,6 +126,24 @@ static void test_synthetic(void)
     hdv_error_analyze(&st, u, 4, VPID, &e);
     CHECK(!e.frame_error, "audio gap does not taint");
 
+    /* a counter jump on a packet that sets discontinuity_indicator is the camera's own break */
+    make_pic(u, 2, 0, 0);
+    int base = cc_v - 3;
+    u[188 + 3] = (uint8_t)(0x30 | ((base + 1 + 5) & 15));   /* adaptation field + payload */
+    u[188 + 4] = 1;                                          /* its length */
+    u[188 + 5] = 0x80;                                       /* discontinuity_indicator */
+    u[564 + 3] = (uint8_t)(0x10 | ((base + 1 + 5 + 1) & 15));   /* continues from the jump */
+    cc_v = base + 1 + 5 + 2;
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error && e.cc_errors == 0 && !e.video_damaged, "a flagged discontinuity is no error");
+    make_pic(u, 3, 0, 0);
+    base = cc_v - 3;
+    u[188 + 3] = (uint8_t)(0x10 | ((base + 1 + 5) & 15));   /* the same jump, not flagged */
+    u[564 + 3] = (uint8_t)(0x10 | ((base + 1 + 5 + 1) & 15));
+    cc_v = base + 1 + 5 + 2;
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.cc_errors == 1 && e.video_damaged, "the same jump without the flag is");
+
     /* TEI */
     make_pic(u, 2, 0, 0);
     u[188 + 1] |= 0x80;

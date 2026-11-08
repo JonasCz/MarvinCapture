@@ -175,6 +175,11 @@ int dv_audio_extract(const uint8_t *frame, size_t frame_len, dv_audio_pcm_t *pcm
         const uint8_t *seq = frame + (size_t)i * DV_SEQ_SIZE;
         int16_t *out = pcm->pair1;
         int shuffle_row_base = i;
+        /* 12-bit: the second half of the segments carries the second stereo pair. Without one
+         * (2-channel mode) they hold no pair-1 data, and the "channel 2" shuffle rows used below
+         * would lie past the table for them. */
+        if (quant == 1 && !pcm->four_channel && i >= half_ch)
+            break;
         if (pcm->four_channel && i >= half_ch) {
             out = pcm->pair2;
             shuffle_row_base = i - half_ch; /* i % half_ch, i is always < 2*half_ch */

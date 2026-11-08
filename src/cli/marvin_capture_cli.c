@@ -199,7 +199,7 @@ static void print_capture_summary(pin_session_t *s)
     pin_status_snapshot_t st;
     memset(&st, 0, sizeof(st));
     st.size = sizeof(st);
-    if (pin_get_status(s, &st) != PIN_OK)
+    if (pin_get_capture_end_status(s, &st) != PIN_OK)
         return;
     char line[256];
     pin_format_capture_summary(&st, line, sizeof(line));

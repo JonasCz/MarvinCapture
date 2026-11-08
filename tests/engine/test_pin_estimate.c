@@ -51,7 +51,7 @@ int main(void)
     CHECK(near(pin_est_rate(PIN_EST_DV, 0, 0, 0, 0, 5e6, &src), 5e6, 0) && src == PIN_EST_SRC_MEASURED,
           "measured wins");
     CHECK(near(pin_est_seconds_left(36000000, 3600000), 10, 1e-9), "seconds left");
-    CHECK(pin_est_seconds_left(100, 0) == 0, "unknown rate");
+    CHECK(pin_est_seconds_left(100, 0) < 0, "unknown rate");
     /* remux: (free - 2 * written) / (3 * rate) */
 
     /* persistence */

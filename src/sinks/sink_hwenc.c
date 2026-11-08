@@ -1380,6 +1380,9 @@ static pin_status_t hwenc_close(pin_sink_t *s)
         p->qhead = (p->qhead + 1) % QUEUE_DEPTH;
         p->qcount--;
     }
+    /* the queue, the encoder's lookahead and the trailer reached the file only in this close */
+    if (s->final_status)
+        *s->final_status = p->st;
     if (p->st.last_error != PIN_OK)
         rc = p->st.last_error;
 

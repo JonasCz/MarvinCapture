@@ -22,7 +22,9 @@
 
 #include "pin_session.h"
 #include "pin_session_priv.h"
+#include <stddef.h>
 #include <stdio.h>
+#include <string.h>
 
 static int g_failures = 0;
 #define CHECK(cond, msg)                                                     \
@@ -36,6 +38,8 @@ static int g_failures = 0;
 static void drain(void)
 {
     pin_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.size = sizeof(e);
     while (pin_session_poll_event(NULL, &e))
         ;
 }
@@ -55,6 +59,8 @@ static void test_drops_log_keeps_order(void)
     pin_session_push_event(NULL, PIN_EVT_STATE, n++, NULL);
 
     pin_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.size = sizeof(e);
     int got = 0, expect = 0, in_order = 1, saw_log = 0;
     while (pin_session_poll_event(NULL, &e)) {
         got++;
@@ -80,6 +86,8 @@ static void test_drops_oldest_without_log(void)
         pin_session_push_event(NULL, PIN_EVT_STATE, i, NULL);
 
     pin_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.size = sizeof(e);
     int expect = 1, in_order = 1, got = 0;
     while (pin_session_poll_event(NULL, &e)) {
         got++;
@@ -90,8 +98,27 @@ static void test_drops_oldest_without_log(void)
     CHECK(in_order, "oldest dropped, the rest in order");
 }
 
+/* A caller built against a shorter pin_event_t gets those fields and nothing behind them. */
+static void test_short_caller_struct(void)
+{
+    drain();
+    pin_session_push_event(NULL, PIN_EVT_STATE, 7, "text");
+    unsigned char buf[sizeof(pin_event_t) + 16];
+    memset(buf, 0xAB, sizeof(buf));
+    pin_event_t *e = (pin_event_t *)buf;
+    e->size = (uint32_t)offsetof(pin_event_t, a);   /* size and kind only */
+    CHECK(pin_session_poll_event(NULL, e) == 1, "polled");
+    CHECK(e->size == offsetof(pin_event_t, a) && e->kind == PIN_EVT_STATE, "size and kind");
+    int untouched = 1;
+    for (size_t i = offsetof(pin_event_t, a); i < sizeof(buf); i++)
+        if (buf[i] != 0xAB)
+            untouched = 0;
+    CHECK(untouched, "nothing past the caller's size was written");
+}
+
 int main(void)
 {
+    test_short_caller_struct();
     test_drops_log_keeps_order();
     test_drops_oldest_without_log();
     if (g_failures) {

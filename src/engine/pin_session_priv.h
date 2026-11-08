@@ -123,8 +123,11 @@ struct pin_session {
     char current_file[PIN_PATH_MAX];
     double elapsed_s, idle_s;
     uint64_t frames, frames_dropped, frames_damaged, lost_blocks, ts_errors;
+    double captured_s;          /* playing time of the video units that went into a file */
     uint64_t bytes_written, writer_backlog, writer_backlog_max;
-    uint64_t write_dropped;     /* units the writer queue refused, see pin_status_snapshot_t */
+    uint64_t write_dropped;     /* video units the writer queue refused, see pin_status_snapshot_t */
+    uint64_t clip_write_dropped;  /* the same for the open file */
+    uint64_t audio_write_dropped; /* audio blocks it refused (analog), logged at the end */
     /* error stats (see dv_error.h / hdv_error.h): total = since capture start
      * (or session start while not capturing), clip = since the current file
      * opened. frames / frames_dropped above are the totals' other two. */
@@ -204,6 +207,7 @@ struct pin_session {
     int have_output_hint;
     char free_cache_dir[PIN_PATH_MAX]; /* pin_session_get_status(): free-space lookup, kept ~1 s */
     uint64_t free_cache_bytes;
+    int free_cache_known;      /* the lookup worked (free_cache_bytes means something) */
     double free_cache_t;
     /* not yet committed raw units (DV frames, HDV pictures, PAT/PMT), so a confirmed scene cut
      * can be back-dated to its first frame (pin_holdback.h; zeroed = not initialised) */
@@ -230,6 +234,8 @@ struct pin_session {
     double capture_start_s, last_data_s;
     int capture_began;       /* start_capture_now() opened the first file of this capture */
     int opening_first_file;  /* start_capture_now() is opening that first file */
+    int disk_slow_pending;   /* a file handed over mid-capture had overflowed its queue: the capture
+                                goes on in a new file with a hole before it (capture_guard() ends it) */
     double disk_check_s;     /* capture_guard(): last free-space check */
     uint64_t file_limit;     /* the output drive's largest file (FAT32: PIN_FAT32_FILE_MAX), 0 = none
                                 or standard output: a file goes on in the next one before it
@@ -244,6 +250,8 @@ struct pin_session {
     double stop_captured_s;
     char stop_text[PIN_TEXT_MAX];
     int stop_no_video;       /* the capture ended without a single video unit written */
+    pin_status_snapshot_t end_status;   /* the status at that moment (pin_get_capture_end_status()) */
+    int have_end_status;
     unsigned close_failed;   /* files of this capture whose close failed (collected from the closer) */
     pin_status_t close_fail_status;  /* the first of them */
     char close_fail_path[PIN_PATH_MAX];

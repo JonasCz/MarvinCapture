@@ -212,7 +212,7 @@ static void test_writer_overflow_fatal(void)
     nap_ms(20);
     /* room again, but the hole is already there: nothing more is queued */
     CHECK_EQ_I(pin_writer_push(w, PIN_UNIT_RAW, 3, unit, 10), 0);
-    CHECK_EQ_I(pin_writer_stop(w), -1);   /* the hole is a failed close */
+    CHECK_EQ_I(pin_writer_stop(w), 0);
     CHECK_EQ_I(sl.consumed, 2);   /* the two before the overflow were delivered */
 
     /* the normal mode keeps counting drops and carries on */

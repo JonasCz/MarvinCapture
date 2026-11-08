@@ -700,9 +700,12 @@ typedef struct {
     double elapsed_s;
     uint64_t frames;
     uint64_t frames_dropped;    /* not in the output (DV: lost in transit; analog: the previous frame repeated) */
-    uint64_t frames_damaged;    /* analog: the dropped frames that arrived short; DV: sequences zero-padded */
+    uint64_t frames_damaged;    /* analog: the dropped frames that arrived short; DV: units that could not be parsed
+                                   as a frame (neither 10 nor 12 sequences); HDV 0. Not the count of frames with errors (frames_error) */
     uint64_t lost_blocks;       /* DV/HDV: CIP data blocks (DV 480 bytes, HDV 24) the DBC says were lost in transit */
-    uint64_t ts_errors;         /* HDV: continuity errors */
+    uint64_t ts_errors;         /* HDV: transport packets whose adaptation field sets discontinuity_indicator (the
+                                   camera marking a break in the stream), not continuity errors; those are in
+                                   frames_error / err_missing_blocks */
     uint64_t bytes_written;
     uint64_t writer_backlog;    /* bytes queued for the disk */
     uint64_t writer_backlog_max;
@@ -714,9 +717,11 @@ typedef struct {
     /* Appended fields, ABI-compatible (PIN_API_VERSION unchanged). Disk
      * space on the output volume: while CAPTURING, from the live data rate;
      * else estimated from pin_set_output_hint()'s format at its nominal
-     * rate, or 0/0 if no hint was ever given. */
+     * rate. Without a hint, or while the volume cannot be asked (a folder
+     * that does not exist yet, a drive that is gone): disk_free_bytes 0,
+     * est_seconds_left -1 (unknown, not "0 left") and disk_low 0. */
     uint64_t disk_free_bytes;
-    double est_seconds_left;
+    double est_seconds_left;    /* < 0 = unknown */
     int disk_low;               /* free space/time is getting low (< 1 hour or < 50 GB) */
 
     /* Appended fields, ABI-compatible.
@@ -734,9 +739,12 @@ typedef struct {
     int progress_percent;
     int camera_present;
 
-    /* Appended fields, ABI-compatible. Video frames and audio blocks that
-     * arrived but never reached the file because the disk writer's queue
-     * was full (or the file had already failed). Always 0 in a good capture. */
+    /* Appended fields, ABI-compatible. Video frames that arrived but never
+     * reached the file because the disk writer's queue was full (or the file
+     * had already failed). Always 0 in a good capture. Part of the "dropped"
+     * total (frames_dropped + write_dropped); clip_frames_dropped includes
+     * the same count for the current file. Audio blocks the queue refused
+     * are not frames and are only logged. */
     uint64_t write_dropped;
 
     /* Appended fields, ABI-compatible. Seconds until the capture stops by
@@ -777,7 +785,8 @@ typedef struct {
      * and counts as an error instead), analog repeated frames; HDV MOV / MKV frames that repeat a neighbour because
      * their picture was lost (also "with error"); raw HDV 0.
      * err_*_blocks: running totals behind the verdicts (DV: video blocks with
-     * STA != 0, audio blocks bad or muted, blocks missing; HDV: damaged
+     * STA != 0, audio blocks bad or muted, blocks missing; analog: audio
+     * packets replaced by silence (they add no frame with error); HDV: damaged
      * pictures in err_video_blocks, TEI + continuity gaps + sync losses in
      * err_missing_blocks). */
     uint64_t frames_error;
@@ -836,8 +845,16 @@ typedef struct {
     int stop_no_video;
 } pin_status_snapshot_t;
 
-/* Non-blocking. */
+/* Non-blocking. out->size is the caller's sizeof(): a caller built against an older, shorter
+ * struct gets those fields only (0 means sizeof of this header's). PIN_ERR_ABI for a size
+ * below 4. */
 PIN_API pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out);
+
+/* Non-blocking. The status as it stood when the last capture of this session ended (after its
+ * files were closed): its totals, which pin_get_status() no longer shows once the next capture
+ * has begun (a script starts it at once). Same size rules as pin_get_status(). PIN_ERR_STATE
+ * until a capture has ended. */
+PIN_API pin_status_t pin_get_capture_end_status(pin_session_t *s, pin_status_snapshot_t *out);
 
 /* Ready-made text so every GUI shows the same thing. */
 PIN_API void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t cap);
