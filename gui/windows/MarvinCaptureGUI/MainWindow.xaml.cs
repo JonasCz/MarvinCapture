@@ -37,6 +37,8 @@ public sealed partial class MainWindow : Window
     private Thread? _deviceWatch;
     private volatile bool _closing;
     private readonly TaskbarButton _taskbar;
+    private readonly SessionEndGuard _sessionEnd;
+    private bool _released;
     private readonly SemaphoreSlim _dialogGate = new(1, 1);
 
     private D3DPreview? _preview;
@@ -69,6 +71,7 @@ public sealed partial class MainWindow : Window
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _taskbar = new TaskbarButton(_hwnd);
+        _sessionEnd = new SessionEndGuard(_hwnd, () => VM.IsCapturing, ReleaseSession);
         // Raised inside the window procedure: handle on the next dispatcher turn.
         _taskbar.StartClicked += () => DispatcherQueue.TryEnqueue(() => _ = TaskbarStartAsync());
         _taskbar.StopClicked += () => DispatcherQueue.TryEnqueue(TaskbarStop);
@@ -444,6 +447,7 @@ public sealed partial class MainWindow : Window
         RunPendingScriptIfReady();
         UpdateTaskbar();
         UpdateKeepAwake();
+        _sessionEnd.SetBusy(VM.IsCapturing);
 
         if (_finalizingForClose && VM.SessionState is PinState.Ready or PinState.Error or PinState.Closed)
         {
@@ -1161,9 +1165,14 @@ public sealed partial class MainWindow : Window
         Close();
     }
 
-    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    /// <summary>Stops the timers, then closes the session: pin_close blocks until any capture is finalised. Also the forced session end (logoff, shutdown).</summary>
+    private void ReleaseSession()
     {
-        SaveWindowGeometry();
+        if (_released)
+        {
+            return;
+        }
+        _released = true;
         _statusTimer.Stop();
         _meterTimer.Stop();
         _closing = true;
@@ -1171,7 +1180,14 @@ public sealed partial class MainWindow : Window
         Native.DevicesWake();
         _preview?.Dispose();
         _preview = null;
-        VM.Dispose(); // pin_close: blocks until any capture is finalised
+        VM.Dispose();
+    }
+
+    private void MainWindow_Closed(object sender, WindowEventArgs args)
+    {
+        SaveWindowGeometry();
+        ReleaseSession();
+        _sessionEnd.Dispose();
         if (_keepingAwake)
         {
             Win32.SetThreadExecutionState(Win32.ES_CONTINUOUS);

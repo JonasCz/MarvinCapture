@@ -336,5 +336,11 @@ MarvinCaptureGUI/
   current clip; storage: written, free, time left).
 - Closing the window during a capture asks first. Confirming stops the capture,
   shows "Finalizing files…" and exits once the core reports READY.
+- Logoff, shutdown and restart during a capture (or while its files are finalised) are
+  blocked like an editor with unsaved work: `Controls/SessionEndGuard` (window subclass)
+  registers `ShutdownBlockReasonCreate` and answers `WM_QUERYENDSESSION` with FALSE. If the
+  session ends anyway (`WM_ENDSESSION` TRUE, "Shut down anyway"), it stops the capture and
+  closes the session (`pin_close`, files finalised) on the UI thread before the message
+  returns. Without a capture the session end is allowed and the session is closed the same way.
 - There are no keyboard shortcuts, on purpose. Every control is tabbable and
   has an automation name.

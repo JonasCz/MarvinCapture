@@ -62,9 +62,10 @@ static double now_s(void)
 }
 #endif
 
-/* ---- Ctrl-C ------------------------------------------------------------- */
+/* ---- Ctrl-C, terminal loss, termination --------------------------------- */
 
-static volatile sig_atomic_t g_interrupts;   /* number of Ctrl-C presses so far */
+static volatile sig_atomic_t g_interrupts;   /* number of stop requests so far */
+static volatile sig_atomic_t g_quiet;        /* the terminal is gone: print nothing more */
 
 static void note_interrupt(void)
 {
@@ -73,25 +74,54 @@ static void note_interrupt(void)
 }
 
 #if defined(_WIN32)
+static HANDLE g_finalised;   /* set once the files are finalised: the console handler waits for it */
+
 static BOOL WINAPI on_console_ctrl(DWORD type)
 {
     switch (type) {
     case CTRL_C_EVENT:
     case CTRL_BREAK_EVENT:
-    case CTRL_CLOSE_EVENT:
         note_interrupt();
+        return TRUE;
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+        /* Windows ends the process when this handler returns (and after a few seconds at the
+         * latest): request the stop, then block until the main thread has finalised the files. */
+        g_quiet = 1;
+        if (g_interrupts == 0)
+            g_interrupts = 1;
+        if (g_finalised)
+            WaitForSingleObject(g_finalised, INFINITE);
         return TRUE;
     }
     return FALSE;
 }
-static void install_interrupt_handler(void) { SetConsoleCtrlHandler(on_console_ctrl, TRUE); }
+static void install_interrupt_handler(void)
+{
+    g_finalised = CreateEventW(NULL, TRUE, FALSE, NULL);
+    SetConsoleCtrlHandler(on_console_ctrl, TRUE);
+}
+static void signal_finalised(void)
+{
+    if (g_finalised)
+        SetEvent(g_finalised);
+}
 #else
-static void on_signal(int sig) { (void)sig; note_interrupt(); }
+static void on_signal(int sig)
+{
+    if (sig == SIGHUP)
+        g_quiet = 1;   /* the terminal is gone: its writes would fail */
+    note_interrupt();
+}
 static void install_interrupt_handler(void)
 {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
+    signal(SIGHUP, on_signal);
+    signal(SIGQUIT, on_signal);
 }
+static void signal_finalised(void) {}
 #endif
 
 /* ---- output ------------------------------------------------------------- */
@@ -115,7 +145,7 @@ static int console_width(void)
 /* Wipes the in-place status line so the next printed line starts clean. */
 static void finish_inplace(void)
 {
-    if (g_inplace_width > 0) {
+    if (g_inplace_width > 0 && !g_quiet) {
         fprintf(stderr, "\r%*s\r", g_inplace_width, "");
         g_inplace_width = 0;
     }
@@ -125,6 +155,8 @@ static void say(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 static void say(const char *fmt, ...)
 {
     va_list ap;
+    if (g_quiet)
+        return;
     finish_inplace();
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
@@ -136,6 +168,8 @@ static void say(const char *fmt, ...)
 static void show_status(pin_session_t *s, int inplace)
 {
     pin_status_snapshot_t st;
+    if (g_quiet)
+        return;
     memset(&st, 0, sizeof(st));
     st.size = sizeof(st);
     if (pin_get_status(s, &st) != PIN_OK)
@@ -544,6 +578,7 @@ int main(int argc, char **argv)
     }
     finish_inplace();
     pin_close(s);
+    signal_finalised();
     print_log_events(debug);
     pin_script_free(sc);
     return exit_code;

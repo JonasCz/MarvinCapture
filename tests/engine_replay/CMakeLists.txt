@@ -166,6 +166,14 @@ add_test(NAME test_cli_pipe
             "-DDATA=${PIN_TEST_DATA}" -P "${PROJECT_SOURCE_DIR}/tests/check_cli_pipe.cmake")
 set_tests_properties(test_cli_pipe PROPERTIES TIMEOUT 120)
 
+# SIGTERM, SIGHUP and SIGQUIT stop the CLI and finalise the file (exit 130), also with stderr gone.
+if(UNIX)
+    add_test(NAME test_cli_signal
+        COMMAND sh "${PROJECT_SOURCE_DIR}/tests/check_cli_signal.sh"
+                "$<TARGET_FILE:MarvinCaptureCLI>" "${PIN_TEST_DATA}")
+    set_tests_properties(test_cli_signal PROPERTIES TIMEOUT 90 FIXTURES_REQUIRED pin_test_data)
+endif()
+
 # All of the above replay the generated recordings.
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output

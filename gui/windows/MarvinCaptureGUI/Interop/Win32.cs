@@ -10,6 +10,8 @@ internal static partial class Win32
 
     public const uint WM_COMMAND = 0x0111;
     public const uint WM_NCDESTROY = 0x0082;
+    public const uint WM_QUERYENDSESSION = 0x0011;
+    public const uint WM_ENDSESSION = 0x0016;
     public const uint WM_SETTINGCHANGE = 0x001A;
     public const uint WM_DPICHANGED = 0x02E0;
     public const uint THBN_CLICKED = 0x1800;
@@ -36,6 +38,14 @@ internal static partial class Win32
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static partial bool ChangeWindowMessageFilterEx(nint hwnd, uint message, uint action, nint changeInfo);
+
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ShutdownBlockReasonCreate(nint hwnd, string reason);
+
+    [LibraryImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    public static partial bool ShutdownBlockReasonDestroy(nint hwnd);
 
     [StructLayout(LayoutKind.Sequential)]
     public struct FLASHWINFO
