@@ -39,6 +39,8 @@ void dv_output_file(dv_output_t *out, FILE *fp)
 
 #define DIF_SEQUENCE_BYTES (150 * 80) /* 12,000 */
 #define DIF_BLOCK_BYTES 80
+/* One CIP data block of a DV packet (DBS 0x78 quadlets): 6 DIF blocks, 25 per sequence. */
+#define EP88_BLOCK_BYTES 480
 #define NTSC_SEQ_COUNT 10
 #define PAL_SEQ_COUNT 12
 
@@ -85,12 +87,42 @@ static int is_dif_header(const uint8_t *p, unsigned *dseq_out)
     return 1;
 }
 
-static size_t find_header(const uint8_t *buf, size_t len, size_t from, unsigned *dseq_out)
+/* Bytes of a header candidate needed to judge it: its block and the next one's ID. */
+#define DIF_HDR_CHECK_BYTES (DIF_BLOCK_BYTES + 2)
+
+/* A real sequence header: a DIF sequence number a frame can have, followed by the first
+ * subcode block (ID0 0x3F) of the same sequence. A 3-byte pattern alone also appears in
+ * video data. Needs DIF_HDR_CHECK_BYTES at p. */
+static int is_seq_header(const uint8_t *p, unsigned *dseq_out)
 {
-    if (len < 3)
-        return (size_t)-1;
+    unsigned dseq;
+    if (!is_dif_header(p, &dseq) || dseq >= PAL_SEQ_COUNT)
+        return 0;
+    const uint8_t *n = p + DIF_BLOCK_BYTES;
+    if (n[0] != 0x3f || (n[1] >> 4) != dseq || (n[1] & 0x07) != 0x07)
+        return 0;
+    *dseq_out = dseq;
+    return 1;
+}
+
+/* First header at or after `from`. (size_t)-1 = none. *need_more is set when the candidate
+ * at the returned offset cannot be judged yet (the buffer ends inside its check bytes). */
+static size_t find_header(const uint8_t *buf, size_t len, size_t from, unsigned *dseq_out,
+                          int *need_more)
+{
+    *need_more = 0;
     for (size_t i = from; i + 3 <= len; i++) {
-        if (is_dif_header(buf + i, dseq_out))
+        if (buf[i] != 0x1f)
+            continue;
+        if (i + DIF_HDR_CHECK_BYTES > len) {
+            unsigned d;
+            if (is_dif_header(buf + i, &d) && d < PAL_SEQ_COUNT) {
+                *need_more = 1;
+                return i;
+            }
+            continue;
+        }
+        if (is_seq_header(buf + i, dseq_out))
             return i;
     }
     return (size_t)-1;
@@ -217,45 +249,63 @@ static void frame_begin(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
 }
 
 /* How many frame boundaries lie between the last sequence placed and the arriving one
- * (number `dseq`), and how many whole frames in between never arrived (*lost). The DBC
- * says how many sequences vanished (25 blocks each, known modulo 256, and 25 is invertible
- * there), and the vanished ones are j * n + dseq - last - 1 for j boundaries of n-sequence
- * frames; if that fits, j is known, and so is the loss, however many frames it was. Without
- * a fitting gap: a dseq 0 is a new frame, a later dseq is the same frame (the ones between
- * lost), and a dseq that goes back is a new frame whose start was lost if a gap happened, else
- * a stray match (-1: ignore it). */
-static int frames_between(const dv_reassembler_t *r, unsigned dseq, unsigned n, unsigned *lost)
+ * (number `dseq`, at stream offset `pos`), and how many whole frames in between never
+ * arrived (*lost).
+ *
+ * Sequences are 25 blocks and start on a header, so the sequence slots between the two
+ * headers are (blocks received between them + blocks lost between them) / 25. The blocks
+ * received follow from the offsets; the lost ones from the DBC holes in between, known only
+ * modulo 256, so 256 more are tried (as many as keep the total a whole number of sequences
+ * and land on `dseq`). With j boundaries of n-sequence frames the arriving sequence is
+ * slot last + k, so j = (last + k) / n and the j - 1 frames between are lost.
+ *
+ * Without a fitting answer (no hole, or a stream that does not add up): a dseq 0 is a new
+ * frame, a later dseq is the same frame (the ones between lost), and a dseq that goes back
+ * is a new frame whose start was lost if a hole happened, else a stray match (-1: ignore
+ * it). */
+static int frames_between(const dv_reassembler_t *r, unsigned dseq, unsigned n, uint64_t pos,
+                          unsigned *lost)
 {
     unsigned last = r->expected_dseq - 1;
     *lost = 0;
-    if (r->dbc_gap_pending) {
-        int t = (int)((r->dbc_pending * 41u) & 0xFF); /* sequences lost */
-        int x = t - ((int)dseq - (int)last - 1);
-        if (x >= 0 && x % (int)n == 0) {
-            unsigned j = (unsigned)(x / (int)n);
+    if (r->dbc_gap_n && r->last_seq_valid && pos > r->last_seq_pos &&
+        (pos - r->last_seq_pos) % EP88_BLOCK_BYTES == 0) {
+        uint64_t blocks = (pos - r->last_seq_pos) / EP88_BLOCK_BYTES;
+        for (unsigned i = 0; i < r->dbc_gap_n; i++)
+            if (r->dbc_gap_pos[i] > r->last_seq_pos && r->dbc_gap_pos[i] <= pos)
+                blocks += r->dbc_gap_blocks[i];
+        for (unsigned m = 0; m < 25; m++, blocks += 256) {
+            if (blocks % 25 != 0)
+                continue;
+            uint64_t k = blocks / 25;
+            if ((last + k) % n != dseq)
+                continue;
+            unsigned j = (unsigned)((last + k) / n);
             *lost = j ? j - 1 : 0;
             return (int)j;
         }
-        if (dseq <= last)
-            return 1;
     }
+    if (r->dbc_gap_n && dseq <= last)
+        return 1;
     if (dseq == 0)
         return 1;
     return dseq > last ? 0 : -1;
 }
 
-static int place_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
+/* Returns 1 if the sequence was placed, 0 if ignored, -1 on an output error. */
+static int place_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq, uint64_t pos)
 {
     if (!r->frame_started) {
         /* Haven't seen sequence 0 yet; ignore until we do, so the output
          * always starts frame-aligned. */
-        if (dseq == 0)
-            frame_begin(r, p, 0);
-        return 0;
+        if (dseq != 0)
+            return 0;
+        frame_begin(r, p, 0);
+        return 1;
     }
 
     unsigned lost;
-    int boundaries = frames_between(r, dseq, frame_seq_total(r), &lost);
+    int boundaries = frames_between(r, dseq, frame_seq_total(r), pos, &lost);
     if (boundaries < 0)
         return 0; /* stale/duplicate match; ignore rather than rewind */
 
@@ -270,7 +320,7 @@ static int place_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
                 r->out.on_loss(0, lost, r->out.user);
         }
         frame_begin(r, p, dseq);
-        return 0;
+        return 1;
     }
 
     while (r->expected_dseq < dseq) {
@@ -281,26 +331,48 @@ static int place_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
     r->sequences_written++;
     r->expected_dseq = dseq + 1;
     if (p[3] & 0x80) r->frame_dsf_pal++; else r->frame_dsf_ntsc++;
-    return 0;
+    return 1;
 }
 
-/* Handles one located DIF sequence at buf+p with the given dseq. Advances
+/* Handles one located DIF sequence at buf+p with the given dseq and stream offset. Advances
  * frame/sequence bookkeeping and copies real data into the in-progress
  * frame buffer; a frame is only handed to the output callbacks once it's
  * complete (the next frame's first sequence arrived, or dv_reassembler_finish
- * at end of capture). */
-static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
+ * at end of capture). `have` < a whole sequence means data was lost inside it: the rest
+ * stays zero. */
+static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, size_t have, unsigned dseq,
+                           uint64_t pos)
 {
-    int rc = place_sequence(r, p, dseq);
-    r->dbc_pending = 0;
-    r->dbc_gap_pending = 0;
-    return rc;
+    uint8_t part[DIF_SEQUENCE_BYTES];
+    if (have < DIF_SEQUENCE_BYTES) {
+        memset(part, 0, sizeof(part));
+        memcpy(part, p, have);
+        p = part;
+    }
+    int rc = place_sequence(r, p, dseq, pos);
+    if (rc < 0)
+        return -1;
+    if (rc > 0) {
+        r->last_seq_pos = pos;
+        r->last_seq_valid = 1;
+        /* holes inside this sequence's span belong to the gap before the next one */
+        unsigned keep = 0;
+        for (unsigned i = 0; i < r->dbc_gap_n; i++) {
+            if (r->dbc_gap_pos[i] > pos) {
+                r->dbc_gap_pos[keep] = r->dbc_gap_pos[i];
+                r->dbc_gap_blocks[keep++] = r->dbc_gap_blocks[i];
+            }
+        }
+        r->dbc_gap_n = keep;
+    }
+    return 0;
 }
 
 /* Feeds recovered DIF bytes (layers 1+2 already stripped) into sequence
  * assembly. The stream is contiguous, so the header search normally hits
  * immediately at offset 0 of each 12,000-byte step; it stays a search only as
- * a resync safety net. */
+ * a resync safety net. A header inside the 12,000 bytes after a header means
+ * the sequence lost data: it ends there, so the next sequence is not swallowed. */
 static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 {
     r->dif_bytes += len;
@@ -319,26 +391,39 @@ static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
     size_t consumed = 0;
     for (;;) {
         unsigned dseq = 0;
-        size_t p = find_header(r->buf, r->buf_len, consumed, &dseq);
+        int need_more;
+        size_t p = find_header(r->buf, r->buf_len, consumed, &dseq, &need_more);
         if (p == (size_t)-1) {
             if (r->buf_len - consumed > MAX_RESYNC_WINDOW)
                 consumed = r->buf_len - DIF_SEQUENCE_BYTES;
             break;
         }
-        if (p + DIF_SEQUENCE_BYTES > r->buf_len) {
+        if (need_more || p + DIF_SEQUENCE_BYTES > r->buf_len) {
             consumed = p;
             break;
         }
 
-        if (handle_sequence(r, r->buf + p, dseq) != 0)
+        /* a header on a block boundary inside this sequence's span */
+        size_t take = DIF_SEQUENCE_BYTES;
+        for (size_t q = p + DIF_BLOCK_BYTES; q + DIF_HDR_CHECK_BYTES <= p + DIF_SEQUENCE_BYTES;
+             q += DIF_BLOCK_BYTES) {
+            unsigned d;
+            if (r->buf[q] == 0x1f && is_seq_header(r->buf + q, &d)) {
+                take = q - p;
+                break;
+            }
+        }
+
+        if (handle_sequence(r, r->buf + p, take, dseq, r->dif_pos + p) != 0)
             return -1;
 
-        consumed = p + DIF_SEQUENCE_BYTES;
+        consumed = p + take;
     }
 
     if (consumed > 0) {
         memmove(r->buf, r->buf + consumed, r->buf_len - consumed);
         r->buf_len -= consumed;
+        r->dif_pos += consumed;
     }
 
     return 0;
@@ -400,6 +485,20 @@ static int iso_header_ok(const uint8_t *h, unsigned *dif_len, unsigned *skip_len
  * by `blocks`. Empty packets carry the next expected value unchanged. A jump
  * means the device, the USB path or the 1394 bus lost data — this is what a
  * "were any frames dropped?" answer rests on. */
+static void log_gap(dv_reassembler_t *r, unsigned blocks)
+{
+    uint64_t pos = r->dif_pos + r->buf_len; /* the data after the hole is not in yet */
+    unsigned i = r->dbc_gap_n;
+    if (i == DV_DBC_GAP_LOG) {
+        i--;
+        blocks += r->dbc_gap_blocks[i];
+    } else {
+        r->dbc_gap_n++;
+    }
+    r->dbc_gap_pos[i] = pos;
+    r->dbc_gap_blocks[i] = blocks;
+}
+
 static void check_dbc(dv_reassembler_t *r, unsigned dbc, unsigned blocks)
 {
     /* Empty packets are skipped: they carry no data, and implementations
@@ -427,15 +526,14 @@ static void check_dbc(dv_reassembler_t *r, unsigned dbc, unsigned blocks)
                           : !r->frame_started;
         r->dbc_epoch++;
         if (!joining) {
-            /* Distance forward, modulo 256. Anything else (a backwards jump)
-             * is counted as a single lost block rather than ~255. */
+            /* Distance forward, modulo 256: a hole of up to 255 blocks (a whole
+             * NTSC frame is 250). Longer ones wrap and cannot be told from the DBC. */
             unsigned gap = (dbc - r->dbc_next) & 0xFF;
-            unsigned lost = (gap > 0 && gap < 128) ? gap : 1;
+            unsigned lost = gap ? gap : 1;
             r->dbc_gaps++;
             r->dbc_lost_blocks += lost;
             if (r->format == DV_FORMAT_DV) {
-                r->dbc_pending = (r->dbc_pending + gap) & 0xFF;
-                r->dbc_gap_pending = 1;
+                log_gap(r, gap);
             }
             if (r->out.on_loss)
                 r->out.on_loss(lost, 0, r->out.user);
@@ -702,8 +800,9 @@ static void dv_reset(dv_reassembler_t *r)
     r->expected_dseq = 0;
     r->frame_dsf_pal = r->frame_dsf_ntsc = 0;
     r->std_cand_frames = 0;
-    r->dbc_pending = 0;
-    r->dbc_gap_pending = 0;
+    r->dbc_gap_n = 0;
+    r->last_seq_valid = 0;
+    r->dif_pos += r->buf_len;
     r->buf_len = 0;
 }
 

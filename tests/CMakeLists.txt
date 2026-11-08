@@ -91,3 +91,10 @@ set_tests_properties(pinnacle_lock PROPERTIES TIMEOUT 60)
 add_executable(test_fx2 test_fx2.c)
 target_link_libraries(test_fx2 PRIVATE pinnacle_core)
 add_test(NAME pinnacle_fx2 COMMAND test_fx2)
+
+# dv_reassembler on streams that lose arbitrary packets, and on header-like video data
+# (synthetic, no fixture files).
+add_executable(test_reassembler_holes test_reassembler_holes.c)
+target_link_libraries(test_reassembler_holes PRIVATE pinnacle_core)
+add_test(NAME test_reassembler_holes COMMAND test_reassembler_holes)
+set_tests_properties(test_reassembler_holes PROPERTIES TIMEOUT 300)

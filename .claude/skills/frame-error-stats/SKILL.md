@@ -55,10 +55,14 @@ Traps (all learned the hard way):
   or the DBC says a frame's worth was lost, so two damaged neighbours stay two frames); a
   frame that never arrived is only counted: `frames_lost` and the `on_loss` callback, which
   the session adds to `frames_dropped` / `clip_frames_dropped` (not to `frames`) next to
-  `lost_blocks` (the DBC jump in blocks). The number of lost frames comes from the DBC
-  (25 blocks per sequence, known modulo 256) matched against the DIF numbering, so it is
-  right up to about 25 frames lost in one hole. `tests/test_reassembler_loss.c` has the
-  cases, `test_replay_dv_loss` the status.
+  `lost_blocks` (the DBC jump in blocks). The number of lost frames is worked out from the
+  blocks received between two sequence headers (stream offsets) plus the blocks the DBC
+  holes between them lost (25 per sequence, known modulo 256), matched against the DIF
+  numbering, so it is right for holes of any length at any packet offset, up to about 25
+  frames. A header is only accepted with a matching subcode block after it, and a header
+  inside the 12,000 bytes after another ends that sequence early (lost data inside it).
+  `tests/test_reassembler_loss.c` and `test_reassembler_holes.c` have the cases,
+  `test_replay_dv_loss` the status.
 - The only shipped views of these counters are the status line / snapshot fields
   of `MarvinCaptureCLI` and the GUI; the old CIP/DBC continuity line of `pincli` is
   gone (`dbc_gaps` / `dbc_joins` still live in `dv_reassembler.h` and the replay

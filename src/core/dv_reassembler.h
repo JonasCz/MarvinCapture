@@ -112,6 +112,10 @@ typedef enum {
 /* DV: sequence headers that must agree on the DSF bit for a frame to be sized
  * by it (and outnumber the others two to one). */
 #define DV_DSF_MIN_VOTES 3
+
+/* Holes kept for the next sequence placement; more than this in one sequence's span is
+ * noise and the newest are merged. */
+#define DV_DBC_GAP_LOG 8
 /* HDV: GOPs on another video PID that make it the tracked one. */
 #define DV_TS_PID_SWITCH_GOPS 2
 /* HDV: a picture this big without another video PES start is dropped (an
@@ -270,9 +274,16 @@ typedef struct {
     unsigned long dbc_gaps;       /* discontinuities detected after lock-on */
     unsigned long dbc_lost_blocks;/* blocks implied missing by those gaps */
     uint32_t dbc_epoch;           /* bumped on every DBC discontinuity */
-    unsigned dbc_pending;         /* DV: blocks lost by the gaps since the last DIF sequence
-                                   * was placed, modulo 256 */
-    int dbc_gap_pending;          /* DV: a gap happened since then */
+    /* DV: the holes found by the DBC since the last DIF sequence was placed. Each is where
+     * in the DIF byte stream (dif_pos) the data went on after the hole, and how many blocks
+     * it lost (modulo 256). Placing a sequence uses them to count the sequences that
+     * vanished between it and the one before. */
+    unsigned dbc_gap_n;
+    uint64_t dbc_gap_pos[DV_DBC_GAP_LOG];
+    unsigned dbc_gap_blocks[DV_DBC_GAP_LOG];
+    uint64_t dif_pos;             /* DIF stream offset of buf[0] */
+    uint64_t last_seq_pos;        /* ... of the sequence placed last */
+    int last_seq_valid;
     unsigned long dbc_joins;      /* discontinuities seen while still syncing
                                    * in to the already-running ring; expected,
                                    * not loss */

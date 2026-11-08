@@ -95,6 +95,10 @@ static inline void ep88_make_seq(uint8_t *seq, unsigned dseq, int pal, uint8_t f
     seq[1] = (uint8_t)((dseq << 4) | 0x07);
     seq[2] = 0x00;
     seq[3] = pal ? 0x80 : 0x00;
+    /* first subcode block: what a real sequence header is followed by */
+    seq[80] = 0x3F;
+    seq[81] = (uint8_t)((dseq << 4) | 0x07);
+    seq[82] = 0x00;
 }
 
 #endif /* PIN_TEST_EP88_SYNTH_H */

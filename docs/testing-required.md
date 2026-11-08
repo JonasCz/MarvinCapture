@@ -752,15 +752,6 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 
 ### 17.1 Frames lost without being counted
 
-- **R3. `find_header()` accepts false DIF headers.** Medium. Fix required (reproduced).
-  - `is_dif_header()` matches `1F ?7 00` at any byte offset and trusts the 4-bit dseq. A rescan happens only after a loss.
-  - A false match with dseq 13 builds a 14-sequence frame, which the session then drops as damaged.
-  - A false dseq 0 emits an extra bogus frame that is counted as normal.
-  - Fix: validate a candidate (the next block is a `3F` header, the next header sits 12000 bytes on, the offset is a multiple of 80 from the last good header, dseq is below 10 or 12).
-- **R4. Resync takes 12000 bytes blindly.** Low-medium. Fix required (reproduced).
-  - After a resync, `dif_feed()` takes a full sequence without looking for a header inside it.
-  - One lost 480-byte packet in sequence S therefore corrupts S (shifted data) and zero-pads S+1.
-  - Second pass (reproduced): a hole in the *last* sequence of a frame is worse than this. The 12000-byte take swallows the head of the next frame's dseq 0, the frame in progress is already complete, and every following dseq 1..n-1 is then rejected as stale by `place_sequence()` until the next dseq 0. The next frame, though fully received, vanishes, and no counter moves (`sequences_dropped`, `frames_lost` and `dv_on_unit()` see nothing; only `on_loss` reports the lost blocks). One lost 480-byte packet at the wrong offset is enough: about 10% of short holes (NTSC) and 8% (PAL). Raised to high; see also 18.1 N1.
 - **R11. Analog audio lead-in loss.** Low. Testing required.
   - `sink_lazy.c` `lazy_write_audio()` drops audio until the first video unit has opened the file.
   - If the audio packet for frame F arrives before video frame F, the file starts with the audio of F+1: about 40 ms missing and a constant lag. Measure on the device.
@@ -887,14 +878,6 @@ items are marked "Second pass" under those items.
 
 ### 18.1 Frames lost, mangled or put in the wrong file
 
-- **N1. `frames_between()` invents lost frames and splits good frames** (`dv_reassembler.c`, from 4a49606). Medium-high. Fix required (reproduced).
-  - `t = (dbc_pending * 41) & 0xFF` assumes the lost block count is a multiple of 25 (whole sequences). Nothing checks that. For other hole lengths `t` is arbitrary, and for about 1 in n lengths `t - (dseq - last - 1)` is a multiple of n. The sequence holding the start of the hole is placed with the gap still pending, so the code invents frame boundaries and lost frames.
-  - PAL, 8 packets lost mid-sequence: `frames_lost = 6` although every frame arrived (hole lengths 8, 16, 24, 52, 60, 68, 88, 96 at almost every offset). NTSC, 1 lost header packet: 4 phantom frames.
-  - The bogus boundary calls `frame_finish()` early: a good frame is cut in two and an extra, mostly empty frame is written. Combined with N2 an intact frame can disappear while phantom losses are reported.
-  - The reverse also happens: a real whole-frame loss that is not sequence-aligned is not counted (NTSC, 255 packets at a frame start: `frames_lost = 0`).
-  - The existing loss tests drop only sequence-aligned runs of 25 packets. The FX2 / FPGA drops arbitrary 480-byte packets.
-  - Fix: keep the unreduced block count and use `t` only when it is a multiple of 25 and small; otherwise order by dseq and estimate frames as blocks / (25 * n). Test: drop 1..60 packets at every offset.
-- **N2. A damaged last sequence makes the next, intact frame vanish uncounted.** High. Fix required (reproduced). Listed under R4 (second pass), which it extends.
 - **N3. The live DV / HDV path never flushes or resets the reassembler between passes or captures** (`pin_session.c` `dv_tick()` pass branch, `capture_end()`, `do_run_dv()`). Medium-low. Fix required (reproduced).
   - A frame is emitted only when the next frame's first sequence arrives, or at `dv_reassembler_finish()`, which `do_run_dv()` calls only when the read loop ends.
   - At a pass end (no signal, time limit) `finish_file()` closes the file while the reassembler still holds the last frame. After the rewind the first new data pushes the stale frame out, and it is written as the first frame of pass 2's file. The first new frame, which starts mid-frame, becomes an error frame; if the stale frame was partial, a glued hybrid frame can result.
@@ -971,8 +954,8 @@ items are marked "Second pass" under those items.
 
 ### 18.3 Wrong numbers on screen
 
-- **N33. `lost_blocks` is wrong for holes of 128 or more blocks** (`check_dbc()`: `lost = (gap > 0 && gap < 128) ? gap : 1`). Low-medium (it is the only loss figure for HDV). Fix required (reproduced).
-  - 128..255 lost packets report 1 block (a whole NTSC frame counts as 1); 256 or more wrap (300 -> 44); exactly 256 is not seen at all, and two missing frames go uncounted.
+- **N33. `lost_blocks` is wrong for holes of 256 or more blocks** (`check_dbc()` sees the DBC modulo 256). Low-medium (it is the only loss figure for HDV). Fix required (reproduced).
+  - 256 or more lost packets wrap (300 -> 44); exactly 256 is not seen at all, and two missing frames go uncounted. DV frame counting is not affected (`frames_between()` resolves the wrap from the DIF numbering); HDV has no such check.
 - **N34. Analog: a silence block adds an error on top of the stand-in video frame** (`analog_audio_cb()`: `if (b->silence) { frames_error++; clip_frames_error++; }`, without `frames++`). Low. Fix required.
   - A 750-frame outage gives 750 frames and 1500 error frames (200 %). Whether audio should count separately is a product decision; the percentage must not exceed 100.
 - **N35. "Captured" length uses the final frame rate and counts unwritten units** (`captured_seconds()`, `apply_unit_counts()` runs with no file open). Low. Fix required.
@@ -1020,7 +1003,7 @@ items are marked "Second pass" under those items.
 
 ### 18.6 Checked, nothing found (second pass)
 
-- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug; except N1 to N3), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17 to N19), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8 to N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
+- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug; except N3), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17 to N19), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8 to N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
 - Reassembler chunking: 200 random lossy PAL and NTSC streams give identical output fed whole or in 1-byte to 5000-byte pieces. URB buffer reuse, ring order, teardown and URB status handling; `ts_buf` bounds; HDV source-packet alignment.
 - Analog: field weave and line offsets across transfers, the delivery ring (the producer waits, nothing dropped), drain at stop, 64-bit device time, the resampler (32 and 44.1 kHz within one sample over 32 M samples).
 - Writer ring, `pin_stdout` (short writes, EINTR, EPIPE, SIGPIPE), avi_writer layout, hdv_demux PTS unwrap and PES / PSI bounds, hdvmux PASS timestamps and thread shutdown.
