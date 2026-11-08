@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/images/logo.svg" width="128" alt="MarvinCapture logo"></p>
 
 <h1 align="center">MarvinCapture</h1>
-<p align="center"><b>An open-source user-space driver application for  DV and analog video using Pinnacle MovieBox USB "Marvin" capture devices.</b></p>
+<p align="center"><b>An open-source user-space driver & application for DV and analog video capture using Pinnacle MovieBox USB "Marvin" devices (MovieBox 500-USB, 510-USB, 700-USB, 710-USB & MovieBox Classic)</b></p>
 
 ## Background
 
