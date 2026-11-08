@@ -617,6 +617,60 @@ static double measure_ffv1_fps(void)
     return fps;
 }
 
+/* A write that fails (PIN_TEST_WRITE_FAIL_AFTER: a full or pulled drive) shows in write_video()
+ * and write_audio() while capturing, and in close(); not only at stop. */
+static void test_ffv1_write_fail(void)
+{
+    printf("== sink_ffv1 write failure ==\n");
+    pin_sink_params_t p;
+    common_params(&p, "write failure");
+    uint8_t *yuyv = malloc((size_t)W * H * 2);
+    int16_t *pcm = malloc((size_t)SAMPLES_PER_FRAME * ACHAN * sizeof(int16_t));
+    CHECK(yuyv && pcm);
+    fill_gradient_frame(yuyv, 5);
+    fill_tone(pcm, SAMPLES_PER_FRAME, 0);
+
+#if defined(_WIN32)
+    _putenv_s("PIN_TEST_WRITE_FAIL_AFTER", "20000");
+#else
+    setenv("PIN_TEST_WRITE_FAIL_AFTER", "20000", 1);
+#endif
+    pin_sink_t *s = pin_sink_create(PIN_FMT_ANALOG_FFV1_MKV);
+    CHECK(s);
+    int rc = s->open(s, "test_ffv1_write_fail.mkv", &p);
+#if defined(_WIN32)
+    _putenv_s("PIN_TEST_WRITE_FAIL_AFTER", "");
+#else
+    setenv("PIN_TEST_WRITE_FAIL_AFTER", "", 1);
+#endif
+    CHECK(rc == PIN_OK);
+
+    int failed_at = -1;
+    for (int i = 0; i < 200 && failed_at < 0; i++) {
+        if (s->write_video(s, yuyv, (size_t)W * H * 2) != PIN_OK ||
+            s->write_audio(s, pcm, SAMPLES_PER_FRAME) != PIN_OK)
+            failed_at = i;
+        else {   /* the encoder thread runs behind the writer */
+#if defined(_WIN32)
+            Sleep(20);
+#else
+            struct timespec ts = { 0, 20000000L };
+            nanosleep(&ts, NULL);
+#endif
+        }
+    }
+    printf("  write error reported at frame %d\n", failed_at);
+    CHECK(failed_at >= 0);
+    CHECK(s->write_video(s, yuyv, (size_t)W * H * 2) != PIN_OK);
+    CHECK(s->write_audio(s, pcm, SAMPLES_PER_FRAME) != PIN_OK);
+    pin_sink_status_t st;
+    s->get_status(s, &st);
+    CHECK(st.last_error != PIN_OK);
+    CHECK(s->close(s) != PIN_OK);
+    free(yuyv);
+    free(pcm);
+}
+
 int main(void)
 {
     test_avi();
@@ -624,6 +678,7 @@ int main(void)
     test_ffv1_correctness();
     test_ffv1_audio_exact();
     test_ffv1_long_capture();
+    test_ffv1_write_fail();
     measure_ffv1_fps();
     printf("OK\n");
     return 0;

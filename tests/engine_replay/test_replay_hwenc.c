@@ -217,6 +217,22 @@ int main(int argc, char **argv)
     CHECK(fs.stop_reason == PIN_STOP_ERROR && pin_stop_reason_abnormal(fs.stop_reason));
     CHECK(strstr(fs.stop_text, "video encoder failed") != NULL);
 
+    /* writes that fail (a full or pulled drive, PIN_TEST_WRITE_FAIL_AFTER) end the capture with
+     * WRITE_ERROR while it runs, not as a normal end */
+    pin_close(s);
+    s = pin_test_open_replay(trace);
+    pin_test_prepare_dv(s);
+    pin_test_sleep_ms(300);
+    pin_test_setenv("PIN_TEST_WRITE_FAIL_AFTER", "100000");
+    snprintf(o.path, sizeof(o.path), "replay_hwenc_wfail");
+    CHECK(pin_capture_start(s, &o, 1) == PIN_OK);
+    pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 5000, &fs);
+    pin_test_wait_state(s, PIN_STATE_READY, PIN_STATE_ERROR, 15000, &fs);
+    pin_test_setenv("PIN_TEST_WRITE_FAIL_AFTER", "");
+    printf("  writes failing: %s\n", fs.stop_text);
+    CHECK(fs.state == PIN_STATE_READY);
+    CHECK(fs.stop_reason == PIN_STOP_WRITE_ERROR);
+
     /* no encoder: refused up front, with the reason */
     pin_test_setenv("PIN_HWENC_ENCODER", "no-such-encoder");
     CHECK(pin_encoders_probe() == 0);

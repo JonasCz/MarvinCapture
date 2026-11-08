@@ -63,9 +63,11 @@
 #include <libavutil/channel_layout.h>
 #include <libavutil/imgutils.h>
 
+#include <errno.h>
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -77,12 +79,15 @@
 #define FFV1_SLICES 16
 #define FLAC_LEVEL 8             /* highest within the FLAC subset (LPC order <= 12) */
 #define AUDIO_RING_SECONDS 4
+#define STALL_TIMEOUT_S 10       /* a full queue or ring this long: the encoder or muxer is taken as hung */
 
 typedef struct {
     AVFormatContext *fmt;
     AVStream *vst, *ast;
     AVCodecContext *venc, *aenc;
     pthread_mutex_t mux_lock;
+    int header_written;
+    int fault_io;   /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
 
     int width, height;
     int audio_channels, audio_rate;
@@ -126,8 +131,26 @@ static int cpu_count(void)
 static void set_error(ffv1_priv_t *p, pin_status_t e)
 {
     pthread_mutex_lock(&p->st_lock);
-    p->st.last_error = e;
+    if (p->st.last_error == PIN_OK)
+        p->st.last_error = e;
     pthread_mutex_unlock(&p->st_lock);
+}
+
+static pin_status_t get_error(ffv1_priv_t *p)
+{
+    pthread_mutex_lock(&p->st_lock);
+    pin_status_t e = p->st.last_error;
+    pthread_mutex_unlock(&p->st_lock);
+    return e;
+}
+
+/* pthread_cond_timedwait() takes a CLOCK_REALTIME deadline. Returns ETIMEDOUT or 0. */
+static int timed_wait(pthread_cond_t *c, pthread_mutex_t *m, int seconds)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += seconds;
+    return pthread_cond_timedwait(c, m, &ts);
 }
 
 /* Encodes and muxes one already-converted frame. Called only on the encoder
@@ -430,7 +453,13 @@ static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_pa
     if (params->title[0])
         av_dict_set(&p->fmt->metadata, "title", params->title, 0);
 
-    rc = avio_open(&p->fmt->pb, path, AVIO_FLAG_WRITE);
+    uint64_t budget = pin_sink_fault_budget();
+    if (budget != UINT64_MAX) {
+        rc = pin_sink_fault_avio_open(&p->fmt->pb, path, budget);
+        p->fault_io = rc >= 0;
+    } else {
+        rc = avio_open(&p->fmt->pb, path, AVIO_FLAG_WRITE);
+    }
     if (rc < 0) {
         pin_logf(PIN_LOG_ERROR, "sink_ffv1: avio_open(%s) failed (%d)\n", path, rc);
         return PIN_ERR_IO;
@@ -440,6 +469,7 @@ static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_pa
         pin_logf(PIN_LOG_ERROR, "sink_ffv1: avformat_write_header failed (%d)\n", rc);
         return PIN_ERR_CODEC;
     }
+    p->header_written = 1;
 
     if (pthread_create(&p->enc_thread, NULL, encoder_thread_fn, p) != 0)
         return PIN_ERR_INTERNAL;
@@ -455,6 +485,9 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
     ffv1_priv_t *p = s->priv;
     if (!p->enc_started)
         return PIN_ERR_STATE;
+    pin_status_t err = get_error(p);
+    if (err != PIN_OK)
+        return err;
     size_t expect = (size_t)p->width * p->height * 2;
     if (len < expect) {
         pin_logf(PIN_LOG_WARN, "sink_ffv1: short video frame (%zu of %zu bytes), skipping\n",
@@ -503,8 +536,17 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
         pthread_mutex_lock(&p->st_lock);
         p->st.encoder_behind = 1;
         pthread_mutex_unlock(&p->st_lock);
-        while (p->qcount == QUEUE_DEPTH)
-            pthread_cond_wait(&p->qspace, &p->qlock);
+        while (p->qcount == QUEUE_DEPTH) {
+            if (timed_wait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
+                p->qcount == QUEUE_DEPTH) {
+                pthread_mutex_unlock(&p->qlock);
+                pin_logf(PIN_LOG_ERROR, "sink_ffv1: the encoder took no picture for %d s\n",
+                         STALL_TIMEOUT_S);
+                set_error(p, PIN_ERR_CODEC);
+                av_frame_free(&f);
+                return PIN_ERR_CODEC;
+            }
+        }
     }
     p->queue[p->qtail] = f;
     p->qtail = (p->qtail + 1) % QUEUE_DEPTH;
@@ -519,6 +561,9 @@ static pin_status_t ffv1_write_audio(pin_sink_t *s, const int16_t *pcm, size_t f
     ffv1_priv_t *p = s->priv;
     if (!p->aud_started)
         return PIN_ERR_STATE;
+    pin_status_t err = get_error(p);
+    if (err != PIN_OK)
+        return err;
     const size_t ch = (size_t)p->audio_channels;
 
     /* Appends in pieces of at most the free space, so a call larger than
@@ -529,8 +574,16 @@ static pin_status_t ffv1_write_audio(pin_sink_t *s, const int16_t *pcm, size_t f
             pthread_mutex_lock(&p->st_lock);
             p->st.encoder_behind = 1;
             pthread_mutex_unlock(&p->st_lock);
-            while (p->acount == p->aring_frames)
-                pthread_cond_wait(&p->aspace, &p->alock);
+            while (p->acount == p->aring_frames) {
+                if (timed_wait(&p->aspace, &p->alock, STALL_TIMEOUT_S) == ETIMEDOUT &&
+                    p->acount == p->aring_frames) {
+                    pthread_mutex_unlock(&p->alock);
+                    pin_logf(PIN_LOG_ERROR, "sink_ffv1: the audio encoder took no samples for %d s\n",
+                             STALL_TIMEOUT_S);
+                    set_error(p, PIN_ERR_CODEC);
+                    return PIN_ERR_CODEC;
+                }
+            }
         }
         size_t tail = (p->ahead + p->acount) % p->aring_frames;
         size_t n = p->aring_frames - p->acount;   /* free space */
@@ -568,10 +621,13 @@ static pin_status_t ffv1_close(pin_sink_t *s)
         pthread_join(p->aud_thread, NULL);
     }
     if (p->fmt) {
-        if (p->fmt->pb) {
-            if (av_write_trailer(p->fmt) < 0)
+        if (p->header_written && av_write_trailer(p->fmt) < 0)
+            rc = PIN_ERR_IO;
+        if (p->fault_io) {
+            if (pin_sink_fault_avio_close(&p->fmt->pb) < 0)
                 rc = PIN_ERR_IO;
-            avio_closep(&p->fmt->pb);
+        } else if (p->fmt->pb && avio_closep(&p->fmt->pb) < 0) {
+            rc = PIN_ERR_IO;
         }
         avformat_free_context(p->fmt);
     }

@@ -49,12 +49,13 @@ void sink_hdvmux_test_set(pin_sink_t *s, uint64_t pend_limit, int worker_delay_m
  * that many bytes and refuses the rest, as a full drive would. pin_sink_fault_budget() is a new
  * file's budget (UINT64_MAX: the seam is off); pin_sink_fault_fwrite() is fwrite() within
  * *left (short, errno ENOSPC, where it runs out); pin_sink_fault_avio_open() opens path for a
- * muxer with such a budget, pin_sink_fault_avio_close() closes what it opened. */
+ * muxer with such a budget, pin_sink_fault_avio_close() closes what it opened (negative: the final
+ * flush or the close failed). */
 struct AVIOContext;
 uint64_t pin_sink_fault_budget(void);
 size_t pin_sink_fault_fwrite(const void *data, size_t len, FILE *f, uint64_t *left);
 int pin_sink_fault_avio_open(struct AVIOContext **pb, const char *path, uint64_t budget);
-void pin_sink_fault_avio_close(struct AVIOContext **pb);
+int pin_sink_fault_avio_close(struct AVIOContext **pb);
 pin_sink_t *sink_hwenc_create(pin_format_t format);  /* ANALOG_ / DV_ H264_MKV, HEVC_MKV */
 
 /* Shared by the sinks and the engine: PAL/NTSC DV sample aspect ratios per the

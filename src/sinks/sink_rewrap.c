@@ -512,10 +512,12 @@ static pin_status_t dv_close(pin_sink_t *s)
         }
         if (p->header_written && av_write_trailer(p->fmt) < 0)
             rc = PIN_ERR_IO;
-        if (p->fault_io)
-            pin_sink_fault_avio_close(&p->fmt->pb);
-        else if (p->fmt->pb)
-            avio_closep(&p->fmt->pb);
+        if (p->fault_io) {
+            if (pin_sink_fault_avio_close(&p->fmt->pb) < 0)
+                rc = PIN_ERR_IO;
+        } else if (p->fmt->pb && avio_closep(&p->fmt->pb) < 0) {
+            rc = PIN_ERR_IO;
+        }
         avformat_free_context(p->fmt);
     }
     if (p->st.last_error != PIN_OK)

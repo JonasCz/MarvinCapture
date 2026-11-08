@@ -1386,10 +1386,12 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
     if (m->fmt) {
         if (m->header_written && av_write_trailer(m->fmt) < 0)
             set_error(m, PIN_ERR_IO);
-        if (m->fault_io)
-            pin_sink_fault_avio_close(&m->fmt->pb);
-        else if (m->fmt->pb)
-            avio_closep(&m->fmt->pb);
+        if (m->fault_io) {
+            if (pin_sink_fault_avio_close(&m->fmt->pb) < 0)
+                set_error(m, PIN_ERR_IO);
+        } else if (m->fmt->pb && avio_closep(&m->fmt->pb) < 0) {
+            set_error(m, PIN_ERR_IO);
+        }
         avformat_free_context(m->fmt);
         if (!m->any_written) {
             pin_logf(PIN_LOG_WARN, "sink_hdvmux: no HDV pictures captured, leaving no output file\n");

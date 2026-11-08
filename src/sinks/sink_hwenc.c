@@ -159,6 +159,7 @@ struct hwenc_priv {
     int declared;           /* every stream exists (DV: after the first frame with audio) */
     int vparams_ready;      /* the video stream has its parameter sets (or needs none) */
     int header_written, header_failed;
+    int fault_io;           /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
     pending_t *pending;
     int npending;
     int warned_no_extradata;
@@ -1220,7 +1221,13 @@ static pin_status_t hwenc_open(pin_sink_t *s, const char *path, const pin_sink_p
             return st;
     }
 
-    rc = avio_open(&p->fmt->pb, path, AVIO_FLAG_WRITE);
+    uint64_t budget = pin_sink_fault_budget();
+    if (budget != UINT64_MAX) {
+        rc = pin_sink_fault_avio_open(&p->fmt->pb, path, budget);
+        p->fault_io = rc >= 0;
+    } else {
+        rc = avio_open(&p->fmt->pb, path, AVIO_FLAG_WRITE);
+    }
     if (rc < 0) {
         pin_logf(PIN_LOG_ERROR, "sink_hwenc: avio_open(%s) failed (%d)\n", path, rc);
         return PIN_ERR_IO;
@@ -1360,8 +1367,12 @@ static pin_status_t hwenc_close(pin_sink_t *s)
         for (int i = 0; i < p->npending; i++)
             av_packet_free(&p->pending[i].pkt);
         pthread_mutex_unlock(&p->mux_lock);
-        if (p->fmt->pb)
-            avio_closep(&p->fmt->pb);
+        if (p->fault_io) {
+            if (pin_sink_fault_avio_close(&p->fmt->pb) < 0)
+                rc = PIN_ERR_IO;
+        } else if (p->fmt->pb && avio_closep(&p->fmt->pb) < 0) {
+            rc = PIN_ERR_IO;
+        }
         avformat_free_context(p->fmt);
     }
     free(p->pending);

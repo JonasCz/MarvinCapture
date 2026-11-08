@@ -111,14 +111,17 @@ int pin_sink_fault_avio_open(AVIOContext **pb, const char *path, uint64_t budget
     return 0;
 }
 
-void pin_sink_fault_avio_close(AVIOContext **pb)
+int pin_sink_fault_avio_close(AVIOContext **pb)
 {
     if (!pb || !*pb)
-        return;
+        return 0;
     fault_file_t *ff = (*pb)->opaque;
     avio_flush(*pb);
-    fclose(ff->f);
+    int err = (*pb)->error;
+    if (fclose(ff->f) != 0 && err >= 0)
+        err = AVERROR(EIO);
     free(ff);
     av_freep(&(*pb)->buffer);
     avio_context_free(pb);
+    return err < 0 ? err : 0;
 }
