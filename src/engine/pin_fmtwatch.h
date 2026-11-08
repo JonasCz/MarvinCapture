@@ -32,7 +32,10 @@
  * change. A confirmed change is reported at the index of the first unit of
  * the run, so the caller can back-date it (pin_holdback.h: hold from
  * pin_fmtwatch_pending()'s index while one is pending). A candidate that goes
- * PIN_FMTWATCH_*_STALE units without a unit that counts is dropped.
+ * PIN_FMTWATCH_*_STALE units without a unit that counts is dropped. The first unit's
+ * format is provisional the same way: until need units agree with it, a candidate that
+ * wins is reported at the first unit (the first file has got nothing yet if the caller
+ * holds from pin_fmtwatch_hold_from()).
  */
 
 #ifndef PIN_FMTWATCH_H
@@ -89,13 +92,16 @@ typedef struct {
     unsigned cand_count;        /* units that counted towards it */
     long cand_start;            /* index of its first unit */
     long cand_last;             /* index of the last unit that counted (or of the first) */
+    int provisional;            /* cur is the first unit's format and not yet backed by enough units */
+    long first_start;           /* index of the first unit */
+    unsigned first_count;       /* units that counted for it */
 } pin_fmtwatch_t;
 
 void pin_fmtwatch_init(pin_fmtwatch_t *w);
 
 typedef enum {
     PIN_FMTWATCH_SAME = 0, /* nothing to do (a pending candidate may have started or ended) */
-    PIN_FMTWATCH_FIRST,    /* the first unit: its format is the format, at once */
+    PIN_FMTWATCH_FIRST,    /* the first unit: its format is the format until a candidate wins */
     PIN_FMTWATCH_CHANGED,  /* a change was confirmed: w->cur is the new format */
 } pin_fmtwatch_result_t;
 
@@ -108,6 +114,12 @@ pin_fmtwatch_result_t pin_fmtwatch_feed(pin_fmtwatch_t *w, const pin_stream_fmt_
 /* 1 while another format is being watched, with *start = the index a change
  * would be reported at: hold that unit and everything after it. */
 int pin_fmtwatch_pending(const pin_fmtwatch_t *w, long *start);
+
+/* Like pin_fmtwatch_pending(), and also 1 while the first unit's format is not yet backed by
+ * need units (a damaged first frame or GOP): hold from the first unit, so a change confirmed
+ * meanwhile is reported at the first unit (*start) and replaces the first file's format with
+ * nothing lost. */
+int pin_fmtwatch_hold_from(const pin_fmtwatch_t *w, long *start);
 
 /* What a confirmed change does to the open output. */
 typedef enum {

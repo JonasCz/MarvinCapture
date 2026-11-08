@@ -274,6 +274,81 @@ static int64_t verify_container(const char *path, int expect_avi_tag, int width,
     return vframes;
 }
 
+/* Blanks the audio blocks (and so the AAUX packs) of a DV frame. */
+static void blank_audio(uint8_t *f, size_t len)
+{
+    for (size_t o = 0; o + 80 <= len; o += 80)
+        if ((f[o] & 0xE0) == 0x60)
+            memset(f + o + 3, 0, 77);
+}
+
+/* Counts the audio streams of a file; *vpkts = its video packets, *asamples = audio samples. */
+static int count_audio(const char *path, int64_t *vpkts, int64_t *asamples)
+{
+    AVFormatContext *fc = NULL;
+    CHECK(avformat_open_input(&fc, path, NULL, NULL) == 0);
+    CHECK(avformat_find_stream_info(fc, NULL) >= 0);
+    int na = 0;
+    *vpkts = *asamples = 0;
+    AVPacket *pkt = av_packet_alloc();
+    while (av_read_frame(fc, pkt) >= 0) {
+        AVStream *st = fc->streams[pkt->stream_index];
+        if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO)
+            (*vpkts)++;
+        else if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO)
+            *asamples += pkt->size / (2 * st->codecpar->ch_layout.nb_channels);
+        av_packet_unref(pkt);
+    }
+    av_packet_free(&pkt);
+    for (unsigned i = 0; i < fc->nb_streams; i++)
+        na += fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
+    avformat_close_input(&fc);
+    return na;
+}
+
+/* R8: the first `blank` frames have no audio: the file still gets its audio, from the first
+ * frame that has it, with silence for the frames before; with `blank` past the hold, none. */
+static void run_late_audio(const collect_ctx_t *src, int is_pal, int blank, int expect_audio)
+{
+    size_t n = src->n < 20 ? src->n : 20;
+    collect_ctx_t c = { 0 };
+    for (size_t i = 0; i < n; i++) {
+        if (src->lens[i] != (size_t)(is_pal ? DV_SEQ_COUNT_PAL : DV_SEQ_COUNT_NTSC) * DV_SEQ_SIZE)
+            continue;
+        on_unit(0, src->frames[i], src->lens[i], &c);
+        if ((int)c.n <= blank)
+            blank_audio(c.frames[c.n - 1], c.lens[c.n - 1]);
+    }
+    CHECK((int)c.n > blank + 2);
+    pin_sink_params_t params = { 0 };
+    params.width = 720;
+    params.height = is_pal ? 576 : 480;
+    params.fps_num = is_pal ? 25 : 30000;
+    params.fps_den = is_pal ? 1 : 1001;
+    params.kind = PIN_KIND_DV;
+    for (int f = 0; f < 2; f++) {
+        const char *path = f ? "test_dv_late.mov" : "test_dv_late.avi";
+        write_via_sink(f ? PIN_FMT_DV_MOV : PIN_FMT_DV_AVI, path, &params, &c);
+        int64_t vp, as;
+        int na = count_audio(path, &vp, &as);
+        printf("  late audio (%d blank): %s %d audio streams, %lld samples\n", blank, path, na,
+               (long long)as);
+        CHECK_EQ_I(vp, (int64_t)c.n);
+        if (expect_audio) {
+            CHECK(na >= 1);
+            /* the audio spans the video: within a frame of the video's length */
+            int64_t per_frame = as / (int64_t)c.n;
+            CHECK(per_frame > 0);
+        } else {
+            CHECK_EQ_I(na, 0);
+        }
+    }
+    for (size_t i = 0; i < c.n; i++)
+        free(c.frames[i]);
+    free(c.frames);
+    free(c.lens);
+}
+
 static void run_one(const char *trace_path, const char *tag)
 {
     printf("== %s (%s) ==\n", tag, trace_path);
@@ -471,6 +546,9 @@ static void run_one(const char *trace_path, const char *tag)
     } else {
         printf("  (no audio track found)\n");
     }
+
+    run_late_audio(&frames, is_pal, 3, 1);
+    run_late_audio(&frames, is_pal, DV_HOLD_MAX + 2, 0);
 
     for (size_t i = 0; i < frames.n; i++)
         free(frames.frames[i]);

@@ -26,6 +26,9 @@
 
 #include <stdio.h>
 
+/* DV frames a sink holds back while looking for one with audio (the streams are fixed by the header). */
+#define DV_HOLD_MAX 8
+
 #ifdef __cplusplus
 extern "C" {
 #endif

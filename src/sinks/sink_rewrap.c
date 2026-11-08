@@ -89,6 +89,7 @@
 typedef struct {
     AVStream *ast;      /* NULL until this pair is first seen */
     int64_t apts;
+    int started;        /* its lead-in silence (frames held before it appeared) is out */
 } audio_track_t;
 
 typedef struct {
@@ -100,6 +101,8 @@ typedef struct {
     audio_track_t ch[2];       /* [0] = pair 1 (main), [1] = pair 2, if present */
     int header_written;
     int64_t vpts;
+    uint8_t *hold[DV_HOLD_MAX]; /* frames held back until one has audio */
+    int nhold;
     int fault_io;             /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
 
     pin_sink_status_t st;
@@ -328,6 +331,23 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
                     avail_bytes += (size_t)bufpkt[i]->size;
         int64_t avail_samples = (int64_t)(avail_bytes / (2 * (size_t)ch));
 
+        /* frames held before this track appeared: silence for their span */
+        if (!tr->started) {
+            tr->started = 1;
+            int64_t lead = av_rescale(p->vpts, (int64_t)rate * p->params.fps_den, p->params.fps_num);
+            AVPacket *lp = lead > 0 ? av_packet_alloc() : NULL;
+            if (lp && av_new_packet(lp, (int)(lead * 2 * ch)) == 0) {
+                memset(lp->data, 0, (size_t)lp->size);
+                lp->stream_index = tr->ast->index;
+                lp->pts = lp->dts = tr->apts;
+                lp->duration = lead;
+                tr->apts += lead;
+                p->st.audio_padded_samples += (uint64_t)lead;
+                if (av_interleaved_write_frame(p->fmt, lp) < 0)
+                    result = PIN_ERR_IO;
+            }
+            av_packet_free(&lp);
+        }
         int64_t target_after = av_rescale(p->vpts + 1, (int64_t)rate * p->params.fps_den,
                                           p->params.fps_num);
         int64_t frame = av_rescale(1, (int64_t)rate * p->params.fps_den, p->params.fps_num);
@@ -455,31 +475,14 @@ static pin_status_t dv_open(pin_sink_t *s, const char *path, const pin_sink_para
     return PIN_OK;
 }
 
-static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
+/* One video frame (its audio is already out). */
+static pin_status_t dv_put_video(rewrap_priv_t *p, const uint8_t *data, size_t len)
 {
-    rewrap_priv_t *p = s->priv;
-    if (!is_valid_dv_unit_len(len)) {
-        p->st.units_damaged++;
-        pin_logf(PIN_LOG_WARN, "sink_rewrap: dropping a %zu-byte DV unit (not 10/12 sequences)\n", len);
-        return PIN_OK;
-    }
-
-    /* Audio must be discovered (or ruled absent) before the header is
-     * written, so hold the header until frame 0 has been through the
-     * per-frame audio demux above. */
-    pin_status_t arc = rewrap_dv_extract_audio(p, data, len);
-
-    if (!p->header_written) {
-        int rc = avformat_write_header(p->fmt, NULL);
-        if (rc < 0) {
-            pin_logf(PIN_LOG_ERROR, "sink_rewrap: avformat_write_header failed (%d)\n", rc);
-            return PIN_ERR_CODEC;
-        }
-        p->header_written = 1;
-    }
-
     AVPacket *pkt = av_packet_alloc();
-    av_new_packet(pkt, (int)len);
+    if (!pkt || av_new_packet(pkt, (int)len) < 0) {
+        av_packet_free(&pkt);
+        return PIN_ERR_NOMEM;
+    }
     memcpy(pkt->data, data, len);
     pkt->stream_index = p->vst->index;
     pkt->pts = pkt->dts = p->vpts++;
@@ -492,11 +495,65 @@ static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len
     }
     p->st.bytes_written += len;
     p->st.units_written++;
+    return PIN_OK;
+}
 
-    /* Audio (both pairs, if present) was already extracted, exactly capped
-     * and padded to this frame's span on the output timeline, inside
-     * rewrap_dv_extract_audio() above -- see its header comment. */
-    return arc;
+/* Writes the header if it is not out, then the held frames. */
+static pin_status_t dv_flush_hold(rewrap_priv_t *p, size_t len)
+{
+    pin_status_t rc = PIN_OK;
+    if (!p->header_written) {
+        int hrc = avformat_write_header(p->fmt, NULL);
+        if (hrc < 0) {
+            pin_logf(PIN_LOG_ERROR, "sink_rewrap: avformat_write_header failed (%d)\n", hrc);
+            rc = PIN_ERR_CODEC;
+        } else {
+            p->header_written = 1;
+        }
+    }
+    for (int i = 0; i < p->nhold; i++) {
+        if (rc == PIN_OK)
+            rc = dv_put_video(p, p->hold[i], len);
+        free(p->hold[i]);
+        p->hold[i] = NULL;
+    }
+    p->nhold = 0;
+    return rc;
+}
+
+static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
+{
+    rewrap_priv_t *p = s->priv;
+    if (!is_valid_dv_unit_len(len)) {
+        p->st.units_damaged++;
+        pin_logf(PIN_LOG_WARN, "sink_rewrap: dropping a %zu-byte DV unit (not 10/12 sequences)\n", len);
+        return PIN_OK;
+    }
+
+    /* The audio streams must be known before the header: hold frames until one has audio
+     * (or DV_HOLD_MAX did not), then the held frames go out with silent audio. */
+    int held = p->nhold;
+    p->vpts += held; /* the held frames' span, for the audio timeline */
+    pin_status_t arc = rewrap_dv_extract_audio(p, data, len);
+    p->vpts -= held;
+
+    if (!p->header_written) {
+        if (p->nhold + 1 < DV_HOLD_MAX) {
+            uint8_t *copy = malloc(len);
+            if (!copy)
+                return PIN_ERR_NOMEM;
+            memcpy(copy, data, len);
+            p->hold[p->nhold++] = copy;
+            return arc;
+        }
+        pin_logf(PIN_LOG_WARN, "sink_rewrap: no audio in the first %d DV frames; the file has none\n",
+                 DV_HOLD_MAX);
+    }
+    pin_status_t rc = dv_flush_hold(p, len);
+    if (rc != PIN_OK)
+        return rc;
+    rc = dv_put_video(p, data, len);
+    return rc != PIN_OK ? rc : arc;
 }
 
 static pin_status_t dv_close(pin_sink_t *s)
@@ -504,6 +561,12 @@ static pin_status_t dv_close(pin_sink_t *s)
     rewrap_priv_t *p = s->priv;
     pin_status_t rc = PIN_OK;
     if (p->fmt) {
+        if (!p->header_written && p->nhold) {
+            /* a short capture without audio: the held frames still go in */
+            if (dv_flush_hold(p, p->params.height == 576 ? DV_SEQ_COUNT_PAL * DV_SEQ_SIZE
+                                                         : DV_SEQ_COUNT_NTSC * DV_SEQ_SIZE) != PIN_OK)
+                rc = PIN_ERR_IO;
+        }
         if (!p->header_written) {
             /* No frame ever arrived (or all were damaged): still produce a
              * valid, empty container rather than a truncated file. */
@@ -522,6 +585,8 @@ static pin_status_t dv_close(pin_sink_t *s)
     }
     if (p->st.last_error != PIN_OK)
         rc = p->st.last_error;
+    for (int i = 0; i < p->nhold; i++)
+        free(p->hold[i]);
     free(p);
     free(s);
     return rc;

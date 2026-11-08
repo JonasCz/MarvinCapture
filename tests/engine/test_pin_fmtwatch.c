@@ -235,8 +235,56 @@ static void test_action(void)
     CHECK(strcmp(t, "the input changed from DV to HDV; a pipe carries one format only") == 0, "stop text");
 }
 
+/* A damaged first unit does not set the first file's format for good. */
+static void test_first_unit(void)
+{
+    pin_fmtwatch_t w;
+    long idx = 0, start = -1, st;
+    pin_stream_fmt_t pal = dv(1, 0, 48000), ntsc = dv(0, 0, 48000);
+
+    /* NTSC first (a corrupt DSF), then PAL: the PAL run replaces it, reported at unit 0 */
+    pin_fmtwatch_init(&w);
+    CHECK(pin_fmtwatch_feed(&w, &ntsc, idx++, NULL, NULL) == PIN_FMTWATCH_FIRST, "first");
+    CHECK(pin_fmtwatch_hold_from(&w, &st) && st == 0, "held from the first unit");
+    CHECK(!pin_fmtwatch_pending(&w, NULL), "no candidate yet");
+    long at = feed(&w, pal, 10, &idx, &start);
+    CHECK(at == PIN_FMTWATCH_DV_FRAMES && start == 0, "the real format wins, back-dated to unit 0");
+    CHECK(w.cur.pal == 1, "now PAL");
+    CHECK(!pin_fmtwatch_hold_from(&w, NULL), "nothing held when settled");
+
+    /* a good first format settles after the cool-down; a later change is back-dated as before */
+    pin_fmtwatch_init(&w);
+    idx = 0;
+    CHECK(pin_fmtwatch_feed(&w, &pal, idx++, NULL, NULL) == PIN_FMTWATCH_FIRST, "first");
+    feed(&w, pal, PIN_FMTWATCH_DV_FRAMES - 2, &idx, &start);
+    CHECK(pin_fmtwatch_hold_from(&w, &st) && st == 0, "still provisional");
+    feed(&w, pal, 1, &idx, &start);
+    CHECK(!pin_fmtwatch_hold_from(&w, NULL), "settled after DV_FRAMES agreeing frames");
+    long first_ntsc = idx;
+    CHECK(feed(&w, ntsc, 10, &idx, &start) >= 0 && start == first_ntsc, "later change back-dated to its own start");
+
+    /* units that say nothing: provisional ends after the stale limit */
+    pin_fmtwatch_init(&w);
+    idx = 0;
+    pin_stream_fmt_t none = dv(-1, -1, 0);
+    CHECK(pin_fmtwatch_feed(&w, &none, idx++, NULL, NULL) == PIN_FMTWATCH_FIRST, "first, says nothing");
+    feed(&w, none, PIN_FMTWATCH_DV_STALE + 2, &idx, &start);
+    CHECK(!pin_fmtwatch_hold_from(&w, NULL), "not held for ever");
+
+    /* HDV: a damaged first GOP, then three real ones */
+    pin_fmtwatch_init(&w);
+    idx = 0;
+    pin_stream_fmt_t odd = hdv(1280, 720, 60000, 1001, 1), i1080 = hdv(1440, 1080, 25, 1, 0);
+    CHECK(pin_fmtwatch_feed(&w, &odd, idx++, NULL, NULL) == PIN_FMTWATCH_FIRST, "HDV first");
+    long a = -1;
+    for (int g = 0; g < PIN_FMTWATCH_HDV_GOPS && a < 0; g++)
+        a = feed_gop(&w, i1080, &idx, &start);
+    CHECK(a >= 0 && start == 0 && w.cur.height == 1080, "HDV: the real GOPs win, back-dated to the first picture");
+}
+
 int main(void)
 {
+    test_first_unit();
     test_dv_cooldown();
     test_kind_and_hdv();
     test_action();

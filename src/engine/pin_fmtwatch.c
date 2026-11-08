@@ -132,7 +132,20 @@ pin_fmtwatch_result_t pin_fmtwatch_feed(pin_fmtwatch_t *w, const pin_stream_fmt_
         w->cur = *obs;
         w->have = 1;
         w->pending = 0;
+        w->provisional = 1;
+        w->first_start = index;
+        w->first_count = decisive(obs) ? 1 : 0;
         return PIN_FMTWATCH_FIRST;
+    }
+    if (w->provisional) {
+        /* the first format stands once enough units agree with it (or none contradicted it
+         * for as long as a candidate would be watched) */
+        if (pin_stream_fmt_agrees(&w->cur, obs) && decisive(obs))
+            w->first_count++;
+        unsigned need = w->cur.kind == PIN_KIND_HDV ? w->need_hdv : w->need_dv;
+        if (w->first_count >= (need ? need : 1) ||
+            index - w->first_start > (w->cur.kind == PIN_KIND_HDV ? PIN_FMTWATCH_HDV_STALE : PIN_FMTWATCH_DV_STALE))
+            w->provisional = 0;
     }
     if (pin_stream_fmt_agrees(&w->cur, obs)) {
         /* the format goes on (and learns what it did not know); a candidate
@@ -163,9 +176,10 @@ pin_fmtwatch_result_t pin_fmtwatch_feed(pin_fmtwatch_t *w, const pin_stream_fmt_
     if (old)
         *old = w->cur;
     if (start)
-        *start = w->cand_start;
+        *start = w->provisional ? w->first_start : w->cand_start;
     w->cur = w->cand;
     w->pending = 0;
+    w->provisional = 0;
     return PIN_FMTWATCH_CHANGED;
 }
 
@@ -174,6 +188,16 @@ int pin_fmtwatch_pending(const pin_fmtwatch_t *w, long *start)
     if (w->pending && start)
         *start = w->cand_start;
     return w->pending;
+}
+
+int pin_fmtwatch_hold_from(const pin_fmtwatch_t *w, long *start)
+{
+    if (w->have && w->provisional) {
+        if (start)
+            *start = w->first_start;
+        return 1;
+    }
+    return pin_fmtwatch_pending(w, start);
 }
 
 pin_fmtchg_t pin_format_change_action(pin_format_t active, int to_stdout, int aspect_forced,

@@ -107,7 +107,6 @@
 #define QUEUE_DEPTH 8
 #define AUDIO_RING_SECONDS 4
 #define FLAC_LEVEL 8             /* as sink_ffv1.c: the highest within the FLAC subset */
-#define DV_HOLD_MAX 8            /* DV frames held back while looking for one with audio */
 #define STALL_TIMEOUT_S 10       /* no progress for this long: the encoder is taken as hung */
 #define MAX_PENDING 1024         /* packets waiting for the header */
 

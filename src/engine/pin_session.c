@@ -1889,7 +1889,7 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
     s->cut_run_bytes += len;
     uint64_t ahead = s->cut_last_run > len ? s->cut_last_run : len;
     int size_cut = s->file_limit && (flags & PIN_HOLD_CUT_OK) && kind == s->file_kind &&
-                   s->split.file_units > 0 && fmt_res == PIN_FMTWATCH_SAME &&
+                   (s->split.file_units > 0 || s->hold.count > 0) && fmt_res == PIN_FMTWATCH_SAME &&
                    !pin_fmtwatch_pending(&s->fmtw, NULL) &&
                    file_bytes_due(s) + ahead > pin_stop_file_cap(s->file_limit);
 
@@ -1944,7 +1944,7 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
 
     /* release what no pending cut can land on any more */
     long keep_from = idx + 1, st;
-    if (pin_fmtwatch_pending(&s->fmtw, &st) && st < keep_from)
+    if (pin_fmtwatch_hold_from(&s->fmtw, &st) && st < keep_from)
         keep_from = st;
     if (s->scene_cut_deferred && s->scene_cut_at < keep_from)
         keep_from = s->scene_cut_at;
