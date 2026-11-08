@@ -1456,6 +1456,24 @@ static void count_frame(pin_session_t *s, int err, int dropped)
     if (dropped) { s->frames_dropped++; s->clip_frames_dropped++; }
 }
 
+/* What one DV frame / HDV picture adds to the error counters; applied once the unit has a file
+ * (apply_unit_counts()). */
+typedef struct {
+    int err, dropped;
+    int hdv;                     /* an HDV picture: into HDV MOV / MKV the file counts instead */
+    uint64_t video, audio, missing;
+} unit_counts_t;
+
+static void apply_unit_counts(pin_session_t *s, const unit_counts_t *uc)
+{
+    int file_counts = uc->hdv && s->sink && s->file_kind == PIN_KIND_HDV &&
+                      (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV);
+    count_frame(s, file_counts ? 0 : uc->err, uc->dropped);
+    s->err_video_blocks += uc->video;
+    s->err_audio_blocks += uc->audio;
+    s->err_missing_blocks += uc->missing;
+}
+
 /* Numbered output: the names after a taken one, for the lazy sink (sink_lazy.c, "Taken names":
  * Android shared storage can hold files of this name that the app cannot see). Owned by the
  * sink, which may use it on the writer thread after the session moved on, hence the copy. */
@@ -1922,6 +1940,19 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
     pin_holdback_release_before(&s->hold, keep_from);
 }
 
+/* Data lost in transit (dv_output_t.on_loss): the blocks, and the whole frames that never
+ * reached dv_on_unit(), which are dropped ones. */
+static void dv_on_loss(unsigned long blocks, unsigned long frames, void *user)
+{
+    dv_ctx_t *ctx = user;
+    pin_session_t *s = ctx->s;
+    pin_session_lock(s);
+    s->lost_blocks += blocks;
+    s->frames_dropped += frames;
+    s->clip_frames_dropped += frames;
+    pin_session_unlock(s);
+}
+
 static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *user)
 {
     dv_ctx_t *ctx = user;
@@ -1948,6 +1979,8 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
     pin_scene_record_t rec;
     memset(&rec, 0, sizeof(rec));
     int have_rec = 0;
+    unit_counts_t uc;
+    memset(&uc, 0, sizeof(uc));
     int hdv_dar_num = 0, hdv_dar_den = 0, hdv_bff = -1; /* this picture's, if it says */
 
     if (kind == PIN_KIND_DV) {
@@ -1974,10 +2007,11 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             dv_frame_errors_t derr;
             if (dv_error_analyze(data, len, &derr) != 0)
                 memset(&derr, 0, sizeof(derr));
-            count_frame(s, derr.frame_error, derr.frame_dropped);
-            s->err_video_blocks += derr.video_err + derr.video_concealed;
-            s->err_audio_blocks += derr.audio_err + derr.audio_mute;
-            s->err_missing_blocks += derr.missing_blocks;
+            uc.err = derr.frame_error;
+            uc.dropped = derr.frame_dropped;
+            uc.video = derr.video_err + derr.video_concealed;
+            uc.audio = derr.audio_err + derr.audio_mute;
+            uc.missing = derr.missing_blocks;
 
             pin_previewer_push_dv(s->preview, data, len, is_pal);
 
@@ -2026,7 +2060,7 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             /* not 10 or 12 whole sequences (a bogus resync): says nothing about the format;
              * the sink counts it as damaged and drops it */
             s->frames_damaged++;
-            count_frame(s, 1, 1);
+            uc.err = uc.dropped = 1;
         }
     } else { /* HDV */
         if (!ctx->hdv_map_init) {
@@ -2085,11 +2119,10 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             hdv_error_analyze(&ctx->hdv_err, data, len / 188, vpid, &herr);
             /* into HDV MOV / MKV: whether it is "with error" is the file's to say (what it
              * re-encoded or played with silence, sink_hdvmux.c), not the packets' */
-            int file_counts = s->sink && s->file_kind == PIN_KIND_HDV &&
-                              (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV);
-            count_frame(s, file_counts ? 0 : herr.frame_error, 0);
-            s->err_video_blocks += herr.video_damaged || herr.tainted;
-            s->err_missing_blocks += herr.cc_errors + herr.tei + herr.sync_lost;
+            uc.hdv = 1;
+            uc.err = herr.frame_error;
+            uc.video = herr.video_damaged || herr.tainted;
+            uc.missing = herr.cc_errors + herr.tei + herr.sync_lost;
         }
         /* the video format, from a sequence header (and its extension) */
         if (herr.seq_found && herr.seq_width > 0 && herr.seq_height > 0) {
@@ -2156,6 +2189,12 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         pin_logf(PIN_LOG_INFO, "session: the input changed from %s to %s\n", a, b);
     }
 
+    /* The unit that makes the stream kind known opens the file, and is its first unit:
+     * the capture's counters restart there, so this unit is counted after them. */
+    if (kind_newly_known)
+        maybe_begin_capture(s, s->dev.camera_node);
+    apply_unit_counts(s, &uc);
+
     if (s->sink)
         capture_unit(s, data, len, kind, idx, flags, fr, &old_fmt, fmt_start, have_rec ? &rec : NULL);
 
@@ -2163,8 +2202,6 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
     s->idle_s = 0;
     if (fr != PIN_FMTWATCH_SAME || signal_back)
         pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
-    if (kind_newly_known)
-        maybe_begin_capture(s, s->dev.camera_node);
     pin_session_unlock(s);
 }
 
@@ -2985,12 +3022,12 @@ static void do_run_dv(pin_session_t *s)
         }
 
         dv_reassembler_t reasm;
-        dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = NULL };
+        dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .on_loss = dv_on_loss,
+                            .user = NULL };
         dv_ctx_t ctx = { .s = s };
         out.user = &ctx;
         memset(&s->hdv_psi, 0, sizeof(s->hdv_psi)); /* a new stream: its own PAT/PMT */
         dv_reassembler_init(&reasm, &out);
-        s->reasm = reasm; /* kept for status/inspection only */
 
         s->loop_stop = 0;
         s->last_data_s = pin_session_now();
@@ -3011,10 +3048,14 @@ static void do_run_dv(pin_session_t *s)
         pin_session_lock(s);
         /* a pending SET_INPUT / CLOSE wins over a re-scan */
         int rescan = s->dv_rescan && !s->worker_stop && !s->cmd.pending;
-        if (!rescan)
-            capture_end(s, PIN_STOP_USER, NULL, 0); /* input switch / close */
         pin_session_unlock(s);
+        /* the last complete frame still goes to the open file */
         dv_reassembler_finish(&reasm);
+        if (!rescan) {
+            pin_session_lock(s);
+            capture_end(s, PIN_STOP_USER, NULL, 0); /* input switch / close */
+            pin_session_unlock(s);
+        }
         pinnacle_stream_stop(&s->dev);
         if (!rescan)
             break;
@@ -3395,6 +3436,14 @@ static uint64_t replay_unplug_after(void)
     return v && v[0] ? (uint64_t)strtoull(v, NULL, 10) : 0;
 }
 
+/* Test seam: PIN_REPLAY_HOLD_MS=<ms> keeps the DV replay from sending its first byte for that
+ * long, so a capture can be asked for before the first frame arrives. */
+static double replay_hold_s(void)
+{
+    const char *v = getenv("PIN_REPLAY_HOLD_MS");
+    return v && v[0] ? (double)strtoul(v, NULL, 10) / 1000.0 : 0;
+}
+
 /* The replay loops' share of what a hardware loop keeps up to date in the status (the DV and
  * analog ticks): the capture time, the writer backlog, the bytes on disk, the file-opened event
  * and the rate window behind the time-left estimate. At most every 100 ms (*last: the loop's
@@ -3583,7 +3632,8 @@ static int replay_run(pin_session_t *s)
 
     dv_reassembler_t reasm;
     dv_ctx_t ctx = { .s = s };
-    dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .user = &ctx };
+    dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .on_loss = dv_on_loss,
+                        .user = &ctx };
     dv_reassembler_init(&reasm, &out);
     memset(&s->hdv_psi, 0, sizeof(s->hdv_psi));
 
@@ -3600,9 +3650,11 @@ static int replay_run(pin_session_t *s)
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
     double stats_t = 0;
+    double hold_until = pin_session_now() + replay_hold_s();
     s->loop_stop = 0;
     while (!s->loop_stop) {
         if (handle_inline_commands(s, 0)) { s->loop_stop = 1; break; }
+        if (pin_session_now() < hold_until) { sleep_ms(10); continue; }
 
         pin_session_lock(s);
         capture_guard(s, 0);

@@ -216,8 +216,14 @@ What is used instead:
 
 **CIP/DBC continuity**, tracked by the DV reassembler (`dbc_gaps`, `dbc_joins`
 in `dv_reassembler.h`; the replay baseline test checks it). The shipped
-programs report its effect, the zero-filled sequences, as `frames_error` rather
-than a continuity line:
+programs report its effect in the status counters rather than as a continuity
+line: the blocks the DBC says went missing as `lost_blocks`; a frame that lost
+some of its sequences comes out with them zero-filled and counts in
+`frames_error`; a frame that never arrived at all (a stall of the host or the
+bus: whole frames missing from the stream) counts in `frames_dropped`, its
+number worked out from the DBC jump and the DIF sequence numbers (a loss of
+more than about 25 frames wraps the 8-bit DBC and is counted as one frame at
+most):
 
 The IEC 61883 CIP header carries a data block counter that the *camera*
 increments once per 480-byte data block, modulo 256. A jump means data was lost

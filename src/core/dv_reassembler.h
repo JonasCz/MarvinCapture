@@ -49,6 +49,9 @@
  * or 12 (PAL), and Dseq==0 starts a new frame. If a sequence is missing we
  * write 12,000 zero bytes in its place so every frame stays a fixed, aligned
  * size — without that, one dropped sequence would desync every later frame.
+ * A frame that never arrived at all is not padded (nothing of it reaches the output) but
+ * counted: frames_lost and dv_output_t.on_loss, worked out from the DBC jump and the
+ * sequence numbers (handle_sequence).
  *
  * HDV (IEC 61883-4) uses the same two outer layers. Its CIP packets are
  * FMT=0x20, DBS=6, FN=3, SPH=1: the payload is 1..n source packets of 192
@@ -130,6 +133,11 @@ typedef enum {
 typedef struct {
     int (*write)(const uint8_t *data, size_t len, void *user);
     void (*on_unit)(dv_format_t fmt, const uint8_t *data, size_t len, void *user);
+    /* Optional: data lost in transit, as it is found. `blocks` = CIP data blocks the
+     * DBC jump implies (DV: 480 bytes each, HDV: 24), `frames` = whole DV frames that
+     * never arrived (no part of them reached the output; a frame that comes out with
+     * zero-padded sequences is not one of these). Either may be 0. */
+    void (*on_loss)(unsigned long blocks, unsigned long frames, void *user);
     void *user;
 } dv_output_t;
 
@@ -239,6 +247,7 @@ typedef struct {
     unsigned long frame_start_dropped;
 
     unsigned long frames_written;
+    unsigned long frames_lost;    /* whole frames that never arrived (estimated, see handle_sequence) */
     unsigned long sequences_written;
     unsigned long sequences_dropped;
     unsigned long bytes_fed;      /* raw EP 0x88 bytes in */
@@ -261,6 +270,9 @@ typedef struct {
     unsigned long dbc_gaps;       /* discontinuities detected after lock-on */
     unsigned long dbc_lost_blocks;/* blocks implied missing by those gaps */
     uint32_t dbc_epoch;           /* bumped on every DBC discontinuity */
+    unsigned dbc_pending;         /* DV: blocks lost by the gaps since the last DIF sequence
+                                   * was placed, modulo 256 */
+    int dbc_gap_pending;          /* DV: a gap happened since then */
     unsigned long dbc_joins;      /* discontinuities seen while still syncing
                                    * in to the already-running ring; expected,
                                    * not loss */

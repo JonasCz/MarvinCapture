@@ -696,9 +696,9 @@ typedef struct {
     char current_file[PIN_PATH_MAX];
     double elapsed_s;
     uint64_t frames;
-    uint64_t frames_dropped;    /* not in the output (analog: the previous frame repeated) */
+    uint64_t frames_dropped;    /* not in the output (DV: lost in transit; analog: the previous frame repeated) */
     uint64_t frames_damaged;    /* analog: the dropped frames that arrived short; DV: sequences zero-padded */
-    uint64_t lost_blocks;       /* DV/HDV: CIP data blocks lost in transit */
+    uint64_t lost_blocks;       /* DV/HDV: CIP data blocks (DV 480 bytes, HDV 24) the DBC says were lost in transit */
     uint64_t ts_errors;         /* HDV: continuity errors */
     uint64_t bytes_written;
     uint64_t writer_backlog;    /* bytes queued for the disk */
@@ -767,8 +767,11 @@ typedef struct {
      *           or played with its audio replaced by silence; it lags the
      *           picture count by a GOP or a repair;
      *   analog: a repeated (dropped) frame.
-     * frames_dropped: DV frames with >= 90 % of their blocks missing, analog
-     * repeated frames; HDV MOV / MKV frames that repeat a neighbour because
+     * frames_dropped: DV frames with >= 90 % of their blocks missing and DV frames
+     * lost in transit whole (not in the output at all, so not in `frames`;
+     * estimated from the DBC and the DIF sequence numbering, see dv_reassembler.c;
+     * a frame that loses only some sequences, or only its first, comes out padded
+     * and counts as an error instead), analog repeated frames; HDV MOV / MKV frames that repeat a neighbour because
      * their picture was lost (also "with error"); raw HDV 0.
      * err_*_blocks: running totals behind the verdicts (DV: video blocks with
      * STA != 0, audio blocks bad or muted, blocks missing; HDV: damaged

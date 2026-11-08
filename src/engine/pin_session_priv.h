@@ -183,7 +183,6 @@ struct pin_session {
     /* capture pipeline (only valid while CAPTURING) */
     pin_capture_opts_t capture_opts;
     pinnacle_analog_t analog;
-    dv_reassembler_t reasm;
     pin_writer_t *writer;
     pin_sink_t *sink;             /* the writer's consumer writes to this one (its user pointer) */
     pin_closer_t *closer;         /* finishes the files handed over (pin_closer.h) */

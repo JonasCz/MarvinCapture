@@ -49,6 +49,16 @@ Traps (all learned the hard way):
   the closer from the sink's `final_status`) and the open sink's (asked in the snapshot).
   `frames_dropped` there = the repeated frames. `test_hdv_repair` checks the sink's counts,
   `test_replay_hdv_mov` the status.
+- DV data lost in transit is told apart by where it fell: a frame that loses some of its
+  sequences (even its first) is emitted zero-padded and is an error frame
+  (`dv_reassembler.c` `place_sequence()` starts a new frame when the numbering goes back
+  or the DBC says a frame's worth was lost, so two damaged neighbours stay two frames); a
+  frame that never arrived is only counted: `frames_lost` and the `on_loss` callback, which
+  the session adds to `frames_dropped` / `clip_frames_dropped` (not to `frames`) next to
+  `lost_blocks` (the DBC jump in blocks). The number of lost frames comes from the DBC
+  (25 blocks per sequence, known modulo 256) matched against the DIF numbering, so it is
+  right up to about 25 frames lost in one hole. `tests/test_reassembler_loss.c` has the
+  cases, `test_replay_dv_loss` the status.
 - The only shipped views of these counters are the status line / snapshot fields
   of `MarvinCaptureCLI` and the GUI; the old CIP/DBC continuity line of `pincli` is
   gone (`dbc_gaps` / `dbc_joins` still live in `dv_reassembler.h` and the replay

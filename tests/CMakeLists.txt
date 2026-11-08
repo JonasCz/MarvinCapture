@@ -66,6 +66,13 @@ target_link_libraries(test_reassembler_mixed PRIVATE pinnacle_core)
 add_test(NAME test_reassembler_mixed COMMAND test_reassembler_mixed "${PIN_TEST_DATA}")
 set_tests_properties(test_reassembler_mixed PROPERTIES FIXTURES_REQUIRED pin_test_data TIMEOUT 60)
 
+# dv_reassembler on a stream that loses sequences and whole frames in transit (synthetic, no
+# fixture files).
+add_executable(test_reassembler_loss test_reassembler_loss.c)
+target_link_libraries(test_reassembler_loss PRIVATE pinnacle_core)
+add_test(NAME test_reassembler_loss COMMAND test_reassembler_loss)
+set_tests_properties(test_reassembler_loss PROPERTIES TIMEOUT 60)
+
 # pinnacle_lock: hardware-free (see tests/test_lock.c), but it does spawn a
 # real child process (fork on POSIX, CreateProcess on Windows) to exercise
 # cross-process BUSY detection and crash cleanup, so give it more headroom
