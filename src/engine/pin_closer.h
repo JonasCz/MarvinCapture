@@ -86,6 +86,14 @@ int pin_closer_busy(pin_closer_t *c);
 void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units, pin_closer_frames_t *frames);
 
 /* Disk space the files not yet closed still need. */
+/* Files whose close failed (the sink's close(), or a write error while draining) and that
+ * pin_closer_take_failure() has not yet taken. */
+unsigned pin_closer_failures(pin_closer_t *c);
+
+/* Returns that count and clears it; *status and path (cap bytes) get the first failed file's
+ * status and name. */
+unsigned pin_closer_take_failure(pin_closer_t *c, pin_status_t *status, char *path, size_t cap);
+
 uint64_t pin_closer_pending_bytes(pin_closer_t *c);
 
 /* Closes what is still queued and ends the thread. */

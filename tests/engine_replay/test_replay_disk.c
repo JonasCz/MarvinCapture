@@ -204,6 +204,25 @@ static void test_write_error(const char *trace)
     CHECK(lavf_frames("write_error_avi.avi", &audio_s, &header_frames) >= 6);
 }
 
+/* A file that cannot be closed completely (no write failed on the way; PIN_TEST_CLOSE_FAIL) makes
+ * the capture a failed one: WRITE_ERROR instead of the normal end, the file named in the text. */
+static void test_close_error(const char *trace)
+{
+    result_t r;
+    const char *env[] = { "PIN_TEST_CLOSE_FAIL", "1", NULL };
+    capture(trace, "close_error_raw", PIN_FMT_DV_RAW, env, &r);
+    CHECK(r.snap.stop_reason == PIN_STOP_WRITE_ERROR);
+    CHECK(strstr(r.snap.stop_text, "close_error_raw.dv could not be written completely") != NULL);
+    CHECK(r.closed_status != PIN_OK && r.closed_status != -1);
+
+    /* the old file of a size cut fails to close: the capture ends there, not at the tape's end */
+    const char *env2[] = { "PIN_TEST_CLOSE_FAIL", "1", "PIN_TEST_FAT32_LIMIT", "2000000", NULL };
+    capture(trace, "close_error_cut", PIN_FMT_DV_RAW, env2, &r);
+    CHECK(r.snap.stop_reason == PIN_STOP_WRITE_ERROR);
+    CHECK(strstr(r.snap.stop_text, "close_error_cut.dv could not be written completely") != NULL);
+    CHECK(r.snap.total_bytes_written < 4000000ull);   /* the replay holds 30 frames, 4.3 MB */
+}
+
 /* The drive is slower than the stream: DISK_SLOW, and the file has no hole. */
 static void test_disk_slow(const char *trace)
 {
@@ -240,6 +259,7 @@ int main(int argc, char **argv)
     pin_test_require_fixture(argv[1]);
     test_disk_full(argv[1]);
     test_write_error(argv[1]);
+    test_close_error(argv[1]);
     test_disk_slow(argv[1]);
     printf("OK\n");
     return 0;

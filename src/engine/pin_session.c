@@ -653,6 +653,7 @@ static void writer_commit(void *user, const uint8_t *data, size_t len)
 }
 
 static void open_sink_for_scene(pin_session_t *s);
+static void deck_send(pin_session_t *s, uint16_t node, pin_deck_cmd_t cmd);
 static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const char *detail);
 
 /* Saves the FFV1 rate of the running capture (average of the last 10 minutes)
@@ -693,6 +694,17 @@ static void closer_collect(pin_session_t *s)
     s->units_total = (uint64_t)((int64_t)s->units_total + units);
     s->sinkf_error = (uint64_t)((int64_t)s->sinkf_error + fr.error);
     s->sinkf_repeated = (uint64_t)((int64_t)s->sinkf_repeated + fr.repeated);
+    pin_status_t fst = PIN_OK;
+    char fpath[PIN_PATH_MAX];
+    fpath[0] = 0;
+    unsigned nfail = pin_closer_take_failure(s->closer, &fst, fpath, sizeof(fpath));
+    if (nfail) {
+        if (s->close_failed == 0) {
+            s->close_fail_status = fst;
+            snprintf(s->close_fail_path, sizeof(s->close_fail_path), "%s", fpath);
+        }
+        s->close_failed += nfail;
+    }
 }
 
 /* Every file handed over is closed and counted. Caller holds the lock (the
@@ -1504,6 +1516,18 @@ static void adopt_renumbered_file(pin_session_t *s)
     s->scene_index += k;
 }
 
+/* A file could not be opened: during a capture (a scene split, the next pass) that ends the
+ * capture and stops the deck; then the session is in ERROR. Caller holds the lock. */
+static void open_failed(pin_session_t *s, pin_status_t st, const char *text)
+{
+    if (s->capture_began) {
+        capture_report_end(s, PIN_STOP_WRITE_ERROR, "the next output file could not be created");
+        if (s->capture_opts.start_deck && s->dev.camera_node)
+            deck_send(s, s->dev.camera_node, PIN_DECK_CMD_STOP);
+    }
+    set_error(s, st, text);
+}
+
 static void open_sink_for_scene(pin_session_t *s)
 {
     /* numbered: scene split, a first number, or the files after a format change */
@@ -1518,7 +1542,7 @@ static void open_sink_for_scene(pin_session_t *s)
     if (to_stdout) {
         snprintf(path, sizeof(path), "-");
     } else if (pin_naming_build(s->naming_base, &nopts, s->naming_ext, path, sizeof(path)) != 0) {
-        set_error(s, PIN_ERR_ARG, "output path too long");
+        open_failed(s, PIN_ERR_ARG, "output path too long");
         return;
     }
 
@@ -1526,7 +1550,7 @@ static void open_sink_for_scene(pin_session_t *s)
     s->sink = to_stdout ? pin_sink_create_stdout(s->file_kind)
                         : pin_sink_lazy(pin_sink_create(s->active_format));
     if (!s->sink) {
-        set_error(s, PIN_ERR_ARG, "unsupported output format");
+        open_failed(s, PIN_ERR_ARG, "unsupported output format");
         return;
     }
     if (!to_stdout && s->capture_opts.first_number != 0) {
@@ -1597,10 +1621,7 @@ static void open_sink_for_scene(pin_session_t *s)
 
     pin_status_t st = s->sink->open(s->sink, path, &params);
     if (st != PIN_OK) {
-        /* a scene split or the next pass: the capture ends here */
-        if (s->capture_began)
-            capture_report_end(s, PIN_STOP_WRITE_ERROR, "the next output file could not be created");
-        set_error(s, st, "failed to open output");
+        open_failed(s, st, "failed to open output");
         s->sink->close(s->sink); /* never opened: nothing to count */
         s->sink = NULL;
         return;
@@ -2292,6 +2313,18 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
         else
             snprintf(s->stop_text + n, sizeof(s->stop_text) - n, " No file was written.");
     }
+    if (s->close_failed && !pin_path_is_stdout(s->capture_opts.path)) {
+        /* a file that was not closed properly is a failed capture, whatever else ended it */
+        const char *name = s->close_fail_path;
+        for (const char *p = name; *p; p++)
+            if (*p == '/' || *p == '\\')
+                name = p + 1;
+        size_t n = strlen(s->stop_text);
+        snprintf(s->stop_text + n, sizeof(s->stop_text) - n, " But %s%s could not be written completely: %s.",
+                 name, s->close_failed > 1 ? " (and other files)" : "", pin_strerror(s->close_fail_status));
+        if (!pin_stop_abnormal(why))
+            s->stop_reason = why = PIN_STOP_WRITE_ERROR;
+    }
     pin_logf(why == PIN_STOP_USER ? PIN_LOG_INFO : PIN_LOG_WARN, "session: %s\n", s->stop_text);
     pin_session_push_event(s, PIN_EVT_CAPTURE_ENDED, (int32_t)why, s->stop_text);
     if (say_no_video)
@@ -2358,6 +2391,13 @@ static uint16_t auto_stop_node(const pin_session_t *s, uint16_t node)
  * the lock. Returns 1 if it ended the capture. */
 static int capture_guard(pin_session_t *s, uint16_t deck_node)
 {
+    if (s->sink && s->state == PIN_STATE_CAPTURING && pin_closer_failures(s->closer) > 0) {
+        /* a finished file could not be written completely (a scene split's old file): the drive
+         * is failing, so the capture ends; its report says which file */
+        capture_end(s, PIN_STOP_WRITE_ERROR, NULL, deck_node);
+        set_state(s, PIN_STATE_READY);
+        return 1;
+    }
     if (!s->sink || !s->writer || s->state != PIN_STATE_CAPTURING)
         return 0;
     if (s->fmt_stop) {
@@ -2665,6 +2705,8 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         s->units_total = 0;
         s->stop_captured_s = 0;
         s->stop_text[0] = 0;
+        s->close_failed = 0;
+        pin_closer_take_failure(s->closer, NULL, NULL, 0);
         s->capture_began = 0;
         s->capture_want_start = 1;
         s->rewind_before_capture = 0;
@@ -2927,19 +2969,22 @@ static void dv_tick(void *user)
             /* start the next pass, in the kind the stream has now (a change at the tape's
              * start replaces the file, see format_cut_begin()) */
             s->pass_rewinding = 0;
-            deck_send(s, node, PIN_DECK_CMD_PLAY);
             s->scene_index = first_scene_number(s);
             s->fmt_numbered = 0;
             s->scene_cut_deferred = 0;
             file_format_for_stream(s);
             open_sink_for_scene(s);
-            set_state(s, PIN_STATE_CAPTURING);
-            pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
-            s->capture_start_s = pin_session_now();
-            s->elapsed_s = 0;
-            s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
-            s->idle_s = 0;
-            s->scene_det_ready = 0;
+            /* a failed open has ended the capture and stopped the deck (open_sink_for_scene()) */
+            if (s->state != PIN_STATE_ERROR) {
+                deck_send(s, node, PIN_DECK_CMD_PLAY);
+                set_state(s, PIN_STATE_CAPTURING);
+                pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
+                s->capture_start_s = pin_session_now();
+                s->elapsed_s = 0;
+                s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
+                s->idle_s = 0;
+                s->scene_det_ready = 0;
+            }
         }
     }
     pin_session_unlock(s);

@@ -46,6 +46,10 @@ struct pin_closer {
     pin_closer_frames_t more_frames;
     pin_closer_done_fn done;
     void *user;
+    unsigned closes;          /* files closed so far (the test seam) */
+    unsigned failed;          /* files whose close failed since pin_closer_take_failure() */
+    pin_status_t fail_status; /* the first of them */
+    char fail_path[PIN_PATH_MAX];
 };
 
 /* Stops the writer, counts, closes. Returns the close status. final_path: the name the file
@@ -81,10 +85,28 @@ static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, ui
     return st == PIN_OK && wfail ? PIN_ERR_IO : st;
 }
 
+/* Test seam: PIN_TEST_CLOSE_FAIL=<n> makes the n-th file closed fail with an I/O error. */
+static pin_status_t close_seam(pin_closer_t *c, pin_status_t st)
+{
+    const char *v = getenv("PIN_TEST_CLOSE_FAIL");
+    unsigned n = v && v[0] ? (unsigned)strtoul(v, NULL, 10) : 0;
+    pthread_mutex_lock(&c->lock);
+    unsigned k = ++c->closes;
+    pthread_mutex_unlock(&c->lock);
+    return n && k == n ? PIN_ERR_IO : st;
+}
+
 static void report(pin_closer_t *c, const job_t *j, pin_status_t st, uint64_t units, const char *path)
 {
-    if (st != PIN_OK)
+    if (st != PIN_OK) {
         pin_logf(PIN_LOG_WARN, "closer: %s: %s\n", path, pin_strerror(st));
+        pthread_mutex_lock(&c->lock);
+        if (c->failed++ == 0) {
+            c->fail_status = st;
+            snprintf(c->fail_path, sizeof(c->fail_path), "%s", path ? path : "");
+        }
+        pthread_mutex_unlock(&c->lock);
+    }
     pin_closer_done_t d = { .status = st, .units = units, .announced = j->announced, .path = path };
     if (c->done)
         c->done(c->user, &d);
@@ -111,6 +133,7 @@ static void *closer_thread(void *arg)
         pin_closer_frames_t fr;
         char final_path[PIN_PATH_MAX];
         pin_status_t st = close_job(j, &bytes, &units, &final_units, &fr, final_path, sizeof(final_path));
+        st = close_seam(c, st);
         report(c, j, st, final_units, final_path);
 
         pthread_mutex_lock(&c->lock);
@@ -170,6 +193,7 @@ void pin_closer_submit(pin_closer_t *c, pin_writer_t *writer, pin_sink_t *sink, 
         char final_path[PIN_PATH_MAX];
         pin_status_t st = close_job(&now, &b, &u, &final_units, &fr, final_path, sizeof(final_path));
         if (c) {
+            st = close_seam(c, st);
             report(c, &now, st, final_units, final_path);
             pthread_mutex_lock(&c->lock);
             c->more_bytes += b;
@@ -229,6 +253,33 @@ void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units, pin_closer
     memset(&c->more_frames, 0, sizeof(c->more_frames));
     c->more_bytes = c->more_units = 0;
     pthread_mutex_unlock(&c->lock);
+}
+
+unsigned pin_closer_failures(pin_closer_t *c)
+{
+    if (!c)
+        return 0;
+    pthread_mutex_lock(&c->lock);
+    unsigned n = c->failed;
+    pthread_mutex_unlock(&c->lock);
+    return n;
+}
+
+unsigned pin_closer_take_failure(pin_closer_t *c, pin_status_t *status, char *path, size_t cap)
+{
+    if (!c)
+        return 0;
+    pthread_mutex_lock(&c->lock);
+    unsigned n = c->failed;
+    if (n) {
+        if (status)
+            *status = c->fail_status;
+        if (path && cap)
+            snprintf(path, cap, "%s", c->fail_path);
+    }
+    c->failed = 0;
+    pthread_mutex_unlock(&c->lock);
+    return n;
 }
 
 uint64_t pin_closer_pending_bytes(pin_closer_t *c)

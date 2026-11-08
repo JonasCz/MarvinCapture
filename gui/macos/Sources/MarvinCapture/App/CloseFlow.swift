@@ -86,7 +86,16 @@ final class CloseFlow {
     private func afterTick() {
         guard model.isFinalizingForClose else { return }
         switch model.sessionState {
-        case PIN_STATE_READY, PIN_STATE_ERROR, PIN_STATE_CLOSED: finish()
+        case PIN_STATE_READY, PIN_STATE_ERROR, PIN_STATE_CLOSED:
+            if let text = model.quitEndError {
+                // the capture ended with an error: stay open and say so instead of quitting
+                model.quitEndError = nil
+                model.isFinalizingForClose = false
+                cancelled()
+                Task { @MainActor in await Alerts.shared.notify(title: "Capture stopped", message: text) }
+            } else {
+                finish()
+            }
         default: break
         }
     }

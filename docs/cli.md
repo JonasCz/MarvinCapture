@@ -74,7 +74,7 @@ How a wait is evaluated (polled about 10 times a second):
   - wallclock counts from the start of the wait, not from the first captured frame: after --play --capture f --wait wallclock=00:00:15 the file is shorter by the time the deck needs to start playing (about 3 s seen). Use captured= for the length of the file.
   - Winding for a duration (--rew/--ff --wait wallclock=00:00:30) depends on the deck's wind speed, so the position reached is not precise; do not use it to position the tape. Many decks report the timecode only while playing or stopped, so timecode waits are most reliable during --play.
 
-Exit codes: 0 ok, 1 usage error, 2 device or bring-up error, 3 deck error, 4 capture ended abnormally, 5 a capture received no video (nothing written), 130 cancelled (Ctrl-C). A capture that gets no video, e.g. an empty tape, leaves no file; the later steps still run and the script exits 5 at the end, unless a more severe error (1-4, 130) occurs first.
+Exit codes: 0 ok, 1 usage error, 2 device or bring-up error, 3 deck error, 4 capture ended abnormally (including a file that could not be written completely when it was closed), 5 a capture received no video (nothing written), 130 cancelled (Ctrl-C). A capture that gets no video, e.g. an empty tape, leaves no file; the later steps still run and the script exits 5 at the end, unless a more severe error (1-4, 130) occurs first.
 
 Examples:
   Capture the whole tape; stops once the deck reaches the end:

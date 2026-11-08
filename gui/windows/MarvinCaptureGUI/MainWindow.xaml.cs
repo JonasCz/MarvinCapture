@@ -447,7 +447,19 @@ public sealed partial class MainWindow : Window
 
         if (_finalizingForClose && VM.SessionState is PinState.Ready or PinState.Error or PinState.Closed)
         {
-            FinishClose();
+            if (_quitEndError is not null)
+            {
+                // the capture ended with an error (a file not written completely): stay open and say so
+                string text = _quitEndError;
+                _quitEndError = null;
+                _finalizingForClose = false;
+                FinalizingOverlay.Visibility = Visibility.Collapsed;
+                _ = ShowDialogAsync("Capture stopped", text, null, "OK");
+            }
+            else
+            {
+                FinishClose();
+            }
         }
     }
 
@@ -601,6 +613,9 @@ public sealed partial class MainWindow : Window
     }
 
     private bool _wasCapturing;
+
+    /// <summary>The end text of a capture that failed while the window was finalising it for quitting.</summary>
+    private string? _quitEndError;
 
     /// <summary>The error bar's text that was open when the last capture ended normally; it does not turn the taskbar red.</summary>
     private string? _normalEndInfoMessage;
@@ -807,6 +822,11 @@ public sealed partial class MainWindow : Window
             !_closing && !_finalizingForClose && !_scriptRunning)
         {
             _ = ShowDialogAsync("Capture stopped", e.Text, null, "OK");
+        }
+        else if (e.Kind == PinEventKind.CaptureEnded && Native.StopReasonAbnormal((PinStopReason)e.A) &&
+                 _finalizingForClose && !_closing && !_scriptRunning)
+        {
+            _quitEndError = e.Text; // shown instead of quitting (OnStatusTick)
         }
         // A capture that received no video at all (an empty tape): no file was written. A
         // warning bar; a command-line script reports it itself through its exit code (Done).

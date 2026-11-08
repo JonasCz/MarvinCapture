@@ -243,6 +243,9 @@ struct pin_session {
     double stop_captured_s;
     char stop_text[PIN_TEXT_MAX];
     int stop_no_video;       /* the capture ended without a single video unit written */
+    unsigned close_failed;   /* files of this capture whose close failed (collected from the closer) */
+    pin_status_t close_fail_status;  /* the first of them */
+    char close_fail_path[PIN_PATH_MAX];
     uint64_t units_total;    /* video units written by this capture's closed files */
     int file_announced;      /* PIN_EVT_FILE_OPENED was sent for the open file (it is created
                                 by its first video unit, see sink_lazy.c) */

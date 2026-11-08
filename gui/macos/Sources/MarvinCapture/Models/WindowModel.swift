@@ -129,6 +129,9 @@ final class WindowModel {
     /// Set by the close flow so no dialog / notification fires for the stop the user asked for.
     /// Observable: the view shows the "Finalizing files…" overlay while it is set.
     var isFinalizingForClose = false
+    /// The end text of a capture that failed while the close flow was finalising it (a file not
+    /// written completely): the close flow stays open and shows it.
+    @ObservationIgnored var quitEndError: String?
 
     // MARK: devices
 
@@ -1309,6 +1312,7 @@ final class WindowModel {
                     Notifier.shared.postIfInactive(title: "Capture stopped", body: e.text)
                     onAttention?(true)
                 }
+                if isFinalizingForClose && !isClosing { quitEndError = e.text }
                 pendingFinished = nil
             } else if !quiet {
                 pendingFinished = (e.text, 0)   // a no-video event may follow right away

@@ -54,6 +54,7 @@ static void sleep_ms(int ms)
 typedef struct {
     uint64_t units, bytes;
     int close_ms;
+    pin_status_t close_st;   /* what close() returns */
     int counts_frames;       /* as sink_hdvmux: frame counts, more of them written while closing */
     int *order, *norder;
 } fake_t;
@@ -86,9 +87,10 @@ static pin_status_t fake_close(pin_sink_t *s)
         s->final_status->frames_error = 12;
         s->final_status->frames_repeated = 3;
     }
+    pin_status_t st = f->close_st;
     free(f);
     free(s);
-    return PIN_OK;
+    return st;
 }
 
 static pin_sink_t *fake_sink(int close_ms)
@@ -113,8 +115,8 @@ static int consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, si
 
 typedef struct {
     pthread_mutex_t lock;
-    char order[8][16];
-    uint64_t units[8];
+    char order[32][16];
+    uint64_t units[32];
     int n;
 } log_t;
 
@@ -122,7 +124,7 @@ static void on_done(void *user, const pin_closer_done_t *d)
 {
     log_t *l = user;
     pthread_mutex_lock(&l->lock);
-    if (l->n < 8) {
+    if (l->n < 32) {
         snprintf(l->order[l->n], sizeof(l->order[0]), "%s", d->path);
         l->units[l->n] = d->units;
         l->n++;
@@ -177,10 +179,39 @@ int main(void)
     CHECK(fr.frames == 10 && fr.error == 2 && fr.repeated == 0, "frames counted while closing");
     CHECK(bytes == 1000, "bytes written while closing");
 
+    /* a file whose close fails is counted and remembered (the first one), once */
+    CHECK(pin_closer_failures(c) == 0, "no failure so far");
+    pin_sink_t *bad1 = fake_sink(0);
+    ((fake_t *)bad1->priv)->close_st = PIN_ERR_IO;
+    pin_sink_t *bad2 = fake_sink(0);
+    ((fake_t *)bad2->priv)->close_st = PIN_ERR_ARG;
+    pin_closer_submit(c, NULL, bad1, "bad1", 1, 0, 0, 0, NULL);
+    pin_closer_submit(c, NULL, fake_sink(0), "good", 1, 0, 0, 0, NULL);
+    pin_closer_submit(c, NULL, bad2, "bad2", 1, 0, 0, 0, NULL);
+    pin_closer_wait(c);
+    CHECK(pin_closer_failures(c) == 2, "two failed closes");
+    pin_status_t fst = PIN_OK;
+    char fpath[64] = "";
+    CHECK(pin_closer_take_failure(c, &fst, fpath, sizeof(fpath)) == 2, "taken: two");
+    CHECK(fst == PIN_ERR_IO && strcmp(fpath, "bad1") == 0, "the first failure is kept");
+    CHECK(pin_closer_failures(c) == 0 && pin_closer_take_failure(c, NULL, NULL, 0) == 0, "cleared");
+
+    /* the test seam: the n-th file closed fails */
+    pin_closer_t *c2 = pin_closer_create(on_done, &log);
+    setenv("PIN_TEST_CLOSE_FAIL", "2", 1);
+    pin_closer_submit(c2, NULL, fake_sink(0), "seam1", 1, 0, 0, 0, NULL);
+    pin_closer_submit(c2, NULL, fake_sink(0), "seam2", 1, 0, 0, 0, NULL);
+    pin_closer_wait(c2);
+    unsetenv("PIN_TEST_CLOSE_FAIL");
+    CHECK(pin_closer_take_failure(c2, &fst, fpath, sizeof(fpath)) == 1 && fst == PIN_ERR_IO &&
+              strcmp(fpath, "seam2") == 0, "seam: the 2nd close fails");
+    pin_closer_destroy(c2);
+    int n_before = log.n;
+
     /* destroy closes what is still queued */
     pin_closer_submit(c, NULL, fake_sink(50), "scene3", 1, 0, 0, 0, NULL);
     pin_closer_destroy(c);
-    CHECK(log.n == 4 && strcmp(log.order[3], "scene3") == 0, "closed on destroy");
+    CHECK(log.n == n_before + 1 && strcmp(log.order[log.n - 1], "scene3") == 0, "closed on destroy");
 
     if (g_failures) {
         printf("test_pin_closer: %d failure(s)\n", g_failures);

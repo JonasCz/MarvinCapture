@@ -41,7 +41,9 @@ session engine"). The traps:
 - **End a capture only with `capture_end(s, reason, detail, deck_node)`** (then
   set the state). It closes the file, sends Stop, and reports the reason
   (`PIN_EVT_CAPTURE_ENDED` + `stop_*` status; abnormal reasons per
-  `pin_stop_abnormal()` get the GUI's dialog, normal ones a status-bar line). A pass change uses `finish_file()`. `capture_guard()` (disk reserve,
+  `pin_stop_abnormal()` get the GUI's dialog, normal ones a status-bar line). A pass change uses `finish_file()`. A file whose close failed (closer) turns the end into
+  `PIN_STOP_WRITE_ERROR` with the file named in `stop_text`, and `capture_guard()` ends the capture on a
+  split's failed close; a failed open mid-capture (`open_failed()`) ends it and stops the deck. `capture_guard()` (disk reserve,
   writer failure) runs from dv_tick / analog_tick / the replay loops;
   `stream_failed()` handles a read loop that returned by itself (unplug).
 - Bus reset during a capture ends it (`PIN_STOP_CAMERA_LOST`, user's decision:
