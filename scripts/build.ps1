@@ -117,15 +117,18 @@ if (Test-Path $dist) { Remove-Item -Recurse -Force $dist }
 New-Item -ItemType Directory -Force $dist | Out-Null
 Copy-Item (Join-Path $core 'MarvinCaptureCLI.exe') $dist -Force
 Copy-Item (Join-Path $core 'MarvinPlayout.exe') $dist -Force   # links the core statically, finds firmware\ next to itself
+Copy-Item (Join-Path $core 'marvin-core.dll') $dist -Force
+Copy-Item (Join-Path $core 'libusb-1.0.dll') $dist -Force
+Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $dist -Force
+# The CLI needs the DLLs copied above to start, so its help text is read only now.
 # The help text lives in src\engine\pin_script.c; docs\cli.md is generated from docs\cli.md.template.
-$helpText = (& (Join-Path $dist 'MarvinCaptureCLI.exe') --help-text) -join "`n"
+$helpLines = & (Join-Path $dist 'MarvinCaptureCLI.exe') --help-text
+if ($LASTEXITCODE -ne 0 -or -not $helpLines) { throw "MarvinCaptureCLI.exe --help-text failed (exit code $LASTEXITCODE); docs\cli.md left as it was" }
+$helpText = $helpLines -join "`n"
 $tmpl = [IO.File]::ReadAllText((Join-Path $root 'docs\cli.md.template'))
 $new = $tmpl.Replace('@CLI_HELP@', "``````text`n$helpText`n``````")
 $helpDoc = Join-Path $root 'docs\cli.md'
 if (-not (Test-Path $helpDoc) -or [IO.File]::ReadAllText($helpDoc) -ne $new) { [IO.File]::WriteAllText($helpDoc, $new) }
-Copy-Item (Join-Path $core 'marvin-core.dll') $dist -Force
-Copy-Item (Join-Path $core 'libusb-1.0.dll') $dist -Force
-Copy-Item (Join-Path $ucrt 'libwinpthread-1.dll') $dist -Force
 Copy-Item (Join-Path $root 'firmware') (Join-Path $dist 'firmware') -Recurse
 
 # --- 4. GUI --------------------------------------------------------------------

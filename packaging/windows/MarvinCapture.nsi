@@ -23,6 +23,9 @@ SetCompressorDictSize 32
 !ifndef VERSION
   !error "VERSION is not defined (run scripts\package-windows.ps1)"
 !endif
+!ifndef UNINSTALL_LIST
+  !error "UNINSTALL_LIST is not defined (run scripts\package-windows.ps1)"
+!endif
 !ifndef ARCH
   !define ARCH "x64"
 !endif
@@ -95,8 +98,8 @@ Function LaunchGUI
   Exec '"$WINDIR\explorer.exe" "$INSTDIR\${APP_EXE}"'
 FunctionEnd
 
-; The uninstaller deletes $INSTDIR recursively, so the directory is always a
-; "...\MarvinCapture" folder: append it if the user picked something else.
+; The installation always goes into a "...\MarvinCapture" folder (append it if the user picked
+; something else), so it never shares a folder with other programs' files.
 Function NormalizeInstDir
   StrCpy $0 $INSTDIR 13 -13
   ${If} $0 != "${APP_NAME}"
@@ -336,15 +339,11 @@ Section "un.${APP_NAME} program files and shortcuts" UnSecMain
 
   DeleteRegKey HKLM "${UNINST_KEY}"
 
-  ; only ever delete recursively inside a folder named MarvinCapture
-  StrCpy $0 $INSTDIR 13 -13
-  ${If} $0 == "${APP_NAME}"
-    SetOutPath "$TEMP"
-    RMDir /r "$INSTDIR"
-  ${Else}
-    DetailPrint "$INSTDIR is not a ${APP_NAME} folder, leaving its contents alone."
-    Delete "$INSTDIR\uninstall.exe"
-  ${EndIf}
+  ; Only the files the installer put down (a generated list, scripts\package-windows.ps1) and the
+  ; folders that end up empty: the folder may be one the user also keeps captures in.
+  SetOutPath "$TEMP"
+  !include "${UNINSTALL_LIST}"
+  RMDir "$INSTDIR"
 SectionEnd
 
 !insertmacro MUI_UNFUNCTION_DESCRIPTION_BEGIN

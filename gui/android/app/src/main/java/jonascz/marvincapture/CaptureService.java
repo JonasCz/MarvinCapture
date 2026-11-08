@@ -43,6 +43,7 @@ import android.util.Log;
 import java.io.File;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 /**
  * Owns the session (pin_session_t) and with it the device: the USB connection, the capture, the
@@ -119,6 +120,11 @@ public final class CaptureService extends Service {
     private long captureStartWall;
     private String pendingFinished;   // a normal end, announced one tick later unless no-video follows
     private int pendingAge;
+    // The last abnormal capture end (or background-start refusal) the user has not seen: with the app
+    // in the background and notifications denied nothing else shows it. Handed to the activity when
+    // it becomes visible.
+    private String unseenTitle, unseenText;
+    private boolean foregroundDenied;   // startForeground failed for this busy period; not retried every tick
 
     private final BroadcastReceiver detachReceiver = new BroadcastReceiver() {
         @Override
@@ -181,6 +187,12 @@ public final class CaptureService extends Service {
         unregisterReceiver(detachReceiver);
         closeSession("");
         coreThread.shutdown();
+        // The close finalises the files; the process may be killed right after this returns.
+        try {
+            if (!coreThread.awaitTermination(8, TimeUnit.SECONDS)) Log.w(TAG, "core thread still closing at onDestroy");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         Core.audioSetKeepAlive(MarvinApp.monitor, false);
         if (wakeLock.isHeld()) wakeLock.release();
         super.onDestroy();
@@ -191,6 +203,15 @@ public final class CaptureService extends Service {
     void setListener(Listener l, boolean visible) {
         listener = l;
         listenerVisible = l != null && visible;
+        if (listenerVisible && unseenTitle != null) {
+            String t = unseenTitle, x = unseenText;
+            unseenTitle = unseenText = null;
+            getSystemService(NotificationManager.class).cancel(NOTIF_RESULT);
+            if (!l.onCaptureFailed(t, x)) {
+                unseenTitle = t;
+                unseenText = x;
+            }
+        }
         scheduleTick(0);
     }
 
@@ -311,7 +332,10 @@ public final class CaptureService extends Service {
         }
         long s = session;
         UsbDeviceConnection c = connection;
-        boolean wasCapturing = status.isCapturing();
+        // A fresh read: the last tick's snapshot can be 1 s old, and a capture started since then
+        // must keep the foreground service and wake lock until pin_close has finalised it.
+        status.read(s);
+        boolean wasCapturing = status.isCapturing() || status.state() == Core.STATE_STOPPING;
         session = 0;
         connection = null;
         device = null;
@@ -427,6 +451,7 @@ public final class CaptureService extends Service {
             startRequestedAt = SystemClock.uptimeMillis() / 1000.0;
             captureStartWall = System.currentTimeMillis();
             pendingFinished = null;
+            unseenTitle = unseenText = null;
             getSystemService(NotificationManager.class).cancel(NOTIF_RESULT);
             updateWakeLock(true);
             // the activity calls startForegroundService(ACTION_FOREGROUND) right after
@@ -476,7 +501,8 @@ public final class CaptureService extends Service {
                 handleEvent(kind, evA[0], evText[0] != null ? evText[0] : "");
             }
             if (detachedAt != 0 && (!status.isCapturing() || SystemClock.uptimeMillis() - detachedAt > 15000)) {
-                closeSession(Core.noDevicesHint());
+                // an abnormal end the user has not seen stays the card's text: the hint would hide why
+                closeSession(unseenText != null ? unseenText + "\n\n" + Core.noDevicesHint() : Core.noDevicesHint());
             }
             int sk = status.i[Core.ST_STREAM_KIND];
             if (status.input() == Core.INPUT_DV && sk != lastStreamKind && (sk == Core.KIND_DV || sk == Core.KIND_HDV)) {
@@ -490,10 +516,12 @@ public final class CaptureService extends Service {
         updateWakeLock(busy);
         updateKeepAlive(session != 0 && busy && status.analog() && Settings.audioKeepAlive());
         if (busy) {
-            if (!foreground) goForeground();
+            if (!foreground && !foregroundDenied) goForeground();
             else if (SystemClock.uptimeMillis() - lastNotify >= 1000) updateOngoing();
-        } else if (foreground && !busy) {
+        } else if (foreground) {
             leaveForeground();
+        } else {
+            foregroundDenied = false;
         }
         if (listener != null) listener.onStatus(status);
         if (session != 0 || opening > 0 || closing > 0 || listener != null) {
@@ -506,8 +534,7 @@ public final class CaptureService extends Service {
             case Core.EVT_CAPTURE_ENDED:
                 if (Core.stopReasonAbnormal(a)) {
                     pendingFinished = null;
-                    boolean shown = listener != null && listenerVisible && listener.onCaptureFailed("Capture stopped", text);
-                    if (!shown) notifyResult(CH_ALERT, "Capture stopped", text);
+                    reportProblem("Capture stopped", text);
                 } else {
                     pendingFinished = text;   // a no-video event may follow right away
                     pendingAge = 0;
@@ -521,6 +548,14 @@ public final class CaptureService extends Service {
                 break;
         }
         if (listener != null) listener.onEvent(kind, a, text);
+    }
+
+    /** Shows a problem in the activity if it is visible; else a notification, and keeps it for the next visit. */
+    private void reportProblem(String title, String text) {
+        if (listener != null && listenerVisible && listener.onCaptureFailed(title, text)) return;
+        unseenTitle = title;
+        unseenText = text;
+        notifyResult(CH_ALERT, title, text);
     }
 
     private void flushPendingFinished() {
@@ -600,6 +635,11 @@ public final class CaptureService extends Service {
         } catch (RuntimeException e) {
             // e.g. the USB permission is gone: the capture still runs while the app is open
             Log.e(TAG, "startForeground failed", e);
+            if (!foregroundDenied) {
+                foregroundDenied = true;
+                reportProblem("Capture may stop in the background",
+                        "Android did not allow the capture to keep running in the background. Keep the app open until it ends.");
+            }
         }
     }
 
@@ -609,6 +649,7 @@ public final class CaptureService extends Service {
     }
 
     private void leaveForeground() {
+        foregroundDenied = false;
         if (foreground) {
             stopForeground(STOP_FOREGROUND_REMOVE);
             foreground = false;

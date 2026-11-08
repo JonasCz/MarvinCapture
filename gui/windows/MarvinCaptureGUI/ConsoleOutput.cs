@@ -2,6 +2,8 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading;
+using Microsoft.UI.Dispatching;
 using Microsoft.Win32.SafeHandles;
 using PinnacleCapture.Interop;
 
@@ -48,6 +50,63 @@ internal static partial class ConsoleOutput
             _out = null;
         }
     }
+
+    private static ConsoleCtrlHandler? _ctrlProc;   // kept alive: native code holds the pointer
+    private static DispatcherQueue? _ctrlQueue;
+    private static Action? _ctrlRelease;
+    private static int _ctrlInterrupts;
+
+    /// <summary>
+    /// When the GUI was started from a console, Ctrl+C, closing the console, logoff and shutdown end the
+    /// process without running any managed code, and the capture file stays unfinalised. This runs
+    /// <paramref name="release"/> (stop, finalise, pin_close) on the UI thread and holds the handler
+    /// until it is done, as the CLI does; Windows still ends the process after its own time limit for
+    /// the close, logoff and shutdown events. A second Ctrl+C quits at once.
+    /// </summary>
+    public static void RegisterCtrlHandler(DispatcherQueue queue, Action release)
+    {
+        _ctrlQueue = queue;
+        _ctrlRelease = release;
+        _ctrlProc ??= OnCtrl;
+        SetConsoleCtrlHandler(Marshal.GetFunctionPointerForDelegate(_ctrlProc), true);   // fails harmlessly without an attached console
+    }
+
+    private static bool OnCtrl(uint type)
+    {
+        const uint CtrlC = 0, CtrlBreak = 1, CtrlClose = 2, CtrlLogoff = 5, CtrlShutdown = 6;
+        if (type != CtrlC && type != CtrlBreak && type != CtrlClose && type != CtrlLogoff && type != CtrlShutdown)
+        {
+            return false;
+        }
+        bool interrupt = type == CtrlC || type == CtrlBreak;
+        if (interrupt && Interlocked.Increment(ref _ctrlInterrupts) >= 2)
+        {
+            Environment.Exit(130);
+        }
+        var done = new ManualResetEventSlim();
+        var release = _ctrlRelease;
+        bool queued = _ctrlQueue?.TryEnqueue(() =>
+        {
+            try { release?.Invoke(); }
+            finally { done.Set(); }
+        }) ?? false;
+        if (queued)
+        {
+            done.Wait();
+        }
+        if (interrupt)
+        {
+            Environment.Exit(130);
+        }
+        return true;
+    }
+
+    [UnmanagedFunctionPointer(CallingConvention.Winapi)]
+    private delegate bool ConsoleCtrlHandler(uint ctrlType);
+
+    [LibraryImport("kernel32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool SetConsoleCtrlHandler(nint handler, [MarshalAs(UnmanagedType.Bool)] bool add);
 
     private static TextWriter Open(SafeFileHandle h) =>
         new StreamWriter(new FileStream(h, FileAccess.Write), new UTF8Encoding(false)) { AutoFlush = true };

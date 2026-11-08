@@ -533,12 +533,18 @@ static void *pv_thread(void *arg)
         size_t len = p->pending_len;
         unsigned w = p->pending_w, h = p->pending_h;
         int is_pal = p->pending_is_pal, pid = p->pending_video_pid;
-        if (len > work_cap) {
-            uint8_t *nb = realloc(work, len);
-            if (nb) { work = nb; work_cap = len; }
+        /* The decoders may read a few bytes past the end of their input (FFmpeg's contract), so the
+         * copy has zeroed padding. A failed allocation skips this picture. */
+        int have_copy = 0;
+        if (len + AV_INPUT_BUFFER_PADDING_SIZE > work_cap) {
+            uint8_t *nb = realloc(work, len + AV_INPUT_BUFFER_PADDING_SIZE);
+            if (nb) { work = nb; work_cap = len + AV_INPUT_BUFFER_PADDING_SIZE; }
         }
-        if (work && len <= work_cap)
+        if (work && len + AV_INPUT_BUFFER_PADDING_SIZE <= work_cap) {
             memcpy(work, p->pending_buf, len);
+            memset(work + len, 0, AV_INPUT_BUFFER_PADDING_SIZE);
+            have_copy = 1;
+        }
         p->pending_kind = PV_IN_NONE; /* consumed: drop-if-busy applies to the NEXT push */
         int skipped = p->pending_skipped;
         p->pending_skipped = 0;
@@ -551,7 +557,7 @@ static void *pv_thread(void *arg)
             pthread_mutex_unlock(&p->out_mtx);
         }
 
-        if (!work)
+        if (!have_copy)
             continue;
         switch (kind) {
         case PV_IN_ANALOG: decode_analog(p, work, w, h, is_pal); break;

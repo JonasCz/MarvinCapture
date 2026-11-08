@@ -152,25 +152,51 @@ WORK_EXTRACT_DIR="${WORK_THIRD_PARTY}/ffmpeg-src/ffmpeg-${FFMPEG_VERSION}"
 # ---------------------------------------------------------------------------
 mkdir -p "${SRC_DIR}"
 
-if [[ ! -f "${TARBALL_PATH}" ]]; then
+download_tarball() {
     echo "Downloading ${FFMPEG_URL}"
+    rm -f "${TARBALL_PATH}.part"
     curl -fL --retry 3 -o "${TARBALL_PATH}.part" "${FFMPEG_URL}"
     mv "${TARBALL_PATH}.part" "${TARBALL_PATH}"
+}
+
+fresh_download=0
+if [[ ! -f "${TARBALL_PATH}" ]]; then
+    download_tarball
+    fresh_download=1
 fi
 
 echo "Verifying sha256"
 computed_sha256="$(sha256_of "${TARBALL_PATH}")"
+if [[ "${computed_sha256}" != "${FFMPEG_SHA256}" && "${fresh_download}" -eq 0 ]]; then
+    # a damaged or partial file from an earlier run: never trusted again
+    echo "build-ffmpeg.sh: cached ${TARBALL_PATH} fails its sha256; deleting it and downloading again" >&2
+    rm -f "${TARBALL_PATH}"
+    download_tarball
+    computed_sha256="$(sha256_of "${TARBALL_PATH}")"
+fi
 if [[ "${computed_sha256}" != "${FFMPEG_SHA256}" ]]; then
     echo "build-ffmpeg.sh: sha256 mismatch for ${TARBALL_PATH}" >&2
     echo "  expected: ${FFMPEG_SHA256}" >&2
     echo "  got:      ${computed_sha256}" >&2
+    rm -f "${TARBALL_PATH}"
     exit 1
 fi
 
+# Extracted next to the final folder and renamed into place only when tar finished, so an
+# interrupted extraction is never mistaken for the source tree.
 EXTRACT_DIR="${SRC_DIR}/ffmpeg-${FFMPEG_VERSION}"
 if [[ ! -d "${EXTRACT_DIR}" ]]; then
     echo "Extracting ${FFMPEG_TARBALL}"
-    tar -C "${SRC_DIR}" -xf "${TARBALL_PATH}"
+    EXTRACT_TMP="${SRC_DIR}/.extract-$$"
+    rm -rf "${EXTRACT_TMP}"
+    mkdir -p "${EXTRACT_TMP}"
+    if ! tar -C "${EXTRACT_TMP}" -xf "${TARBALL_PATH}" || [[ ! -d "${EXTRACT_TMP}/ffmpeg-${FFMPEG_VERSION}" ]]; then
+        rm -rf "${EXTRACT_TMP}"
+        echo "build-ffmpeg.sh: extracting ${TARBALL_PATH} failed" >&2
+        exit 1
+    fi
+    mv "${EXTRACT_TMP}/ffmpeg-${FFMPEG_VERSION}" "${EXTRACT_DIR}"
+    rm -rf "${EXTRACT_TMP}"
 fi
 
 # ---------------------------------------------------------------------------

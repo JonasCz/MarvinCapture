@@ -27,6 +27,7 @@
 #include "dv_error.h"
 #include "hdv_error.h"
 #include "pin_estimate.h"
+#include "pin_freeprobe.h"
 #include "pin_format_opts.h"
 #include "pin_stop.h"
 #include "pin_vidfmt.h"
@@ -2556,7 +2557,13 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
     dir_of(s->current_file, dir, sizeof(dir));
     uint64_t free_bytes = 0;
     int fat32 = 0;
-    int known = fat32_and_free(dir, &free_bytes, &fat32) == 0;
+    /* asked off the session lock: a share that has gone away must not stall the USB callbacks;
+     * until the first answer the space is unknown */
+    int known = 0;
+    if (s->free_guard && pin_freeprobe_get(s->free_guard, dir, 0.9, &free_bytes, &known, &fat32))
+        known = known != 0;
+    else
+        known = 0;
     if (s->test_free_space) {
         /* test seam PIN_TEST_FREE_SPACE: a drive with that much room when the capture began */
         pin_sink_status_t sst;
@@ -4047,6 +4054,8 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     pthread_cond_init(&s->cmd_idle, NULL);
     pthread_mutex_init(&s->evq_mtx, NULL);
     pthread_mutex_init(&s->mon_mtx, NULL);
+    s->free_status = pin_freeprobe_create(fat32_and_free);
+    s->free_guard = pin_freeprobe_create(fat32_and_free);
     s->requested_std = PIN_STD_AUTO;
     s->aspect_override = PIN_ASPECT_AUTO;
     s->tape_percent = -1;
@@ -4133,6 +4142,8 @@ void pin_session_close(pin_session_t *s)
     pthread_cond_destroy(&s->cmd_idle);
     pthread_mutex_destroy(&s->evq_mtx);
     pthread_mutex_destroy(&s->mon_mtx);
+    pin_freeprobe_release(s->free_status);
+    pin_freeprobe_release(s->free_guard);
     free(s);
 }
 
@@ -4630,18 +4641,15 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
         uint64_t free_bytes = 0;
         int free_known;
         /* Status is polled 40 times a second by the GUIs and statvfs/statfs are real syscalls (visible in
-         * the macOS GUI's profile): ask again after a second, or when the directory changed. */
-        double now_s = pin_previewer_clock();
-        if (strcmp(s->free_cache_dir, dir) == 0 && s->free_cache_t > 0 && now_s - s->free_cache_t < 1.0) {
-            free_bytes = s->free_cache_bytes;
-            free_known = s->free_cache_known;
-        } else {
-            int fat32_unused = 0;
-            free_known = fat32_and_free(dir, &free_bytes, &fat32_unused) == 0;
-            snprintf(s->free_cache_dir, sizeof(s->free_cache_dir), "%s", dir);
-            s->free_cache_bytes = free_bytes;
-            s->free_cache_known = free_known;
-            s->free_cache_t = now_s;
+         * the macOS GUI's profile): ask again after a second, or when the directory changed. The lookup
+         * runs off the session lock; pin_session_get_status() waits for a first answer outside it. */
+        int fat32_unused = 0;
+        free_known = 0;
+        if (!s->free_status ||
+            !pin_freeprobe_get(s->free_status, dir, 1.0, &free_bytes, &free_known, &fat32_unused)) {
+            free_bytes = 0;
+            free_known = 0;
+            s->free_status_first = 1;
         }
         out->disk_free_bytes = free_bytes;
         int src = 0;
@@ -4681,8 +4689,16 @@ pin_status_t pin_session_get_status(pin_session_t *s, pin_status_snapshot_t *out
     if (!s || !out) return PIN_ERR_ARG;
     pin_status_snapshot_t full;
     pin_session_lock(s);
+    s->free_status_first = 0;
     status_fill_locked(s, &full);
+    int first = s->free_status_first;
     pin_session_unlock(s);
+    if (first && s->free_status && pin_freeprobe_wait_idle(s->free_status, 300)) {
+        /* the first free-space answer of this folder arrived: fill again with it */
+        pin_session_lock(s);
+        status_fill_locked(s, &full);
+        pin_session_unlock(s);
+    }
     return status_copy_out(out, &full);
 }
 

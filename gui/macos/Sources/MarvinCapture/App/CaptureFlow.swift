@@ -38,6 +38,9 @@ enum CaptureFlow {
 
     static func start(_ model: WindowModel, playFirst: Bool) {
         guard !starting, !model.captureStartPending else { return }
+        // A number field applies a typed value only when editing ends, and a button or menu item does
+        // not take first responder: end editing first so the plan sees what the box shows.
+        _ = (NSApp.keyWindow ?? NSApp.mainWindow)?.makeFirstResponder(nil)
         starting = true
         Task { @MainActor in
             defer { starting = false }

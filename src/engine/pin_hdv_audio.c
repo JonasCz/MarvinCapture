@@ -49,6 +49,7 @@ struct pin_hdv_audio {
 
     const AVCodec *codec;
     AVCodecContext *ctx;
+    AVCodecParserContext *parser; /* cuts the stream into whole frames; keeps a frame across pushes */
     int last_pid; /* audio_pid the ctx was opened for; -1 if not open yet */
     pin_resampler_t resampler;
 
@@ -65,7 +66,6 @@ struct pin_hdv_audio {
 static size_t extract_es(pin_hdv_audio_t *a, const uint8_t *ts, size_t n_packets, int pid)
 {
     size_t out_len = 0;
-    int seen_start = 0;
     for (size_t i = 0; i < n_packets; i++) {
         const uint8_t *pkt = ts + i * HDV_TS_PKT;
         if (pkt[0] != 0x47)
@@ -86,8 +86,9 @@ static size_t extract_es(pin_hdv_audio_t *a, const uint8_t *ts, size_t n_packets
         }
         if (avail <= 0)
             continue;
+        /* Bytes before the first payload start are the tail of the frame the previous picture's
+         * packets ended in: they stay in, the parser joins them to that frame's head. */
         if (pusi) {
-            seen_start = 1;
             if (avail >= 9 && payload[0] == 0 && payload[1] == 0 && payload[2] == 1) {
                 int hdr_data_len = payload[8];
                 int skip = 9 + hdr_data_len;
@@ -99,7 +100,7 @@ static size_t extract_es(pin_hdv_audio_t *a, const uint8_t *ts, size_t n_packets
                 }
             }
         }
-        if (!seen_start || avail <= 0)
+        if (avail <= 0)
             continue;
         if (out_len + (size_t)avail + 4096 > a->es_cap) {
             size_t want = out_len + (size_t)avail + 4096;
@@ -112,6 +113,8 @@ static size_t extract_es(pin_hdv_audio_t *a, const uint8_t *ts, size_t n_packets
         memcpy(a->es_buf + out_len, payload, (size_t)avail);
         out_len += (size_t)avail;
     }
+    if (a->es_buf)   /* the parser may read past the end; the buffer always has room (see above) */
+        memset(a->es_buf + out_len, 0, AV_INPUT_BUFFER_PADDING_SIZE);
     return out_len;
 }
 
@@ -188,6 +191,10 @@ static void process_job(pin_hdv_audio_t *a, hdv_audio_job_t *job)
     if (!a->ctx || a->last_pid != job->audio_pid) {
         if (a->ctx)
             avcodec_free_context(&a->ctx);
+        if (a->parser) {
+            av_parser_close(a->parser);
+            a->parser = NULL;
+        }
         if (!a->codec)
             a->codec = avcodec_find_decoder(AV_CODEC_ID_MP2);
         if (!a->codec)
@@ -195,6 +202,11 @@ static void process_job(pin_hdv_audio_t *a, hdv_audio_job_t *job)
         a->ctx = avcodec_alloc_context3(a->codec);
         if (!a->ctx || avcodec_open2(a->ctx, a->codec, NULL) < 0)
             return;
+        a->parser = av_parser_init(AV_CODEC_ID_MP2);
+        if (!a->parser) {
+            avcodec_free_context(&a->ctx);
+            return;
+        }
         a->last_pid = job->audio_pid;
         pin_resampler_reset(&a->resampler);
     }
@@ -207,11 +219,27 @@ static void process_job(pin_hdv_audio_t *a, hdv_audio_job_t *job)
     AVFrame *frame = av_frame_alloc();
     if (!pkt || !frame)
         goto out;
-    pkt->data = a->es_buf;
-    pkt->size = (int)es_len;
-    if (avcodec_send_packet(a->ctx, pkt) == 0) {
-        while (avcodec_receive_frame(a->ctx, frame) == 0)
-            handle_frame(a, frame);
+    const uint8_t *in = a->es_buf;
+    int left = (int)es_len;
+    while (left > 0) {
+        uint8_t *out_data = NULL;
+        int out_size = 0;
+        int used = av_parser_parse2(a->parser, a->ctx, &out_data, &out_size, in, left,
+                                    AV_NOPTS_VALUE, AV_NOPTS_VALUE, 0);
+        if (used < 0)
+            break;
+        in += used;
+        left -= used;
+        if (out_size > 0) {
+            pkt->data = out_data;
+            pkt->size = out_size;
+            if (avcodec_send_packet(a->ctx, pkt) == 0) {
+                while (avcodec_receive_frame(a->ctx, frame) == 0)
+                    handle_frame(a, frame);
+            }
+        } else if (used == 0) {
+            break;
+        }
     }
 out:
     av_frame_free(&frame);
@@ -275,6 +303,8 @@ void pin_hdv_audio_destroy(pin_hdv_audio_t *a)
         free(a->queue[(a->head + i) % PIN_HDV_AUDIO_QUEUE_CAP].data);
     if (a->ctx)
         avcodec_free_context(&a->ctx);
+    if (a->parser)
+        av_parser_close(a->parser);
     free(a->es_buf);
     pthread_mutex_destroy(&a->mtx);
     pthread_cond_destroy(&a->cond);

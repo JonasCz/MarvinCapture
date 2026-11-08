@@ -72,7 +72,7 @@ static void make_slice(const char *src_path, const char *dst_path)
 static void check_format(pin_session_t *s, int w, int h, int fps_num, int fps_den, int interlaced,
                          const char *label)
 {
-    pin_status_snapshot_t snap;
+    pin_status_snapshot_t snap = { 0 };   /* size 0 = this header's sizeof */
     for (int i = 0; i < 100; i++) {
         pin_get_status(s, &snap);
         if (snap.stream_kind == PIN_KIND_HDV && snap.video_label[0])
@@ -106,7 +106,7 @@ int main(int argc, char **argv)
 
     /* Wait for the stream kind to settle to HDV (a few PAT/PMT + picture
      * units in). */
-    pin_status_snapshot_t snap;
+    pin_status_snapshot_t snap = { 0 };
     int is_hdv = 0;
     for (int i = 0; i < 100; i++) {
         pin_get_status(s, &snap);

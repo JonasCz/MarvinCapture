@@ -257,6 +257,31 @@ $lic = Join-Path $outDir 'LICENSE.txt'
 $licText = [IO.File]::ReadAllText((Join-Path $root 'LICENSE')) -replace "`r?`n", "`r`n"
 [IO.File]::WriteAllText($lic, $licText, (New-Object Text.UTF8Encoding($false)))
 
+# The uninstaller removes exactly the files the installer puts down (NSIS "File /r" has no list of
+# its own), so a folder the user chose and filled with captures keeps everything else.
+$ulist = Join-Path $outDir 'uninstall-files.nsh'
+$ufiles = New-Object Collections.Generic.List[string]
+$udirs = New-Object Collections.Generic.HashSet[string]
+$distFull = (Resolve-Path $dist).Path.TrimEnd('\')
+foreach ($f in Get-ChildItem $dist -Recurse -File | Where-Object { $_.Extension -ne '.pdb' }) {
+    $ufiles.Add($f.FullName.Substring($distFull.Length + 1))
+}
+$ufiles.Add('installer\driver-install.ps1'); $ufiles.Add('installer\driver-uninstall.ps1'); $ufiles.Add('installer\path-edit.ps1')
+$ufiles.Add('driver\' + (Split-Path $wdiExe -Leaf))
+$wdiDocsFull = (Resolve-Path $wdiDocs).Path.TrimEnd('\')
+foreach ($f in Get-ChildItem $wdiDocs -Recurse -File) { $ufiles.Add('driver\' + $f.FullName.Substring($wdiDocsFull.Length + 1)) }
+$ufiles.Add('uninstall.exe')
+foreach ($rel in $ufiles) {
+    if ($rel -match '["\r\n]') { throw "cannot list $rel in the uninstaller" }
+    $d = Split-Path $rel -Parent
+    while ($d) { [void]$udirs.Add($d); $d = Split-Path $d -Parent }
+}
+$lines = New-Object Collections.Generic.List[string]
+foreach ($rel in $ufiles) { $lines.Add('  Delete "$INSTDIR\' + $rel.Replace('$', '$$') + '"') }
+# deepest first; RMDir without /r leaves a folder that still holds something else
+foreach ($d in ($udirs | Sort-Object { $_.Length } -Descending)) { $lines.Add('  RMDir "$INSTDIR\' + $d.Replace('$', '$$') + '"') }
+[IO.File]::WriteAllLines($ulist, $lines, (New-Object Text.UTF8Encoding($false)))
+
 $nsisArgs = @(
     '/V2',
     "/DVERSION=$version",
@@ -267,7 +292,8 @@ $nsisArgs = @(
     "/DLICENSE_FILE=$lic",
     "/DOUTFILE=$out",
     "/DWDI_SIMPLE=$wdiExe",
-    "/DWDI_DOCS=$wdiDocs"
+    "/DWDI_DOCS=$wdiDocs",
+    "/DUNINSTALL_LIST=$ulist"
 )
 $nsisArgs += (Join-Path $src 'MarvinCapture.nsi')
 Run $nsis $nsisArgs

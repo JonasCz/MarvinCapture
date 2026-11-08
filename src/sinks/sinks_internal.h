@@ -23,6 +23,7 @@
 #define SINKS_INTERNAL_H
 
 #include "pin_sink.h"
+#include "../core/pin_cond.h"
 
 #include <errno.h>
 #include <pthread.h>
@@ -35,47 +36,6 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-/* A condition variable for pin_cond_timedwait(): the wait runs on the monotonic clock, so a
- * wall-clock step (NTP, the user setting the time) cannot end it early or late. macOS has no
- * pthread_condattr_setclock(); its relative wait is monotonic already. Where the clock cannot
- * be set the plain variable is used and the wait falls back to the wall clock. */
-#if !defined(__APPLE__)
-static inline int *pin_cond_mono_flag(void)
-{
-    static int ok = 1;      /* per translation unit; init and wait are in the same one */
-    return &ok;
-}
-#endif
-static inline void pin_cond_init_timed(pthread_cond_t *c)
-{
-#if !defined(__APPLE__)
-    pthread_condattr_t a;
-    if (pthread_condattr_init(&a) == 0) {
-        if (pthread_condattr_setclock(&a, CLOCK_MONOTONIC) == 0 && pthread_cond_init(c, &a) == 0) {
-            pthread_condattr_destroy(&a);
-            return;
-        }
-        pthread_condattr_destroy(&a);
-    }
-    *pin_cond_mono_flag() = 0;
-#endif
-    pthread_cond_init(c, NULL);
-}
-
-/* Waits up to `seconds` for c (mutex m held). Returns ETIMEDOUT or 0. */
-static inline int pin_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m, int seconds)
-{
-#if defined(__APPLE__)
-    struct timespec rel = { .tv_sec = seconds, .tv_nsec = 0 };
-    return pthread_cond_timedwait_relative_np(c, m, &rel);
-#else
-    struct timespec ts;
-    clock_gettime(*pin_cond_mono_flag() ? CLOCK_MONOTONIC : CLOCK_REALTIME, &ts);
-    ts.tv_sec += seconds;
-    return pthread_cond_timedwait(c, m, &ts);
-#endif
-}
 
 pin_sink_t *sink_raw_create(void);
 pin_sink_t *sink_nut_create(void);        /* analog to stdout: NUT, YUY2 + PCM */

@@ -205,10 +205,10 @@ struct pin_session {
     pin_capture_opts_t output_hint; /* pin_set_output_hint(): format/path while READY, for
                                         est_seconds_left before a capture actually starts */
     int have_output_hint;
-    char free_cache_dir[PIN_PATH_MAX]; /* pin_session_get_status(): free-space lookup, kept ~1 s */
-    uint64_t free_cache_bytes;
-    int free_cache_known;      /* the lookup worked (free_cache_bytes means something) */
-    double free_cache_t;
+    /* Free-space lookups run off the session lock (pin_freeprobe.h): one for pin_session_get_status(),
+     * one for capture_guard(), which asks about different directories. */
+    struct pin_freeprobe *free_status, *free_guard;
+    int free_status_first;     /* get_status() found no result yet: it waits briefly, outside the lock */
     /* not yet committed raw units (DV frames, HDV pictures, PAT/PMT), so a confirmed scene cut
      * can be back-dated to its first frame (pin_holdback.h; zeroed = not initialised) */
     pin_holdback_t hold;

@@ -30,7 +30,7 @@ Modern, native GUIs for Windows and Mac, plus a flexible command-line applicatio
 * Composite / S-video capture, to uncompressed AVI or FFV1 + FLAC in MKV. YUY2 video (4:2:2, 8-bit) and 48 kHz stereo PCM, 16-bit.
 * Scene-splitting by timecode (DV/HDV)
 * Auto-stop (timeout) on no input signal signal (DV/HDV/analog)
-* Auto-stop after total time captured (DV/HDV/analog)
+* Auto-stop after a time limit per pass (DV/HDV/analog)
 * Automatic multiple capture-passes, intended for use with tools such as [DVrescue's DVmerge](https://mipops.github.io/dvrescue/sections/merge.html) allowing for error reduction by picking error free blocks from multiple captures. (DV/HDV)
 * Deck control, FF, REW, Play, Pause, (DV/HDV)
 * Manual capture withoug use of deck control. (DV/HDV/analog)

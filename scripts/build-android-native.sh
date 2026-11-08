@@ -114,17 +114,41 @@ LIBUSB_SRC_DIR="${ROOT}/third_party/libusb-src"
 fetch_libusb() {
     mkdir -p "${LIBUSB_SRC_DIR}"
     local tarball="${LIBUSB_SRC_DIR}/${LIBUSB_TARBALL}"
-    if [[ ! -f "${tarball}" ]]; then
+    local fresh=0 got
+    download_libusb() {
         echo "Downloading ${LIBUSB_URL}"
+        rm -f "${tarball}.part"
         curl -fL --retry 3 -o "${tarball}.part" "${LIBUSB_URL}"
         mv "${tarball}.part" "${tarball}"
+    }
+    if [[ ! -f "${tarball}" ]]; then
+        download_libusb
+        fresh=1
     fi
-    local got
     got="$(sha256_of "${tarball}")"
-    [[ "${got}" == "${LIBUSB_SHA256}" ]] ||
+    if [[ "${got}" != "${LIBUSB_SHA256}" && "${fresh}" -eq 0 ]]; then
+        # a damaged or partial file from an earlier run: never trusted again
+        echo "cached ${tarball} fails its sha256; deleting it and downloading again" >&2
+        rm -f "${tarball}"
+        download_libusb
+        got="$(sha256_of "${tarball}")"
+    fi
+    if [[ "${got}" != "${LIBUSB_SHA256}" ]]; then
+        rm -f "${tarball}"
         die "sha256 mismatch for ${tarball}: expected ${LIBUSB_SHA256}, got ${got}"
+    fi
+    # extracted aside and renamed into place only when tar finished: an interrupted extraction
+    # must not leave a half tree that the next run trusts
     if [[ ! -d "${LIBUSB_SRC_DIR}/libusb-${LIBUSB_VERSION}" ]]; then
-        tar -C "${LIBUSB_SRC_DIR}" -xjf "${tarball}"
+        local tmp="${LIBUSB_SRC_DIR}/.extract-$$"
+        rm -rf "${tmp}"
+        mkdir -p "${tmp}"
+        if ! tar -C "${tmp}" -xjf "${tarball}" || [[ ! -d "${tmp}/libusb-${LIBUSB_VERSION}" ]]; then
+            rm -rf "${tmp}"
+            die "extracting ${tarball} failed"
+        fi
+        mv "${tmp}/libusb-${LIBUSB_VERSION}" "${LIBUSB_SRC_DIR}/libusb-${LIBUSB_VERSION}"
+        rm -rf "${tmp}"
     fi
 }
 

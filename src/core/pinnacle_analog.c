@@ -25,6 +25,7 @@
 
 #include "pinnacle_analog.h"
 #include "pinnacle_cfg.h"
+#include "pin_cond.h"
 #include "pin_log.h"
 #include "pin_thread_boost.h"
 
@@ -890,14 +891,8 @@ static void *deliver_thread(void *arg)
             if (r)
                 d->stop = 1;
         } else if (d->ihead == d->itail && !d->closing) {
-            struct timespec ts;
-            clock_gettime(CLOCK_REALTIME, &ts);
-            ts.tv_nsec += TICK_MS * 1000000L;
-            if (ts.tv_nsec >= 1000000000L) {
-                ts.tv_sec++;
-                ts.tv_nsec -= 1000000000L;
-            }
-            pthread_cond_timedwait(&d->wake, &d->lock, &ts);
+            /* monotonic: a wall-clock step back would stall the tick (idle stop, time limit) */
+            pin_cond_timedwait_ms(&d->wake, &d->lock, TICK_MS);
         }
     }
     pthread_mutex_unlock(&d->lock);
@@ -929,7 +924,7 @@ static int deliver_start(deliver_t *d, const pinnacle_capture_sink_t *sink, size
         if (!(d->abuf[i] = malloc(audio_bytes)))
             goto fail;
     pthread_mutex_init(&d->lock, NULL);
-    pthread_cond_init(&d->wake, NULL);
+    pin_cond_init_timed(&d->wake);
     pthread_cond_init(&d->space, NULL);
     d->started = 1;
     if (pthread_create(&d->thread, NULL, deliver_thread, d) != 0)

@@ -69,7 +69,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 command -v gh >/dev/null 2>&1 || die "the GitHub CLI (gh) is not installed"
 command -v jq >/dev/null 2>&1 || die "jq is not installed"
 
-VERSION="$(jq -r .version "${ROOT}/VERSION")"
+VERSION="$(jq -r '.version // empty' "${ROOT}/VERSION")"
+[[ -n "${VERSION}" && "${VERSION}" != null ]] || die "VERSION has no \"version\" key"
 TAG="v${VERSION}"
 COMMIT="$(git -C "${ROOT}" rev-parse HEAD)"
 REPO="$(gh repo view ${REPO_ARGS[@]+"${REPO_ARGS[@]}"} --json nameWithOwner --jq .nameWithOwner)"
@@ -93,6 +94,25 @@ fi
 shopt -s nullglob
 FILES=("${DIR}"/*.exe "${DIR}"/*.pkg "${DIR}"/*.deb "${DIR}"/*.apk)
 [[ ${#FILES[@]} -gt 0 ]] || die "no installers (*.exe, *.pkg, *.deb, *.apk) in ${DIR}"
+
+# Every installer must be of this version (a leftover from an older build in DIR would be
+# published under the new tag), and a platform without one is only a warning: the Build
+# workflow can build a subset.
+for f in "${FILES[@]}"; do
+    b="$(basename "${f}")"
+    case "${b}" in
+        *[-_]"${VERSION}"[-_.]*) ;;
+        *) die "${b} does not carry version ${VERSION} in its name: remove it from ${DIR}, or bump VERSION" ;;
+    esac
+done
+for want in "windows-x86_64-setup.exe" "windows-arm64-setup.exe" "macos-arm64.pkg" "macos-x86_64.pkg" \
+            "_amd64.deb" "_arm64.deb" "-android.apk"; do
+    found=0
+    for f in "${FILES[@]}"; do
+        [[ "$(basename "${f}")" == *"${want}" ]] && found=1
+    done
+    [[ "${found}" -eq 1 ]] || echo "warning: no installer matching *${want} in ${DIR}: ${TAG} is released without it" >&2
+done
 
 # apksigner: on PATH, else the newest one in the SDK's build-tools
 APKS=("${DIR}"/*.apk)

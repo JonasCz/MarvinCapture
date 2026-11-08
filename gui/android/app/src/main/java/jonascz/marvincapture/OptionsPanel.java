@@ -469,7 +469,7 @@ final class OptionsPanel extends LinearLayout {
         parent.addView(Ui.label(c, "Stop after no signal for"));
         parent.addView(lock(minutesSpinner(IDLE_PRESETS, Settings.idleStop(kind), m -> Settings.setInt("gui.idle_" + kk, m))),
                 Ui.fillWidth());
-        parent.addView(Ui.label(c, "Stop after a total time of"));
+        parent.addView(Ui.label(c, "Stop each pass after"));
         parent.addView(lock(minutesSpinner(DURATION_PRESETS, Settings.maxDuration(kind),
                 m -> Settings.setInt("gui.duration_" + kk, m))), Ui.fillWidth());
     }

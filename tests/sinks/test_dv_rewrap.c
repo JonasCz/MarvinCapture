@@ -556,6 +556,58 @@ static void run_one(const char *trace_path, const char *tag)
     free(frames.lens);
 }
 
+/* N5: frames held back (no audio yet) keep their own length when a frame of the other standard
+ * ends the hold. Writes DV_HOLD_MAX - 1 NTSC frames without audio, then a PAL frame, and checks
+ * the sizes of the video packets in the file. */
+static void run_mixed_hold(const char *ntsc_trace, const char *pal_trace)
+{
+    collect_ctx_t n = { 0 }, p = { 0 };
+    reassemble(ntsc_trace, "test_dv_mixh_n.dv", &n);
+    reassemble(pal_trace, "test_dv_mixh_p.dv", &p);
+    const size_t nlen = (size_t)DV_SEQ_COUNT_NTSC * DV_SEQ_SIZE, plen = (size_t)DV_SEQ_COUNT_PAL * DV_SEQ_SIZE;
+    collect_ctx_t c = { 0 };
+    for (size_t i = 0; i < n.n && c.n < DV_HOLD_MAX - 1; i++)
+        if (n.lens[i] == nlen) {
+            on_unit(0, n.frames[i], n.lens[i], &c);
+            blank_audio(c.frames[c.n - 1], c.lens[c.n - 1]);
+        }
+    CHECK_EQ_I((int64_t)c.n, DV_HOLD_MAX - 1);
+    for (size_t i = 0; i < p.n; i++)
+        if (p.lens[i] == plen) {
+            on_unit(0, p.frames[i], p.lens[i], &c);
+            blank_audio(c.frames[c.n - 1], c.lens[c.n - 1]);
+            break;
+        }
+    CHECK_EQ_I((int64_t)c.n, DV_HOLD_MAX);
+    pin_sink_params_t params = { 0 };
+    params.width = 720;
+    params.height = 480;
+    params.fps_num = 30000;
+    params.fps_den = 1001;
+    params.kind = PIN_KIND_DV;
+    write_via_sink(PIN_FMT_DV_AVI, "test_dv_mixed_hold.avi", &params, &c);
+    AVFormatContext *fc = NULL;
+    CHECK(avformat_open_input(&fc, "test_dv_mixed_hold.avi", NULL, NULL) == 0);
+    AVPacket *pkt = av_packet_alloc();
+    size_t k = 0;
+    while (fc && av_read_frame(fc, pkt) >= 0) {
+        if (fc->streams[pkt->stream_index]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            CHECK_EQ_I((int64_t)pkt->size, (int64_t)c.lens[k]);
+            k++;
+        }
+        av_packet_unref(pkt);
+    }
+    CHECK_EQ_I((int64_t)k, DV_HOLD_MAX);
+    av_packet_free(&pkt);
+    avformat_close_input(&fc);
+    for (size_t i = 0; i < c.n; i++) free(c.frames[i]);
+    free(c.frames); free(c.lens);
+    for (size_t i = 0; i < n.n; i++) free(n.frames[i]);
+    free(n.frames); free(n.lens);
+    for (size_t i = 0; i < p.n; i++) free(p.frames[i]);
+    free(p.frames); free(p.lens);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);   /* <pal-trace> <ntsc-trace> */
@@ -563,6 +615,7 @@ int main(int argc, char **argv)
         return 0;
     run_one(argv[1], "pal");
     run_one(argv[2], "ntsc");
+    run_mixed_hold(argv[2], argv[1]);
     printf("OK\n");
     return 0;
 }

@@ -92,3 +92,8 @@ endif()
 add_test(NAME test_hwenc_sink COMMAND test_hwenc_sink
     "${PIN_TEST_DATA}/ep88-pal.bin" "${PIN_TEST_DATA}/dv-ntsc.dv")
 set_tests_properties(test_hwenc_sink PROPERTIES TIMEOUT 300 FIXTURES_REQUIRED pin_test_data)
+
+# HDV monitor audio: an MP2 frame across a picture boundary (includes the module's source)
+add_executable(test_hdv_audio test_hdv_audio.c)
+target_link_libraries(test_hdv_audio PRIVATE pinnacle_sinks pinnacle_engine_pure)
+add_test(NAME test_hdv_audio COMMAND test_hdv_audio)

@@ -102,6 +102,7 @@ typedef struct {
     int header_written;
     int64_t vpts;
     uint8_t *hold[DV_HOLD_MAX]; /* frames held back until one has audio */
+    size_t hold_len[DV_HOLD_MAX]; /* each held frame's own length (NTSC and PAL differ) */
     int nhold;
     int fault_io;             /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
 
@@ -503,7 +504,7 @@ static pin_status_t dv_put_video(rewrap_priv_t *p, const uint8_t *data, size_t l
 }
 
 /* Writes the header if it is not out, then the held frames. */
-static pin_status_t dv_flush_hold(rewrap_priv_t *p, size_t len)
+static pin_status_t dv_flush_hold(rewrap_priv_t *p)
 {
     pin_status_t rc = PIN_OK;
     if (!p->header_written) {
@@ -517,7 +518,7 @@ static pin_status_t dv_flush_hold(rewrap_priv_t *p, size_t len)
     }
     for (int i = 0; i < p->nhold; i++) {
         if (rc == PIN_OK)
-            rc = dv_put_video(p, p->hold[i], len);
+            rc = dv_put_video(p, p->hold[i], p->hold_len[i]);
         free(p->hold[i]);
         p->hold[i] = NULL;
     }
@@ -547,13 +548,14 @@ static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len
             if (!copy)
                 return PIN_ERR_NOMEM;
             memcpy(copy, data, len);
+            p->hold_len[p->nhold] = len;
             p->hold[p->nhold++] = copy;
             return arc;
         }
         pin_logf(PIN_LOG_WARN, "sink_rewrap: no audio in the first %d DV frames; the file has none\n",
                  DV_HOLD_MAX);
     }
-    pin_status_t rc = dv_flush_hold(p, len);
+    pin_status_t rc = dv_flush_hold(p);
     if (rc != PIN_OK)
         return rc;
     rc = dv_put_video(p, data, len);
@@ -567,8 +569,7 @@ static pin_status_t dv_close(pin_sink_t *s)
     if (p->fmt) {
         if (!p->header_written && p->nhold && p->fmt->pb) {
             /* a short capture without audio: the held frames still go in */
-            if (dv_flush_hold(p, p->params.height == 576 ? DV_SEQ_COUNT_PAL * DV_SEQ_SIZE
-                                                         : DV_SEQ_COUNT_NTSC * DV_SEQ_SIZE) != PIN_OK)
+            if (dv_flush_hold(p) != PIN_OK)
                 rc = PIN_ERR_IO;
         }
         if (!p->header_written && p->fmt->pb) {

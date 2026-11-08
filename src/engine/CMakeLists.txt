@@ -26,6 +26,7 @@ add_library(pinnacle_engine_pure STATIC
     dv_error.c
     hdv_error.c
     pin_estimate.c
+    pin_freeprobe.c
     pin_format_opts.c
     pin_stop.c
     pin_vidfmt.c
@@ -47,6 +48,8 @@ add_library(pinnacle_engine_pure STATIC
 
 target_include_directories(pinnacle_engine_pure PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(pinnacle_engine_pure PUBLIC c_std_11)
+find_package(Threads REQUIRED)
+target_link_libraries(pinnacle_engine_pure PUBLIC Threads::Threads)
 
 if(WIN32)
     target_link_libraries(pinnacle_engine_pure PUBLIC shell32 ole32)
@@ -81,6 +84,7 @@ if(PIN_BUILD_TESTS)
     pinnacle_engine_test(test_dv_error)
     pinnacle_engine_test(test_hdv_error)
     pinnacle_engine_test(test_pin_estimate)
+    pinnacle_engine_test(test_pin_freeprobe)
     pinnacle_engine_test(test_pin_format_opts)
     pinnacle_engine_test(test_pin_stop)
     pinnacle_engine_test(test_pin_vidfmt)

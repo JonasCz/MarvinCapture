@@ -303,7 +303,7 @@ public unsafe struct PinStatusSnapshot
 
     // Appended later: seconds until the capture stops by itself, -1 = no such limit / not capturing.
     public double IdleStopRemainingS;   // the no-signal timeout (counts down while there is no signal)
-    public double DurationRemainingS;   // the total capture time limit
+    public double DurationRemainingS;   // the capture time limit of the current pass (restarts with each pass)
 
     // Appended later: frame error statistics (see pin_api.h for what counts as an error).
     // Frames / FramesDropped / FramesError are the totals (since capture start, or session start

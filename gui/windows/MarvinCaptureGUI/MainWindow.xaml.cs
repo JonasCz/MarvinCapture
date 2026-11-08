@@ -12,6 +12,7 @@ using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using PinnacleCapture.Controls;
 using PinnacleCapture.Interop;
@@ -72,6 +73,7 @@ public sealed partial class MainWindow : Window
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _taskbar = new TaskbarButton(_hwnd);
         _sessionEnd = new SessionEndGuard(_hwnd, () => VM.IsCapturing, ReleaseSession);
+        ConsoleOutput.RegisterCtrlHandler(DispatcherQueue, ReleaseSession);
         // Raised inside the window procedure: handle on the next dispatcher turn.
         _taskbar.StartClicked += () => DispatcherQueue.TryEnqueue(() => _ = TaskbarStartAsync());
         _taskbar.StopClicked += () => DispatcherQueue.TryEnqueue(TaskbarStop);
@@ -636,11 +638,35 @@ public sealed partial class MainWindow : Window
         _taskbarStartBusy = true; // a double click must not queue a second start behind a dialog
         try
         {
+            CommitFocusedNumberBox();
             await StartCaptureAsync(playFirst: false);
         }
         finally
         {
             _taskbarStartBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// A NumberBox applies a typed value on Enter or focus loss; a click on the thumbnail button
+    /// moves no focus, so the idle / duration limit would still be the old one when the capture starts.
+    /// </summary>
+    private void CommitFocusedNumberBox()
+    {
+        if (Content?.XamlRoot is not { } xr || FocusManager.GetFocusedElement(xr) is not TextBox tb)
+        {
+            return;
+        }
+        for (DependencyObject? d = tb; d is not null; d = VisualTreeHelper.GetParent(d))
+        {
+            if (d is NumberBox nb)
+            {
+                if (double.TryParse(tb.Text, NumberStyles.Float, CultureInfo.CurrentCulture, out var v))
+                {
+                    nb.Value = Math.Clamp(Math.Round(v), nb.Minimum, nb.Maximum);
+                }
+                return;
+            }
         }
     }
 
