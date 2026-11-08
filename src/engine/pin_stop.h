@@ -77,6 +77,13 @@ void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *d
 void pin_stop_message_no_video(pin_stop_reason_t reason, const char *path, const char *detail,
                                char *out, size_t cap);
 
+/* The reason and wording for a capture whose writer failed (the file's sink reported
+ * last_error). A codec error of a sink that encodes (H.264 / HEVC, FFV1), or of the HDV
+ * repair that cannot keep up or fails, is PIN_STOP_ERROR with its own sentence in detail;
+ * anything else is PIN_STOP_WRITE_ERROR with an empty detail. */
+pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_error,
+                                          int reencode_behind, char *detail, size_t cap);
+
 #ifdef __cplusplus
 }
 #endif

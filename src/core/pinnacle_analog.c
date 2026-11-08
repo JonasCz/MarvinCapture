@@ -1244,6 +1244,11 @@ static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
             return 0;   /* older than where output started */
         s->audio_started = 1;
     }
+    /* At a user's stop, an audio packet lost just before the last frame is not filled: a later
+     * packet that is already past the last frame ends the drain here, before the gap check
+     * below. The file then ends with a packet (about one frame) less audio than video; that
+     * small loss is accepted. The 300 ms timeout in assembler_cb() does pad, as no later packet
+     * is there to show where the audio stopped. */
     if (s->draining && (uint16_t)(seq - s->last_vseq - 1) < 0x8000) {
         s->audio_done = 1;   /* past the last delivered frame */
         return 0;

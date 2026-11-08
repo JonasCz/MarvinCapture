@@ -20,6 +20,7 @@
 #include <ctype.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* dirent.h is provided by MSYS2/mingw-w64 (our Windows toolchain) as well
  * as every POSIX system, so this one header covers all three target
@@ -131,6 +132,31 @@ int pin_naming_validate(const char *path, char *reason, size_t reason_size)
         return 0;
     }
     return 1;
+}
+
+int pin_naming_folder_exists(const char *path, char *reason, size_t reason_size)
+{
+    if (!path)
+        return 0;
+    char dir[1024];
+    const char *sep = NULL;
+    for (const char *p = path; *p; p++)
+        if (is_sep(*p))
+            sep = p;
+    /* no folder part, the root, or a bare drive (C:\x): nothing to look up */
+    if (!sep || sep == path || sep[-1] == ':')
+        return 1;
+    size_t n = (size_t)(sep - path);
+    if (n >= sizeof(dir))
+        return 1; /* too long to look at; opening the file reports it */
+    memcpy(dir, path, n);
+    dir[n] = 0;
+    struct stat st;
+    if (stat(dir, &st) == 0 && (st.st_mode & S_IFDIR))
+        return 1;
+    if (reason && reason_size)
+        snprintf(reason, reason_size, "The folder %.300s does not exist", dir);
+    return 0;
 }
 
 int pin_naming_strip_extension(const char *base_path, const char *known_ext, char *out,

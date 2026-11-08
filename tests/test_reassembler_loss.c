@@ -264,6 +264,59 @@ static void test_pal(void)
     CHECK_EQ(g.first[3][0], FILL(4));
 }
 
+/* feeds `frames` PAL frames (the fill of frame f is first + f) in USB-sized pieces */
+static void feed_frames(dv_reassembler_t *r, int frames, int first)
+{
+    ep88_synth_t w;
+    memset(&w, 0, sizeof(w));
+    uint8_t seq[EP88_SEQ_BYTES];
+    for (int f = 0; f < frames; f++) {
+        for (unsigned d = 0; d < 12; d++) {
+            ep88_make_seq(seq, d, 1, FILL(first + f));
+            ep88_sequence(&w, seq, 0);
+        }
+    }
+    for (size_t off = 0; off < w.len;) {
+        size_t k = w.len - off < 16384 ? w.len - off : 16384;
+        CHECK(dv_reassembler_feed(r, w.data + off, k) == 0);
+        off += k;
+    }
+    free(w.data);
+}
+
+/* A pass ends and the tape starts over: restart() emits the frame still being held, and the
+ * data after it is not glued to, and does not push out, anything from before. */
+static void test_restart_and_discard(void)
+{
+    for (int discard = 0; discard < 2; discard++) {
+        got_t g;
+        memset(&g, 0, sizeof(g));
+        dv_output_t out = { .write = on_write, .on_loss = on_loss, .user = &g };
+        dv_reassembler_t r;
+        CHECK(dv_reassembler_init(&r, &out) == 0);
+        feed_frames(&r, 3, 0);
+        CHECK_EQ(g.frames, 2);                 /* the third waits for the next frame */
+        if (discard) {
+            CHECK(dv_reassembler_discard(&r) == 0);
+            CHECK_EQ(g.frames, 2);             /* dropped, nothing emitted */
+        } else {
+            CHECK(dv_reassembler_restart(&r) == 0);
+            CHECK_EQ(g.frames, 3);             /* emitted now, into the pass it belongs to */
+            CHECK_EQ(g.first[2][0], FILL(2));
+        }
+        int before = g.frames;
+        feed_frames(&r, 3, 10);
+        CHECK_EQ(g.frames, before + 2);
+        CHECK_EQ(g.first[before][0], FILL(10)); /* the new data starts the next file's first frame */
+        for (int d = 0; d < 12; d++)
+            CHECK_EQ(g.first[before][d], FILL(10));
+        CHECK_EQ(r.frames_lost, 0);
+        CHECK_EQ(g.loss_frames, 0);
+        dv_reassembler_finish(&r);
+        CHECK_EQ(g.frames, before + 3);
+    }
+}
+
 int main(void)
 {
     test_clean();
@@ -274,6 +327,7 @@ int main(void)
     test_hybrid_contiguous();
     test_tail_then_whole();
     test_pal();
+    test_restart_and_discard();
     printf("OK: lost frames counted, lost starts and hybrids padded\n");
     return 0;
 }

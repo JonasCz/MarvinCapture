@@ -193,6 +193,30 @@ static void test_validate(void)
     CHECK(pin_naming_validate(longname, why, sizeof(why)) == 0, "too long");
 }
 
+static void test_folder_exists(void)
+{
+    const char *dir = "pin_naming_test_dir";
+    MKDIR(dir);
+    char path[300], why[400] = "";
+    snprintf(path, sizeof(path), "%s/capture.dv", dir);
+    CHECK(pin_naming_folder_exists(path, why, sizeof(why)) == 1, "an existing folder");
+    snprintf(path, sizeof(path), "%s/no_such_folder/capture.dv", dir);
+    CHECK(pin_naming_folder_exists(path, why, sizeof(why)) == 0, "a missing folder");
+    CHECK(strstr(why, "no_such_folder") != NULL && strstr(why, "does not exist") != NULL,
+          "the reason names the folder");
+    CHECK(pin_naming_folder_exists("capture.dv", NULL, 0) == 1, "no folder part: the current one");
+    CHECK(pin_naming_folder_exists("/capture.dv", NULL, 0) == 1, "the root");
+    CHECK(pin_naming_folder_exists("C:\\capture.dv", NULL, 0) == 1, "a drive root");
+    char file[300];
+    snprintf(file, sizeof(file), "%s/afile", dir);
+    FILE *f = fopen(file, "wb");
+    if (f)
+        fclose(f);
+    snprintf(path, sizeof(path), "%s/afile/x.dv", dir);
+    CHECK(pin_naming_folder_exists(path, NULL, 0) == 0, "a file is not a folder");
+    remove(file);
+}
+
 static void test_low_space(void)
 {
     CHECK(pin_output_space_low(0) == 0, "unknown free space is not low");
@@ -208,6 +232,7 @@ int main(void)
     test_build();
     test_collides();
     test_validate();
+    test_folder_exists();
     test_low_space();
 
     if (g_failures == 0) {

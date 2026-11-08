@@ -113,6 +113,12 @@ static int consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, si
     return s->write_unit(s, data, len) == PIN_OK ? 0 : -1;
 }
 
+static int consume_slow(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, size_t len, void *user)
+{
+    sleep_ms(50);   /* the disk is behind: the queue in front of it fills */
+    return consume(kind, index, data, len, user);
+}
+
 typedef struct {
     pthread_mutex_t lock;
     char order[32][16];
@@ -195,6 +201,23 @@ int main(void)
     CHECK(pin_closer_take_failure(c, &fst, fpath, sizeof(fpath)) == 2, "taken: two");
     CHECK(fst == PIN_ERR_IO && strcmp(fpath, "bad1") == 0, "the first failure is kept");
     CHECK(pin_closer_failures(c) == 0 && pin_closer_take_failure(c, NULL, NULL, 0) == 0, "cleared");
+
+    /* a writer that overflowed (fatal mode) before the hand-over: the file lacks the refused
+     * units, so its close fails although the sink closed fine */
+    pin_sink_t *ov = fake_sink(0);
+    pin_writer_t *wov = pin_writer_start_ex(250, consume_slow, ov, PIN_WRITER_OVERFLOW_FATAL);
+    int accepted = 0;
+    for (int i = 0; i < 6; i++)
+        accepted += pin_writer_push(wov, PIN_UNIT_RAW, (uint64_t)i, buf, sizeof(buf));
+    CHECK(accepted < 6, "the queue overflowed");
+    pin_closer_submit(c, wov, ov, "overflowed", 1, 0, 0, 0, NULL);
+    pin_sink_t *okw = fake_sink(0);
+    pin_writer_t *wok = pin_writer_start_ex(250, consume, okw, PIN_WRITER_OVERFLOW_FATAL);
+    CHECK(pin_writer_push(wok, PIN_UNIT_RAW, 0, buf, sizeof(buf)) == 1, "a unit that fits");
+    pin_closer_submit(c, wok, okw, "no_overflow", 1, 0, 0, 0, NULL);
+    pin_closer_wait(c);
+    CHECK(pin_closer_take_failure(c, &fst, fpath, sizeof(fpath)) == 1 && fst == PIN_ERR_IO &&
+              strcmp(fpath, "overflowed") == 0, "an overflowed writer is a failed close, and only that one");
 
     /* the test seam: the n-th file closed fails */
     pin_closer_t *c2 = pin_closer_create(on_done, &log);

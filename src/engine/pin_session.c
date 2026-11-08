@@ -1516,12 +1516,18 @@ static void adopt_renumbered_file(pin_session_t *s)
     s->scene_index += k;
 }
 
-/* A file could not be opened: during a capture (a scene split, the next pass) that ends the
- * capture and stops the deck; then the session is in ERROR. Caller holds the lock. */
+/* A file could not be opened: for a capture (its first file, a scene split, the next pass)
+ * that ends the capture and stops the deck, which has been sent PLAY by then; then the
+ * session is in ERROR. s->sink is NULL here. Caller holds the lock. */
 static void open_failed(pin_session_t *s, pin_status_t st, const char *text)
 {
     if (s->capture_began) {
-        capture_report_end(s, PIN_STOP_WRITE_ERROR, "the next output file could not be created");
+        /* The earlier files may still be draining to a slow disk: waiting for them with the
+         * lock held would freeze every status call meanwhile. */
+        closer_drain_unlocked(s);
+        capture_report_end(s, PIN_STOP_WRITE_ERROR,
+                           s->opening_first_file ? "the output file could not be created"
+                                                 : "the next output file could not be created");
         if (s->capture_opts.start_deck && s->dev.camera_node)
             deck_send(s, s->dev.camera_node, PIN_DECK_CMD_STOP);
     }
@@ -1621,9 +1627,9 @@ static void open_sink_for_scene(pin_session_t *s)
 
     pin_status_t st = s->sink->open(s->sink, path, &params);
     if (st != PIN_OK) {
-        open_failed(s, st, "failed to open output");
         s->sink->close(s->sink); /* never opened: nothing to count */
         s->sink = NULL;
+        open_failed(s, st, "failed to open output");
         return;
     }
     /* A full queue ends the capture (PIPE_SLOW / DISK_SLOW, capture_guard()):
@@ -1634,6 +1640,14 @@ static void open_sink_for_scene(pin_session_t *s)
     if (s->test_writer_queue)
         cap = (size_t)s->test_writer_queue;
     s->writer = pin_writer_start_ex(cap, writer_consume, s->sink, PIN_WRITER_OVERFLOW_FATAL);
+    if (!s->writer) {
+        /* no memory for the queue (or no thread): without a writer every unit would be
+         * skipped and the capture would "run" without a file */
+        s->sink->close(s->sink);
+        s->sink = NULL;
+        open_failed(s, PIN_ERR_NOMEM, "not enough memory to write the output file");
+        return;
+    }
     strncpy(s->current_file, path, sizeof(s->current_file) - 1);
     s->encoder_behind_logged = 0;
     pin_split_new_file(&s->split);
@@ -1765,7 +1779,28 @@ typedef struct {
     hdv_err_state_t hdv_err;       /* continuity / reference tracking for the error stats */
     unsigned units_out;            /* frames / pictures handed to dv_on_unit() (replay pacing) */
     pin_kind_t unit_kind;          /* the kind of the last unit (DV <-> HDV resets the above) */
+    dv_reassembler_t *reasm;       /* the live stream's reassembler (NULL for a replay) */
 } dv_ctx_t;
+
+/* A pass or capture that ends on its own: the frame (or HDV picture) the reassembler still
+ * holds belongs to the file that is closing, and the data after the rewind starts a new
+ * stream (it must not push that frame out into the next file, nor be glued to a half
+ * frame). The frame is emitted into the open file, then the reassembler starts afresh.
+ * Without the session lock: the reassembler's callbacks take it. */
+static void dv_reasm_restart(dv_ctx_t *ctx)
+{
+    if (ctx->reasm)
+        dv_reassembler_restart(ctx->reasm);
+}
+
+/* The same after a capture that ended some other way (a user's Stop, an error): the held
+ * frame is dropped, not written, and the next capture starts on clean ground. Calls no
+ * callback, so it is safe under the lock. */
+static void dv_reasm_discard(dv_ctx_t *ctx)
+{
+    if (ctx->reasm)
+        dv_reassembler_discard(ctx->reasm);
+}
 
 /* Forward decls: defined further down (near handle_inline_commands()), but
  * dv_on_unit()/analog_video_cb() above them need to call in when the
@@ -2353,8 +2388,14 @@ int pin_session_capture_busy(pin_session_t *s)
  * which reports it closed (PIN_EVT_FILE_CLOSED). */
 static void finish_file(pin_session_t *s)
 {
-    if (!s->sink)
+    if (!s->sink) {
+        /* the file was lost (a failed open): what was held for it has no file to go to, and
+         * must not open the next capture's */
+        pin_holdback_free(&s->hold);
+        pin_split_free(&s->split);
+        memset(&s->split, 0, sizeof(s->split));
         return;
+    }
     dv_flush_pending(s);
     hand_over_file(s);
 }
@@ -2487,22 +2528,8 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         memset(&sst, 0, sizeof(sst));
         if (s->sink->get_status)
             s->sink->get_status(s->sink, &sst);
-        if (sst.last_error == PIN_ERR_CODEC && pin_fmt_is_hwenc(s->active_format)) {
-            why = PIN_STOP_ERROR;
-            snprintf(detail, sizeof(detail), "the video encoder failed");
-        } else if (sst.last_error == PIN_ERR_CODEC && sst.reencode_behind) {
-            why = PIN_STOP_ERROR;
-            snprintf(detail, sizeof(detail), "checking and repairing the HDV stream could not keep "
-                     "up with the capture (too slow a computer, or too much damage); capture to the "
-                     "raw transport stream (.m2t) instead");
-        } else if (sst.last_error == PIN_ERR_CODEC &&
-                   (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV)) {
-            why = PIN_STOP_ERROR;
-            snprintf(detail, sizeof(detail), "repairing a damaged part of the HDV stream failed");
-        } else {
-            why = PIN_STOP_WRITE_ERROR;
-            detail[0] = 0;
-        }
+        why = pin_stop_writer_failure(s->active_format, sst.last_error, sst.reencode_behind,
+                                      detail, sizeof(detail));
     } else {
         return 0;
     }
@@ -2621,9 +2648,14 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->scene_det_ready = 0;
     pin_split_free(&s->split);
     memset(&s->split, 0, sizeof(s->split));
+    pin_holdback_free(&s->hold);   /* the last capture's units are not this one's */
+    /* the capture exists before its first file does: a failed open ends it and stops the deck
+     * (open_failed()) */
+    s->capture_began = 1;
+    s->opening_first_file = 1;
     open_sink_for_scene(s);
+    s->opening_first_file = 0;
     if (s->state != PIN_STATE_ERROR) {
-        s->capture_began = 1;
         s->disk_check_s = 0;
         set_state(s, PIN_STATE_CAPTURING);
         s->pass = 1;
@@ -2718,6 +2750,11 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         /* AS_STARTED: only a capture that drives the deck stops it. */
         int stop_deck = cmd.stop_deck == PIN_STOP_DECK_YES ||
                         (cmd.stop_deck == PIN_STOP_DECK_AS_STARTED && s->capture_opts.start_deck);
+        /* The frame the reassembler is still assembling when the user stops is not written
+         * (dv_tick() drops it afterwards): a frame is only complete once the next one starts, so
+         * the last frame before the stop may be missing from the file. At most one frame at the
+         * very end of a capture the user ended by hand is accepted; it cannot be written without
+         * running the reassembler from here, with the lock held. */
         capture_end(s, PIN_STOP_USER, NULL, stop_deck ? camera_node : 0);
         if (s->state != PIN_STATE_ERROR)
             set_state(s, PIN_STATE_READY);
@@ -2752,6 +2789,7 @@ static void dv_tick(void *user)
     dv_ctx_t *ctx = user;
     pin_session_t *s = ctx->s;
     uint16_t node = s->dev.camera_node;
+    const unsigned end_seq = s->capture_end_seq;
 
     if (handle_inline_commands(s, node)) {
         s->loop_stop = 1;
@@ -2925,6 +2963,13 @@ static void dv_tick(void *user)
     int idle_stop = s->capture_opts.idle_stop_minutes > 0 &&
                     s->idle_s > s->capture_opts.idle_stop_minutes * 60.0;
     if (s->state == PIN_STATE_CAPTURING && (idle_stop || duration_stop)) {
+        /* the last frame goes into the file that is ending (the lock is released for it; only
+         * this thread changes the state, but the frame's own units can end the capture) */
+        pin_session_unlock(s);
+        dv_reasm_restart(ctx);
+        pin_session_lock(s);
+    }
+    if (s->state == PIN_STATE_CAPTURING && (idle_stop || duration_stop)) {
         if (s->pass < s->passes) {
             /* end this pass, rewind, next pass */
             finish_file(s);
@@ -2988,6 +3033,9 @@ static void dv_tick(void *user)
         }
     }
     pin_session_unlock(s);
+    /* a capture that ended without the flush above (Stop, an error): see dv_reasm_discard() */
+    if (s->capture_end_seq != end_seq)
+        dv_reasm_discard(ctx);
 }
 
 /* ========================================================================
@@ -3073,6 +3121,7 @@ static void do_run_dv(pin_session_t *s)
         out.user = &ctx;
         memset(&s->hdv_psi, 0, sizeof(s->hdv_psi)); /* a new stream: its own PAT/PMT */
         dv_reassembler_init(&reasm, &out);
+        ctx.reasm = &reasm;
 
         s->loop_stop = 0;
         s->last_data_s = pin_session_now();
@@ -4236,6 +4285,9 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
         return PIN_OK;
     }
     if (!pin_naming_validate(o->path, out->message, sizeof(out->message)))
+        return PIN_ERR_ARG;
+    /* a typo or an unplugged drive: say so now, not after the deck has started to play */
+    if (!pin_naming_folder_exists(o->path, out->message, sizeof(out->message)))
         return PIN_ERR_ARG;
 
     pin_kind_t kind = s->stream_kind;

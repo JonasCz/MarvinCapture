@@ -229,6 +229,7 @@ struct pin_session {
     long scene_cut_at;       /* its index */
     double capture_start_s, last_data_s;
     int capture_began;       /* start_capture_now() opened the first file of this capture */
+    int opening_first_file;  /* start_capture_now() is opening that first file */
     double disk_check_s;     /* capture_guard(): last free-space check */
     uint64_t file_limit;     /* the output drive's largest file (FAT32: PIN_FAT32_FILE_MAX), 0 = none
                                 or standard output: a file goes on in the next one before it

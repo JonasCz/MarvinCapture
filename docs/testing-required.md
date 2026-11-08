@@ -722,7 +722,7 @@ tapes stay necessary for compatibility and tape errors.
    Resolve; scene split on a tape with several recordings (does the camera clock jump? do
    recordings start on a closed GOP?); the aux stream and real EP 0x88 dumps as fixtures;
    if it records DV, a DV/HDV tape (3.1).
-2. **Code**: the fixes in 17 (first R15); the fake AV/C link and the deck items; the end-to-end gaps in 13; a CI job on
+2. **Code**: the fixes in 17; the fake AV/C link and the deck items; the end-to-end gaps in 13; a CI job on
    push with sanitizer builds.
 3. **Decide** the points in 14.
 4. **A sender** (first check whether a second Marvin can transmit, step 1 of 15):
@@ -750,18 +750,9 @@ functions. The others come from reading the code alone. Each item is marked:
 
 Severity is high, medium or low, judged by how much data can go missing and how quietly.
 
-### 17.1 Frames lost without being counted
-
-- **R11. Analog audio lead-in loss.** Low. Testing required.
-  - `sink_lazy.c` `lazy_write_audio()` drops audio until the first video unit has opened the file.
-  - If the audio packet for frame F arrives before video frame F, the file starts with the audio of F+1: about 40 ms missing and a constant lag. Measure on the device.
 
 ### 17.2 Files not finalised, or errors not reported
 
-- **R15. A writer start failure goes unnoticed.** Medium. Fix required.
-  - `open_sink_for_scene()` does not check `pin_writer_start_ex()`. It returns NULL when the 64 / 256 / 512 MiB ring cannot be allocated (32-bit host, low-memory Android, Windows commit limit) or the thread cannot start.
-  - With a NULL writer, `writer_commit()` and the analog callbacks skip every push without a counter, and `capture_guard()` returns early. The capture "runs" and ends as "No video received".
-  - Fix: fail the open with `PIN_ERR_NOMEM`, or retry with a smaller ring.
 - **R18. An AVI is only valid after a clean close.** Low-medium. Testing required.
   - `avi_writer.c` writes the RIFF sizes, the avih / strh / dmlh totals, `indx` and `idx1` only in `close_segment()` and `avi_close()`.
   - After ENOSPC, a pulled drive, a kill or a power loss, the file has RIFF size 0, zero frame counts and no index. ffmpeg can scan it; many players and editors cannot.
@@ -832,10 +823,7 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 - **EP 0x84 resubmit loop** (`ep84_cb`). Low.
   - A stalled endpoint spins the loop, because every status but CANCELLED and NO_DEVICE resubmits. A record longer than 512 bytes is lost.
   - At stop, transfers that completed but were not yet delivered (up to about 290 ms) are discarded.
-  - Second pass: the completed-but-undelivered transfers discarded at stop are those of the EP 0x88 read loop (`pinnacle_stream_read_loop_ex()`), not EP 0x84. They add to the pass-end loss in 18.1 N3.
-- **The last pending DV frame at a user stop** (`handle_inline_commands()`) is not
-  written, and the counters keep running after CAPTURE_ENDED. At most one frame. Low.
-  - Second pass: wider than a user stop, see 18.1 N3: at a pass end the frame stays in the reassembler and is written as the first frame of the *next* file.
+  - Second pass: the completed-but-undelivered transfers discarded at stop are those of the EP 0x88 read loop (`pinnacle_stream_read_loop_ex()`), not EP 0x84.
 - **The stdout pipe treats EAGAIN as fatal** (`pin_stdout_write()`). Low.
   - A non-blocking stdout inherited from the parent ends the capture with WRITE_ERROR.
 - **Device locks.** Low. Testing required.
@@ -878,14 +866,6 @@ items are marked "Second pass" under those items.
 
 ### 18.1 Frames lost, mangled or put in the wrong file
 
-- **N3. The live DV / HDV path never flushes or resets the reassembler between passes or captures** (`pin_session.c` `dv_tick()` pass branch, `capture_end()`, `do_run_dv()`). Medium-low. Fix required (reproduced).
-  - A frame is emitted only when the next frame's first sequence arrives, or at `dv_reassembler_finish()`, which `do_run_dv()` calls only when the read loop ends.
-  - At a pass end (no signal, time limit) `finish_file()` closes the file while the reassembler still holds the last frame. After the rewind the first new data pushes the stale frame out, and it is written as the first frame of pass 2's file. The first new frame, which starts mid-frame, becomes an error frame; if the stale frame was partial, a glued hybrid frame can result.
-  - The same after a Stop capture followed by a later capture across a deck stop.
-  - HDV: the partial picture in `ts_pic_buf` is glued to the next pass's first packets (`hdv_write_gate` drops it unless it carries a sequence header).
-  - `replay_run()` already does `dv_reassembler_finish(); dv_reassembler_init();` on REWINDING, with a comment saying why. The live path needs the same, before `finish_file()`.
-- **N4. The hold-back FIFO survives a failed open** (`finish_file()` returns before `dv_flush_pending()` when `s->sink` is NULL; `start_capture_now()` frees `s->split` but not `s->hold`). Low. Fix required.
-  - A scene split whose open fails (drive gone) leaves the last `opts_scene_split_window + 1` units in the hold. The next capture's first `pin_holdback_release_before()` writes those stale frames at the head of the new file.
 - **N5. A DV hold in the rewrap sink assumes all held frames have the current frame's length** (`sink_rewrap.c` `dv_flush_hold(p, len)`, also `dv_close()` using `params.height`). Low. Testing required.
   - A held 120000-byte NTSC frame flushed by a 144000-byte PAL frame reads 24000 bytes past the held buffer into the file. Needs the format watch to let mixed frames through, which it should not. Fix: store each held frame's length.
 - **N6. fmtwatch provisional start moves real old-format units** (`pin_fmtwatch_feed()`: `*start = provisional ? first_start : cand_start`, from b43f2f6). Low. Testing required.
@@ -899,8 +879,6 @@ items are marked "Second pass" under those items.
   - Fix direction: decide the video fill from device time as well and use the counter as a check, so both streams fill the same span.
 - **N9. Analog: short audio packets are not corrected** (`on_audio()`: `samples = (n - 12) / 4`). Low-medium. Testing required (does the device ever send one?).
   - A packet with fewer than 1920 samples is written as is; the deficit rounds to no fill (1000 of 1920: 920 samples missing, no error) or to a whole extra block (900 of 1920: 780 samples too many). Each event shifts audio against video by up to about 20 ms, breaking the "exactly 1920 samples per frame" promise in [analog.md](analog.md). Fix: zero-pad any short packet to a full frame and count it.
-- **N10. Analog: lost final audio packets at a user stop are not filled** (`on_audio()`: the `draining && seq > last_vseq` branch returns before the gap check). Low. Fix required (reproduced).
-  - Audio packet 30 lost, stop, packet 31 arrives: 30 frames, 29 audio blocks, `audio_missing` 0. The 300 ms timeout stop path does pad, so the two stop paths disagree.
 - **N11. Analog gap fill can overflow the fatal writer ring** (`analog_video_cb()` -> `pin_writer_push()`, ring `PIN_WRITER_ANALOG_CAPACITY` 512 MiB with `PIN_WRITER_OVERFLOW_FATAL`). Medium. Testing required.
   - `fill_frames()` can add up to 0x7fff stand-ins in one burst, pushed at memcpy speed. After about 640 PAL frames (about 26 s of gap) the next push overflows, and `capture_guard()` ends the capture as DISK_SLOW although the disk is fine; everything after the gap is lost.
   - Fix: pace fillers, cap the fill per call, or let fillers wait for the writer.
@@ -914,11 +892,6 @@ items are marked "Second pass" under those items.
   - When `avio_open()` fails in `dv_open()` (stick pulled, folder removed or read-only, a Windows sharing violation, ENOSPC at create), `p->fmt` stays with `pb == NULL`. `lazy_close()` always calls `inner->close()`, and `dv_close()` calls `avformat_write_header()` for the "empty container" with `pb == NULL`. With libavformat 60 this segfaults for avi, mov and matroska (tested through ctypes).
   - hdvmux, nut, ffv1 and hwenc check `header_written` and are not affected.
   - In the GUIs every other open file of that process (a second device instance) is lost too.
-- **N14. A failed open of the first file leaves the deck playing and reports no end** (`open_failed()` acts only `if (s->capture_began)`; `maybe_begin_capture()` has already sent REW / PLAY and cleared `capture_want_start`). Medium. Fix required.
-  - A start-deck capture to a folder that does not exist (`pin_check_output()` and `pin_naming_validate()` do not check the folder; only `lazy_open()` does): no CAPTURE_ENDED, `stop_reason` stays NONE, no deck Stop. An unattended rewind-and-capture plays the whole tape into nothing; the only sign is the ERROR state. The mid-capture case (5f66c1e) does stop the deck.
-  - Fix: treat a requested capture like `capture_began` (end with WRITE_ERROR, Stop the deck), and check the folder in `pin_check_output()`.
-- **N15. A writer that overflowed just before a hand-over is closed as OK** (`pin_writer_stop()` returns failure only for `failed`; `close_job()` uses that; `capture_guard()` looks only at the current `s->writer`). Low. Testing required.
-  - An overflow in the same read-loop batch as a scene, size or format cut: the old file lacks the refused units, the closer reports success, and the capture goes on with a new writer. Only `write_dropped` and a log line show it. Fix: treat `overflowed` as a failed close, or check it in `hand_over_file()` and end with DISK_SLOW.
 - **N16. hdvmux removes a file that was there before** (`hdvmux_close()`: `if (!any_written) remove(m->path)`). Low. Testing required.
   - With overwrite on and an existing read-only file in a writable folder, `avio_open()` fails and the close path then deletes the old file. Fix: remove only a file this sink created.
 - **N17. The FFV1 / hwenc 10 s watchdog turns a disk stall into a failed capture** (`ffv1_write_video()` / `ffv1_write_audio()`, hwenc `queue_push()` / `ring_push()`, from 5e2317f). Medium-low. Testing required.
@@ -927,7 +900,6 @@ items are marked "Second pass" under those items.
   - After the watchdog fires, `ffv1_close()` / `hwenc_close()` still `pthread_join` a thread that may be stuck in a kernel write (dead share, pulled disk); the session then stays STOPPING until the OS returns.
 - **N18. hwenc loses the encoder's last frames at close without an error** (`sink_hwenc.c` `drain_packets(p, 1)`). Low. Fix required.
   - On the 10 s flush timeout it logs a WARN and returns `got >= 0`; no `set_error()`, so FILE_CLOSED reports success while the pictures the encoder still held are gone. Fix: set an error or count them.
-- **N19. FFV1 stall or encode error is reported as "writing the file failed"** (`capture_guard()` maps `PIN_ERR_CODEC` to "the video encoder failed" only for `pin_fmt_is_hwenc()`). Low. Fix required.
 - **N20. CLI: a second SIGHUP, SIGTERM or SIGQUIT exits before the files are finalised** (`marvin_capture_cli.c` `note_interrupt()`: `if (++g_interrupts >= 2) _exit(130)`, from b712741). High for terminal use. Fix required; the double delivery is Testing required on a real terminal.
   - Closing the terminal sends SIGHUP to the foreground job, and an interactive bash forwards its own SIGHUP to its jobs, so the CLI can get two within milliseconds and `_exit()` in the middle of `pin_close()`: no AVI index, no MKV / MOV trailer. SIGTERM followed by SIGHUP does the same. On Windows a Ctrl+C during the finalise wait still exits at once.
   - Fix: only a repeated SIGINT should mean "quit now"; SIGHUP / SIGTERM / SIGQUIT should be idempotent.
@@ -943,7 +915,6 @@ items are marked "Second pass" under those items.
   - `dv_tick()` sets `deck_cmd_done_s` without checking the answer; the tape never moved, so the poll reads STOPPED, and 3 s later "rewind finished" sends PLAY: the capture starts where the tape is, or pass 2 starts from the end. Fix: FAILED after exhausted retries, with a message.
 - **N26. Deck commands during the rewind between passes hijack the rewind detection** (`pin_session_deck()` rejects only CAPTURING; the rewind-finished test in `dv_tick()` does not know who stopped the deck). Low. Testing required (the GUIs may hide the deck buttons then).
   - A user Stop during the rewind is overridden 3 s later by PLAY for pass 2; PLAY or FF leaves the session in REWINDING with no idle or time-limit check until Stop capture.
-- **N27. `open_failed()` mid-capture waits for the closer with the session lock held** (`capture_report_end()` -> `closer_drain()` rather than `closer_drain_unlocked()`). Low (UI freeze while earlier files drain to a slow disk). Fix required.
 - **N28. Disk-free syscall under the session lock** (`pin_session_get_status()` -> `fat32_and_free()`, and `capture_guard()` once a second). Low-medium. Testing required.
   - On a network share that has gone away the call can block 20-60 s with the lock held; USB callbacks that take the same lock stall behind it, and frames are lost uncounted. The 1 s cache limits how often, not how long.
 - **N29. A partly failed initial URB submit ends the capture at the first wrap** (`pinnacle_stream_read_loop_ex()`). Low-medium. Testing required (usbfs ENOMEM, a small `usbfs_memory_mb`).
@@ -1003,7 +974,7 @@ items are marked "Second pass" under those items.
 
 ### 18.6 Checked, nothing found (second pass)
 
-- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug; except N3), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17 to N19), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8 to N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
+- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17 and N18), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8, N9 and N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
 - Reassembler chunking: 200 random lossy PAL and NTSC streams give identical output fed whole or in 1-byte to 5000-byte pieces. URB buffer reuse, ring order, teardown and URB status handling; `ts_buf` bounds; HDV source-packet alignment.
 - Analog: field weave and line offsets across transfers, the delivery ring (the producer waits, nothing dropped), drain at stop, 64-bit device time, the resampler (32 and 44.1 kHz within one sample over 32 M samples).
 - Writer ring, `pin_stdout` (short writes, EINTR, EPIPE, SIGPIPE), avi_writer layout, hdv_demux PTS unwrap and PES / PSI bounds, hdvmux PASS timestamps and thread shutdown.

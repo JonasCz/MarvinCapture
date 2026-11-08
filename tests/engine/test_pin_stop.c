@@ -96,6 +96,20 @@ int main(void)
     CHECK(strcmp(b, "This is a FAT32 drive: its files cannot pass 2.0 MB, so the capture will go on "
                     "in a new file more than once a minute.") == 0, "FAT32 note, test limit");
 
+    /* a failed writer: the encoder's codec error is an encoder failure for FFV1 too */
+    CHECK(pin_stop_writer_failure(PIN_FMT_ANALOG_FFV1_MKV, PIN_ERR_CODEC, 0, b, sizeof(b)) == PIN_STOP_ERROR &&
+              strcmp(b, "the video encoder failed") == 0, "FFV1 codec error");
+    CHECK(pin_stop_writer_failure(PIN_FMT_ANALOG_FFV1_MKV, PIN_ERR_IO, 0, b, sizeof(b)) == PIN_STOP_WRITE_ERROR &&
+              b[0] == 0, "FFV1 I/O error is a write error");
+    CHECK(pin_stop_writer_failure(PIN_FMT_HDV_MKV, PIN_ERR_CODEC, 1, b, sizeof(b)) == PIN_STOP_ERROR &&
+              strstr(b, "could not keep up") != NULL, "HDV repair behind");
+    CHECK(pin_stop_writer_failure(PIN_FMT_HDV_MOV, PIN_ERR_CODEC, 0, b, sizeof(b)) == PIN_STOP_ERROR &&
+              strstr(b, "repairing a damaged part") != NULL, "HDV repair failed");
+    CHECK(pin_stop_writer_failure(PIN_FMT_DV_AVI, PIN_ERR_CODEC, 0, b, sizeof(b)) == PIN_STOP_WRITE_ERROR,
+          "a codec error of a sink that does not encode");
+    CHECK(pin_stop_writer_failure(PIN_FMT_DV_AVI, PIN_ERR_IO, 0, b, sizeof(b)) == PIN_STOP_WRITE_ERROR,
+          "plain write error");
+
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

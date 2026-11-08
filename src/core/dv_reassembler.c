@@ -1016,6 +1016,16 @@ int dv_reassembler_init(dv_reassembler_t *r, const dv_output_t *out)
     return 0;
 }
 
+static void release_buffers(dv_reassembler_t *r)
+{
+    free(r->buf);
+    r->buf = NULL;
+    free(r->ts_pic_buf);
+    r->ts_pic_buf = NULL;
+    free(r->fmt_cand_buf);
+    r->fmt_cand_buf = NULL;
+}
+
 void dv_reassembler_finish(dv_reassembler_t *r)
 {
     if (r->format == DV_FORMAT_HDV) {
@@ -1029,10 +1039,19 @@ void dv_reassembler_finish(dv_reassembler_t *r)
     }
     if (r->fmt_cand != DV_FORMAT_UNKNOWN)
         fmt_cand_drop(r);
-    free(r->buf);
-    r->buf = NULL;
-    free(r->ts_pic_buf);
-    r->ts_pic_buf = NULL;
-    free(r->fmt_cand_buf);
-    r->fmt_cand_buf = NULL;
+    release_buffers(r);
+}
+
+int dv_reassembler_restart(dv_reassembler_t *r)
+{
+    const dv_output_t out = r->out;
+    dv_reassembler_finish(r);
+    return dv_reassembler_init(r, &out);
+}
+
+int dv_reassembler_discard(dv_reassembler_t *r)
+{
+    const dv_output_t out = r->out;
+    release_buffers(r);
+    return dv_reassembler_init(r, &out);
 }

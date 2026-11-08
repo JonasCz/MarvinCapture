@@ -200,8 +200,12 @@ static pin_status_t lazy_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
 static pin_status_t lazy_write_audio(pin_sink_t *s, const int16_t *pcm, size_t frames)
 {
     lazy_priv_t *p = s->priv;
+    /* Before the first video: dropped. The file is created by its first video unit, so when
+     * the audio packet of frame F is delivered ahead of video frame F, the file starts with the
+     * audio of F+1: about one frame (40 ms) of audio is missing at the start. That is accepted;
+     * holding audio back until the video arrives would need a queue for a loss this small. */
     if (!p->opened)
-        return PIN_OK;      /* before the first video: dropped */
+        return PIN_OK;
     return p->inner->write_audio(p->inner, pcm, frames);
 }
 

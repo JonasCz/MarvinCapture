@@ -17,6 +17,7 @@
  */
 
 #include "pin_stop.h"
+#include "pin_format_opts.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -147,4 +148,29 @@ void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *d
         snprintf(out, cap, "Capture stopped after capturing %s.", dur);
     else
         snprintf(out, cap, "Capture stopped after capturing %s, because %s.", dur, detail);
+}
+
+pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_error,
+                                          int reencode_behind, char *detail, size_t cap)
+{
+    if (!detail || !cap)
+        return PIN_STOP_WRITE_ERROR;
+    detail[0] = 0;
+    if (last_error == PIN_ERR_CODEC) {
+        if (pin_fmt_is_hwenc(fmt) || fmt == PIN_FMT_ANALOG_FFV1_MKV) {
+            snprintf(detail, cap, "the video encoder failed");
+            return PIN_STOP_ERROR;
+        }
+        if (reencode_behind) {
+            snprintf(detail, cap, "checking and repairing the HDV stream could not keep "
+                     "up with the capture (too slow a computer, or too much damage); capture to the "
+                     "raw transport stream (.m2t) instead");
+            return PIN_STOP_ERROR;
+        }
+        if (fmt == PIN_FMT_HDV_MOV || fmt == PIN_FMT_HDV_MKV) {
+            snprintf(detail, cap, "repairing a damaged part of the HDV stream failed");
+            return PIN_STOP_ERROR;
+        }
+    }
+    return PIN_STOP_WRITE_ERROR;
 }

@@ -305,6 +305,16 @@ int dv_reassembler_feed(dv_reassembler_t *r, const uint8_t *data, size_t len);
  * capture. */
 void dv_reassembler_finish(dv_reassembler_t *r);
 
+/* dv_reassembler_finish(), then a fresh reassembler with the same output, for a tape that
+ * starts over (a pass ends and the deck rewinds): what the next data brings must not be
+ * glued to, or push out, a frame from before. Returns what dv_reassembler_init() returns. */
+int dv_reassembler_restart(dv_reassembler_t *r);
+
+/* A fresh reassembler with the same output, dropping the frame or picture in progress
+ * without emitting it and without calling any callback (safe where the output's callbacks
+ * must not run). Returns what dv_reassembler_init() returns. */
+int dv_reassembler_discard(dv_reassembler_t *r);
+
 #ifdef __cplusplus
 }
 #endif

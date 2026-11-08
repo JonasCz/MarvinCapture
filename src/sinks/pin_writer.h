@@ -105,7 +105,8 @@ void pin_writer_get_stats(pin_writer_t *w, pin_writer_stats_t *out);
 /* Lets the consumer drain everything already queued, joins its thread, frees
  * *w. Returns the consume callback's failure status: 0 if every unit that
  * was queued was consumed without the callback ever returning non-zero, -1
- * otherwise. Safe with NULL. */
+ * otherwise, and -1 also when a PIN_WRITER_OVERFLOW_FATAL queue overflowed (the file
+ * lacks the refused units). Safe with NULL. */
 int pin_writer_stop(pin_writer_t *w);
 
 /* Discards what is still queued and refuses further pushes; the consumer thread

@@ -68,6 +68,11 @@ int pin_naming_build(const char *base_no_ext, const pin_naming_opts_t *opts, con
  * between platforms and file systems. */
 int pin_naming_validate(const char *path, char *reason, size_t reason_size);
 
+/* 1 if the folder part of an output path exists (a path with no folder part, or only a
+ * root or drive, counts as existing); else 0 with "The folder X does not exist" in reason
+ * (may be NULL). The same rule the sink applies when it opens the file. */
+int pin_naming_folder_exists(const char *path, char *reason, size_t reason_size);
+
 /* Checks whether ANY file matching this capture's naming pattern already
  * exists on disk: base.ext, base-NNNN.ext, base-pass-N.ext and
  * base-pass-N-NNNN.ext, for the given base (already extension-stripped)
