@@ -112,6 +112,7 @@ typedef struct hdv_gop {
     hdv_seq_t seq;             /* the stream's values when it was cut */
     int64_t first_id;          /* the decoder's id of pics.p[0]; picture i is first_id + i */
     struct AVFrame **frames;   /* hdv_decode: per picture, what the decoder gave back (NULL: nothing) */
+    int nframes;               /* slots in frames[]: kept apart from pics, which a consumer may take over */
     int dec_error;             /* hdv_decode: the decoder refused a picture */
     /* for the consumer's own queue */
     int eof;

@@ -298,7 +298,7 @@ public static unsafe partial class Native
     [LibraryImport(Lib)]
     private static partial void pin_format_kind_help(PinKind kind, byte* out_, nuint cap);
 
-    /// <summary>Tooltip of a kind's format drop-down (HDV: MOV / MKV are not truly lossless), or "".</summary>
+    /// <summary>Tooltip of a kind's format drop-down (AVI / MOV need a clean finish; HDV: MOV / MKV are not truly lossless), or "".</summary>
     public static string FormatKindHelp(PinKind kind)
     {
         const int cap = 1024;

@@ -171,6 +171,7 @@ typedef struct {
     AVFormatContext *fmt;
     AVStream *vst, *ast;
     int header_written, header_failed;
+    int file_created;         /* avio_open() made (or truncated) the file: it is ours to remove */
     int fault_io;
     int any_written;
 
@@ -1289,6 +1290,9 @@ static pin_status_t hdvmux_open(pin_sink_t *s, const char *path, const pin_sink_
     if (strlen(path) >= sizeof(m->path))
         return PIN_ERR_ARG;
     snprintf(m->path, sizeof(m->path), "%s", path);
+    /* MOV: no movflags (fragmenting), so the moov index is written only at close (about 11 GB
+     * an hour of HDV). A capture that ends uncleanly (kill, power loss, pulled drive, ENOSPC at
+     * the trailer) leaves an mdat that no player can open; MKV stays readable. */
     const char *muxer = m->format == PIN_FMT_HDV_MOV ? "mov" : "matroska";
     avformat_alloc_output_context2(&m->fmt, NULL, muxer, path);
     if (!m->fmt)
@@ -1303,6 +1307,7 @@ static pin_status_t hdvmux_open(pin_sink_t *s, const char *path, const pin_sink_
     }
     if (rc < 0)
         return PIN_ERR_IO;
+    m->file_created = 1;
     hdv_demux_cb_t cb = { on_gop, on_audio, on_error, m };
     m->dmx = hdv_demux_create(&cb, params->interlaced ? params->top_field_first != 0 : -1);
     if (!m->dmx)
@@ -1393,7 +1398,7 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
             set_error(m, PIN_ERR_IO);
         }
         avformat_free_context(m->fmt);
-        if (!m->any_written) {
+        if (!m->any_written && m->file_created) {
             pin_logf(PIN_LOG_WARN, "sink_hdvmux: no HDV pictures captured, leaving no output file\n");
             remove(m->path);
         }

@@ -1321,8 +1321,22 @@ void pin_session_format_kind_help(pin_kind_t kind, char *out, size_t cap)
     if (!out || cap == 0)
         return;
     out[0] = 0;
-    if (kind == PIN_KIND_HDV)
-        snprintf(out, cap, "Note the MOV and MKV for capturing HDV are not truly lossless: undamaged "
+    /* AVI and MOV get their index, sizes and moov only when the file is closed; an unclean end
+     * (kill, power loss, pulled drive, full disk) leaves one that many players cannot open. */
+    if (kind == PIN_KIND_ANALOG)
+        snprintf(out, cap, "AVI needs a clean finish: its index is written when the capture ends, "
+                 "so if the capture is cut off (power loss, drive pulled, disk full) many players "
+                 "cannot open the file. MKV stays readable.");
+    else if (kind == PIN_KIND_DV)
+        snprintf(out, cap, "AVI and MOV need a clean finish: the index (AVI) or the movie header "
+                 "(MOV) is written when the capture ends, so if the capture is cut off (power loss, "
+                 "drive pulled, disk full) many players cannot open the file; a MOV without it "
+                 "cannot be opened at all. MKV and the raw .dv stay readable.");
+    else if (kind == PIN_KIND_HDV)
+        snprintf(out, cap, "MOV needs a clean finish: its movie header is written when the capture "
+                 "ends, so if the capture is cut off (power loss, drive pulled, disk full) the file "
+                 "cannot be opened. MKV and the raw .m2t stay readable.\n\n"
+                 "Note the MOV and MKV for capturing HDV are not truly lossless: undamaged "
                  "frames are passed through as is, and MarvinCapture re-encodes broken frames with "
                  "the damage concealed (by ffmpeg's decoder). This improves compatibility with "
                  "applications such as DaVinci Resolve, preventing clip import failure / rendering "

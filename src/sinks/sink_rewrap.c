@@ -414,6 +414,10 @@ static pin_status_t dv_open(pin_sink_t *s, const char *path, const pin_sink_para
 {
     rewrap_priv_t *p = s->priv;
     p->params = *params;
+    /* The AVI index and sizes and the MOV moov are written only at close (no movflags are set,
+     * as fragmenting would cost compatibility). A capture that ends uncleanly (kill, power loss,
+     * pulled drive, ENOSPC at the trailer) leaves a file many players cannot open: ffmpeg can
+     * scan an AVI, nothing opens a MOV without its moov. */
     const char *muxer = p->format == PIN_FMT_DV_AVI ? "avi" : "mov";
 
     int rc = avformat_alloc_output_context2(&p->fmt, NULL, muxer, path);
@@ -561,15 +565,16 @@ static pin_status_t dv_close(pin_sink_t *s)
     rewrap_priv_t *p = s->priv;
     pin_status_t rc = PIN_OK;
     if (p->fmt) {
-        if (!p->header_written && p->nhold) {
+        if (!p->header_written && p->nhold && p->fmt->pb) {
             /* a short capture without audio: the held frames still go in */
             if (dv_flush_hold(p, p->params.height == 576 ? DV_SEQ_COUNT_PAL * DV_SEQ_SIZE
                                                          : DV_SEQ_COUNT_NTSC * DV_SEQ_SIZE) != PIN_OK)
                 rc = PIN_ERR_IO;
         }
-        if (!p->header_written) {
+        if (!p->header_written && p->fmt->pb) {
             /* No frame ever arrived (or all were damaged): still produce a
-             * valid, empty container rather than a truncated file. */
+             * valid, empty container rather than a truncated file. Not when
+             * the file could not be created: the muxer would write to a NULL pb. */
             if (avformat_write_header(p->fmt, NULL) >= 0)
                 p->header_written = 1;
         }

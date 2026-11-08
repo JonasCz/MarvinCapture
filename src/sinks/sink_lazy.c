@@ -74,6 +74,7 @@ typedef struct {
     int opened;                 /* the real sink was opened (the file exists) */
     pin_status_t open_error;
     uint64_t units;             /* video units the real sink took */
+    int created_by_open;        /* a failed open() of the real sink left a file that did not exist before */
     /* numbered output: candidates for a taken name (pin_sink_lazy_set_renumber) */
     pin_sink_name_fn next;
     void *next_ctx;
@@ -154,6 +155,17 @@ static void lazy_renumber(lazy_priv_t *p)
 #endif
 }
 
+/* Units the real sink has dropped as damaged so far. A sink counts them inside the write call
+ * that drops them and still returns PIN_OK, so a unit is "taken" only if this did not grow. */
+static uint64_t inner_damaged(lazy_priv_t *p)
+{
+    pin_sink_status_t st;
+    memset(&st, 0, sizeof(st));
+    if (p->inner->get_status)
+        p->inner->get_status(p->inner, &st);
+    return st.units_damaged;
+}
+
 static pin_status_t lazy_ensure_open(lazy_priv_t *p)
 {
     if (p->opened)
@@ -164,9 +176,15 @@ static pin_status_t lazy_ensure_open(lazy_priv_t *p)
         return PIN_ERR_STATE;
     if (p->next)
         lazy_renumber(p);
+    /* A name that existed before may be an old file the open did not touch (read-only, or
+     * refused): only a file that appears during a failed open is ours to remove. */
+    struct stat sb;
+    int existed = stat(p->path, &sb) == 0;
     pin_status_t st = p->inner->open(p->inner, p->path, &p->params);
     if (st != PIN_OK) {
         p->open_error = st;
+        /* the open can fail after it created the file (header, encoder or thread start) */
+        p->created_by_open = !existed && stat(p->path, &sb) == 0;
         return st;
     }
     p->opened = 1;
@@ -179,8 +197,9 @@ static pin_status_t lazy_write_unit(pin_sink_t *s, const uint8_t *data, size_t l
     pin_status_t st = lazy_ensure_open(p);
     if (st != PIN_OK)
         return st;
+    uint64_t damaged = inner_damaged(p);
     st = p->inner->write_unit(p->inner, data, len);
-    if (st == PIN_OK)
+    if (st == PIN_OK && inner_damaged(p) == damaged)
         p->units++;
     return st;
 }
@@ -191,8 +210,9 @@ static pin_status_t lazy_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
     pin_status_t st = lazy_ensure_open(p);
     if (st != PIN_OK)
         return st;
+    uint64_t damaged = inner_damaged(p);
     st = p->inner->write_video(p->inner, yuyv, len);
-    if (st == PIN_OK)
+    if (st == PIN_OK && inner_damaged(p) == damaged)
         p->units++;
     return st;
 }
@@ -232,8 +252,8 @@ static pin_status_t lazy_close(pin_sink_t *s)
     }
     if (!p->opened)
         rc = PIN_OK;        /* nothing on disk, the inner sink was only freed */
-    if (p->opened && p->units == 0)
-        remove(p->path);    /* only damaged units reached it: the empty container we just created */
+    if ((p->opened && p->units == 0) || p->created_by_open)
+        remove(p->path);    /* no video reached it (or its open failed half-way): an empty container */
     if (rc == PIN_OK && p->open_error != PIN_OK)
         rc = p->open_error;
     if (p->next_free)

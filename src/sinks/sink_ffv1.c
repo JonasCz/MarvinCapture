@@ -144,15 +144,6 @@ static pin_status_t get_error(ffv1_priv_t *p)
     return e;
 }
 
-/* pthread_cond_timedwait() takes a CLOCK_REALTIME deadline. Returns ETIMEDOUT or 0. */
-static int timed_wait(pthread_cond_t *c, pthread_mutex_t *m, int seconds)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += seconds;
-    return pthread_cond_timedwait(c, m, &ts);
-}
-
 /* Encodes and muxes one already-converted frame. Called only on the encoder
  * thread. */
 static void encode_one(ffv1_priv_t *p, AVFrame *frame)
@@ -495,6 +486,7 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
         pthread_mutex_lock(&p->st_lock);
         p->st.units_damaged++;
         pthread_mutex_unlock(&p->st_lock);
+        p->vpts++;      /* the slot stays empty so later video keeps its place against the audio */
         return PIN_OK;
     }
 
@@ -537,7 +529,7 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
         p->st.encoder_behind = 1;
         pthread_mutex_unlock(&p->st_lock);
         while (p->qcount == QUEUE_DEPTH) {
-            if (timed_wait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
+            if (pin_cond_timedwait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
                 p->qcount == QUEUE_DEPTH) {
                 pthread_mutex_unlock(&p->qlock);
                 pin_logf(PIN_LOG_ERROR, "sink_ffv1: the encoder took no picture for %d s\n",
@@ -575,7 +567,7 @@ static pin_status_t ffv1_write_audio(pin_sink_t *s, const int16_t *pcm, size_t f
             p->st.encoder_behind = 1;
             pthread_mutex_unlock(&p->st_lock);
             while (p->acount == p->aring_frames) {
-                if (timed_wait(&p->aspace, &p->alock, STALL_TIMEOUT_S) == ETIMEDOUT &&
+                if (pin_cond_timedwait(&p->aspace, &p->alock, STALL_TIMEOUT_S) == ETIMEDOUT &&
                     p->acount == p->aring_frames) {
                     pthread_mutex_unlock(&p->alock);
                     pin_logf(PIN_LOG_ERROR, "sink_ffv1: the audio encoder took no samples for %d s\n",
@@ -680,10 +672,10 @@ pin_sink_t *sink_ffv1_create(void)
     pthread_mutex_init(&p->qlock, NULL);
     pthread_mutex_init(&p->st_lock, NULL);
     pthread_cond_init(&p->qwake, NULL);
-    pthread_cond_init(&p->qspace, NULL);
+    pin_cond_init_timed(&p->qspace);
     pthread_mutex_init(&p->alock, NULL);
     pthread_cond_init(&p->awake, NULL);
-    pthread_cond_init(&p->aspace, NULL);
+    pin_cond_init_timed(&p->aspace);
     s->priv = p;
     s->open = ffv1_open;
     s->write_video = ffv1_write_video;

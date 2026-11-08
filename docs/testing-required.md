@@ -486,7 +486,7 @@ Any input; DV is the easiest.
   `test_pin_stop`. Untested: the detection itself (`fat32_and_free()`).
 - **A nearly full drive, a USB stick pulled while writing, a slow network drive**: what
   each OS reports. Tested in code for DV and pipes: `test_replay_disk`, `test_cli_pipe`.
-  Not for analog AVI, which is unreadable by many tools without a clean close (R18), nor
+  Not for analog AVI, which is unreadable by many tools without a clean close, nor
   for analog FFV1.
 - **An 8-hour capture**, once per OS.
 - **DV AVI past FFmpeg's 1 GiB RIFF segments** (`sink_rewrap`): a DV AVI over about
@@ -753,19 +753,6 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 
 ### 17.2 Files not finalised, or errors not reported
 
-- **R18. An AVI is only valid after a clean close.** Low-medium. Testing required.
-  - `avi_writer.c` writes the RIFF sizes, the avih / strh / dmlh totals, `indx` and `idx1` only in `close_segment()` and `avi_close()`.
-  - After ENOSPC, a pulled drive, a kill or a power loss, the file has RIFF size 0, zero frame counts and no index. ffmpeg can scan it; many players and editors cannot.
-  - Multi-hour analog AVIs are exposed for their whole length. A periodic patch of the sizes and totals would limit the damage.
-  - Section 9's pulled-stick test has been done for DV and pipes only; do it for analog AVI.
-  - Second pass: MOV is worse. No `movflags` are set anywhere in `src/`, so the mov muxer writes `moov` only in the trailer (DV MOV in `sink_rewrap.c`, HDV MOV in `sink_hdvmux.c`). After a kill, crash (see 18.2 N13), power loss, pulled drive or ENOSPC at the trailer the file is an `mdat` nothing can open (HDV MOV: about 11 GB per hour). MKV stays playable. [usage.md](usage.md) says an AVI or MOV with no index is still readable; that is true for AVI only. Fix: `frag_keyframe+empty_moov`, or fix the docs. Testing required (pull the drive during a MOV capture).
-- **R20. Damaged units counted as written; empty files left behind.** Low. Fix required.
-  - `sink_raw.c` (a DV unit that is not 10 or 12 sequences) and `sink_nut.c` (a short video frame) drop the unit and return `PIN_OK`. `sink_lazy.c` counts every OK as written.
-  - Effects: `units_written`, FILE_OPENED and `stop_no_video` are wrong for a file with no video, and `lazy_close()` never removes such an empty file.
-  - `units_damaged` is read nowhere in the engine.
-  - In NUT, a skipped video frame does not advance `vpts`, so audio drifts against video.
-  - Second pass: the same skip without `vpts++` exists in `sink_ffv1.c` `ffv1_write_video()` and `sink_hwenc.c` `hwenc_write_video()` / `process_picture()` (`len < expect` returns `PIN_OK`). Audio keeps its sample-exact pts, so every skipped frame moves later video 40 ms (33.4 ms) early against audio, as in NUT.
-  - A failed open after `avio_open` has created the file (header write, thread start or encoder open fails in `ffv1_open()` / `hwenc_open()`) leaves an empty or partial `.mkv`: `lazy_close()` removes the file only when `opened && units == 0`, and `opened` is still 0.
 - **R21. Android: finalising judged from a stale status.** Low. Fix required.
   - `CaptureService.closeSession()` takes `wasCapturing` from the last tick's snapshot, up to 1 s old. If a capture started within that time, the service leaves the foreground and releases the wake lock while `Core.close` is still finalising.
   - `onDestroy()` shuts the core thread down without waiting for it.
@@ -838,7 +825,6 @@ Severity is high, medium or low, judged by how much data can go missing and how 
   - After 256 sections, sections are written twice.
   - Second pass: `pin_settings_load()` returns 0 both for a missing file and for a failed `fopen()`, and `pin_settings_set()` / `pin_est_store_ffv1()` (from `rate_persist()` during FFV1 captures) then save. A transient EACCES or Windows sharing violation therefore writes a file holding only `[core] ffv1_bytes_per_hour`, losing `Paths.firmware_dir` and the per-device keys. Fix: fail on any error but ENOENT and skip the save.
   - The parser: a UTF-8 BOM before the first header puts that whole section under `""`, and `[Paths] ; comment` is not read as a header, so its keys land in the previous section. The next save makes it permanent (reproduced). Lines over 4095 bytes split into bogus entries.
-- **Unchecked `realloc`** in `avi_writer.c` (`ix_add()`, the idx1 list). Negligible.
 
 ### 17.7 Checked, nothing found
 
@@ -885,26 +871,14 @@ items are marked "Second pass" under those items.
 
 ### 18.2 Files not finalised, or errors not reported
 
-- **N12. HDV MOV / MKV leaks every decoded frame of every passed-through GOP** (`sink_hdvmux.c` `gop_decide()` ends with `it->pics = *gp; memset(gp, 0, sizeof(*gp))`; `hdv_gop_free()` frees frames for `i < g->pics.cap`, now 0). High. Fix required.
-  - On the normal clean-tape path no decoded 1440x1080 AVFrame is ever freed: about 50-60 MB/s at 25 fps, so a capture runs out of memory within minutes and the file is lost with it. The repair path (`span_add()`) is fine.
-  - The short replay tests do not run long enough to notice. Check with valgrind / ASan on `test_replay_hdv_mov`, and a 10-minute HDV MOV capture.
-- **N13. DV AVI / MOV: crash when the file cannot be created** (`sink_rewrap.c` `dv_close()`). High (the whole process dies). Fix required.
-  - When `avio_open()` fails in `dv_open()` (stick pulled, folder removed or read-only, a Windows sharing violation, ENOSPC at create), `p->fmt` stays with `pb == NULL`. `lazy_close()` always calls `inner->close()`, and `dv_close()` calls `avformat_write_header()` for the "empty container" with `pb == NULL`. With libavformat 60 this segfaults for avi, mov and matroska (tested through ctypes).
-  - hdvmux, nut, ffv1 and hwenc check `header_written` and are not affected.
-  - In the GUIs every other open file of that process (a second device instance) is lost too.
-- **N16. hdvmux removes a file that was there before** (`hdvmux_close()`: `if (!any_written) remove(m->path)`). Low. Testing required.
-  - With overwrite on and an existing read-only file in a writable folder, `avio_open()` fails and the close path then deletes the old file. Fix: remove only a file this sink created.
 - **N17. The FFV1 / hwenc 10 s watchdog turns a disk stall into a failed capture** (`ffv1_write_video()` / `ffv1_write_audio()`, hwenc `queue_push()` / `ring_push()`, from 5e2317f). Medium-low. Testing required.
   - The encoder thread muxes straight to the file. A drive stall over 10 s (spin-up, USB reset, network share, antivirus) fills the 8-frame queue in about 0.3 s, and the sink fails with `PIN_ERR_CODEC` although the 64-512 MiB writer ring in front could have absorbed it. Before 5e2317f the wait was unbounded.
-  - `timed_wait()` uses CLOCK_REALTIME (hwenc's other watchdog is monotonic): a forward clock step during a blocked wait fails the sink at once.
   - After the watchdog fires, `ffv1_close()` / `hwenc_close()` still `pthread_join` a thread that may be stuck in a kernel write (dead share, pulled disk); the session then stays STOPPING until the OS returns.
-- **N18. hwenc loses the encoder's last frames at close without an error** (`sink_hwenc.c` `drain_packets(p, 1)`). Low. Fix required.
-  - On the 10 s flush timeout it logs a WARN and returns `got >= 0`; no `set_error()`, so FILE_CLOSED reports success while the pictures the encoder still held are gone. Fix: set an error or count them.
 - **N20. CLI: a second SIGHUP, SIGTERM or SIGQUIT exits before the files are finalised** (`marvin_capture_cli.c` `note_interrupt()`: `if (++g_interrupts >= 2) _exit(130)`, from b712741). High for terminal use. Fix required; the double delivery is Testing required on a real terminal.
   - Closing the terminal sends SIGHUP to the foreground job, and an interactive bash forwards its own SIGHUP to its jobs, so the CLI can get two within milliseconds and `_exit()` in the middle of `pin_close()`: no AVI index, no MKV / MOV trailer. SIGTERM followed by SIGHUP does the same. On Windows a Ctrl+C during the finalise wait still exits at once.
   - Fix: only a repeated SIGINT should mean "quit now"; SIGHUP / SIGTERM / SIGQUIT should be idempotent.
 - **N21. Windows GUI launched from a console: Ctrl+C or closing the console skips `pin_close`** (`ConsoleOutput.cs` attaches to the parent console; the GUI registers no `SetConsoleCtrlHandler`). Medium for scripted use (`MarvinCaptureGUI.exe ... --exit-when-done`). Testing required.
-  - b712741 added the handler to the CLI only. The process exits, `ReleaseSession` never runs, and the file is unfinalised (R18). Fix: register a handler that releases the session and waits, as the CLI does.
+  - b712741 added the handler to the CLI only. The process exits, `ReleaseSession` never runs, and the file is unfinalised. Fix: register a handler that releases the session and waits, as the CLI does.
 - **N22. Windows forced shutdown: `pin_close` runs in `WM_ENDSESSION` without a time bound** (`SessionEndGuard.WndProc`). Medium-low. Testing required.
   - A slow drive with a full 256 / 512 MiB ring, or an encoder tail, can take longer than the shutdown kill timeout; the process is then killed mid-flush. Window geometry is also not saved on logoff (`SaveWindowGeometry` only in `Closing` / `Closed`).
 - **N23. Windows: the final `pin_close` can run late on the preview render thread** (`D3DPreview.Dispose` joins for 500 ms; the render loop holds a `DangerousAddRef` on the session handle). Low. Testing required.
@@ -974,7 +948,7 @@ items are marked "Second pass" under those items.
 
 ### 18.6 Checked, nothing found (second pass)
 
-- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17 and N18), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8, N9 and N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
+- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8, N9 and N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
 - Reassembler chunking: 200 random lossy PAL and NTSC streams give identical output fed whole or in 1-byte to 5000-byte pieces. URB buffer reuse, ring order, teardown and URB status handling; `ts_buf` bounds; HDV source-packet alignment.
 - Analog: field weave and line offsets across transfers, the delivery ring (the producer waits, nothing dropped), drain at stop, 64-bit device time, the resampler (32 and 44.1 kHz within one sample over 32 M samples).
 - Writer ring, `pin_stdout` (short writes, EINTR, EPIPE, SIGPIPE), avi_writer layout, hdv_demux PTS unwrap and PES / PSI bounds, hdvmux PASS timestamps and thread shutdown.

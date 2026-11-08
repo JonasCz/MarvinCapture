@@ -177,6 +177,7 @@ static pin_status_t nut_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t l
     if (len < expect) {
         pin_logf(PIN_LOG_WARN, "sink_nut: short video frame (%zu of %zu bytes), skipping\n", len, expect);
         p->st.units_damaged++;
+        p->vpts++;      /* the slot stays empty so later video keeps its place against the audio */
         return PIN_OK;
     }
     pin_status_t rc = nut_write_packet(p, p->vst, p->vpts++, 1,

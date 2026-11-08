@@ -256,15 +256,6 @@ static void sleep_ms(int ms)
 #endif
 }
 
-/* pthread_cond_timedwait() takes a CLOCK_REALTIME deadline. Returns ETIMEDOUT or 0. */
-static int timed_wait(pthread_cond_t *c, pthread_mutex_t *m, int seconds)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += seconds;
-    return pthread_cond_timedwait(c, m, &ts);
-}
-
 /* ---- muxing ------------------------------------------------------------------------ */
 
 static int is_param_set(pin_hwenc_codec_t c, const uint8_t *nal)
@@ -423,7 +414,8 @@ static int drain_packets(hwenc_priv_t *p, int flushing)
         if (rc == AVERROR(EAGAIN) && flushing) {
             av_packet_free(&pkt);
             if (mono_now() - last > STALL_TIMEOUT_S) {
-                pin_logf(PIN_LOG_WARN, "sink_hwenc: the encoder did not finish its last frames\n");
+                pin_logf(PIN_LOG_ERROR, "sink_hwenc: the encoder did not finish its last frames\n");
+                set_error(p, PIN_ERR_CODEC);    /* the pictures it still held are not in the file */
                 return got;
             }
             sleep_ms(2);
@@ -772,7 +764,7 @@ static pin_status_t queue_push(hwenc_priv_t *p, item_t *it)
     if (p->qcount == QUEUE_DEPTH) {
         set_behind(p);
         while (p->qcount == QUEUE_DEPTH) {
-            if (timed_wait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
+            if (pin_cond_timedwait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
                 p->qcount == QUEUE_DEPTH) {
                 pthread_mutex_unlock(&p->qlock);
                 pin_logf(PIN_LOG_ERROR, "sink_hwenc: the encoder took no picture for %d s\n",
@@ -885,7 +877,7 @@ static pin_status_t ring_push(track_t *t, const int16_t *pcm, size_t frames)
         if (t->count == t->ring_frames) {
             set_behind(t->p);
             while (t->count == t->ring_frames) {
-                if (timed_wait(&t->space, &t->lock, STALL_TIMEOUT_S) == ETIMEDOUT &&
+                if (pin_cond_timedwait(&t->space, &t->lock, STALL_TIMEOUT_S) == ETIMEDOUT &&
                     t->count == t->ring_frames) {
                     pthread_mutex_unlock(&t->lock);
                     pin_logf(PIN_LOG_ERROR, "sink_hwenc: the audio encoder took nothing for %d s\n",
@@ -1257,6 +1249,7 @@ static pin_status_t hwenc_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t
     if (len < expect) {
         pin_logf(PIN_LOG_WARN, "sink_hwenc: short video frame (%zu of %zu bytes), skipping\n", len, expect);
         count_damaged(p);
+        p->vpts++;      /* the slot stays empty so later video keeps its place against the audio */
         return PIN_OK;
     }
     AVFrame *f = av_frame_alloc();
@@ -1428,13 +1421,13 @@ pin_sink_t *sink_hwenc_create(pin_format_t format)
     pthread_mutex_init(&p->mux_lock, NULL);
     pthread_mutex_init(&p->qlock, NULL);
     pthread_cond_init(&p->qwake, NULL);
-    pthread_cond_init(&p->qspace, NULL);
+    pin_cond_init_timed(&p->qspace);
     pthread_cond_init(&p->enc_cond, NULL);
     pthread_mutex_init(&p->st_lock, NULL);
     for (int i = 0; i < 2; i++) {
         pthread_mutex_init(&p->trk[i].lock, NULL);
         pthread_cond_init(&p->trk[i].wake, NULL);
-        pthread_cond_init(&p->trk[i].space, NULL);
+        pin_cond_init_timed(&p->trk[i].space);
     }
     s->priv = p;
     s->open = hwenc_open;

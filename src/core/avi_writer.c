@@ -289,13 +289,19 @@ static void write_headers(avi_writer_t *w)
     w->movi_at = begin(f, "LIST", "movi");
 }
 
-static void ix_add(ix_list_t *l, uint32_t off, uint32_t size)
+/* 0, or -1 when out of memory (the list is unchanged). */
+static int ix_add(ix_list_t *l, uint32_t off, uint32_t size)
 {
     if (l->n == l->cap) {
-        l->cap = l->cap ? l->cap * 2 : 1024;
-        l->e = realloc(l->e, l->cap * sizeof(*l->e));
+        size_t cap = l->cap ? l->cap * 2 : 1024;
+        ix_entry_t *e = realloc(l->e, cap * sizeof(*l->e));
+        if (!e)
+            return -1;
+        l->e = e;
+        l->cap = cap;
     }
     l->e[l->n++] = (ix_entry_t){ off, size };
+    return 0;
 }
 
 /* Standard index chunks for this segment, inside its movi list, then
@@ -375,11 +381,21 @@ static int write_chunk(avi_writer_t *w, int s, const uint8_t *data, size_t len)
     off_t data_at = ftello(w->f);
     fwrite(data, 1, len, w->f);
     end(w->f, at);
-    ix_add(&w->ix[s], (uint32_t)(data_at - (w->riff_at - 4)), (uint32_t)len);
+    /* Without room for an index entry the file would be missing a frame in its index: fail. */
+    if (ix_add(&w->ix[s], (uint32_t)(data_at - (w->riff_at - 4)), (uint32_t)len) < 0) {
+        w->error = 1;
+        return -1;
+    }
     if (w->segment == 0) {
         if (w->nidx1 == w->capidx1) {
-            w->capidx1 = w->capidx1 ? w->capidx1 * 2 : 4096;
-            w->idx1 = realloc(w->idx1, w->capidx1 * sizeof(*w->idx1));
+            size_t cap = w->capidx1 ? w->capidx1 * 2 : 4096;
+            void *n = realloc(w->idx1, cap * sizeof(*w->idx1));
+            if (!n) {
+                w->error = 1;
+                return -1;
+            }
+            w->idx1 = n;
+            w->capidx1 = cap;
         }
         w->idx1[w->nidx1].s = (uint8_t)s;
         w->idx1[w->nidx1].off = (uint32_t)(at - 4 - (w->movi_at + 4));
@@ -447,6 +463,10 @@ int avi_write_audio(avi_writer_t *w, const uint8_t *pcm, size_t len)
     return r;
 }
 
+/* The RIFF sizes, the avih / strh / dmlh totals, the indx and the idx1 are written only here and
+ * in close_segment(), not patched while recording (that would cost seeks in the middle of the
+ * stream). A capture that ends uncleanly (kill, power loss, pulled drive, ENOSPC) leaves a file
+ * with sizes 0 and no index: ffmpeg can scan it, many players and editors cannot open it. */
 int avi_close(avi_writer_t *w)
 {
     if (!w)

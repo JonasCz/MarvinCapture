@@ -433,7 +433,7 @@ final class OptionsPanel extends LinearLayout {
                 pushHint();
             })), Ui.fillWidth());
             fillFormatOptions(optionsBlock, kind, cur);
-            // the core's note on the formats of this kind (HDV: MOV / MKV are not truly lossless)
+            // the core's note on the formats of this kind (AVI / MOV need a clean finish; HDV: MOV / MKV are not truly lossless)
             String formatHelp = Core.formatKindHelp(kind);
             if (!formatHelp.isEmpty())
                 parent.addView(Ui.help(c, formatHelp));

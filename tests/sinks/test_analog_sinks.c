@@ -671,6 +671,54 @@ static void test_ffv1_write_fail(void)
     free(pcm);
 }
 
+/* A short video frame is skipped, but its slot in the timeline stays empty: the frames after it
+ * keep their place against the audio (pts 0 1 3 4, not 0 1 2 3). */
+static void test_ffv1_skipped_frame_keeps_pts(void)
+{
+    printf("== sink_ffv1 (skipped frame advances pts) ==\n");
+    const char *path = "test_ffv1_skip.mkv";
+    pin_sink_params_t p;
+    common_params(&p, "");
+    pin_sink_t *s = pin_sink_create(PIN_FMT_ANALOG_FFV1_MKV);
+    CHECK(s);
+    CHECK_EQ_I(s->open(s, path, &p), PIN_OK);
+    uint8_t *yuyv = calloc(1, (size_t)W * H * 2);
+    CHECK(yuyv);
+    for (int i = 0; i < 5; i++) {
+        fill_gradient_frame(yuyv, i);
+        size_t len = (size_t)W * H * 2;
+        if (i == 2)
+            len = 100;
+        CHECK_EQ_I(s->write_video(s, yuyv, len), PIN_OK);
+    }
+    pin_sink_status_t st;
+    s->get_status(s, &st);
+    CHECK_EQ_I(st.units_damaged, 1);
+    CHECK_EQ_I(s->close(s), PIN_OK);
+    free(yuyv);
+
+    AVFormatContext *fc = NULL;
+    CHECK(avformat_open_input(&fc, path, NULL, NULL) == 0);
+    int vi = av_find_best_stream(fc, AVMEDIA_TYPE_VIDEO, -1, -1, NULL, 0);
+    CHECK(vi >= 0);
+    AVPacket *pkt = av_packet_alloc();
+    int64_t want[4] = { 0, 1, 3, 4 };
+    int n = 0;
+    while (av_read_frame(fc, pkt) >= 0) {
+        if (pkt->stream_index == vi) {
+            CHECK(n < 4);
+            int64_t frame_no = av_rescale_q(pkt->pts, fc->streams[vi]->time_base, (AVRational){ FPS_DEN, FPS_NUM });
+            CHECK_EQ_I(frame_no, want[n]);
+            n++;
+        }
+        av_packet_unref(pkt);
+    }
+    CHECK_EQ_I(n, 4);
+    av_packet_free(&pkt);
+    avformat_close_input(&fc);
+    remove(path);
+}
+
 int main(void)
 {
     test_avi();
@@ -679,6 +727,7 @@ int main(void)
     test_ffv1_audio_exact();
     test_ffv1_long_capture();
     test_ffv1_write_fail();
+    test_ffv1_skipped_frame_keeps_pts();
     measure_ffv1_fps();
     printf("OK\n");
     return 0;

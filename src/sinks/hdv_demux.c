@@ -238,7 +238,7 @@ void hdv_gop_free(hdv_gop_t *g)
     if (!g)
         return;
     if (g->frames)
-        for (int i = 0; i < g->pics.cap; i++)
+        for (int i = 0; i < g->nframes; i++)
             av_frame_free(&g->frames[i]);
     free(g->frames);
     hdv_pics_free(&g->pics);
@@ -257,6 +257,7 @@ static void gop_out(hdv_demux_t *m)
         nomem(m);
         return;
     }
+    g->nframes = m->gop.cap + 1;
     g->pics = m->gop;
     memset(&m->gop, 0, sizeof(m->gop));
     g->seq = m->seq;

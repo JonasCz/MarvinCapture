@@ -446,7 +446,10 @@ PIN_API void pin_format_aspect_help(pin_format_t f, char *out, size_t cap);
 PIN_API void pin_format_scene_split_help(pin_format_t f, char *out, size_t cap);
 
 /* The help text (tooltip) of a GUI's format drop-down for a kind, whatever is selected in it, or
- * "" for none. HDV: that MOV and MKV are not truly lossless (damaged GOPs are re-encoded with the
+ * "" for an unknown kind. Every kind: that AVI and MOV need a clean finish (their index / movie
+ * header is written at the end, so a capture cut off by a power loss or a pulled drive leaves a file
+ * many players cannot open) and which of its formats stay readable (MKV, raw .dv, raw .m2t).
+ * HDV also: that MOV and MKV are not truly lossless (damaged GOPs are re-encoded with the
  * damage concealed, which editors take better, but the damage can no longer be seen as such)
  * and that the raw .m2t is. 1024 bytes are enough. */
 PIN_API void pin_format_kind_help(pin_kind_t kind, char *out, size_t cap);

@@ -415,13 +415,19 @@ static void test_format_help(void)
     /* the format drop-down's note per kind: HDV says MOV / MKV are not truly lossless */
     char kb[1024];
     pin_format_kind_help(PIN_KIND_HDV, kb, sizeof(kb));
-    CHECK(strncmp(kb, "Note the MOV and MKV for capturing HDV are not truly lossless", 61) == 0 &&
+    CHECK(strstr(kb, "Note the MOV and MKV for capturing HDV are not truly lossless") != NULL &&
           strstr(kb, "DaVinci Resolve") != NULL && strstr(kb, ".m2t raw HDV stream") != NULL,
           "format help: HDV");
+    CHECK(strncmp(kb, "MOV needs a clean finish", 24) == 0 && strstr(kb, "MKV and the raw .m2t stay readable") != NULL,
+          "format help: HDV MOV needs a clean finish");
     pin_format_kind_help(PIN_KIND_DV, kb, sizeof(kb));
-    CHECK_STR(kb, "", "format help: DV has none");
+    CHECK(strncmp(kb, "AVI and MOV need a clean finish", 31) == 0 &&
+          strstr(kb, "MKV and the raw .dv stay readable") != NULL, "format help: DV AVI and MOV need a clean finish");
     pin_format_kind_help(PIN_KIND_ANALOG, kb, sizeof(kb));
-    CHECK_STR(kb, "", "format help: analog has none");
+    CHECK(strncmp(kb, "AVI needs a clean finish", 24) == 0 && strstr(kb, "MKV stays readable") != NULL &&
+          strstr(kb, "MOV") == NULL && strstr(kb, "raw") == NULL, "format help: analog AVI needs a clean finish");
+    pin_format_kind_help((pin_kind_t)99, kb, sizeof(kb));
+    CHECK_STR(kb, "", "format help: unknown kind has none");
     pin_format_kind_help(PIN_KIND_HDV, kb, 40);
     CHECK(strlen(kb) == 39, "format help: cut to the buffer");
 

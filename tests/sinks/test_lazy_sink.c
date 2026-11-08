@@ -29,6 +29,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#if !defined(_WIN32)
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
 
 static int exists(const char *path)
 {
@@ -114,6 +118,41 @@ static void empty_leaves_nothing(pin_format_t format, pin_kind_t kind, const cha
         CHECK(!exists(tmp_extra));
 }
 
+/* A sink whose open() creates the file and then fails, as ffv1_open() / hwenc_open() do when the
+ * header or the encoder fails after avio_open(). */
+static pin_status_t stub_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+{
+    (void)params;
+    if (!s->priv)
+        return PIN_ERR_IO;          /* refuses without touching the file */
+    FILE *f = fopen(path, "wb");
+    CHECK(f);
+    fputs("partial", f);
+    fclose(f);
+    return PIN_ERR_CODEC;
+}
+static pin_status_t stub_write(pin_sink_t *s, const uint8_t *d, size_t n)
+{
+    (void)s; (void)d; (void)n;
+    return PIN_OK;
+}
+static pin_status_t stub_close(pin_sink_t *s)
+{
+    free(s);
+    return PIN_OK;
+}
+static pin_sink_t *stub_sink(int creates)
+{
+    pin_sink_t *s = calloc(1, sizeof(*s));
+    CHECK(s);
+    s->priv = creates ? (void *)s : NULL;
+    s->open = stub_open;
+    s->write_unit = stub_write;
+    s->write_video = (pin_status_t (*)(pin_sink_t *, const uint8_t *, size_t))stub_write;
+    s->close = stub_close;
+    return s;
+}
+
 int main(void)
 {
     const size_t frame = (size_t)DV_SEQ_COUNT_PAL * DV_SEQ_SIZE;
@@ -130,6 +169,72 @@ int main(void)
     empty_leaves_nothing(PIN_FMT_ANALOG_AVI, PIN_KIND_ANALOG, "lazy_a2.avi", NULL);
     empty_leaves_nothing(PIN_FMT_ANALOG_FFV1_MKV, PIN_KIND_ANALOG, "lazy_a2.mkv", NULL);
     printf("OK: no unit, no file (raw, rewrap, analog)\n");
+
+    /* a unit the sink drops as damaged is not video: no count, and a file with only those is removed */
+    {
+        pin_sink_params_t p = params(PIN_KIND_DV, 720, 576, 25, 1, PIN_ASPECT_4_3);
+        pin_sink_t *s = pin_sink_lazy(pin_sink_create(PIN_FMT_DV_RAW));
+        CHECK(s && s->open(s, "lazy_dmg.dv", &p) == PIN_OK);
+        CHECK_EQ_I(s->write_unit(s, fr, 1000), PIN_OK);
+        pin_sink_status_t st;
+        s->get_status(s, &st);
+        CHECK_EQ_I(st.units_written, 0);
+        CHECK_EQ_I(s->close(s), PIN_OK);
+        CHECK(!exists("lazy_dmg.dv"));
+
+        s = pin_sink_lazy(pin_sink_create(PIN_FMT_DV_RAW));
+        CHECK(s && s->open(s, "lazy_dmg.dv", &p) == PIN_OK);
+        CHECK_EQ_I(s->write_unit(s, fr, 1000), PIN_OK);
+        CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_OK);
+        s->get_status(s, &st);
+        CHECK_EQ_I(st.units_written, 1);
+        CHECK_EQ_I(s->close(s), PIN_OK);
+        CHECK_EQ_I(size_of("lazy_dmg.dv"), (long)frame);
+        remove("lazy_dmg.dv");
+    }
+    printf("OK: damaged units are not counted as written\n");
+
+    /* an open that fails after creating the file leaves nothing; one that fails before keeps the old file */
+    {
+        pin_sink_params_t p = params(PIN_KIND_DV, 720, 576, 25, 1, PIN_ASPECT_4_3);
+        pin_sink_t *s = pin_sink_lazy(stub_sink(1));
+        CHECK(s && s->open(s, "lazy_fail.dv", &p) == PIN_OK);
+        CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_ERR_CODEC);
+        CHECK(exists("lazy_fail.dv"));
+        CHECK_EQ_I(s->close(s), PIN_ERR_CODEC);
+        CHECK(!exists("lazy_fail.dv"));
+
+        FILE *of = fopen("lazy_old.dv", "wb");
+        CHECK(of);
+        fputs("old take", of);
+        fclose(of);
+        s = pin_sink_lazy(stub_sink(0));
+        CHECK(s && s->open(s, "lazy_old.dv", &p) == PIN_OK);
+        CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_ERR_IO);
+        CHECK_EQ_I(s->close(s), PIN_ERR_IO);
+        CHECK_EQ_I(size_of("lazy_old.dv"), 8);
+        remove("lazy_old.dv");
+    }
+    printf("OK: a failed open leaves no file of its own\n");
+
+#if !defined(_WIN32)
+    /* the file cannot be created (the name is a directory): close() must not write a header into a
+     * muxer without a file */
+    {
+        pin_sink_params_t p = params(PIN_KIND_DV, 720, 576, 25, 1, PIN_ASPECT_4_3);
+        pin_format_t fmts[] = { PIN_FMT_DV_AVI, PIN_FMT_DV_MOV };
+        for (int i = 0; i < 2; i++) {
+            const char *dir = i ? "lazy_isdir.mov" : "lazy_isdir.avi";
+            CHECK(mkdir(dir, 0777) == 0);
+            pin_sink_t *s = pin_sink_lazy(pin_sink_create(fmts[i]));
+            CHECK(s && s->open(s, dir, &p) == PIN_OK);
+            CHECK(s->write_unit(s, fr, frame) != PIN_OK);
+            CHECK(s->close(s) != PIN_OK);
+            rmdir(dir);
+        }
+    }
+    printf("OK: a file that cannot be created does not crash close\n");
+#endif
 
     /* an existing file is not truncated before there is something to replace it with */
     {

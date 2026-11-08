@@ -347,7 +347,7 @@ MJ_FN(jstring, formatAspectHelp)(JNIEnv *env, jclass c, jint f)
     return mj_string(env, w);
 }
 
-/* The format setting's help for a kind (Core.KIND_*): HDV says MOV / MKV are not truly lossless; "" none. */
+/* The format setting's help for a kind (Core.KIND_*): AVI / MOV need a clean finish, HDV MOV / MKV are not truly lossless; "" none. */
 MJ_FN(jstring, formatKindHelp)(JNIEnv *env, jclass c, jint kind)
 {
     (void)c;
