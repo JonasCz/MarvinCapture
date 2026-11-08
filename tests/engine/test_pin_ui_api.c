@@ -190,6 +190,20 @@ static void test_counters(void)
     pin_format_frames(&st, b, sizeof(b));
     CHECK_STR(b, "Frames 1,234 \xc2\xb7 2 err \xc2\xb7 1,501 drop", "frames");
 
+    pin_format_capture_summary(&st, b, sizeof(b));
+    CHECK_STR(b, "Frames 1,234, with errors 2, dropped 1,501", "capture summary");
+    st.lost_blocks = 4321;
+    pin_format_capture_summary(&st, b, sizeof(b));
+    CHECK_STR(b, "Frames 1,234, with errors 2, dropped 1,501, 4,321 lost blocks", "summary with lost blocks");
+    st.lost_blocks = 0;
+    st.state = PIN_STATE_CAPTURING;
+    st.pass = 1;
+    st.passes = 1;
+    st.scene = 1;
+    pin_format_status_line(&st, b, sizeof(b));
+    CHECK(strstr(b, "  err 2  drops 1501") != NULL, "status line shows err and drops");
+    st.state = PIN_STATE_READY;
+
     st.clip_frames = 10;
     st.clip_frames_error = 1;
     st.clip_frames_dropped = 3;

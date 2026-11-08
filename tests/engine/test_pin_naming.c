@@ -143,6 +143,21 @@ static void test_collides(void)
           "a different base in the same directory has no collision");
 
     remove(path);
+
+    /* names differ only in case, ASCII or around UTF-8 bytes */
+    const char *files[] = { "CLIP-0001.DV", "Tape-pass-2.dv", "caf\xc3\xa9-0003.dv" };
+    const char *bases[] = { "clip", "tAPE", "CAF\xc3\xa9" };
+    for (int i = 0; i < 3; i++) {
+        snprintf(path, sizeof(path), "%s/%s", dir, files[i]);
+        f = fopen(path, "wb");
+        if (f)
+            fclose(f);
+        snprintf(base, sizeof(base), "%s/%s", dir, bases[i]);
+        CHECK(pin_naming_collides(base, "dv", first_match, sizeof(first_match)) == 1,
+              "numbered name collides regardless of case");
+        remove(path);
+        CHECK(pin_naming_collides(base, "dv", NULL, 0) == 0, "no collision once removed");
+    }
 }
 
 static void test_validate(void)

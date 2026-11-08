@@ -1219,6 +1219,9 @@ PIN_API void pin_format_signal(const pin_status_snapshot_t *st, char *out, size_
  * and its multi-line tooltip: totals (since capture start while capturing, else since
  * the app started), the current clip, and what counts as an error. */
 PIN_API void pin_format_frames(const pin_status_snapshot_t *st, char *out, size_t cap);
+/* One line for the end of a capture: "Frames 1,234, with errors 2, dropped 0" plus
+ * ", N lost blocks" when lost_blocks is non-zero. */
+PIN_API void pin_format_capture_summary(const pin_status_snapshot_t *st, char *out, size_t cap);
 PIN_API void pin_format_frames_detail(const pin_status_snapshot_t *st, char *out, size_t cap);
 
 /* "1.5 GB / 300.0 MB": everything this capture wrote / the current file. */

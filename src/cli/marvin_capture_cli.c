@@ -193,6 +193,19 @@ static void show_status(pin_session_t *s, int inplace)
     g_inplace_width = pad;
 }
 
+/* The totals of the capture that just ended, as a line that stays on screen. */
+static void print_capture_summary(pin_session_t *s)
+{
+    pin_status_snapshot_t st;
+    memset(&st, 0, sizeof(st));
+    st.size = sizeof(st);
+    if (pin_get_status(s, &st) != PIN_OK)
+        return;
+    char line[256];
+    pin_format_capture_summary(&st, line, sizeof(line));
+    say("%s", line);
+}
+
 /* ---- help wrapping ------------------------------------------------------ */
 
 /* Terminal width of stdout in columns, or 0 when it is not a terminal (then nothing is wrapped). */
@@ -550,6 +563,7 @@ int main(int argc, char **argv)
                 break;
             case PIN_EVT_CAPTURE_ENDED:
                 say("%s", ev.text);
+                print_capture_summary(s);
                 break;
             case PIN_EVT_NO_VIDEO:   /* the same sentence was just printed as the capture's end */
                 snprintf(last_error, sizeof(last_error), "%s", ev.text);   /* ... and is the exit-5 reason: not twice */

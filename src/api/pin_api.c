@@ -780,8 +780,9 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
 
     if (st->state == PIN_STATE_CAPTURING) {
         double mb = st->bytes_written / (1024.0 * 1024.0);
-        snprintf(out, cap, "REC%s%s  pass %d/%d  scene %d  %.1f MB  %.0f s  drops %llu",
+        snprintf(out, cap, "REC%s%s  pass %d/%d  scene %d  %.1f MB  %.0f s  err %llu  drops %llu",
                  tc, deck, st->pass, st->passes, st->scene, mb, st->elapsed_s,
+                 (unsigned long long)st->frames_error,
                  (unsigned long long)(st->frames_dropped + st->write_dropped));
     } else if (st->state == PIN_STATE_ERROR) {
         snprintf(out, cap, "Error: %s", st->error_text);
@@ -992,6 +993,22 @@ void pin_format_frames(const pin_status_snapshot_t *st, char *out, size_t cap)
     pin_ui_format_count(st->frames_error, e, sizeof(e));
     pin_ui_format_count(st->frames_dropped + st->write_dropped, d, sizeof(d));
     snprintf(out, cap, "Frames %s " MIDDOT " %s err " MIDDOT " %s drop", f, e, d);
+}
+
+void pin_format_capture_summary(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!st || !out || cap == 0)
+        return;
+    char f[32], e[32], d[32], l[48] = "";
+    pin_ui_format_count(st->frames, f, sizeof(f));
+    pin_ui_format_count(st->frames_error, e, sizeof(e));
+    pin_ui_format_count(st->frames_dropped + st->write_dropped, d, sizeof(d));
+    if (st->lost_blocks) {
+        char n[32];
+        pin_ui_format_count(st->lost_blocks, n, sizeof(n));
+        snprintf(l, sizeof(l), ", %s lost blocks", n);
+    }
+    snprintf(out, cap, "Frames %s, with errors %s, dropped %s%s", f, e, d, l);
 }
 
 void pin_format_frames_detail(const pin_status_snapshot_t *st, char *out, size_t cap)

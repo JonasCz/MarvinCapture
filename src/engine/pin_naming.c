@@ -32,10 +32,16 @@ static int is_sep(char c)
     return c == '/' || c == '\\';
 }
 
+/* ASCII-only folding: bytes of UTF-8 sequences are left alone in any locale */
+static int fold(unsigned char c)
+{
+    return (c >= 'A' && c <= 'Z') ? c + 32 : c;
+}
+
 static int str_iequal(const char *a, const char *b)
 {
     while (*a && *b) {
-        if (tolower((unsigned char)*a) != tolower((unsigned char)*b))
+        if (fold((unsigned char)*a) != fold((unsigned char)*b))
             return 0;
         a++;
         b++;
@@ -55,7 +61,10 @@ static int ends_with_iext(const char *name, const char *ext)
 
 static int starts_with(const char *name, const char *prefix)
 {
-    return strncmp(name, prefix, strlen(prefix)) == 0;
+    for (; *prefix; name++, prefix++)
+        if (!*name || fold((unsigned char)*name) != fold((unsigned char)*prefix))
+            return 0;
+    return 1;
 }
 
 #define PIN_NAME_MAX_BYTES 200 /* 255 minus "-pass-99-0001.ext" and some slack */
@@ -197,8 +206,8 @@ static void split_dir_and_base(const char *base_no_ext, char *dir, size_t dir_si
     }
 
     size_t dlen = (size_t)(last_sep - base_no_ext);
-    if (dlen == 0)
-        dlen = 1; /* root "/" */
+    if (dlen == 0 || (dlen == 2 && base_no_ext[1] == ':'))
+        dlen++; /* the root: "/" or "C:\" (not the drive's current directory) */
     if (dlen >= dir_size)
         dlen = dir_size - 1;
     memcpy(dir, base_no_ext, dlen);
@@ -244,8 +253,9 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
         if (match) {
             found = 1;
             if (first_match && first_match_size > 0) {
-                snprintf(first_match, first_match_size, "%s%c%s",
-                         dir, (strchr(dir, '\\') ? '\\' : '/'), name);
+                size_t dl = strlen(dir);
+                snprintf(first_match, first_match_size, "%s%s%s", dir,
+                         is_sep(dir[dl - 1]) ? "" : (strchr(dir, '\\') ? "\\" : "/"), name);
             }
             break;
         }
