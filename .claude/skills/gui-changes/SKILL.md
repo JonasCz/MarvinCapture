@@ -20,7 +20,7 @@ the per-platform code to widgets, dialogs, bindings and the native call layer.
 Before writing C# or Swift logic, ask "would the other GUI need this too?". If yes,
 it goes in the core and the GUI calls it through `pin_api.h`. Examples already done that way: output naming
 and collision/free-space checks (`pin_check_output`), file name validation
-(`pin_naming_validate`), settings, command-line parsing, scene splitting, the next
+(`pin_naming_validate`, `pin_validate_output_name` for the typed name), settings, command-line parsing, scene splitting, the next
 file number (`pin_next_file_number`), every status-bar / device-list text
 (`pin_format_status_short`, `pin_format_signal`, `pin_format_frames`,
 `pin_format_sizes`, `pin_format_storage_*`, `pin_format_bytes`,

@@ -873,6 +873,12 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         }
         boolean auto = autoCapture && !forceManual;
         forceManual = false;
+        // pin_check_output sees only the combined path: a name with a folder or drive in it is caught here
+        String nameError = Core.validateOutputName(Settings.name(Settings.input() != Core.INPUT_DV));
+        if (nameError != null && !nameError.isEmpty()) {
+            showInfo("Invalid file name", nameError, true);
+            return;
+        }
         CaptureService.Plan p = svc.buildPlan(auto);
         long[] nums = new long[5];
         String[] strs = { "", "" };

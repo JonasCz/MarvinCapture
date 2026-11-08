@@ -193,6 +193,32 @@ static void test_validate(void)
     CHECK(pin_naming_validate(longname, why, sizeof(why)) == 0, "too long");
 }
 
+static void test_validate_name(void)
+{
+    char why[256];
+    CHECK(pin_naming_validate_name("wedding", why, sizeof(why)) == 1, "plain name ok");
+    CHECK(pin_naming_validate_name("tape 1.final", why, sizeof(why)) == 1, "dots and spaces inside ok");
+    CHECK(pin_naming_validate_name("sub/clip", why, sizeof(why)) == 0 && strstr(why, "folder"),
+          "'/' rejected as a folder");
+    CHECK(pin_naming_validate_name("sub\\clip", why, sizeof(why)) == 0 && strstr(why, "folder"),
+          "'\\' rejected as a folder");
+    CHECK(pin_naming_validate_name("E:\\tapes\\wedding", why, sizeof(why)) == 0 && strstr(why, "drive"),
+          "drive and folder rejected");
+    CHECK(pin_naming_validate_name("E:wedding", why, sizeof(why)) == 0 && strstr(why, "drive"),
+          "bare drive spec rejected");
+    CHECK(pin_naming_validate_name("../x", why, sizeof(why)) == 0, "parent folder rejected");
+    CHECK(pin_naming_validate_name("", why, sizeof(why)) == 0, "empty rejected");
+    CHECK(pin_naming_validate_name("CON", why, sizeof(why)) == 0, "reserved name rejected");
+    CHECK(pin_naming_validate_name(NULL, why, sizeof(why)) == 0, "NULL rejected");
+    CHECK(pin_naming_validate_name("a/b", NULL, 0) == 0, "no reason buffer is fine");
+}
+
+static void test_collides_unknown(void)
+{
+    /* a folder that is not there cannot hold a colliding file */
+    CHECK(pin_naming_collides("pin_naming_no_such_dir/x", "dv", NULL, 0) == 0, "missing folder: no collision");
+}
+
 static void test_folder_exists(void)
 {
     const char *dir = "pin_naming_test_dir";
@@ -232,6 +258,8 @@ int main(void)
     test_build();
     test_collides();
     test_validate();
+    test_validate_name();
+    test_collides_unknown();
     test_folder_exists();
     test_low_space();
 

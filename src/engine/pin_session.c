@@ -4119,9 +4119,11 @@ void pin_session_close(pin_session_t *s)
     pin_closer_destroy(s->closer); /* before the event queue it reports to goes */
     pin_holdback_free(&s->hold);
     pin_split_free(&s->split);
-    pinnacle_lock_release(s->lock);
+    /* The interface is released before the lock, so whoever takes the lock next can claim it
+     * at once instead of failing with a USB error. */
     if (!s->is_replay)
         pinnacle_close(&s->dev);
+    pinnacle_lock_release(s->lock);
     pin_previewer_destroy(s->preview);
     pin_hdv_audio_destroy(s->hdv_audio);
     free(s->mon_buf);
@@ -4377,14 +4379,17 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     char first_match[PIN_PATH_MAX];
     /* numbered naming: the caller already picked an unused number */
     int coll = o->first_number ? 0 : pin_naming_collides(base, ext, first_match, sizeof(first_match));
+    int coll_unknown = coll < 0;
     if (coll <= 0 && !o->first_number && s->input == PIN_INPUT_DV) {
         /* a tape can change between DV and HDV: the capture then goes on in the other kind's
          * format and extension, under the same base name (format_cut_begin()) */
         pin_format_t other = kind == PIN_KIND_HDV ? o->format_dv : o->format_hdv;
         char other_ext[16];
         format_ext(o, other, other_ext, sizeof(other_ext));
-        if (strcmp(other_ext, ext) != 0)
+        if (strcmp(other_ext, ext) != 0) {
             coll = pin_naming_collides(base, other_ext, first_match, sizeof(first_match));
+            coll_unknown |= coll < 0;
+        }
     }
     out->collision = coll > 0;
 
@@ -4418,6 +4423,10 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     }
     if (out->collision)
         snprintf(out->message, sizeof(out->message), "%.200s already exists", first_match);
+    else if (coll_unknown)   /* the GUIs ask "Capture anyway?" for any message */
+        snprintf(out->message, sizeof(out->message),
+                 "Could not check whether files with this name already exist in the folder. "
+                 "An earlier capture may be overwritten");
     else if (out->fat32)   /* DV / HDV go on in a new file at the limit, analog stops there */
         pin_stop_file_limit_note(file_limit, kind == PIN_KIND_ANALOG,
                                  bytes_per_s > 0 ? pin_stop_file_cap(file_limit) / bytes_per_s / 60.0 : 0,

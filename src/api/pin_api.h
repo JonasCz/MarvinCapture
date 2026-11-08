@@ -1164,6 +1164,13 @@ PIN_API void pin_format_time_left(double seconds, char *out, size_t cap);
  * part means ".". */
 PIN_API uint32_t pin_next_file_number(const char *path);
 
+/* Checks the file NAME the user typed, before the GUI combines it with the output folder:
+ * returns 1 if usable, else 0 with the reason (UTF-8) in reason. Rejects what
+ * pin_check_output() reports for a bad name and also a name that reaches outside the chosen
+ * folder: a '/' or '\\' in it, or a drive prefix such as "E:". pin_check_output() only sees the
+ * combined path and cannot tell the two parts apart. Show the reason as "Invalid file name". */
+PIN_API int pin_validate_output_name(const char *name, char *reason, size_t cap);
+
 /* Deck state as shown in the status bar: "Stopped", "Playing", "Paused", "Fast forward",
  * "Rewinding", "Camera recording", "No tape", else "—" (an em dash). Static, never NULL. */
 PIN_API const char *pin_deck_state_name(pin_deck_state_t s);

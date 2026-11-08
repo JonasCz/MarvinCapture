@@ -403,19 +403,43 @@ pinnacle_status_t pinnacle_lock_acquire(const char *device_id, pinnacle_lock_t *
     if (lock_path(device_id, path, sizeof(path)) != 0)
         return PINNACLE_ERR_LOCK;
 
-    int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
-    if (fd < 0) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle_lock: open '%s' failed: %s\n", path, strerror(errno));
-        return PINNACLE_ERR_LOCK;
-    }
+    int fd = -1;
+    for (int attempt = 0;; attempt++) {
+        fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+        if (fd < 0) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle_lock: open '%s' failed: %s\n", path, strerror(errno));
+            return PINNACLE_ERR_LOCK;
+        }
 
-    if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
-        int e = errno;
+        if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+            int e = errno;
+            close(fd);
+            if (e == EWOULDBLOCK) {
+                /* pinnacle_lock_query() holds a shared lock for an instant while it checks
+                 * for a stale file; that must not read as a device in use. */
+                if (attempt < 3) {
+                    usleep(2000);
+                    continue;
+                }
+                return PINNACLE_ERR_BUSY;
+            }
+            pin_logf(PIN_LOG_ERROR, "pinnacle_lock: flock '%s' failed: %s\n", path, strerror(e));
+            return PINNACLE_ERR_LOCK;
+        }
+
+        /* The file we locked may have been unlinked meanwhile (a release, or lock_query()
+         * removing a stale file) and replaced by another process's: two processes would then
+         * each hold a lock on a different inode. Only a lock on the file now at the path counts. */
+        struct stat by_fd, by_path;
+        if (fstat(fd, &by_fd) == 0 && stat(path, &by_path) == 0 &&
+            by_fd.st_dev == by_path.st_dev && by_fd.st_ino == by_path.st_ino)
+            break;
+        flock(fd, LOCK_UN);
         close(fd);
-        if (e == EWOULDBLOCK)
-            return PINNACLE_ERR_BUSY;
-        pin_logf(PIN_LOG_ERROR, "pinnacle_lock: flock '%s' failed: %s\n", path, strerror(e));
-        return PINNACLE_ERR_LOCK;
+        if (attempt >= 20) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle_lock: '%s' keeps being replaced\n", path);
+            return PINNACLE_ERR_LOCK;
+        }
     }
 
     pinnacle_lock_record_t rec;

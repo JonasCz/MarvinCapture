@@ -543,6 +543,17 @@ public static unsafe partial class Native
     /// <summary>pin_capture_opts_t.first_number for a capture to this path: one past the highest "name-NNNN.ext" in its directory.</summary>
     public static uint NextFileNumber(string path) => pin_next_file_number(path);
 
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int pin_validate_output_name(string name, byte* reason, nuint cap);
+
+    /// <summary>The core's check of a typed file name (no folder, no drive); null if usable, else the reason to show.</summary>
+    public static string? ValidateOutputName(string name)
+    {
+        const int cap = 256;
+        byte* buf = stackalloc byte[cap];
+        return pin_validate_output_name(name, buf, (nuint)cap) != 0 ? null : Utf8Fixed.Get(buf, cap);
+    }
+
     [LibraryImport(Lib)]
     private static partial nint pin_deck_state_name(PinDeckState s);
     public static string DeckStateName(PinDeckState s) => PtrToUtf8(pin_deck_state_name(s));

@@ -68,6 +68,12 @@ int pin_naming_build(const char *base_no_ext, const pin_naming_opts_t *opts, con
  * between platforms and file systems. */
 int pin_naming_validate(const char *path, char *reason, size_t reason_size);
 
+/* Validates a file NAME the user typed, before it is combined with a folder: everything
+ * pin_naming_validate() checks, and in addition no '/' or '\' (the name would otherwise
+ * reach into another folder, or onto another drive) and no drive prefix such as "E:".
+ * Returns 1 if usable, 0 if not, with the reason in reason (may be NULL). */
+int pin_naming_validate_name(const char *name, char *reason, size_t reason_size);
+
 /* 1 if the folder part of an output path exists (a path with no folder part, or only a
  * root or drive, counts as existing); else 0 with "The folder X does not exist" in reason
  * (may be NULL). The same rule the sink applies when it opens the file. */

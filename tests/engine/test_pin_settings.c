@@ -18,6 +18,7 @@
 
 #include "pin_settings.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static int g_failures = 0;
@@ -104,6 +105,129 @@ static void test_bool_variants_and_comments(void)
     remove(path);
 }
 
+static void write_file(const char *path, const char *data, size_t n)
+{
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL, "can write a test file");
+    if (f) {
+        fwrite(data, 1, n, f);
+        fclose(f);
+    }
+}
+
+static void test_parser_edge_cases(void)
+{
+    const char *path = "pin_settings_test_parser.ini";
+
+    /* BOM, a header with a trailing comment, a '#' comment, a header whose keys must not
+     * leak into the previous section */
+    const char *txt = "\xEF\xBB\xBF[Paths] ; where\n"
+                      "firmware_dir=/fw\n"
+                      "[General]   # more\n"
+                      "a=1\n"
+                      "[Odd]x]\n"
+                      "b=2\n";
+    write_file(path, txt, strlen(txt));
+    pin_settings_t s;
+    pin_settings_init(&s);
+    CHECK(pin_settings_load(&s, path) == 0, "load with BOM succeeds");
+    CHECK(strcmp(pin_settings_get_string(&s, "Paths", "firmware_dir", ""), "/fw") == 0,
+          "BOM does not become part of the first section");
+    CHECK(strcmp(pin_settings_get_string(&s, "General", "a", ""), "1") == 0,
+          "header followed by a comment is a header");
+    CHECK(strcmp(pin_settings_get_string(&s, "Odd]x", "b", ""), "2") == 0,
+          "a ']' inside the section name still works");
+    CHECK(s.count == 3, "no stray entries");
+    pin_settings_free(&s);
+
+    /* a line over 4095 bytes: one entry (or none), never split into bogus ones */
+    size_t big = 10000;
+    char *buf = malloc(big + 64);
+    CHECK(buf != NULL, "alloc");
+    if (buf) {
+        size_t n = (size_t)sprintf(buf, "[S]\nlong=");
+        memset(buf + n, 'x', big);
+        n += big;
+        n += (size_t)sprintf(buf + n, "\nbogus=zzz\nafter=ok\n");
+        /* text that would parse as an entry if the line were split at 4095 bytes */
+        memcpy(buf + 5000, "bogus2=1", 8);
+        write_file(path, buf, n);
+        free(buf);
+        pin_settings_init(&s);
+        CHECK(pin_settings_load(&s, path) == 0, "load with a long line succeeds");
+        CHECK(strcmp(pin_settings_get_string(&s, "S", "after", ""), "ok") == 0,
+              "the line after a long one is read");
+        CHECK(strlen(pin_settings_get_string(&s, "S", "long", "")) > 4095,
+              "a long value is read whole");
+        CHECK(strcmp(pin_settings_get_string(&s, "S", "bogus2", "none"), "none") == 0,
+              "a long line is not split into entries");
+        pin_settings_free(&s);
+    }
+    remove(path);
+}
+
+static void test_many_sections_written_once(void)
+{
+    const char *path = "pin_settings_test_many.ini";
+    pin_settings_t s;
+    pin_settings_init(&s);
+    for (int i = 0; i < 600; i++) {
+        char sec[32], key[32];
+        snprintf(sec, sizeof(sec), "sec%d", i);
+        snprintf(key, sizeof(key), "k%d", i);
+        pin_settings_set_int(&s, sec, key, i);
+        pin_settings_set_int(&s, sec, "second", i);
+    }
+    CHECK(pin_settings_save(&s, path) == 0, "save 600 sections");
+    pin_settings_free(&s);
+
+    pin_settings_init(&s);
+    CHECK(pin_settings_load(&s, path) == 0, "load 600 sections");
+    CHECK(s.count == 1200, "every entry once");
+    CHECK(pin_settings_get_int(&s, "sec599", "k599", -1) == 599, "last section intact");
+    pin_settings_free(&s);
+
+    /* the file has each header exactly once */
+    FILE *f = fopen(path, "rb");
+    int headers = 0;
+    char line[128];
+    while (f && fgets(line, sizeof(line), f))
+        if (line[0] == '[')
+            headers++;
+    if (f)
+        fclose(f);
+    CHECK(headers == 600, "each section header written once");
+    remove(path);
+}
+
+static void test_load_failure_is_not_empty(void)
+{
+    /* a directory opens with fopen() on POSIX but cannot be read: not the same as "missing" */
+    pin_settings_t s;
+    pin_settings_init(&s);
+    pin_settings_set_string(&s, "A", "b", "c");
+    int rc = pin_settings_load(&s, ".");
+    CHECK(rc != 0, "an unreadable path fails instead of looking empty");
+    CHECK(s.count == 0, "entries are cleared on failure");
+    pin_settings_free(&s);
+}
+
+static void test_save_leaves_no_temp_file(void)
+{
+    const char *path = "pin_settings_test_tmp.ini";
+    pin_settings_t s;
+    pin_settings_init(&s);
+    pin_settings_set_string(&s, "A", "b", "c");
+    CHECK(pin_settings_save(&s, path) == 0, "save");
+    CHECK(pin_settings_save(&s, path) == 0, "save again");
+    pin_settings_free(&s);
+    remove(path);
+    /* a save into a missing directory fails without leaving anything */
+    pin_settings_init(&s);
+    CHECK(pin_settings_save(&s, "no_such_dir_pin/settings.ini") != 0, "missing dir fails");
+    pin_settings_free(&s);
+}
+
 static void test_default_path(void)
 {
     char path[2048];
@@ -146,6 +270,10 @@ int main(void)
     test_missing_file_is_empty();
     test_round_trip();
     test_bool_variants_and_comments();
+    test_parser_edge_cases();
+    test_many_sections_written_once();
+    test_load_failure_is_not_empty();
+    test_save_leaves_no_temp_file();
     test_default_path();
 
     if (g_failures == 0) {

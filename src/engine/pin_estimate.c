@@ -98,7 +98,10 @@ int pin_est_store_ffv1(const char *settings_path, double bytes_per_hour)
         return -1;
     pin_settings_t st;
     pin_settings_init(&st);
-    pin_settings_load(&st, settings_path);
+    if (pin_settings_load(&st, settings_path) != 0) {   /* saving now would wipe the real file */
+        pin_settings_free(&st);
+        return -1;
+    }
     pin_settings_set_double(&st, FFV1_SECTION, FFV1_KEY, bytes_per_hour);
     int rc = pin_settings_save(&st, settings_path);
     pin_settings_free(&st);

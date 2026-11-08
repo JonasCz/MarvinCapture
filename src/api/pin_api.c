@@ -830,6 +830,11 @@ void pin_format_time_left(double seconds, char *out, size_t cap)
     pin_ui_format_time_left(seconds, out, cap);
 }
 
+int pin_validate_output_name(const char *name, char *reason, size_t cap)
+{
+    return pin_naming_validate_name(name, reason, cap);
+}
+
 uint32_t pin_next_file_number(const char *path)
 {
     char ext_buf[PIN_FMT_COUNT][sizeof(((pin_format_info_t *)0)->extension)];
@@ -1383,7 +1388,10 @@ pin_status_t pin_settings_set(const char *key, const char *value)
         return PIN_ERR_IO;
     pin_settings_t st;
     pin_settings_init(&st);
-    pin_settings_load(&st, path);
+    if (pin_settings_load(&st, path) != 0) {   /* saving now would wipe the real file */
+        pin_settings_free(&st);
+        return PIN_ERR_IO;
+    }
 
     char section[PIN_NAME_MAX] = "General";
     const char *dot = strchr(key, '.');

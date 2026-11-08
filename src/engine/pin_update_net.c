@@ -159,6 +159,9 @@ typedef int (*curl_easy_getinfo_fn)(CURL *, int, ...);
 #define CURLOPT_USERAGENT 10018
 #define CURLOPT_WRITEFUNCTION 20011
 #define CURLOPT_FOLLOWLOCATION 52
+#define CURLOPT_REDIR_PROTOCOLS 182          /* long bit mask; deprecated since 7.85.0 */
+#define CURLOPT_REDIR_PROTOCOLS_STR 10319    /* string; 7.85.0 and later */
+#define CURLPROTO_HTTPS 2L
 #define CURLOPT_NOSIGNAL 99
 #define CURLOPT_TIMEOUT_MS 155
 #define CURLOPT_CONNECTTIMEOUT_MS 156
@@ -199,6 +202,11 @@ static int fetch_http(const char *url, uint32_t timeout_ms, body_t *b)
         setopt(h, CURLOPT_USERAGENT, "MarvinCapture/" PIN_APP_VERSION);
         setopt(h, CURLOPT_NOSIGNAL, 1L);
         setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
+        /* A redirect may only lead to https, never down to http or another scheme. The string
+         * option is unknown to a libcurl older than 7.85.0 (the library is loaded at run time, so
+         * this cannot be an #if): then the older mask option is used. */
+        if (setopt(h, CURLOPT_REDIR_PROTOCOLS_STR, "https") != 0)
+            setopt(h, CURLOPT_REDIR_PROTOCOLS, CURLPROTO_HTTPS);
         setopt(h, CURLOPT_TIMEOUT_MS, (long)timeout_ms);
         setopt(h, CURLOPT_CONNECTTIMEOUT_MS, (long)timeout_ms);
         setopt(h, CURLOPT_WRITEFUNCTION, curl_write);

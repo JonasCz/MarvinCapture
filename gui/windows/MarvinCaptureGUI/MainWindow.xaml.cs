@@ -914,6 +914,14 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // pin_check_output sees only the combined path: a name with a folder or drive in it is caught here
+        var nameError = Native.ValidateOutputName(VM.IsDvInput ? VM.DvName : VM.AnalogName);
+        if (nameError != null)
+        {
+            VM.ShowInfo("Invalid file name", nameError, 3);
+            return;
+        }
+
         // "Play and capture" = rewind to the start of the tape, play, record.
         var opts = VM.BuildCaptureOpts(startDeck: playFirst, rewindFirst: playFirst);
         var st = VM.CheckOutput(in opts, out var check);

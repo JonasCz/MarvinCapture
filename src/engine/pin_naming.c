@@ -18,22 +18,28 @@
 
 #include "pin_naming.h"
 #include <ctype.h>
+#include <errno.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
 
 /* dirent.h is provided by MSYS2/mingw-w64 (our Windows toolchain) as well
- * as every POSIX system, so this one header covers all three target
- * platforms without an #ifdef _WIN32 fork. A pure-MSVC build (not used by
- * this project) would need FindFirstFile/FindNextFile instead. */
+ * as every POSIX system; on Windows its wide variants (_wopendir) are used. A pure-MSVC
+ * build (not used by this project) would need FindFirstFileW instead. */
 #include <dirent.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
 
 static int is_sep(char c)
 {
     return c == '/' || c == '\\';
 }
 
-/* ASCII-only folding: bytes of UTF-8 sequences are left alone in any locale */
+/* ASCII-only folding: bytes of UTF-8 sequences are left alone in any locale. A name that
+ * differs from an existing one only in the case of a non-ASCII letter therefore compares
+ * unequal, and so do the NFC and NFD spellings of one name (APFS keeps both apart on disk,
+ * case-insensitive HFS+ and NTFS do not): a collision on those names is not seen. */
 static int fold(unsigned char c)
 {
     return (c >= 'A' && c <= 'Z') ? c + 32 : c;
@@ -132,6 +138,22 @@ int pin_naming_validate(const char *path, char *reason, size_t reason_size)
         return 0;
     }
     return 1;
+}
+
+int pin_naming_validate_name(const char *name, char *reason, size_t reason_size)
+{
+    if (!name)
+        return fail(reason, reason_size, "No file name", 0);
+    /* Checked before the shared rules: those would accept "sub\\clip" (they look at the last
+     * component only) and report a drive prefix as a plain ':' problem. */
+    if (((name[0] >= 'A' && name[0] <= 'Z') || (name[0] >= 'a' && name[0] <= 'z')) && name[1] == ':')
+        return fail(reason, reason_size,
+                    "The file name can't start with a drive; choose the folder separately", 0);
+    for (const char *p = name; *p; p++)
+        if (is_sep(*p))
+            return fail(reason, reason_size,
+                        "The file name can't contain a folder (the characters '/' and '\\'); choose the folder separately", 0);
+    return pin_naming_validate(name, reason, reason_size);
 }
 
 int pin_naming_folder_exists(const char *path, char *reason, size_t reason_size)
@@ -252,17 +274,41 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
     const char *base_name;
     split_dir_and_base(base_no_ext, dir, sizeof(dir), &base_name);
 
-    DIR *d = opendir(dir);
-    if (!d)
+#if defined(_WIN32)
+    /* The paths are UTF-8; opendir() would read them as the ANSI code page and fail in a folder
+     * whose name has a non-ASCII letter. */
+    wchar_t wdir[4096];
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, dir, -1, wdir, 4096) <= 0)
         return -1;
+    _WDIR *d = _wopendir(wdir);
+#else
+    DIR *d = opendir(dir);
+#endif
+    if (!d) {
+        /* A folder that is not there holds no file to collide with; any other failure
+         * (permissions, I/O) means we cannot tell. */
+        return (errno == ENOENT || errno == ENOTDIR) ? 0 : -1;
+    }
 
     char prefix_dash[512];
     snprintf(prefix_dash, sizeof(prefix_dash), "%s-", base_name);
 
     int found = 0;
-    struct dirent *ent;
-    while ((ent = readdir(d)) != NULL) {
+    for (;;) {
+#if defined(_WIN32)
+        struct _wdirent *ent = _wreaddir(d);
+        char name_buf[1024];
+        if (!ent)
+            break;
+        if (WideCharToMultiByte(CP_UTF8, 0, ent->d_name, -1, name_buf, sizeof(name_buf), NULL, NULL) <= 0)
+            continue;   /* longer than any name we would have written */
+        const char *name = name_buf;
+#else
+        struct dirent *ent = readdir(d);
+        if (!ent)
+            break;
         const char *name = ent->d_name;
+#endif
         int match = 0;
 
         /* Exact "base.ext"? */
@@ -286,7 +332,11 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
             break;
         }
     }
+#if defined(_WIN32)
+    _wclosedir(d);
+#else
     closedir(d);
+#endif
     return found;
 }
 

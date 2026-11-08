@@ -966,6 +966,11 @@ final class WindowModel {
             showInfo("No output file", "Choose where to save the capture first.", .warning)
             return nil
         }
+        // pin_check_output sees only the combined path: a name with a folder or drive in it is caught here
+        if let nameError = Pin.validateOutputName(isDvInput ? dvName : analogName) {
+            showInfo("Invalid file name", nameError, .error)
+            return nil
+        }
         // "Automatic rewind & capture" = rewind to the start of the tape, play, record.
         let opts = buildCaptureOpts(startDeck: playFirst, rewindFirst: playFirst)
         guard let s = session else {

@@ -152,6 +152,8 @@ final class Core {
     static native String formatBytes(long bytes);
     static native String formatRemaining(double seconds);
     static native int nextFileNumber(String path);
+    /** The core's check of a typed file name (no folder, no drive): "" if usable, else the reason. */
+    static native String validateOutputName(String name);
     static native boolean stopReasonAbnormal(int reason);
     static native boolean stateIsCapturing(int state);
     static native void drainProcessLog();

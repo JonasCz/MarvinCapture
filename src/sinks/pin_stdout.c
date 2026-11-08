@@ -29,6 +29,7 @@
 #else
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <signal.h>
 #include <unistd.h>
 #endif
@@ -120,6 +121,16 @@ int pin_stdout_write(const void *data, size_t n)
         if (w < 0) {
             if (errno == EINTR)
                 continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                /* A non-blocking pipe inherited from the parent that is full: wait until the
+                 * reader has drained some. The timeout only bounds each wait; the loop goes
+                 * on until the data is written or the pipe fails. */
+                struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+                int pr = poll(&pfd, 1, 1000);
+                if (pr < 0 && errno != EINTR)
+                    return PIN_STDOUT_ERROR;
+                continue;
+            }
             return errno == EPIPE ? PIN_STDOUT_CLOSED : PIN_STDOUT_ERROR;
         }
         p += w;

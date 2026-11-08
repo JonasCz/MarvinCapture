@@ -788,20 +788,9 @@ Severity is high, medium or low, judged by how much data can go missing and how 
   - A stalled endpoint spins the loop, because every status but CANCELLED and NO_DEVICE resubmits. A record longer than 512 bytes is lost.
   - At stop, transfers that completed but were not yet delivered (up to about 290 ms) are discarded.
   - Second pass: the completed-but-undelivered transfers discarded at stop are those of the EP 0x88 read loop (`pinnacle_stream_read_loop_ex()`), not EP 0x84.
-- **The stdout pipe treats EAGAIN as fatal** (`pin_stdout_write()`). Low.
-  - A non-blocking stdout inherited from the parent ends the capture with WRITE_ERROR.
 - **Device locks.** Low. Testing required.
   - Windows: a thread-owned mutex lets the same thread open a device twice. If the opening thread exits, the abandoned mutex is accepted by the next process.
-  - POSIX: unlink-then-unlock leaves a race in which two processes can each lock a different inode.
-  - Second pass: `pin_session_close()` calls `pinnacle_lock_release()` before `pinnacle_close()`, so a second opener can take the lock while the interface is still claimed and fails at claim with a USB error instead of BUSY. Fix: swap the two calls.
-  - POSIX: `lock_query()` takes LOCK_SH on a stale file and unlinks it; an acquirer that opened the same file at that moment gets one spurious BUSY. Fix hint for the known race: compare `fstat(fd)` with `stat(path)` after the flock and retry.
   - Windows: the `Local\` mutex is per logon session, so a second logged-in user is not excluded.
-- **Settings save** (`pin_settings_save()`). Low.
-  - There is no fsync before the rename, so a power loss can leave a zero-length file.
-  - The fixed `.tmp` name lets the CLI and a GUI saving at the same time interleave.
-  - After 256 sections, sections are written twice.
-  - Second pass: `pin_settings_load()` returns 0 both for a missing file and for a failed `fopen()`, and `pin_settings_set()` / `pin_est_store_ffv1()` (from `rate_persist()` during FFV1 captures) then save. A transient EACCES or Windows sharing violation therefore writes a file holding only `[core] ffv1_bytes_per_hour`, losing `Paths.firmware_dir` and the per-device keys. Fix: fail on any error but ENOENT and skip the save.
-  - The parser: a UTF-8 BOM before the first header puts that whole section under `""`, and `[Paths] ; comment` is not read as a header, so its keys land in the previous section. The next save makes it permanent (reproduced). Lines over 4095 bytes split into bogus entries.
 
 ### 17.7 Checked, nothing found
 
@@ -851,9 +840,6 @@ items are marked "Second pass" under those items.
 - **N17. The FFV1 / hwenc 10 s watchdog turns a disk stall into a failed capture** (`ffv1_write_video()` / `ffv1_write_audio()`, hwenc `queue_push()` / `ring_push()`, from 5e2317f). Medium-low. Testing required.
   - The encoder thread muxes straight to the file. A drive stall over 10 s (spin-up, USB reset, network share, antivirus) fills the 8-frame queue in about 0.3 s, and the sink fails with `PIN_ERR_CODEC` although the 64-512 MiB writer ring in front could have absorbed it. Before 5e2317f the wait was unbounded.
   - After the watchdog fires, `ffv1_close()` / `hwenc_close()` still `pthread_join` a thread that may be stuck in a kernel write (dead share, pulled disk); the session then stays STOPPING until the OS returns.
-- **N20. CLI: a second SIGHUP, SIGTERM or SIGQUIT exits before the files are finalised** (`marvin_capture_cli.c` `note_interrupt()`: `if (++g_interrupts >= 2) _exit(130)`, from b712741). High for terminal use. Fix required; the double delivery is Testing required on a real terminal.
-  - Closing the terminal sends SIGHUP to the foreground job, and an interactive bash forwards its own SIGHUP to its jobs, so the CLI can get two within milliseconds and `_exit()` in the middle of `pin_close()`: no AVI index, no MKV / MOV trailer. SIGTERM followed by SIGHUP does the same. On Windows a Ctrl+C during the finalise wait still exits at once.
-  - Fix: only a repeated SIGINT should mean "quit now"; SIGHUP / SIGTERM / SIGQUIT should be idempotent.
 - **N21. Windows GUI launched from a console: Ctrl+C or closing the console skips `pin_close`** (`ConsoleOutput.cs` attaches to the parent console; the GUI registers no `SetConsoleCtrlHandler`). Medium for scripted use (`MarvinCaptureGUI.exe ... --exit-when-done`). Testing required.
   - b712741 added the handler to the CLI only. The process exits, `ReleaseSession` never runs, and the file is unfinalised. Fix: register a handler that releases the session and waits, as the CLI does.
 - **N22. Windows forced shutdown: `pin_close` runs in `WM_ENDSESSION` without a time bound** (`SessionEndGuard.WndProc`). Medium-low. Testing required.
@@ -871,7 +857,6 @@ items are marked "Second pass" under those items.
 - **N29. A partly failed initial URB submit ends the capture at the first wrap** (`pinnacle_stream_read_loop_ex()`). Low-medium. Testing required (usbfs ENOMEM, a small `usbfs_memory_mb`).
   - A failed submit marks only that slot; later slots stay submitted, and in-order delivery ends the capture with a USB error when `head` reaches the failed slot. Only `submitted == 0` is handled. Fix: shrink the queue to the first failing slot. `pinnacle_analog.c` `queue_init()` has a similar fault: a failed submit leaves `done = 0`, and `queue_free()` waits 2 s and leaks the queue.
 - **N30. Any non-zero return of `libusb_handle_events_timeout_completed()` ends the capture** (DV read loop and `pinnacle_analog_read_loop()`), LIBUSB_ERROR_INTERRUPTED included. Low. Testing required (a signal on the USB thread). DV reports it as a USB failure; analog skips the drain.
-- **N31. Settings: a failed read becomes an empty file on the next save.** Listed under 17.6 Settings save (second pass).
 - **N32. `close_capture()` in the CLI can wait 30 minutes, not interruptible** (`pin_session_capture_busy()` stays true while a sink is open after `set_error()` without a capture end). Low. Testing required.
 
 ### 18.3 Wrong numbers on screen
@@ -889,14 +874,12 @@ items are marked "Second pass" under those items.
 - **N43. macOS: a typed idle or duration limit is not applied when Capture is clicked** (`Views/Card.swift` `NumberField`, `TextField(value:format:)`; read by `WindowModel.buildCaptureOpts`). Medium (quiet). Testing required.
   - A number-formatted field commits only on Return or focus loss, and a push button or menu item does not take first responder. The box shows 30, the capture runs with the old value (0 = never stop) until the disk is full. Nothing in `gui/macos/Sources` ends editing before a capture. Fix: resign first responder before building the plan.
   - Windows has the same with the taskbar thumbnail Start button (NumberBox commits on focus loss; `TaskbarStartAsync`). A normal click is fine.
-- **N44. Windows: a name with a drive or folder escapes the chosen folder** (`MainViewModel.CombinePath` uses `Path.Combine`; `pin_naming_validate()` checks only the last component). Low-medium. Fix required.
-  - Folder `D:\Videos` and name `E:\tapes\wedding` write to E: without a warning; `sub\clip` writes into a folder that may not exist and fails later as WRITE_ERROR. macOS and Android only nest below the folder. The core should reject separators in the name, for all three GUIs.
-- **N45. The name-collision check fails open** (`pin_naming_collides()` uses `opendir()` and an ASCII-only `fold()`; the caller treats -1 as "no collision"). Medium if it happens (an earlier capture is overwritten). Testing required (Windows, MSYS2).
-  - mingw `opendir(char *)` is ANSI while the project passes UTF-8 paths, so in a folder like `Café` it fails and the collision check passes. Non-ASCII case (`ÉCRAN` vs `écran`) and NFC / NFD on APFS compare unequal. Fix: treat -1 as unknown and warn, or use `_wopendir`.
+- **N45. The name-collision check compares non-ASCII names byte-wise, and its Windows folder listing is untested** (`pin_naming_collides()`). Low. Testing required (Windows, MSYS2).
+  - The Windows listing now uses `_wopendir` / `_wreaddir` with UTF-8 conversion; try it in a folder like `Café`. An unreadable folder now makes the check "unknown" (the GUIs ask "Capture anyway?", the CLI refuses without `--overwrite`).
+  - The fold is ASCII-only: non-ASCII case (`ÉCRAN` vs `écran`) and NFC / NFD on APFS compare unequal, so those collisions are not seen.
 - **N46. Scene detector: a date break outvotes a continuous timecode** (`pin_scene.c` `classify()`, `state_advance()`). Low. Testing required.
   - A frame just after midnight with the new time but no date pack leaves {old date, 00:00:00} as the baseline; the next intact frame is 86400 s away and a spurious split is confirmed.
 - **N47. Standard change and Record can race** (`analog_tick()` sets `analog_restart`, unlocks, then `handle_inline_commands()`). Low. Testing required. A capture started in that window restarts at the new standard and continues the same file with a different frame size.
-- **N48. CLI with settings but no action prints "Nothing to do" and exits 0** (`MarvinCaptureCLI -i svideo --std pal`). Low. A pipeline that forgot `--capture` sees success and no file. Should be a usage error.
 
 ### 18.5 Smaller items
 
@@ -906,7 +889,6 @@ items are marked "Second pass" under those items.
 - **I2C write NAK ignored, config replies not matched** (`pinnacle_cfg.c` `pinnacle_i2c_write()`, `cfg_xfer()`): after one reply timeout every later exchange is one reply off. Testing required.
 - **`pin_deck_parse_timecode()`** reads drop frame from bit 7 of the frame byte; a camera using the DV convention (bit 6) shows non-drop. Testing required.
 - **`hdv_aux_scan_datetime()`** matches 0x62 / 0x63 / 0x13 at any byte offset. It has no caller today; it needs pack framing before it is used for splits.
-- **The update notice prints remote text unsanitised** (`pin_update.c`: `\u001b` in `release_notes` becomes a raw ESC on the terminal); libcurl redirects are not limited to https. Nothing downloads or replaces binaries.
 - **Scripts:**
   - `scripts/build.ps1` runs `dist\MarvinCaptureCLI.exe --help-text` before `marvin-core.dll`, libusb and winpthread are copied to dist, and does not check `$LASTEXITCODE`, so `docs/cli.md` can be rewritten with an empty help block (`build.sh` has the right order). Testing required on Windows.
   - `scripts/publish-release.sh` uploads every `*.exe`, `*.pkg`, `*.deb`, `*.apk` in DIR with no check that they carry this version or that every platform is there; a missing `version` key gives the tag `vnull`. The debug-signed APK check is only a warning without apksigner.
@@ -915,7 +897,7 @@ items are marked "Second pass" under those items.
 
 ### 18.6 Checked, nothing found (second pass)
 
-- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8, N9 and N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
+- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8, N9 and N11), 6f94979, b712741 (`SessionEndGuard`; except N21 and N22).
 - Reassembler chunking: 200 random lossy PAL and NTSC streams give identical output fed whole or in 1-byte to 5000-byte pieces. URB buffer reuse, ring order, teardown and URB status handling; `ts_buf` bounds; HDV source-packet alignment.
 - Analog: field weave and line offsets across transfers, the delivery ring (the producer waits, nothing dropped), drain at stop, 64-bit device time, the resampler (32 and 44.1 kHz within one sample over 32 M samples).
 - Writer ring, `pin_stdout` (short writes, EINTR, EPIPE, SIGPIPE), avi_writer layout, hdv_demux PTS unwrap and PES / PSI bounds, hdvmux PASS timestamps and thread shutdown.

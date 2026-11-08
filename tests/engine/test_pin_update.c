@@ -54,6 +54,11 @@ static void test_parse(void)
     CHECK(parse("{\"version\": \"1.0\", \"download_url\": \"javascript:alert(1)\"}", &i) == 0 &&
           i.download_url[0] == '\0', "non-http url dropped");
 
+    CHECK(parse("{\"version\": \"1.0\", \"release_notes\": \"a\\u001b[2Jb\\rc\\u007fd\\u009be\\nf\\tg\"}", &i) == 0 &&
+          strcmp(i.notes, "a [2Jb c d  e\nf\tg") == 0, "control characters in the notes become spaces");
+    CHECK(parse("{\"version\": \"1.0\", \"download_url\": \"https://e.com/\\u001b]0;x\"}", &i) == 0 &&
+          i.download_url[0] == '\0', "url with a control character dropped");
+
     CHECK(parse("1.0\n", &i) != 0, "plain old VERSION file rejected");
     CHECK(parse("{}", &i) != 0, "empty object");
     CHECK(parse("{\"version\": \"1.x\"}", &i) != 0, "non-numeric version");

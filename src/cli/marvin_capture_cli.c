@@ -64,13 +64,23 @@ static double now_s(void)
 
 /* ---- Ctrl-C, terminal loss, termination --------------------------------- */
 
-static volatile sig_atomic_t g_interrupts;   /* number of stop requests so far */
+static volatile sig_atomic_t g_interrupts;   /* nonzero: a clean stop was requested */
+static volatile sig_atomic_t g_sigints;      /* Ctrl+C presses so far */
 static volatile sig_atomic_t g_quiet;        /* the terminal is gone: print nothing more */
 
-static void note_interrupt(void)
+/* Any stop request. Idempotent: a terminal close can deliver SIGHUP and SIGTERM within
+ * milliseconds, and neither may cut the finalising short. */
+static void note_stop(void)
 {
-    if (++g_interrupts >= 2)
-        _exit(130);   /* second press: give up on the orderly stop */
+    g_interrupts = 1;
+}
+
+/* Only a repeated Ctrl+C means "quit now" (files left unfinalised), as in ffmpeg. */
+static void note_ctrl_c(void)
+{
+    note_stop();
+    if (++g_sigints >= 2)
+        _exit(130);
 }
 
 #if defined(_WIN32)
@@ -81,7 +91,7 @@ static BOOL WINAPI on_console_ctrl(DWORD type)
     switch (type) {
     case CTRL_C_EVENT:
     case CTRL_BREAK_EVENT:
-        note_interrupt();
+        note_ctrl_c();
         return TRUE;
     case CTRL_CLOSE_EVENT:
     case CTRL_LOGOFF_EVENT:
@@ -89,8 +99,7 @@ static BOOL WINAPI on_console_ctrl(DWORD type)
         /* Windows ends the process when this handler returns (and after a few seconds at the
          * latest): request the stop, then block until the main thread has finalised the files. */
         g_quiet = 1;
-        if (g_interrupts == 0)
-            g_interrupts = 1;
+        note_stop();
         if (g_finalised)
             WaitForSingleObject(g_finalised, INFINITE);
         return TRUE;
@@ -112,7 +121,10 @@ static void on_signal(int sig)
 {
     if (sig == SIGHUP)
         g_quiet = 1;   /* the terminal is gone: its writes would fail */
-    note_interrupt();
+    if (sig == SIGINT)
+        note_ctrl_c();
+    else
+        note_stop();
 }
 static void install_interrupt_handler(void)
 {
@@ -476,10 +488,10 @@ int main(int argc, char **argv)
         return 0;
     }
     if (!pin_script_needs_session(sc)) {
-        fprintf(stderr, "Nothing to do: the command line has settings but no action.\n"
+        fprintf(stderr, "error: the command line has settings but no action (such as --capture).\n"
                         "Run MarvinCaptureCLI --help for usage.\n");
         pin_script_free(sc);
-        return 0;
+        return 1;
     }
 
 #if !defined(_WIN32)
@@ -530,7 +542,7 @@ int main(int argc, char **argv)
     while (!done) {
         if (g_interrupts > 0 && !cancelled) {
             cancelled = 1;
-            say("Stopping: finalising files... (Ctrl-C again to quit at once)");
+            say("Stopping, finishing the file(s)... press Ctrl+C again to quit at once");
             pin_script_cancel(s);
         }
         pin_event_t ev;

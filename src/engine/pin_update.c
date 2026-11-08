@@ -214,6 +214,32 @@ static int is_dotted_number(const char *s)
     return digits > 0;
 }
 
+/* The notes come from a server and end up on a terminal: an ESC or CSI sequence in them could
+ * rewrite the screen, set the title or fake other output. Keep printable text, newline and tab;
+ * turn every other control character (C0, DEL, and the C1 range in its UTF-8 form) into a space. */
+static void sanitize_notes(char *s)
+{
+    for (unsigned char *p = (unsigned char *)s; *p; p++) {
+        if (*p == '\n' || *p == '\t')
+            continue;
+        if (*p < 0x20 || *p == 0x7f) {
+            *p = ' ';
+        } else if (*p == 0xC2 && p[1] >= 0x80 && p[1] <= 0x9F) {
+            p[0] = ' ';
+            p[1] = ' ';
+            p++;
+        }
+    }
+}
+
+static int has_control_char(const char *s)
+{
+    for (; *s; s++)
+        if ((unsigned char)*s < 0x20 || (unsigned char)*s == 0x7f)
+            return 1;
+    return 0;
+}
+
 int pin_update_parse(const char *json, size_t len, pin_update_info_t *info)
 {
     if (!json || !info)
@@ -273,8 +299,9 @@ int pin_update_parse(const char *json, size_t len, pin_update_info_t *info)
     if (!is_dotted_number(version))
         return -1;
     snprintf(info->latest, sizeof(info->latest), "%s", version);
+    sanitize_notes(notes);
     snprintf(info->notes, sizeof(info->notes), "%s", notes);
-    if (strncmp(url, "https://", 8) == 0 || strncmp(url, "http://", 7) == 0)
+    if ((strncmp(url, "https://", 8) == 0 || strncmp(url, "http://", 7) == 0) && !has_control_char(url))
         snprintf(info->download_url, sizeof(info->download_url), "%s", url);
     else
         info->download_url[0] = '\0';

@@ -252,6 +252,13 @@ enum Pin {
 
     static func nextFileNumber(path: String) -> UInt32 { pin_next_file_number(path) }
 
+    /// The core's check of a typed file name (no folder, no drive): nil if usable, else the reason to show.
+    static func validateOutputName(_ name: String) -> String? {
+        var buf = [CChar](repeating: 0, count: 256)
+        if pin_validate_output_name(name, &buf, buf.count) != 0 { return nil }
+        return String(cString: buf)
+    }
+
     static func checkOutput(_ s: Session, _ o: pin_capture_opts_t) -> (status: pin_status_t, check: pin_output_check_t) {
         var check = pin_output_check_t()
         check.size = UInt32(MemoryLayout<pin_output_check_t>.size)

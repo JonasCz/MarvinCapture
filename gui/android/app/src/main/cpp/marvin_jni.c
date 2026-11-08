@@ -446,6 +446,17 @@ MJ_FN(jint, nextFileNumber)(JNIEnv *env, jclass c, jstring path)
     return (jint)pin_next_file_number(p);
 }
 
+/* "" if the name is usable, else the reason. */
+MJ_FN(jstring, validateOutputName)(JNIEnv *env, jclass c, jstring name)
+{
+    (void)c;
+    char n[PIN_PATH_MAX], why[256] = "";
+    mj_utf8(env, name, n, sizeof(n));
+    if (pin_validate_output_name(n, why, sizeof(why)))
+        why[0] = 0;
+    return mj_string(env, why);
+}
+
 MJ_FN(jboolean, stopReasonAbnormal)(JNIEnv *env, jclass c, jint r)
 {
     (void)env; (void)c;

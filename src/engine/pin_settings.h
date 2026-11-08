@@ -23,9 +23,9 @@
  * attempted -- a save rewrites the file from the in-memory key/value
  * pairs, sections in first-seen order.
  *
- * Saving is atomic: write to "<path>.tmp" then rename it over the real
- * file, so a crash or power loss mid-save never leaves a half-written
- * settings file. On Windows the rename is MoveFileExW with
+ * Saving is atomic: write to a temp file next to it ("<path>.tmp.<pid>.<n>"), fsync it,
+ * then rename it over the real file, so a crash or power loss mid-save never leaves a
+ * half-written settings file. On Windows the rename is MoveFileExW with
  * MOVEFILE_REPLACE_EXISTING (POSIX rename() already replaces atomically).
  * Paths are accepted as UTF-8 everywhere, including on Windows, where they
  * are converted to UTF-16 (MultiByteToWideChar) before any Win32 file
@@ -57,11 +57,13 @@ void pin_settings_init(pin_settings_t *s);
 void pin_settings_free(pin_settings_t *s);
 
 /* Loads path (UTF-8) into s (which must already be initialised; existing
- * entries are cleared first). A missing file is not an error: s ends up
+ * entries are cleared first). A missing file (ENOENT) is not an error: s ends up
  * empty and this returns 0, so first-run works with no special case.
- * Returns 0 on success, -1 if the file exists but couldn't be parsed
- * (currently: only an unreadable/unopenable-for-a-reason-other-than-
- * missing file causes this). */
+ * Returns -1 if the file exists but can't be opened or read (permissions, a sharing
+ * violation, an I/O error). A caller that goes on to save must skip the save then,
+ * or it overwrites the real file with a near-empty one.
+ * A UTF-8 BOM is skipped; "[Section] ; comment" is a header; a line over 1 MiB is
+ * ignored as a whole. */
 int pin_settings_load(pin_settings_t *s, const char *path);
 
 /* Atomically writes s to path (UTF-8). Returns 0 on success, -1 on

@@ -352,10 +352,15 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
         for (int i = 0; i < ncand; i++) {
             pin_format_info_t fi = { .size = sizeof(fi) };
             char match[PIN_PATH_MAX];
-            if (pin_session_format_info(cand[i], &fi) == PIN_OK &&
-                pin_naming_collides(c->base, cand[i] == PIN_FMT_HDV_TS && c->ts_ext[0] ? c->ts_ext : fi.extension,
-                                    match, sizeof(match)) > 0)
+            if (pin_session_format_info(cand[i], &fi) != PIN_OK)
+                continue;
+            int coll = pin_naming_collides(c->base, cand[i] == PIN_FMT_HDV_TS && c->ts_ext[0] ? c->ts_ext : fi.extension,
+                                           match, sizeof(match));
+            if (coll > 0)
                 return failf(r, EXIT_USAGE, "%s already exists (use --overwrite to replace it)", match);
+            if (coll < 0)   /* nobody is there to confirm: do not risk an earlier capture */
+                return failf(r, EXIT_USAGE, "cannot check whether %s already has files named like this "
+                             "(use --overwrite to capture anyway)", c->path);
         }
     }
 
@@ -438,10 +443,15 @@ static int precheck_targets(run_t *r, pin_input_t start_input)
         for (int k = 0; k < ncand; k++) {
             pin_format_info_t fi = { .size = sizeof(fi) };
             char match[PIN_PATH_MAX];
-            if (pin_session_format_info(cand[k], &fi) == PIN_OK &&
-                pin_naming_collides(it->cap.base, cand[k] == PIN_FMT_HDV_TS && it->cap.ts_ext[0] ? it->cap.ts_ext : fi.extension,
-                                    match, sizeof(match)) > 0)
+            if (pin_session_format_info(cand[k], &fi) != PIN_OK)
+                continue;
+            int coll = pin_naming_collides(it->cap.base, cand[k] == PIN_FMT_HDV_TS && it->cap.ts_ext[0] ? it->cap.ts_ext : fi.extension,
+                                           match, sizeof(match));
+            if (coll > 0)
                 return failf(r, EXIT_USAGE, "%s already exists (use --overwrite to replace it)", match);
+            if (coll < 0)   /* nobody is there to confirm: do not risk an earlier capture */
+                return failf(r, EXIT_USAGE, "cannot check whether %s already has files named like this "
+                             "(use --overwrite to capture anyway)", it->cap.path);
         }
     }
     return 0;
