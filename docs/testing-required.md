@@ -448,11 +448,24 @@ What only a sender can show:
   restart happens only in READY (`analog_tick()`); geometry and audio packet size are fixed
   at the start. With `--std auto` the status shows the new standard while the file keeps
   the old geometry. The format watch of section 3 covers DV and HDV only.
-- **The signal drops or returns mid-capture** ([analog.md](analog.md)). Unknown whether
-  audio keeps coming while video stops. The assembler fills lost video black (a gap of a
-  second or more; 250 frames or more only while audio ran on) and lost audio with silence,
-  and leaves a gap in both streams unfilled (`test_analog_assembler`). Check on the device
-  that a signal loss is not filled and a host stall is, and that A/V stays in sync.
+- **The signal drops or returns mid-capture** ([analog.md](analog.md)). The assembler
+  fills lost video black (a gap of a second or more; 250 frames or more only while audio
+  ran on) and lost audio with silence, and leaves a gap in both streams unfilled
+  (`test_analog_assembler`). Whether that fill ever runs is unknown:
+  - The SAA7113H free-runs its line clock without a signal and could go on sending
+    frames of digitised noise ("snow"; grey, as the colour killer drops the chroma).
+    analog.md says the device sends nothing then, so either the FPGA gates the data on
+    the decoder's lock (the RTS pins, reg `0x12`) or the decoder output is not used
+    without lock. Not traced.
+  - If video stops only together with audio (signal loss) and a late host only gives
+    short frames with continuous counters (as measured), the fill never runs. It only
+    helps if the device can lose whole frames while audio keeps coming.
+  - Check: unplug and replug the source mid-capture, pause and stop a VCR, play blank
+    tape (snow from the VCR itself is a signal and is recorded), and stall the host
+    (a busy disk). Record which of video counter, audio counter and device time jump,
+    and whether frames come during the loss. If whole video frames are never lost while
+    audio runs, remove the fill code; if snow frames come through, decide whether to
+    keep them.
 - **Weak or jittery sources** (worn VHS) with `--std auto`.
 - **Past the 16-bit packet counters' wrap** (every 65,536 frames: 43.7 min PAL, 36.4 min
   NTSC; [usage.md](usage.md)): a capture of an hour or more, audio checked to the end. No
