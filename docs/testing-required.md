@@ -760,6 +760,7 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 - **R4. Resync takes 12000 bytes blindly.** Low-medium. Fix required (reproduced).
   - After a resync, `dif_feed()` takes a full sequence without looking for a header inside it.
   - One lost 480-byte packet in sequence S therefore corrupts S (shifted data) and zero-pads S+1.
+  - Second pass (reproduced): a hole in the *last* sequence of a frame is worse than this. The 12000-byte take swallows the head of the next frame's dseq 0, the frame in progress is already complete, and every following dseq 1..n-1 is then rejected as stale by `place_sequence()` until the next dseq 0. The next frame, though fully received, vanishes, and no counter moves (`sequences_dropped`, `frames_lost` and `dv_on_unit()` see nothing; only `on_loss` reports the lost blocks). One lost 480-byte packet at the wrong offset is enough: about 10% of short holes (NTSC) and 8% (PAL). Raised to high; see also 18.1 N1.
 - **R11. Analog audio lead-in loss.** Low. Testing required.
   - `sink_lazy.c` `lazy_write_audio()` drops audio until the first video unit has opened the file.
   - If the audio packet for frame F arrives before video frame F, the file starts with the audio of F+1: about 40 ms missing and a constant lag. Measure on the device.
@@ -775,15 +776,19 @@ Severity is high, medium or low, judged by how much data can go missing and how 
   - After ENOSPC, a pulled drive, a kill or a power loss, the file has RIFF size 0, zero frame counts and no index. ffmpeg can scan it; many players and editors cannot.
   - Multi-hour analog AVIs are exposed for their whole length. A periodic patch of the sizes and totals would limit the damage.
   - Section 9's pulled-stick test has been done for DV and pipes only; do it for analog AVI.
+  - Second pass: MOV is worse. No `movflags` are set anywhere in `src/`, so the mov muxer writes `moov` only in the trailer (DV MOV in `sink_rewrap.c`, HDV MOV in `sink_hdvmux.c`). After a kill, crash (see 18.2 N13), power loss, pulled drive or ENOSPC at the trailer the file is an `mdat` nothing can open (HDV MOV: about 11 GB per hour). MKV stays playable. [usage.md](usage.md) says an AVI or MOV with no index is still readable; that is true for AVI only. Fix: `frag_keyframe+empty_moov`, or fix the docs. Testing required (pull the drive during a MOV capture).
 - **R20. Damaged units counted as written; empty files left behind.** Low. Fix required.
   - `sink_raw.c` (a DV unit that is not 10 or 12 sequences) and `sink_nut.c` (a short video frame) drop the unit and return `PIN_OK`. `sink_lazy.c` counts every OK as written.
   - Effects: `units_written`, FILE_OPENED and `stop_no_video` are wrong for a file with no video, and `lazy_close()` never removes such an empty file.
   - `units_damaged` is read nowhere in the engine.
   - In NUT, a skipped video frame does not advance `vpts`, so audio drifts against video.
+  - Second pass: the same skip without `vpts++` exists in `sink_ffv1.c` `ffv1_write_video()` and `sink_hwenc.c` `hwenc_write_video()` / `process_picture()` (`len < expect` returns `PIN_OK`). Audio keeps its sample-exact pts, so every skipped frame moves later video 40 ms (33.4 ms) early against audio, as in NUT.
+  - A failed open after `avio_open` has created the file (header write, thread start or encoder open fails in `ffv1_open()` / `hwenc_open()`) leaves an empty or partial `.mkv`: `lazy_close()` removes the file only when `opened && units == 0`, and `opened` is still 0.
 - **R21. Android: finalising judged from a stale status.** Low. Fix required.
   - `CaptureService.closeSession()` takes `wasCapturing` from the last tick's snapshot, up to 1 s old. If a capture started within that time, the service leaves the foreground and releases the wake lock while `Core.close` is still finalising.
   - `onDestroy()` shuts the core thread down without waiting for it.
   - `goForeground()` swallows a `startForeground` failure (Android 12+ background-start limits), so the OS can kill a background capture with nothing shown to the user (11).
+  - Second pass: `MainActivity.onNewIntent()` closes the session on the same stale `isCapturing()` read (reachable only through the replay extra). Fix it in `closeSession()` itself.
 
 ### 17.4 Wrong numbers on screen
 
@@ -793,6 +798,7 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 - **R25. `hdv_error_analyze()` counts a flagged discontinuity as an error.** Low. Fix required.
   - `hdv_error.c` counts the CC error before it checks `discontinuity_indicator`; the branch for that check is empty.
   - The reassembler honours the flag, so the two disagree on a legitimate CC jump. Does the Canon set it at recording boundaries (1.1)?
+  - Second pass: `own = tei || sync_lost || ...` counts a TEI or bad sync byte on any PID, so one on an audio or PSI packet taints the following P and B pictures. The skill file says an audio-only gap does not spread; that holds for CC gaps only. Probably never set on FireWire HDV. Testing required.
 - **R26. Free-space estimate.** Low-medium. Fix required.
   - The core memsets the status, so `est_seconds_left` is 0 when there is no estimate. `pin_api.h` says "0 if no hint" and `NativeStructs.cs` says "< 0 = unknown".
   - `pin_format_storage_free()` and `pin_format_storage_detail()` test `>= 0`, so they show "0 min left". `test_pin_ui_api.c` sets -1 by hand and misses it.
@@ -801,6 +807,7 @@ Severity is high, medium or low, judged by how much data can go missing and how 
   - The total adds `write_dropped`, but `clip_frames_dropped` does not. `write_dropped` is reset once per capture, not per file.
   - `write_dropped` counts audio blocks too, so "Dropped" mixes frames and audio blocks.
   - In practice only a burst before a DISK_SLOW end.
+  - Second pass: in the encoder sinks a writer-ring drop also shifts A/V. Video frames and audio blocks are dropped independently, and the sinks ignore the unit index, so each dropped video frame moves later video one frame early against audio (and the reverse for audio). Same burst-before-DISK_SLOW window.
 - **R28. Byte totals are wrong at file cuts and for encoder sinks.** Low. Fix required.
   - `hand_over_file()` adds the old file to `bytes_closed`, but `s->bytes_written` is refreshed only in the next `dv_tick()`. For up to 50 ms the total counts the previous file twice.
   - `close_job()` reads the bytes before `sink->close`. Only hdvmux corrects them through `final_status`. For ffv1 and hwenc, the queue, the FLAC ring, the encoder lookahead and the trailer are missing, and a short DV H.264 clip can report 0 bytes.
@@ -834,17 +841,24 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 - **EP 0x84 resubmit loop** (`ep84_cb`). Low.
   - A stalled endpoint spins the loop, because every status but CANCELLED and NO_DEVICE resubmits. A record longer than 512 bytes is lost.
   - At stop, transfers that completed but were not yet delivered (up to about 290 ms) are discarded.
+  - Second pass: the completed-but-undelivered transfers discarded at stop are those of the EP 0x88 read loop (`pinnacle_stream_read_loop_ex()`), not EP 0x84. They add to the pass-end loss in 18.1 N3.
 - **The last pending DV frame at a user stop** (`handle_inline_commands()`) is not
   written, and the counters keep running after CAPTURE_ENDED. At most one frame. Low.
+  - Second pass: wider than a user stop, see 18.1 N3: at a pass end the frame stays in the reassembler and is written as the first frame of the *next* file.
 - **The stdout pipe treats EAGAIN as fatal** (`pin_stdout_write()`). Low.
   - A non-blocking stdout inherited from the parent ends the capture with WRITE_ERROR.
 - **Device locks.** Low. Testing required.
   - Windows: a thread-owned mutex lets the same thread open a device twice. If the opening thread exits, the abandoned mutex is accepted by the next process.
   - POSIX: unlink-then-unlock leaves a race in which two processes can each lock a different inode.
+  - Second pass: `pin_session_close()` calls `pinnacle_lock_release()` before `pinnacle_close()`, so a second opener can take the lock while the interface is still claimed and fails at claim with a USB error instead of BUSY. Fix: swap the two calls.
+  - POSIX: `lock_query()` takes LOCK_SH on a stale file and unlinks it; an acquirer that opened the same file at that moment gets one spurious BUSY. Fix hint for the known race: compare `fstat(fd)` with `stat(path)` after the flock and retry.
+  - Windows: the `Local\` mutex is per logon session, so a second logged-in user is not excluded.
 - **Settings save** (`pin_settings_save()`). Low.
   - There is no fsync before the rename, so a power loss can leave a zero-length file.
   - The fixed `.tmp` name lets the CLI and a GUI saving at the same time interleave.
   - After 256 sections, sections are written twice.
+  - Second pass: `pin_settings_load()` returns 0 both for a missing file and for a failed `fopen()`, and `pin_settings_set()` / `pin_est_store_ffv1()` (from `rate_persist()` during FFV1 captures) then save. A transient EACCES or Windows sharing violation therefore writes a file holding only `[core] ffv1_bytes_per_hour`, losing `Paths.firmware_dir` and the per-device keys. Fix: fail on any error but ENOENT and skip the save.
+  - The parser: a UTF-8 BOM before the first header puts that whole section under `""`, and `[Paths] ; comment` is not read as a header, so its keys land in the previous section. The next save makes it permanent (reproduced). Lines over 4095 bytes split into bogus entries.
 - **Unchecked `realloc`** in `avi_writer.c` (`ix_add()`, the idx1 list). Negligible.
 
 ### 17.7 Checked, nothing found
@@ -861,3 +875,156 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 - JNI indexes and the Windows struct mirror.
 - The overwrite prompts in all three GUIs.
 - The `rm -rf` targets in `scripts/`.
+
+## 18. Code review, second pass: data loss and wrong counts
+
+A second reading of the code (November 2026), after the fixes in 4a49606, 5f66c1e, 5e2317f,
+b712741, 6f94979, ebedc07 and b43f2f6. MarvinCapture only (core, GUIs, CLI, scripts; not
+MarvinPlayout). Same marks as section 17: **Fix required** or **Testing required**, severity
+high, medium or low. "Reproduced" means a scratch harness that feeds synthetic data to the
+static functions showed it. The rest comes from reading the code. Additions to section 17
+items are marked "Second pass" under those items.
+
+### 18.1 Frames lost, mangled or put in the wrong file
+
+- **N1. `frames_between()` invents lost frames and splits good frames** (`dv_reassembler.c`, from 4a49606). Medium-high. Fix required (reproduced).
+  - `t = (dbc_pending * 41) & 0xFF` assumes the lost block count is a multiple of 25 (whole sequences). Nothing checks that. For other hole lengths `t` is arbitrary, and for about 1 in n lengths `t - (dseq - last - 1)` is a multiple of n. The sequence holding the start of the hole is placed with the gap still pending, so the code invents frame boundaries and lost frames.
+  - PAL, 8 packets lost mid-sequence: `frames_lost = 6` although every frame arrived (hole lengths 8, 16, 24, 52, 60, 68, 88, 96 at almost every offset). NTSC, 1 lost header packet: 4 phantom frames.
+  - The bogus boundary calls `frame_finish()` early: a good frame is cut in two and an extra, mostly empty frame is written. Combined with N2 an intact frame can disappear while phantom losses are reported.
+  - The reverse also happens: a real whole-frame loss that is not sequence-aligned is not counted (NTSC, 255 packets at a frame start: `frames_lost = 0`).
+  - The existing loss tests drop only sequence-aligned runs of 25 packets. The FX2 / FPGA drops arbitrary 480-byte packets.
+  - Fix: keep the unreduced block count and use `t` only when it is a multiple of 25 and small; otherwise order by dseq and estimate frames as blocks / (25 * n). Test: drop 1..60 packets at every offset.
+- **N2. A damaged last sequence makes the next, intact frame vanish uncounted.** High. Fix required (reproduced). Listed under R4 (second pass), which it extends.
+- **N3. The live DV / HDV path never flushes or resets the reassembler between passes or captures** (`pin_session.c` `dv_tick()` pass branch, `capture_end()`, `do_run_dv()`). Medium-low. Fix required (reproduced).
+  - A frame is emitted only when the next frame's first sequence arrives, or at `dv_reassembler_finish()`, which `do_run_dv()` calls only when the read loop ends.
+  - At a pass end (no signal, time limit) `finish_file()` closes the file while the reassembler still holds the last frame. After the rewind the first new data pushes the stale frame out, and it is written as the first frame of pass 2's file. The first new frame, which starts mid-frame, becomes an error frame; if the stale frame was partial, a glued hybrid frame can result.
+  - The same after a Stop capture followed by a later capture across a deck stop.
+  - HDV: the partial picture in `ts_pic_buf` is glued to the next pass's first packets (`hdv_write_gate` drops it unless it carries a sequence header).
+  - `replay_run()` already does `dv_reassembler_finish(); dv_reassembler_init();` on REWINDING, with a comment saying why. The live path needs the same, before `finish_file()`.
+- **N4. The hold-back FIFO survives a failed open** (`finish_file()` returns before `dv_flush_pending()` when `s->sink` is NULL; `start_capture_now()` frees `s->split` but not `s->hold`). Low. Fix required.
+  - A scene split whose open fails (drive gone) leaves the last `opts_scene_split_window + 1` units in the hold. The next capture's first `pin_holdback_release_before()` writes those stale frames at the head of the new file.
+- **N5. A DV hold in the rewrap sink assumes all held frames have the current frame's length** (`sink_rewrap.c` `dv_flush_hold(p, len)`, also `dv_close()` using `params.height`). Low. Testing required.
+  - A held 120000-byte NTSC frame flushed by a 144000-byte PAL frame reads 24000 bytes past the held buffer into the file. Needs the format watch to let mixed frames through, which it should not. Fix: store each held frame's length.
+- **N6. fmtwatch provisional start moves real old-format units** (`pin_fmtwatch_feed()`: `*start = provisional ? first_start : cand_start`, from b43f2f6). Low. Testing required.
+  - A capture that starts on the last 1..4 frames (DV) or 1..2 GOPs (HDV) of recording A, followed by B: the cut is placed at `first_start`, so A's units go into B's file. For DV -> HDV `commit_unit_fi()` drops them silently (still counted in `frames`); for PAL -> NTSC, PAL frames land in an NTSC file.
+  - Fix idea: when 2 or more first units agree, cut at `cand_start`.
+- **N7. HDV audio: a frame cut by lost packets is glued onto the next PES** (`hdv_demux.c` `ts_packet()` / `audio_pes_done()`, `acarry`). Low. Testing required.
+  - A CC gap that ends exactly on the first packet of the next PES is recorded at `apes_loss_at == apes.n`, which passes the "nothing lost" test. The truncated frame is carried into the next PES: one garbage MP2 frame, the real first frame lost to the resync, about 48 ms of audio, not counted as an error.
+- **N8. Analog: video fill follows the frame counter, audio fill follows device time** (`pinnacle_analog.c` `video_gap_to_fill()` and `on_audio()`, from ebedc07). Medium. Testing required (reproduced in a harness).
+  - If the device clock jumps while the 16-bit video counter runs on (what the device does across a signal drop is unknown, section 8), video fills nothing and audio fills the whole time gap. Harness: a +120 s clock jump gives 20 frames against 3020 audio blocks; audio is 120 s ahead of video for the rest of the file. If the audio packet happens to be polled before the video frame, the same event is judged a restart and nothing is filled, so the result depends on poll order.
+  - Smaller: the `agrees` window uses a nominal 10 MHz while the device runs at about 10.001 MHz, so a real loss of about 13,800 frames or more is judged a restart; after a host stall up to about 5 frames can be processed before audio is polled, and a real loss of 250+ frames can then be judged a restart.
+  - Fix direction: decide the video fill from device time as well and use the counter as a check, so both streams fill the same span.
+- **N9. Analog: short audio packets are not corrected** (`on_audio()`: `samples = (n - 12) / 4`). Low-medium. Testing required (does the device ever send one?).
+  - A packet with fewer than 1920 samples is written as is; the deficit rounds to no fill (1000 of 1920: 920 samples missing, no error) or to a whole extra block (900 of 1920: 780 samples too many). Each event shifts audio against video by up to about 20 ms, breaking the "exactly 1920 samples per frame" promise in [analog.md](analog.md). Fix: zero-pad any short packet to a full frame and count it.
+- **N10. Analog: lost final audio packets at a user stop are not filled** (`on_audio()`: the `draining && seq > last_vseq` branch returns before the gap check). Low. Fix required (reproduced).
+  - Audio packet 30 lost, stop, packet 31 arrives: 30 frames, 29 audio blocks, `audio_missing` 0. The 300 ms timeout stop path does pad, so the two stop paths disagree.
+- **N11. Analog gap fill can overflow the fatal writer ring** (`analog_video_cb()` -> `pin_writer_push()`, ring `PIN_WRITER_ANALOG_CAPACITY` 512 MiB with `PIN_WRITER_OVERFLOW_FATAL`). Medium. Testing required.
+  - `fill_frames()` can add up to 0x7fff stand-ins in one burst, pushed at memcpy speed. After about 640 PAL frames (about 26 s of gap) the next push overflows, and `capture_guard()` ends the capture as DISK_SLOW although the disk is fine; everything after the gap is lost.
+  - Fix: pace fillers, cap the fill per call, or let fillers wait for the writer.
+
+### 18.2 Files not finalised, or errors not reported
+
+- **N12. HDV MOV / MKV leaks every decoded frame of every passed-through GOP** (`sink_hdvmux.c` `gop_decide()` ends with `it->pics = *gp; memset(gp, 0, sizeof(*gp))`; `hdv_gop_free()` frees frames for `i < g->pics.cap`, now 0). High. Fix required.
+  - On the normal clean-tape path no decoded 1440x1080 AVFrame is ever freed: about 50-60 MB/s at 25 fps, so a capture runs out of memory within minutes and the file is lost with it. The repair path (`span_add()`) is fine.
+  - The short replay tests do not run long enough to notice. Check with valgrind / ASan on `test_replay_hdv_mov`, and a 10-minute HDV MOV capture.
+- **N13. DV AVI / MOV: crash when the file cannot be created** (`sink_rewrap.c` `dv_close()`). High (the whole process dies). Fix required.
+  - When `avio_open()` fails in `dv_open()` (stick pulled, folder removed or read-only, a Windows sharing violation, ENOSPC at create), `p->fmt` stays with `pb == NULL`. `lazy_close()` always calls `inner->close()`, and `dv_close()` calls `avformat_write_header()` for the "empty container" with `pb == NULL`. With libavformat 60 this segfaults for avi, mov and matroska (tested through ctypes).
+  - hdvmux, nut, ffv1 and hwenc check `header_written` and are not affected.
+  - In the GUIs every other open file of that process (a second device instance) is lost too.
+- **N14. A failed open of the first file leaves the deck playing and reports no end** (`open_failed()` acts only `if (s->capture_began)`; `maybe_begin_capture()` has already sent REW / PLAY and cleared `capture_want_start`). Medium. Fix required.
+  - A start-deck capture to a folder that does not exist (`pin_check_output()` and `pin_naming_validate()` do not check the folder; only `lazy_open()` does): no CAPTURE_ENDED, `stop_reason` stays NONE, no deck Stop. An unattended rewind-and-capture plays the whole tape into nothing; the only sign is the ERROR state. The mid-capture case (5f66c1e) does stop the deck.
+  - Fix: treat a requested capture like `capture_began` (end with WRITE_ERROR, Stop the deck), and check the folder in `pin_check_output()`.
+- **N15. A writer that overflowed just before a hand-over is closed as OK** (`pin_writer_stop()` returns failure only for `failed`; `close_job()` uses that; `capture_guard()` looks only at the current `s->writer`). Low. Testing required.
+  - An overflow in the same read-loop batch as a scene, size or format cut: the old file lacks the refused units, the closer reports success, and the capture goes on with a new writer. Only `write_dropped` and a log line show it. Fix: treat `overflowed` as a failed close, or check it in `hand_over_file()` and end with DISK_SLOW.
+- **N16. hdvmux removes a file that was there before** (`hdvmux_close()`: `if (!any_written) remove(m->path)`). Low. Testing required.
+  - With overwrite on and an existing read-only file in a writable folder, `avio_open()` fails and the close path then deletes the old file. Fix: remove only a file this sink created.
+- **N17. The FFV1 / hwenc 10 s watchdog turns a disk stall into a failed capture** (`ffv1_write_video()` / `ffv1_write_audio()`, hwenc `queue_push()` / `ring_push()`, from 5e2317f). Medium-low. Testing required.
+  - The encoder thread muxes straight to the file. A drive stall over 10 s (spin-up, USB reset, network share, antivirus) fills the 8-frame queue in about 0.3 s, and the sink fails with `PIN_ERR_CODEC` although the 64-512 MiB writer ring in front could have absorbed it. Before 5e2317f the wait was unbounded.
+  - `timed_wait()` uses CLOCK_REALTIME (hwenc's other watchdog is monotonic): a forward clock step during a blocked wait fails the sink at once.
+  - After the watchdog fires, `ffv1_close()` / `hwenc_close()` still `pthread_join` a thread that may be stuck in a kernel write (dead share, pulled disk); the session then stays STOPPING until the OS returns.
+- **N18. hwenc loses the encoder's last frames at close without an error** (`sink_hwenc.c` `drain_packets(p, 1)`). Low. Fix required.
+  - On the 10 s flush timeout it logs a WARN and returns `got >= 0`; no `set_error()`, so FILE_CLOSED reports success while the pictures the encoder still held are gone. Fix: set an error or count them.
+- **N19. FFV1 stall or encode error is reported as "writing the file failed"** (`capture_guard()` maps `PIN_ERR_CODEC` to "the video encoder failed" only for `pin_fmt_is_hwenc()`). Low. Fix required.
+- **N20. CLI: a second SIGHUP, SIGTERM or SIGQUIT exits before the files are finalised** (`marvin_capture_cli.c` `note_interrupt()`: `if (++g_interrupts >= 2) _exit(130)`, from b712741). High for terminal use. Fix required; the double delivery is Testing required on a real terminal.
+  - Closing the terminal sends SIGHUP to the foreground job, and an interactive bash forwards its own SIGHUP to its jobs, so the CLI can get two within milliseconds and `_exit()` in the middle of `pin_close()`: no AVI index, no MKV / MOV trailer. SIGTERM followed by SIGHUP does the same. On Windows a Ctrl+C during the finalise wait still exits at once.
+  - Fix: only a repeated SIGINT should mean "quit now"; SIGHUP / SIGTERM / SIGQUIT should be idempotent.
+- **N21. Windows GUI launched from a console: Ctrl+C or closing the console skips `pin_close`** (`ConsoleOutput.cs` attaches to the parent console; the GUI registers no `SetConsoleCtrlHandler`). Medium for scripted use (`MarvinCaptureGUI.exe ... --exit-when-done`). Testing required.
+  - b712741 added the handler to the CLI only. The process exits, `ReleaseSession` never runs, and the file is unfinalised (R18). Fix: register a handler that releases the session and waits, as the CLI does.
+- **N22. Windows forced shutdown: `pin_close` runs in `WM_ENDSESSION` without a time bound** (`SessionEndGuard.WndProc`). Medium-low. Testing required.
+  - A slow drive with a full 256 / 512 MiB ring, or an encoder tail, can take longer than the shutdown kill timeout; the process is then killed mid-flush. Window geometry is also not saved on logoff (`SaveWindowGeometry` only in `Closing` / `Closed`).
+- **N23. Windows: the final `pin_close` can run late on the preview render thread** (`D3DPreview.Dispose` joins for 500 ms; the render loop holds a `DangerousAddRef` on the session handle). Low. Testing required.
+  - If the join times out, the real `pin_close` runs later on the render thread, and the process may exit first. On a device replug the old session and its device lock are released up to 100 ms late, so the reopen can fail as busy.
+- **N24. Android: an abnormal end is invisible with notifications denied and the app in the background** (`CaptureService.handleEvent()` -> `notifyResult()`, `MainActivity.showInfo()` returns when not visible). Low. Testing required.
+  - DISK_FULL / WRITE_ERROR / DEVICE_LOST with the screen off: the event is consumed, the notification is not shown, and for DEVICE_LOST `closeSession(Core.noDevicesHint())` then replaces the status text. The user sees "No device" with no reason. Fix: keep the last abnormal end in the service and show it when the activity becomes visible.
+- **N25. A rewind the deck refuses is taken as done** (`pin_deck.c` `pin_deck_async_poll()`: after 5 `08` NOT_IMPLEMENTED answers, `status = (rl >= 4 && resp[0] != 0x0a) ? DONE : FAILED`). Medium. Testing required (needs a deck that answers 08 to REW; open decision in 14).
+  - `dv_tick()` sets `deck_cmd_done_s` without checking the answer; the tape never moved, so the poll reads STOPPED, and 3 s later "rewind finished" sends PLAY: the capture starts where the tape is, or pass 2 starts from the end. Fix: FAILED after exhausted retries, with a message.
+- **N26. Deck commands during the rewind between passes hijack the rewind detection** (`pin_session_deck()` rejects only CAPTURING; the rewind-finished test in `dv_tick()` does not know who stopped the deck). Low. Testing required (the GUIs may hide the deck buttons then).
+  - A user Stop during the rewind is overridden 3 s later by PLAY for pass 2; PLAY or FF leaves the session in REWINDING with no idle or time-limit check until Stop capture.
+- **N27. `open_failed()` mid-capture waits for the closer with the session lock held** (`capture_report_end()` -> `closer_drain()` rather than `closer_drain_unlocked()`). Low (UI freeze while earlier files drain to a slow disk). Fix required.
+- **N28. Disk-free syscall under the session lock** (`pin_session_get_status()` -> `fat32_and_free()`, and `capture_guard()` once a second). Low-medium. Testing required.
+  - On a network share that has gone away the call can block 20-60 s with the lock held; USB callbacks that take the same lock stall behind it, and frames are lost uncounted. The 1 s cache limits how often, not how long.
+- **N29. A partly failed initial URB submit ends the capture at the first wrap** (`pinnacle_stream_read_loop_ex()`). Low-medium. Testing required (usbfs ENOMEM, a small `usbfs_memory_mb`).
+  - A failed submit marks only that slot; later slots stay submitted, and in-order delivery ends the capture with a USB error when `head` reaches the failed slot. Only `submitted == 0` is handled. Fix: shrink the queue to the first failing slot. `pinnacle_analog.c` `queue_init()` has a similar fault: a failed submit leaves `done = 0`, and `queue_free()` waits 2 s and leaks the queue.
+- **N30. Any non-zero return of `libusb_handle_events_timeout_completed()` ends the capture** (DV read loop and `pinnacle_analog_read_loop()`), LIBUSB_ERROR_INTERRUPTED included. Low. Testing required (a signal on the USB thread). DV reports it as a USB failure; analog skips the drain.
+- **N31. Settings: a failed read becomes an empty file on the next save.** Listed under 17.6 Settings save (second pass).
+- **N32. `close_capture()` in the CLI can wait 30 minutes, not interruptible** (`pin_session_capture_busy()` stays true while a sink is open after `set_error()` without a capture end). Low. Testing required.
+
+### 18.3 Wrong numbers on screen
+
+- **N33. `lost_blocks` is wrong for holes of 128 or more blocks** (`check_dbc()`: `lost = (gap > 0 && gap < 128) ? gap : 1`). Low-medium (it is the only loss figure for HDV). Fix required (reproduced).
+  - 128..255 lost packets report 1 block (a whole NTSC frame counts as 1); 256 or more wrap (300 -> 44); exactly 256 is not seen at all, and two missing frames go uncounted.
+- **N34. Analog: a silence block adds an error on top of the stand-in video frame** (`analog_audio_cb()`: `if (b->silence) { frames_error++; clip_frames_error++; }`, without `frames++`). Low. Fix required.
+  - A 750-frame outage gives 750 frames and 1500 error frames (200 %). Whether audio should count separately is a product decision; the percentage must not exceed 100.
+- **N35. "Captured" length uses the final frame rate and counts unwritten units** (`captured_seconds()`, `apply_unit_counts()` runs with no file open). Low. Fix required.
+  - 10 min PAL then 1 min NTSC shows 560 s instead of 660 s. Frames the deck sends after a time-limit pass end (before REW takes effect) and units a sink drops are counted.
+- **N36. Free-space estimate uses the analog rate before the first frame** (`pin_session_get_status()`: `hint_kind = s->stream_kind`, which is 0 = ANALOG until data arrives). Low-medium. Fix required.
+  - A DV / HDV session with the camera off estimates at the analog rate: 200 GB shows about 2.7 h instead of 15 h, and `disk_low` can be set. `pin_session_check_output()` already corrects for `s->input`; `get_status` does not. Related to R26.
+- **N37. CLI capture summary can show the next capture's counts** (`print_capture_summary()` calls `pin_get_status()` when it handles CAPTURE_ENDED, from 6f94979). Low-medium. Fix required.
+  - In `--capture a --wait .. --capture b` the script thread starts b at once and `reset_frame_counters()` runs before the CLI loop wakes (up to 50 ms), so a's summary prints b's near-zero numbers. Fix: store the final totals in `capture_report_end()`.
+- **N38. DV audio error detection reads 16-bit words in 12-bit mode** (`dv_error.c` `dv_error_analyze()`). Low. Testing required.
+  - The 12-bit error fill 0x800 (bytes `80 80 00`) is not uniform in 16-bit words, so `audio_err` stays 0 on 32 kHz / 12-bit tapes. A block of 36 identical non-zero words (silence with a DC offset, all 0xFFFF) counts as an error on every frame of the passage.
+- **N39. HDV damage can leave a damaged reference marked clean** (`hdv_error.c` propagation). Low-medium. Testing required.
+  - An I picture that loses its tail charges the CC gap to the next unit, an open-GOP leading B, which updates no reference state, so the following P and the rest of the GOP read clean. An I picture that loses its PES start never becomes a unit, so one error frame is counted instead of about 15.
+- **N40. HDV scene detector set to 29.97 fps when the capture starts mid-GOP** (`capture_unit()` initialises with `hdv_frame_rate()` while `hdv_fps_num` is 0; never re-initialised). Low. Fix required. On PAL HDV a forward jump of 1.0-1.2 s is missed.
+- **N41. AV/C PLAY operands 0x65 and 0x6d look swapped** (`pin_deck_state_from_avc()`). Low (status text and script conditions only). Fix required once a camera confirms: reverse play shows Paused, reverse pause shows Playing.
+- **N42. `pin_get_status()` and `pin_poll_event()` ignore the caller's struct size** (`memset(out, 0, sizeof(*out))` also clears `out->size`; `evq_poll()` copies the whole struct). Low. Fix required if the ABI promise in `pin_api.h` is meant: a caller built against an older, shorter struct gets a buffer overflow.
+
+### 18.4 Options, names and stop conditions
+
+- **N43. macOS: a typed idle or duration limit is not applied when Capture is clicked** (`Views/Card.swift` `NumberField`, `TextField(value:format:)`; read by `WindowModel.buildCaptureOpts`). Medium (quiet). Testing required.
+  - A number-formatted field commits only on Return or focus loss, and a push button or menu item does not take first responder. The box shows 30, the capture runs with the old value (0 = never stop) until the disk is full. Nothing in `gui/macos/Sources` ends editing before a capture. Fix: resign first responder before building the plan.
+  - Windows has the same with the taskbar thumbnail Start button (NumberBox commits on focus loss; `TaskbarStartAsync`). A normal click is fine.
+- **N44. Windows: a name with a drive or folder escapes the chosen folder** (`MainViewModel.CombinePath` uses `Path.Combine`; `pin_naming_validate()` checks only the last component). Low-medium. Fix required.
+  - Folder `D:\Videos` and name `E:\tapes\wedding` write to E: without a warning; `sub\clip` writes into a folder that may not exist and fails later as WRITE_ERROR. macOS and Android only nest below the folder. The core should reject separators in the name, for all three GUIs.
+- **N45. The name-collision check fails open** (`pin_naming_collides()` uses `opendir()` and an ASCII-only `fold()`; the caller treats -1 as "no collision"). Medium if it happens (an earlier capture is overwritten). Testing required (Windows, MSYS2).
+  - mingw `opendir(char *)` is ANSI while the project passes UTF-8 paths, so in a folder like `Café` it fails and the collision check passes. Non-ASCII case (`ÉCRAN` vs `écran`) and NFC / NFD on APFS compare unequal. Fix: treat -1 as unknown and warn, or use `_wopendir`.
+- **N46. Scene detector: a date break outvotes a continuous timecode** (`pin_scene.c` `classify()`, `state_advance()`). Low. Testing required.
+  - A frame just after midnight with the new time but no date pack leaves {old date, 00:00:00} as the baseline; the next intact frame is 86400 s away and a spurious split is confirmed.
+- **N47. Standard change and Record can race** (`analog_tick()` sets `analog_restart`, unlocks, then `handle_inline_commands()`). Low. Testing required. A capture started in that window restarts at the new standard and continues the same file with a different frame size.
+- **N48. CLI with settings but no action prints "Nothing to do" and exits 0** (`MarvinCaptureCLI -i svideo --std pal`). Low. A pipeline that forgot `--capture` sees success and no file. Should be a usage error.
+
+### 18.5 Smaller items
+
+- **Preview DV decode without input padding** (`pin_preview.c`: `work` is `realloc(len)` without `AV_INPUT_BUFFER_PADDING_SIZE`; on OOM `decode_*(work, len)` still runs). Low. Testing required with ASan. Preview data only.
+- **`deliver_thread()` waits on CLOCK_REALTIME** (`pinnacle_analog.c`): a backward clock step stalls `analog_tick()` (idle stop, time limit) for the size of the step while READY.
+- **HDV monitor audio** (`pin_hdv_audio.c` `extract_es()`) ignores continuation bytes until the first PUSI of each picture: an MP2 frame across a picture boundary glitches. Monitor only.
+- **I2C write NAK ignored, config replies not matched** (`pinnacle_cfg.c` `pinnacle_i2c_write()`, `cfg_xfer()`): after one reply timeout every later exchange is one reply off. Testing required.
+- **`pin_deck_parse_timecode()`** reads drop frame from bit 7 of the frame byte; a camera using the DV convention (bit 6) shows non-drop. Testing required.
+- **`hdv_aux_scan_datetime()`** matches 0x62 / 0x63 / 0x13 at any byte offset. It has no caller today; it needs pack framing before it is used for splits.
+- **The update notice prints remote text unsanitised** (`pin_update.c`: `\u001b` in `release_notes` becomes a raw ESC on the terminal); libcurl redirects are not limited to https. Nothing downloads or replaces binaries.
+- **Scripts:**
+  - `scripts/build.ps1` runs `dist\MarvinCaptureCLI.exe --help-text` before `marvin-core.dll`, libusb and winpthread are copied to dist, and does not check `$LASTEXITCODE`, so `docs/cli.md` can be rewritten with an empty help block (`build.sh` has the right order). Testing required on Windows.
+  - `scripts/publish-release.sh` uploads every `*.exe`, `*.pkg`, `*.deb`, `*.apk` in DIR with no check that they carry this version or that every platform is there; a missing `version` key gives the tag `vnull`. The debug-signed APK check is only a warning without apksigner.
+  - The NSIS uninstall and upgrade run `RMDir /r "$INSTDIR"`, which also deletes captures in a folder named `...\MarvinCapture` that the user picked as the install folder.
+  - Cached FFmpeg / libusb tarballs that fail their checksum are never deleted, and an interrupted `tar -x` leaves a half-extracted tree that is trusted next time.
+
+### 18.6 Checked, nothing found (second pass)
+
+- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug; except N1 to N3), 5f66c1e and 5e2317f (close and trailer errors in all sinks; except N17 to N19), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name; except N5 and N6), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8 to N11), 6f94979, b712741 (`SessionEndGuard`; except N20 to N22).
+- Reassembler chunking: 200 random lossy PAL and NTSC streams give identical output fed whole or in 1-byte to 5000-byte pieces. URB buffer reuse, ring order, teardown and URB status handling; `ts_buf` bounds; HDV source-packet alignment.
+- Analog: field weave and line offsets across transfers, the delivery ring (the producer waits, nothing dropped), drain at stop, 64-bit device time, the resampler (32 and 44.1 kHz within one sample over 32 M samples).
+- Writer ring, `pin_stdout` (short writes, EINTR, EPIPE, SIGPIPE), avi_writer layout, hdv_demux PTS unwrap and PES / PSI bounds, hdvmux PASS timestamps and thread shutdown.
+- FFV1 and hwenc: no silent drop when a queue is full, complete flush at close, pts from frame and sample counts with no cumulative rounding, pixel conversion strides.
+- Status struct mirrors (C#, Swift, JNI), event queue wrap, text helper buffer sizes and format types, no GUI re-summing counters, 64-bit counters kept 64-bit in all three GUIs.
+- Scene detector 24 h wrap (PAL, NTSC, drop frame), holdback and split order, fmtwatch (no flip-flop path), closer job accounting, naming of reserved and long names.
+- CLI exit codes: every abnormal stop maps to exit 4, and a failed close becomes WRITE_ERROR before the end is reported. Packaging: firmware in every package, `set -euo pipefail`, version from `VERSION`.
