@@ -3289,6 +3289,11 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
      * version of this code used to do before being factored out. */
     if (b->samples && !b->silence)
         feed_audio_locked(s, (const int16_t *)b->pcm, b->samples);
+    if (b->silence) {
+        /* a lost audio packet is an error frame, as a DV frame with audio blocks missing */
+        s->frames_error++;
+        s->clip_frames_error++;
+    }
     if (s->writer && b->samples &&
         !pin_writer_push(s->writer, PIN_UNIT_AUDIO, b->seq, (const uint8_t *)b->pcm,
                          (size_t)b->samples * 4))

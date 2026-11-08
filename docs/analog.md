@@ -256,6 +256,12 @@ What that means:
      Patching only the lines that did not arrive mixed two pictures in one
      frame, and since the fields are sent one after the other, a frame cut
      short in its second field came out combed.
+   Frames missing for more than a second (25 or 30) are filled black
+   (YUYV 16/128) instead, and a gap of 250 frames or more is filled too when the
+   audio ran on through it (the capture device lost the frames); a lost audio gap of 250
+   packets or more is filled with silence when the video ran on. A gap in both
+   streams is a restart and is left out. At stop, audio more than a second past the
+   last frame gets black frames up to it. A lost audio packet counts as an error frame.
    Every repair is counted, and the GUI adds both kinds to its "dropped"
    count. The file therefore always has exactly one
    frame and 1920 samples per source frame, and a player at 25 fps plays

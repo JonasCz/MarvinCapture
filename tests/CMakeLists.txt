@@ -73,6 +73,12 @@ target_link_libraries(test_reassembler_loss PRIVATE pinnacle_core)
 add_test(NAME test_reassembler_loss COMMAND test_reassembler_loss)
 set_tests_properties(test_reassembler_loss PROPERTIES TIMEOUT 60)
 
+# The analog assembler on synthetic packets (includes pinnacle_analog.c for its static functions).
+add_executable(test_analog_assembler test_analog_assembler.c)
+target_link_libraries(test_analog_assembler PRIVATE pinnacle_core)
+add_test(NAME test_analog_assembler COMMAND test_analog_assembler)
+set_tests_properties(test_analog_assembler PROPERTIES TIMEOUT 60)
+
 # pinnacle_lock: hardware-free (see tests/test_lock.c), but it does spawn a
 # real child process (fork on POSIX, CreateProcess on Windows) to exercise
 # cross-process BUSY detection and crash cleanup, so give it more headroom

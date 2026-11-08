@@ -162,7 +162,8 @@ typedef struct {
     uint32_t index;          /* position in the output, from 0 */
     uint16_t seq;            /* device frame counter */
     uint64_t device_time;
-    int repeated;            /* the previous frame again: this one never arrived, or arrived short */
+    int repeated;            /* a stand-in: the previous frame again, or black; this one never arrived, or arrived short */
+    int black;               /* the stand-in is a black frame */
     size_t received;         /* bytes that arrived: 0 never arrived, below width*height*2 short */
 } pinnacle_video_frame_t;
 
@@ -176,7 +177,8 @@ typedef struct {
 
 typedef struct {
     unsigned long frames;          /* delivered, including repeats */
-    unsigned long frames_missing;  /* counter gaps, filled with repeats */
+    unsigned long frames_missing;  /* counter gaps, filled with repeats or black */
+    unsigned long frames_black;    /* of those, filled black (gaps over a second) */
     unsigned long frames_truncated;
     unsigned long audio_blocks;
     unsigned long audio_missing;   /* packets lost (device-time gaps), filled with silence */

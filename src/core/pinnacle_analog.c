@@ -984,11 +984,12 @@ static int deliver_commit(deliver_t *d, const deliver_item_t *it)
 /* --- assembler ----------------------------------------------------------- */
 
 typedef struct {
-    pinnacle_analog_t *a;
+    unsigned width, height;
     deliver_t *dl;
     pinnacle_capture_stats_t *st;
     uint8_t *frame;              /* being received; rows not yet written are stale */
     uint8_t *last_good;          /* last fully-received frame, to repeat for a lost one */
+    uint8_t *black;              /* a black frame (YUYV 16/128), the fill for a long gap */
     size_t frame_bytes, received;
     int in_frame, have_frame;
     uint16_t seq, last_vseq;
@@ -1002,6 +1003,10 @@ typedef struct {
     uint64_t packet_ticks, frame_ticks;
     uint8_t *silence;
     unsigned spp;
+    /* A stream whose counter/clock jumped while the other did not move with it is a
+     * restart, not a loss: the time it jumped to, per stream (0 video, 1 audio). */
+    uint64_t jump_time[2];
+    int jump_set[2];
     /* Stopping: no more video, but wait (briefly) for the audio of the
      * frames already delivered, so both streams end together. */
     volatile int *ext_stop;
@@ -1034,19 +1039,25 @@ static int audio_caught_up(const assembler_t *s)
     return !s->have_frame || s->audio_done;
 }
 
-static int emit_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
-                      int repeated, size_t received)
+static int emit_frame_x(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
+                        int repeated, size_t received, int black)
 {
     uint8_t *buf = deliver_reserve(s->dl, 1);
     memcpy(buf, yuyv, s->frame_bytes);
     deliver_item_t it = {
         .video = 1,
-        .v = { .yuyv = buf, .width = s->a->width, .height = s->a->height,
+        .v = { .yuyv = buf, .width = s->width, .height = s->height,
                .index = s->index++, .seq = seq, .device_time = t,
-               .repeated = repeated, .received = received },
+               .repeated = repeated, .received = received, .black = black },
     };
     s->st->frames++;
     return deliver_commit(s->dl, &it);
+}
+
+static int emit_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
+                      int repeated, size_t received)
+{
+    return emit_frame_x(s, yuyv, seq, t, repeated, received, 0);
 }
 
 static int emit_audio(assembler_t *s, const uint8_t *pcm, unsigned samples, uint16_t seq,
@@ -1062,6 +1073,58 @@ static int emit_audio(assembler_t *s, const uint8_t *pcm, unsigned samples, uint
     return deliver_commit(s->dl, &it);
 }
 
+/* Gaps of 250 frames or more are filled only when the audio shows time went on; a gap in
+ * both streams is a restart. A gap over a second is filled black, a shorter one with the
+ * last good frame. */
+#define FILL_GAP_FRAMES 250
+#define BLACK_AFTER_TICKS DEVICE_HZ
+
+static int near_time(const assembler_t *s, uint64_t a, uint64_t b)
+{
+    uint64_t d = a > b ? a - b : b - a;
+    return d <= 3 * s->frame_ticks;
+}
+
+/* Emits n frames for the counters after last_vseq: black if they span over a second. */
+static int fill_frames(assembler_t *s, uint16_t n)
+{
+    int black = (uint64_t)n * s->frame_ticks >= BLACK_AFTER_TICKS;
+    int r = 0;
+    s->st->frames_missing += n;
+    if (black)
+        s->st->frames_black += n;
+    for (uint16_t i = 1; i <= n && !r; i++)
+        r = emit_frame_x(s, black ? s->black : s->last_good, (uint16_t)(s->last_vseq + i), 0, 1, 0,
+                         black);
+    if (black)
+        memcpy(s->last_good, s->black, s->frame_bytes);   /* a short frame next repeats black */
+    return r;
+}
+
+/* How many lost frames precede the one just received that are to be filled. */
+static uint16_t video_gap_to_fill(assembler_t *s)
+{
+    uint16_t gap = (uint16_t)(s->seq - s->last_vseq - 1);
+    if (gap == 0 || gap >= 0x8000)
+        return 0;                       /* none, or the counter went back: a restart */
+    if (gap < FILL_GAP_FRAMES)
+        return gap;
+    /* The clock must agree with the counter and the audio must have run on through the gap
+     * (without itself jumping to this time): the capture device lost the frames, not the signal. */
+    int agrees = 0;
+    if (s->vtime > s->last_vtime) {
+        uint64_t n = (s->vtime - s->last_vtime + s->frame_ticks / 2) / s->frame_ticks;
+        agrees = n >= (uint64_t)gap && n <= (uint64_t)gap + 2;
+    }
+    int audio_ran = s->audio_started && s->next_atime + 2 * s->packet_ticks >= s->vtime &&
+                    !(s->jump_set[1] && near_time(s, s->jump_time[1], s->vtime));
+    if (agrees && audio_ran)
+        return gap;
+    s->jump_set[0] = 1;
+    s->jump_time[0] = s->vtime;
+    return 0;
+}
+
 static int finish_frame(assembler_t *s)
 {
     int r = 0;
@@ -1070,13 +1133,9 @@ static int finish_frame(assembler_t *s)
     if (truncated)
         s->st->frames_truncated++;
     if (s->have_frame) {
-        uint16_t gap = (uint16_t)(s->seq - s->last_vseq - 1);
-        /* Anything but a small forward gap means the counter restarted. */
-        if (gap > 0 && gap < 250) {
-            s->st->frames_missing += gap;
-            for (uint16_t i = 1; i <= gap && !r; i++)
-                r = emit_frame(s, s->last_good, (uint16_t)(s->last_vseq + i), 0, 1, 0);
-        }
+        uint16_t gap = video_gap_to_fill(s);
+        if (gap)
+            r = fill_frames(s, gap);
     }
     s->have_frame = 1;
     s->last_vseq = s->seq;
@@ -1108,7 +1167,7 @@ static int finish_frame(assembler_t *s)
  * to field-sequential) with the same geometry. */
 static void weave(assembler_t *s, const uint8_t *d, size_t n)
 {
-    size_t stride = (size_t)s->a->width * 2, half = s->a->height / 2;
+    size_t stride = (size_t)s->width * 2, half = s->height / 2;
     size_t off = s->received;
     while (n) {
         size_t line = off / stride, col = off % stride;
@@ -1191,8 +1250,13 @@ static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
     }
     if (t > s->next_atime) {
         uint64_t lost = (t - s->next_atime + s->packet_ticks / 2) / s->packet_ticks;
-        /* Anything but a short gap means the clock restarted. */
-        if (lost < 250) {
+        /* A longer gap is silence only if the video ran on through it; else the clock restarted. */
+        int video_ran = s->have_frame && s->last_vtime + 3 * s->frame_ticks >= t &&
+                        !(s->jump_set[0] && near_time(s, s->jump_time[0], t));
+        if (lost >= FILL_GAP_FRAMES && !video_ran) {
+            s->jump_set[1] = 1;
+            s->jump_time[1] = t;
+        } else {
             s->st->audio_missing += (unsigned long)lost;
             for (uint64_t i = 0; i < lost && !r; i++)
                 r = emit_audio(s, s->silence, s->spp, seq, 0, 1);
@@ -1201,6 +1265,19 @@ static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
     unsigned samples = (unsigned)((n - PACKET_HEADER) / 4);
     s->next_atime = t + s->packet_ticks * samples / s->spp;
     return r ? r : emit_audio(s, d + PACKET_HEADER, samples, seq, t, 0);
+}
+
+/* At the end: if audio ran on over a second past the last frame, the video was lost
+ * (the signal dropped, say): add black frames up to the audio. */
+static void pad_video_to_audio(assembler_t *s)
+{
+    uint64_t video_end = s->last_vtime + s->frame_ticks;
+    if (!s->have_frame || s->next_atime <= video_end + BLACK_AFTER_TICKS)
+        return;
+    uint64_t n = (s->next_atime - video_end) / s->frame_ticks;
+    if (n > 0x7fff)
+        n = 0x7fff;
+    fill_frames(s, (uint16_t)n);
 }
 
 static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
@@ -1221,8 +1298,10 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
     if (!s->draining)
         return 0;
 
-    if (audio_caught_up(s))
+    if (audio_caught_up(s)) {
+        pad_video_to_audio(s);
         return 1;
+    }
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     long ms = (now.tv_sec - s->drain_start.tv_sec) * 1000 +
@@ -1237,7 +1316,65 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
         emit_audio(s, s->silence, s->spp, s->last_vseq, 0, 1);
         s->next_atime += s->packet_ticks;
     }
+    pad_video_to_audio(s);
     return 1;
+}
+
+/* Sets the assembler up for a capture of a's geometry and standard. */
+static int assembler_open(assembler_t *s, const pinnacle_analog_t *a,
+                          const pinnacle_capture_sink_t *sink, pinnacle_capture_stats_t *stats,
+                          volatile int *stop_flag)
+{
+    memset(s, 0, sizeof(*s));
+    memset(stats, 0, sizeof(*stats));
+    s->width = a->width;
+    s->height = a->height;
+    s->st = stats;
+    s->spp = a->audio_samples_per_packet;
+    /* In ticks of the device's ~10 MHz clock; it runs about 100 ppm fast,
+     * far inside the tolerance on_audio() needs. */
+    s->packet_ticks = (uint64_t)s->spp * DEVICE_HZ / AUDIO_RATE;
+    s->frame_ticks = pinnacle_std_is_60hz(a->cfg.standard) ? (uint64_t)DEVICE_HZ * 1001 / 30000
+                                                           : DEVICE_HZ / 25;
+    s->frame_bytes = (size_t)a->width * a->height * 2;
+    s->frame = malloc(s->frame_bytes);
+    s->last_good = malloc(s->frame_bytes);
+    s->black = malloc(s->frame_bytes);
+    s->silence = calloc(s->spp, 4);
+    deliver_t *dl = malloc(sizeof(*dl));
+    /* an audio block is never bigger than the transfer it came in */
+    size_t audio_bytes = (s->spp * 4 + PACKET_HEADER + 511) & ~(size_t)511;
+    if (!s->frame || !s->last_good || !s->black || !s->silence || !dl ||
+        deliver_start(dl, sink, s->frame_bytes, audio_bytes) != 0) {
+        free(s->frame);
+        free(s->last_good);
+        free(s->black);
+        free(s->silence);
+        free(dl);
+        return -1;
+    }
+    s->dl = dl;
+    /* Black, in case the very first frame arrives short. */
+    for (size_t i = 0; i < s->frame_bytes; i += 2) {
+        s->black[i] = 0x10;
+        s->black[i + 1] = 0x80;
+    }
+    memcpy(s->frame, s->black, s->frame_bytes);
+    memcpy(s->last_good, s->black, s->frame_bytes);
+    /* The assembler watches stop_flag itself, so it can drain first. */
+    s->ext_stop = stop_flag;
+    return 0;
+}
+
+/* Delivers what is queued and frees the assembler. */
+static void assembler_close(assembler_t *s)
+{
+    deliver_stop(s->dl);
+    free(s->dl);
+    free(s->frame);
+    free(s->last_good);
+    free(s->black);
+    free(s->silence);
 }
 
 pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
@@ -1246,46 +1383,10 @@ pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
                                                volatile int *stop_flag)
 {
     assembler_t s;
-    memset(&s, 0, sizeof(s));
-    memset(stats, 0, sizeof(*stats));
-    s.a = a;
-    s.st = stats;
-    s.spp = a->audio_samples_per_packet;
-    /* In ticks of the device's ~10 MHz clock; it runs about 100 ppm fast,
-     * far inside the tolerance on_audio() needs. */
-    s.packet_ticks = (uint64_t)s.spp * DEVICE_HZ / AUDIO_RATE;
-    s.frame_ticks = pinnacle_std_is_60hz(a->cfg.standard) ? (uint64_t)DEVICE_HZ * 1001 / 30000
-                                                          : DEVICE_HZ / 25;
-    s.frame_bytes = (size_t)a->width * a->height * 2;
-    s.frame = malloc(s.frame_bytes);
-    s.last_good = malloc(s.frame_bytes);
-    s.silence = calloc(s.spp, 4);
-    deliver_t *dl = malloc(sizeof(*dl));
-    /* an audio block is never bigger than the transfer it came in */
-    size_t audio_bytes = (s.spp * 4 + PACKET_HEADER + 511) & ~(size_t)511;
-    if (!s.frame || !s.last_good || !s.silence || !dl ||
-        deliver_start(dl, sink, s.frame_bytes, audio_bytes) != 0) {
-        free(s.frame);
-        free(s.last_good);
-        free(s.silence);
-        free(dl);
+    if (assembler_open(&s, a, sink, stats, stop_flag) != 0)
         return PINNACLE_ERR_USB_TRANSFER;
-    }
-    s.dl = dl;
-    /* Black, in case the very first frame arrives short. */
-    for (size_t i = 0; i < s.frame_bytes; i += 2) {
-        s.frame[i] = 0x10;
-        s.frame[i + 1] = 0x80;
-    }
-    memcpy(s.last_good, s.frame, s.frame_bytes);
-    /* The assembler watches stop_flag itself, so it can drain first. */
-    s.ext_stop = stop_flag;
     volatile int never = 0;
     pinnacle_status_t st = pinnacle_analog_read_loop(a, assembler_cb, &s, &never);
-    deliver_stop(dl);
-    free(dl);
-    free(s.frame);
-    free(s.last_good);
-    free(s.silence);
+    assembler_close(&s);
     return st;
 }
