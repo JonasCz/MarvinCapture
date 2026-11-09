@@ -211,6 +211,14 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   never count as "no signal".
 - **NOT_IMPLEMENTED is never a deck state.** The answer (08) echoes the
   command; it must not be mapped to a transport state.
+- **A refused rewind is not a finished one.** A transport command still
+  answered 08 after its retries, REJECTED (0a) or not answered is FAILED
+  (`pin_deck_judge_answer()`), and only an accepted one sets `deck_cmd_done_s`
+  (`pin_deck_rewind_finished()`). A REW that fails before pass 1 or between
+  passes ends the capture with `PIN_STOP_ERROR` ("the camera did not rewind
+  the tape") instead of sending PLAY where the tape is. While the capture
+  rewinds, `pin_deck()` takes only Stop, which ends the capture. Reasoned from
+  the code, not tried on a deck that refuses REW: to test on hardware.
 - **Stopping.** The no-signal timeout (`idle_stop_minutes`; time since data
   last arrived) and the time limit (`max_duration_minutes`, per pass: capture
   time of the current pass only, `elapsed_s`, which restarts with each pass so
@@ -224,7 +232,9 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   the Stop goes through `deck_send()` like every other deck command.
 - **Multi-pass.** The no-signal timeout is also how the end of the tape is
   noticed. With passes left it closes the file, sends REW (state REWINDING,
-  `pass_rewinding`), and at BOT sends PLAY and opens the next file; the
+  `pass_rewinding`), and at BOT sends PLAY and opens the next file (if the
+  closing file's queue overflowed, the capture ends there with DISK_SLOW
+  instead); `elapsed_s` stands still during the rewind; the
   no-signal timer and the per-pass time limit restart with each pass (they must
   not count the rewind). Whichever limit comes first ends the pass.
 - **Passes need a limit.** `pin_capture_passes_allowed(idle_min, duration_min)`

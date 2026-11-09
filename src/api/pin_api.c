@@ -791,6 +791,7 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
                  (unsigned long long)(st->frames_dropped + st->write_dropped));
     } else if (st->state == PIN_STATE_ERROR) {
         snprintf(out, cap, "Error: %s", st->error_text);
+        pin_utf8_trim_end(out);     /* a short buffer cuts the text: not inside a character */
     } else if (st->state == PIN_STATE_PREPARING && st->detail[0]) {
         snprintf(out, cap, "Preparing: %s", st->detail);
     } else if (st->state == PIN_STATE_STOPPING) {
@@ -936,11 +937,12 @@ int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub, cha
 
     if (st->state == PIN_STATE_ERROR) {
         snprintf(out, cap, "Error: %s", st->error_text[0] ? st->error_text : pin_strerror(st->last_error));
+        pin_utf8_trim_end(out);
     } else if (st->state == PIN_STATE_PREPARING && st->detail[0]) {
         snprintf(out, cap, "Preparing: %s", st->detail);
     } else if (st->state == PIN_STATE_READY && st->stop_text[0] && stopped_unasked(st)) {
         /* why the last capture stopped (not after the user's own stop), until the next one */
-        snprintf(out, cap, "%s", st->stop_text);
+        pin_utf8_copy(out, cap, st->stop_text);
     } else if (st->state == PIN_STATE_STOPPING && file[0]) {
         /* the capture ended; the last file is being written out */
         snprintf(out, cap, "Finishing %s" ELLIPSIS, file);

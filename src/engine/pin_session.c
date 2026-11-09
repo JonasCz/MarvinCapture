@@ -238,6 +238,50 @@ static void set_error(pin_session_t *s, pin_status_t err, const char *msg)
     pin_session_push_event(s, PIN_EVT_ERROR, (int32_t)err, s->error_text);
 }
 
+static int capture_active(const pin_session_t *s);
+static void capture_end(pin_session_t *s, pin_stop_reason_t why, const char *detail, uint16_t deck_node);
+
+/* An input switch or close is waiting for the worker: what it is bringing up or running is no
+ * longer wanted, and its READY or error must not replace the PREPARING pin_session_set_input()
+ * already shows. Caller holds the lock. */
+static int superseded(const pin_session_t *s)
+{
+    return s->worker_stop ||
+           (s->cmd.pending && (s->cmd.kind == PIN_CMD_SET_INPUT || s->cmd.kind == PIN_CMD_CLOSE));
+}
+
+/* The worker cannot go on: a capture still running (or waiting to start) is ended first, so the
+ * session never sits in ERROR with a file open or a capture that nothing will finish. Caller
+ * holds the lock. */
+static void fail_locked(pin_session_t *s, pin_status_t err, const char *msg)
+{
+    if (capture_active(s)) {
+        capture_end(s, PIN_STOP_ERROR, NULL, 0);
+        if (s->state == PIN_STATE_ERROR)
+            return; /* ending it failed on its own and said why */
+    }
+    set_error(s, err, msg);
+}
+
+/* fail_locked() from the worker without the lock; nothing if an input switch or close
+ * supersedes the input that failed. */
+static void worker_error(pin_session_t *s, pin_status_t err, const char *msg)
+{
+    pin_session_lock(s);
+    if (!superseded(s))
+        fail_locked(s, err, msg);
+    pin_session_unlock(s);
+}
+
+/* The worker's input is up: READY, unless an input switch or close supersedes it. */
+static void worker_ready(pin_session_t *s)
+{
+    pin_session_lock(s);
+    if (!superseded(s))
+        set_state(s, PIN_STATE_READY);
+    pin_session_unlock(s);
+}
+
 /* Bring-up progress from the core (pinnacle_device_t.progress). */
 static void session_progress(void *user, const char *step, int percent)
 {
@@ -474,7 +518,8 @@ pin_status_t pin_session_firmware_path(const pinnacle_model_t *model, pin_kind_t
 }
 
 /* Error for a failed pinnacle_init_hardware() / pinnacle_analog_open()
- * after the bitstream file itself was found and validated. */
+ * after the bitstream file itself was found and validated. Worker thread,
+ * without the lock (worker_error()). */
 static void set_init_error(pin_session_t *s, pinnacle_status_t pst, const char *fw)
 {
     char msg[PIN_TEXT_MAX];
@@ -489,7 +534,7 @@ static void set_init_error(pin_session_t *s, pinnacle_status_t pst, const char *
     else
         snprintf(msg, sizeof(msg), "Device initialisation failed: %s", pinnacle_strerror(pst));
     /* FD_REENUMERATE: not a USB fault; the model cannot be driven from "fd:N" (yet) */
-    set_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY ? PIN_ERR_FIRMWARE
+    worker_error(s, pst == PINNACLE_ERR_BITSTREAM_READ || pst == PINNACLE_ERR_NOT_READY ? PIN_ERR_FIRMWARE
                  : pst == PINNACLE_ERR_FD_REENUMERATE ? PIN_ERR_ARG : PIN_ERR_USB, msg);
 }
 
@@ -670,19 +715,35 @@ static void deck_send(pin_session_t *s, uint16_t node, pin_deck_cmd_t cmd);
 static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const char *detail);
 static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out);
 
-/* Saves the FFV1 rate of the running capture (average of the last 10 minutes)
- * into the core settings as core.ffv1_bytes_per_hour, when it has run long
- * enough (30 s) to mean something. */
+/* Notes the FFV1 rate of the running capture (average of the last 10 minutes)
+ * to be saved into the core settings as core.ffv1_bytes_per_hour, when it has
+ * run long enough (30 s) to mean something. Caller holds the lock; the file is
+ * written by rate_flush(), off the lock (a slow settings drive must not stall
+ * the status calls and the USB callbacks). */
 static void rate_persist(pin_session_t *s)
 {
     double bps = pin_rate_bytes_per_s(&s->rate_win, 30.0);
     if (bps <= 0) return;
-    char path[PIN_PATH_MAX];
-    if (pin_settings_default_path(path, sizeof(path)) != 0) return;
     /* kept as the "fast" level's rate, so a later capture at another level scales it */
-    double bph = bps * 3600.0 / pin_est_ffv1_factor(s->capture_opts.ffv1_compression);
-    if (pin_est_store_ffv1(path, bph) == 0)
-        s->ffv1_learned_bph = bph;
+    s->rate_save_bph = bps * 3600.0 / pin_est_ffv1_factor(s->capture_opts.ffv1_compression);
+}
+
+/* Writes what rate_persist() noted. Caller does NOT hold the lock. */
+static void rate_flush(pin_session_t *s)
+{
+    pin_session_lock(s);
+    double bph = s->rate_save_bph;
+    s->rate_save_bph = 0;
+    pin_session_unlock(s);
+    if (bph <= 0)
+        return;
+    char path[PIN_PATH_MAX];
+    if (pin_settings_default_path(path, sizeof(path)) != 0 || pin_est_store_ffv1(path, bph) != 0)
+        return;
+    pin_session_lock(s);
+    s->ffv1_learned_bph = bph;
+    s->ffv1_learned_loaded = 1;
+    pin_session_unlock(s);
 }
 
 /* The learned FFV1 rate, read from the settings once per session. */
@@ -828,8 +889,12 @@ static void split_do(void *user)
     pin_session_t *s = user;
     hand_over_file(s);
     s->scene_index++;
+    s->open_fail_defer = 1;
     open_sink_for_scene(s);
-    pin_session_push_event(s, PIN_EVT_SCENE, (int32_t)s->scene_index, NULL);
+    s->open_fail_defer = 0;
+    /* no new file (the capture ends, open_failed()): no new scene */
+    if (s->sink)
+        pin_session_push_event(s, PIN_EVT_SCENE, (int32_t)s->scene_index, NULL);
 }
 
 static void split_ensure(pin_session_t *s)
@@ -1057,7 +1122,9 @@ static void format_cut_begin(void *user, long index)
     }
     file_format_for_stream(s);
     s->scene_det_ready = 0; /* the scene detector starts over at the new frame rate */
+    s->open_fail_defer = 1;
     open_sink_for_scene(s);
+    s->open_fail_defer = 0;
 }
 
 /* A change of the stream's format was confirmed (pin_fmtwatch.h) during a capture, its
@@ -1561,9 +1628,22 @@ static void adopt_renumbered_file(pin_session_t *s)
 
 /* A file could not be opened: for a capture (its first file, a scene split, the next pass)
  * that ends the capture and stops the deck, which has been sent PLAY by then; then the
- * session is in ERROR. s->sink is NULL here. Caller holds the lock. */
+ * session is in ERROR. s->sink is NULL here. Caller holds the lock.
+ * Inside a cut (open_fail_defer) the hold-back / split code is still in the middle of its
+ * callbacks: ending the capture there would release the lock (closer_drain_unlocked()) with
+ * their state half updated, and they would go on with a capture that has ended. Only the
+ * failure is noted; with no file open no unit goes anywhere, and capture_guard() ends the
+ * capture at the next tick (open_fail_finish()). */
 static void open_failed(pin_session_t *s, pin_status_t st, const char *text)
 {
+    if (s->open_fail_defer && s->capture_began) {
+        if (!s->open_fail_pending) {
+            s->open_fail_pending = 1;
+            s->open_fail_status = st;
+            snprintf(s->open_fail_text, sizeof(s->open_fail_text), "%s", text);
+        }
+        return;
+    }
     if (s->capture_began) {
         /* The earlier files may still be draining to a slow disk: waiting for them with the
          * lock held would freeze every status call meanwhile. */
@@ -1669,6 +1749,9 @@ static void open_sink_for_scene(pin_session_t *s)
     params.ffv1_compression = pin_fmt_clamp_ffv1(s->capture_opts.ffv1_compression);
 
     pin_status_t st = s->sink->open(s->sink, path, &params);
+    s->files_opened++;
+    if (st == PIN_OK && s->test_open_fail && s->files_opened == s->test_open_fail)
+        st = PIN_ERR_IO;   /* test seam PIN_TEST_OPEN_FAIL: the drive refuses this file */
     if (st != PIN_OK) {
         s->sink->close(s->sink); /* never opened: nothing to count */
         s->sink = NULL;
@@ -1946,7 +2029,9 @@ static void size_cut_begin(void *user, long index)
     s->scene_index++;
     if (!scene_split_on(s))
         s->fmt_numbered = 1;
+    s->open_fail_defer = 1;
     open_sink_for_scene(s);
+    s->open_fail_defer = 0;
     if (s->sink && s->file_kind == PIN_KIND_HDV)
         hdv_emit_psi(s);
 }
@@ -2365,6 +2450,45 @@ static double captured_seconds(const pin_session_t *s)
     return s->captured_s > 0 ? s->captured_s : 0;
 }
 
+/* The last part of a path: the file's name. */
+static const char *file_name_of(const char *path)
+{
+    const char *name = path;
+    for (const char *p = path; *p; p++)
+        if (*p == '/' || *p == '\\')
+            name = p + 1;
+    return name;
+}
+
+/* The sentence why the capture ended (capture_report_end()): with whole paths for the event
+ * (short_form 0, PIN_PATH_MAX), or with file names only for the status snapshot's PIN_TEXT_MAX
+ * (short_form 1). In both the sentence about a file that could not be written stays whole
+ * (pin_stop_append_close_failure()), and a cut falls on a character boundary. */
+static void build_stop_text(const pin_session_t *s, pin_stop_reason_t why, const char *detail,
+                            int say_no_video, int short_form, char *out, size_t cap)
+{
+    const int to_stdout = pin_path_is_stdout(s->capture_opts.path);
+    if (say_no_video)
+        pin_stop_message_no_video(why, short_form && !to_stdout ? file_name_of(s->capture_opts.path)
+                                                                : s->capture_opts.path,
+                                  detail, out, cap);
+    else
+        pin_stop_message(why, s->stop_captured_s, detail, out, cap);
+    if (why == PIN_STOP_DEVICE_LOST && !to_stdout) {
+        /* the files were closed (finalised) before this; say where they are */
+        size_t n = strlen(out);
+        if (s->units_total > 0 && s->current_file[0])
+            snprintf(out + n, cap - n, " The file was saved up to that point: %s",
+                     short_form ? file_name_of(s->current_file) : s->current_file);
+        else
+            snprintf(out + n, cap - n, " No file was written.");
+        pin_utf8_trim_end(out);
+    }
+    if (s->close_failed && !to_stdout)
+        pin_stop_append_close_failure(out, cap, file_name_of(s->close_fail_path), s->close_failed > 1,
+                                      pin_strerror(s->close_fail_status));
+}
+
 /* Records why the capture ended and tells the GUI (PIN_EVT_CAPTURE_ENDED).
  * Caller holds the lock. */
 static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const char *detail)
@@ -2372,33 +2496,26 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
     /* The end is reported once every file is closed (PIN_EVT_FILE_CLOSED
      * first, the counts below complete, capture_end_seq means "on disk"). */
     closer_drain(s);
+    /* Units were lost, whatever else ended the capture: a queue that overflowed in the last
+     * file (or one handed over since the last check), or a cut whose next file could not be
+     * opened. */
+    if (!pin_stop_abnormal(why) && s->open_fail_pending) {
+        why = PIN_STOP_WRITE_ERROR;
+        detail = "the next output file could not be created";
+    } else if (!pin_stop_abnormal(why) && s->disk_slow_pending) {
+        why = PIN_STOP_DISK_SLOW;
+        detail = NULL;
+    }
+    s->open_fail_pending = 0;
     s->stop_reason = why;
     s->stop_captured_s = captured_seconds(s);
     /* no unit reached any file (they are closed by now): there is nothing to keep */
     s->stop_no_video = s->units_total == 0;
     int say_no_video = s->stop_no_video && !pin_stop_abnormal(why);
-    if (say_no_video)
-        pin_stop_message_no_video(why, s->capture_opts.path, detail, s->stop_text, sizeof(s->stop_text));
-    else
-        pin_stop_message(why, s->stop_captured_s, detail, s->stop_text, sizeof(s->stop_text));
-    if (why == PIN_STOP_DEVICE_LOST && !pin_path_is_stdout(s->capture_opts.path)) {
-        /* the files were closed (finalised) before this; say where they are */
-        size_t n = strlen(s->stop_text);
-        if (s->units_total > 0 && s->current_file[0])
-            snprintf(s->stop_text + n, sizeof(s->stop_text) - n,
-                     " The file was saved up to that point: %s", s->current_file);
-        else
-            snprintf(s->stop_text + n, sizeof(s->stop_text) - n, " No file was written.");
-    }
+    build_stop_text(s, why, detail, say_no_video, 0, s->stop_text, sizeof(s->stop_text));
+    build_stop_text(s, why, detail, say_no_video, 1, s->stop_text_short, sizeof(s->stop_text_short));
     if (s->close_failed && !pin_path_is_stdout(s->capture_opts.path)) {
         /* a file that was not closed properly is a failed capture, whatever else ended it */
-        const char *name = s->close_fail_path;
-        for (const char *p = name; *p; p++)
-            if (*p == '/' || *p == '\\')
-                name = p + 1;
-        size_t n = strlen(s->stop_text);
-        snprintf(s->stop_text + n, sizeof(s->stop_text) - n, " But %s%s could not be written completely: %s.",
-                 name, s->close_failed > 1 ? " (and other files)" : "", pin_strerror(s->close_fail_status));
         if (!pin_stop_abnormal(why))
             s->stop_reason = why = PIN_STOP_WRITE_ERROR;
     }
@@ -2482,6 +2599,16 @@ static uint16_t auto_stop_node(const pin_session_t *s, uint16_t node)
  * the lock. Returns 1 if it ended the capture. */
 static int capture_guard(pin_session_t *s, uint16_t deck_node)
 {
+    if (s->open_fail_pending) {
+        /* a cut could not open its file (open_failed()): end the capture here, outside the
+         * hold-back and split callbacks */
+        s->open_fail_pending = 0;
+        char text[PIN_TEXT_MAX];
+        snprintf(text, sizeof(text), "%s", s->open_fail_text);
+        capture_end(s, PIN_STOP_WRITE_ERROR, "the next output file could not be created", deck_node);
+        set_error(s, s->open_fail_status, text);
+        return 1;
+    }
     if (s->disk_slow_pending && s->state == PIN_STATE_CAPTURING) {
         capture_end(s, PIN_STOP_DISK_SLOW, NULL, deck_node);
         set_state(s, PIN_STATE_READY);
@@ -2650,6 +2777,7 @@ static void file_format_for_stream(pin_session_t *s)
  *   PIN_TEST_WRITER_QUEUE=<bytes>  the size of the writer queue in front of every file or pipe
  *   PIN_TEST_SINK_DELAY_MS=<ms>    the writer thread waits that long before each unit: a slow drive
  *   PIN_TEST_FAT32_LIMIT=<bytes>   the output drive is FAT32 with that file size limit (not 4 GiB)
+ *   PIN_TEST_OPEN_FAIL=<n>         the n-th file a capture opens (1 = its first) cannot be opened
  * The sinks have PIN_TEST_WRITE_FAIL_AFTER (pin_sink_fault.c): writes that fail. */
 static uint64_t test_seam(const char *name)
 {
@@ -2662,6 +2790,8 @@ static void test_seams_read(pin_session_t *s)
 {
     s->test_free_space = test_seam("PIN_TEST_FREE_SPACE");
     s->test_writer_queue = test_seam("PIN_TEST_WRITER_QUEUE");
+    s->test_open_fail = test_seam("PIN_TEST_OPEN_FAIL");
+    s->files_opened = 0;
     g_test_sink_delay_ms = (int)test_seam("PIN_TEST_SINK_DELAY_MS");
 }
 
@@ -2714,6 +2844,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
      * (open_failed()) */
     s->capture_began = 1;
     s->disk_slow_pending = 0;
+    s->open_fail_pending = 0;
     s->opening_first_file = 1;
     open_sink_for_scene(s);
     s->opening_first_file = 0;
@@ -2744,6 +2875,7 @@ static void maybe_begin_capture(pin_session_t *s, uint16_t camera_node)
             /* Rewinding needs no stream, so it starts at once; the stream kind
              * is only needed to open the file, after PLAY. */
             s->rewind_before_capture = 1;
+            s->rewind_failed = 0;
             s->rewind_wait_start_s = pin_session_now();
             set_state(s, PIN_STATE_REWINDING);
             deck_send(s, camera_node, PIN_DECK_CMD_REW);
@@ -2777,6 +2909,13 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         pthread_mutex_unlock(&s->mtx);
         return 1; /* caller must break out of the streaming loop */
     }
+    if (kind == PIN_CMD_CAPTURE_START && s->analog_restart) {
+        /* the analog input restarts at another standard first: a capture started now would
+         * go on in the same file at the new frame size. It stays pending for the restarted
+         * loop. */
+        pthread_mutex_unlock(&s->mtx);
+        return 0;
+    }
     /* Taken before it runs: ending a capture releases the lock while the
      * files finish (closer_drain_unlocked()), and a command posted then
      * must stay pending, not be cleared with this one. */
@@ -2785,7 +2924,11 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
     s->cmd.kind = PIN_CMD_NONE;
     pthread_cond_broadcast(&s->cmd_idle);
 
-    if (kind == PIN_CMD_CAPTURE_START) {
+    if (kind == PIN_CMD_CAPTURE_START && capture_active(s)) {
+        /* a capture is already running (or waiting to start): pin_session_capture_start() refuses
+         * a second one, so this only guards the files of the running one */
+        pin_logf(PIN_LOG_WARN, "session: a capture start while a capture runs was ignored\n");
+    } else if (kind == PIN_CMD_CAPTURE_START) {
         s->capture_opts = cmd.capture;
         if (pin_path_is_stdout(s->capture_opts.path)) {
             /* a stream has no files to split, keep or number, and one pass */
@@ -2799,6 +2942,7 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         s->units_total = 0;
         s->stop_captured_s = 0;
         s->stop_text[0] = 0;
+        s->stop_text_short[0] = 0;
         s->close_failed = 0;
         pin_closer_take_failure(s->closer, NULL, NULL, 0);
         s->capture_began = 0;
@@ -2823,13 +2967,15 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
     } else if (kind == PIN_CMD_DECK) {
         uint16_t node = camera_node;
         if (!node) {
-            set_error(s, PIN_ERR_NO_CAMERA, "no camera on the 1394 bus");
-        } else if (s->state == PIN_STATE_CAPTURING && cmd.deck_cmd != PIN_DECK_CMD_STOP) {
-            /* "while CAPTURING, only STOP accepted" */
-        } else if (cmd.deck_cmd == PIN_DECK_CMD_STOP && s->state == PIN_STATE_CAPTURING) {
-            /* STOP while capturing: finish the capture first, then the deck */
+            fail_locked(s, PIN_ERR_NO_CAMERA, "no camera on the 1394 bus");
+        } else if (capture_active(s) && cmd.deck_cmd != PIN_DECK_CMD_STOP) {
+            /* while a capture runs or rewinds, only STOP is accepted (pin_session_deck()) */
+        } else if (cmd.deck_cmd == PIN_DECK_CMD_STOP && capture_active(s)) {
+            /* STOP while capturing (or rewinding for one): finish the capture first, then the
+             * deck; a rewind stopped by hand must not be taken for the tape's start */
             capture_end(s, PIN_STOP_USER, NULL, node);
-            set_state(s, PIN_STATE_READY);
+            if (s->state != PIN_STATE_ERROR)
+                set_state(s, PIN_STATE_READY);
         } else {
             deck_send(s, node, cmd.deck_cmd);
         }
@@ -2933,8 +3079,21 @@ static void dv_tick(void *user)
         pin_deck_async_status_t st = pin_deck_async_poll(&s->deck_async, pin_session_now());
         if (st == PIN_DECK_ASYNC_DONE || st == PIN_DECK_ASYNC_FAILED) {
             s->deck_busy = 0;
-            if (s->deck_async.cmd[0] == 0x00)   /* a transport command, not a status query */
+            /* a transport command, not a status query: when it was accepted. One the deck
+             * refused or never answered did not move the tape; above all a REW that failed
+             * must not let the deck's "stopped" pass for the tape's start. */
+            if (s->deck_async.cmd[0] == 0x00 && st == PIN_DECK_ASYNC_DONE)
                 s->deck_cmd_done_s = pin_session_now();
+            if (s->deck_async.cmd[0] == 0x00 && st == PIN_DECK_ASYNC_FAILED) {
+                uint8_t rew[8];
+                unsigned rl = pin_deck_build_cmd(PIN_DECK_CMD_REW, rew);
+                int was_rew = s->deck_async.cmd_len == rl && memcmp(s->deck_async.cmd, rew, rl) == 0;
+                pin_logf(PIN_LOG_WARN, "session: the deck %s the command %02x %02x\n",
+                         s->deck_async.resp_len > 0 ? "refused" : "did not answer",
+                         s->deck_async.cmd[2], s->deck_async.cmd[3]);
+                if (was_rew && (s->rewind_before_capture || s->pass_rewinding))
+                    s->rewind_failed = 1;
+            }
             if (st == PIN_DECK_ASYNC_DONE && s->deck_async.cmd[2] == 0x51) {
                 /* TIME CODE answer: the tape position, shown while no DV/HDV stream
                  * carries its own timecode (winding, stopped). */
@@ -2985,7 +3144,8 @@ static void dv_tick(void *user)
         }
     }
 
-    if (s->capture_start_s > 0)
+    /* the pass's capture time: it stands still while the deck rewinds for the next pass */
+    if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
         s->elapsed_s = pin_session_now() - s->capture_start_s;
     s->idle_s = pin_session_now() - s->last_data_s;
     if (s->writer) {
@@ -3013,8 +3173,9 @@ static void dv_tick(void *user)
         }
         file_announce(s);
         rate_sample(s);
-        capture_guard(s, auto_stop_node(s, node));
     }
+    if (s->writer || s->open_fail_pending)
+        capture_guard(s, auto_stop_node(s, node));
 
     /* No-signal stop (idle_stop_minutes) and total-time stop (max_duration_minutes).
      * The no-signal timeout is also how the end of the tape is noticed: with
@@ -3039,13 +3200,23 @@ static void dv_tick(void *user)
         if (s->pass < s->passes) {
             /* end this pass, rewind, next pass */
             finish_file(s);
-            set_state(s, PIN_STATE_REWINDING);
-            s->pass_rewinding = 1;
-            s->rewind_wait_start_s = pin_session_now();
-            deck_send(s, node, PIN_DECK_CMD_REW);
-            s->pass_index++;
-            s->pass++;
-            s->last_data_s = pin_session_now(); /* reset idle timer across the rewind */
+            s->hdv_err_reset = 1;   /* the stream breaks off: no continuity across it */
+            if (s->disk_slow_pending) {
+                /* The last units of this pass (flushed with the file) overflowed its queue: they
+                 * are missing from its file. The capture ends here, where it happened, rather
+                 * than after a whole rewind. */
+                capture_end(s, PIN_STOP_DISK_SLOW, NULL, auto_stop_node(s, node));
+                set_state(s, PIN_STATE_READY);
+            } else {
+                set_state(s, PIN_STATE_REWINDING);
+                s->pass_rewinding = 1;
+                s->rewind_failed = 0;
+                s->rewind_wait_start_s = pin_session_now();
+                deck_send(s, node, PIN_DECK_CMD_REW);
+                s->pass_index++;
+                s->pass++;
+                s->last_data_s = pin_session_now(); /* reset idle timer across the rewind */
+            }
         } else {
             /* last pass: stop */
             char mins[32], detail[PIN_TEXT_MAX];
@@ -3061,9 +3232,18 @@ static void dv_tick(void *user)
             set_state(s, PIN_STATE_READY);
         }
     } else if (s->state == PIN_STATE_REWINDING && (s->rewind_before_capture || s->pass_rewinding) &&
-               s->deck == PIN_DECK_STOPPED && !s->deck_busy && !s->deck_q_valid &&
-               s->deck_cmd_done_s >= s->rewind_wait_start_s &&
-               pin_session_now() - s->deck_cmd_done_s > 3.0) {
+               s->rewind_failed) {
+        /* The deck refused the REW or did not answer it (after the retries): the tape is not
+         * at its start. Playing from here would capture the wrong part of the tape (or the
+         * blank end of it as pass 2), so the capture ends and says why. */
+        s->rewind_failed = 0;
+        capture_end(s, PIN_STOP_ERROR,
+                    "the camera did not rewind the tape (it refused the command or did not answer)",
+                    auto_stop_node(s, node));
+        set_state(s, PIN_STATE_READY);
+    } else if (s->state == PIN_STATE_REWINDING && (s->rewind_before_capture || s->pass_rewinding) &&
+               pin_deck_rewind_finished(s->deck, s->deck_busy || s->deck_q_valid, s->deck_cmd_done_s,
+                                        s->rewind_wait_start_s, pin_session_now())) {
         /* Rewind finished (BOT). A status query answered within a moment of
          * the REW command can still report the old "stopped", so the deck must
          * also have had a few seconds since REW was acknowledged. */
@@ -3095,6 +3275,7 @@ static void dv_tick(void *user)
                 s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
                 s->idle_s = 0;
                 s->scene_det_ready = 0;
+                s->hdv_err_reset = 1;   /* the first packets after the rewind start afresh */
             }
         }
     }
@@ -3128,7 +3309,7 @@ static void do_run_dv(pin_session_t *s)
     s->analog_valid = 0; /* the OHCI design replaces Capture */
     char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
     if (pin_session_firmware_path(s->dev.model, PIN_KIND_DV, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
-        set_error(s, PIN_ERR_FIRMWARE, why);
+        worker_error(s, PIN_ERR_FIRMWARE, why);
         return;
     }
 
@@ -3142,7 +3323,7 @@ static void do_run_dv(pin_session_t *s)
 
     /* switched away while we were bringing the device up: don't start a stream */
     pin_session_lock(s);
-    int abandoned = s->cmd.pending || s->worker_stop;
+    int abandoned = superseded(s);
     pin_session_unlock(s);
     if (abandoned)
         return;
@@ -3153,7 +3334,7 @@ static void do_run_dv(pin_session_t *s)
     for (int first = 1;; first = 0) {
         pst = pinnacle_stream_start(&s->dev);
         if (pst != PINNACLE_OK) {
-            set_error(s, PIN_ERR_USB, s->dev.fail_detail[0] ? s->dev.fail_detail : NULL);
+            worker_error(s, PIN_ERR_USB, s->dev.fail_detail[0] ? s->dev.fail_detail : NULL);
             return;
         }
         pin_session_lock(s);
@@ -3174,11 +3355,8 @@ static void do_run_dv(pin_session_t *s)
         pin_session_unlock(s);
 
         p1394_init(&s->link, &s->dev);
-        if (first) {
-            pin_session_lock(s);
-            set_state(s, PIN_STATE_READY);
-            pin_session_unlock(s);
-        }
+        if (first)
+            worker_ready(s);
 
         dv_reassembler_t reasm;
         dv_output_t out = { .write = dv_write_cb, .on_unit = dv_on_unit, .on_loss = dv_on_loss,
@@ -3363,17 +3541,20 @@ static int analog_tick(void *user)
         }
         file_announce(s);
         rate_sample(s);
-        capture_guard(s, 0);
     }
+    if (s->writer || s->open_fail_pending)
+        capture_guard(s, 0);
     int idle_stop = s->capture_opts.idle_stop_minutes > 0 &&
                     now - s->last_data_s > s->capture_opts.idle_stop_minutes * 60.0;
     int should_stop = s->state == PIN_STATE_CAPTURING &&
                       (idle_stop || (s->capture_opts.max_duration_minutes > 0 &&
                                      s->elapsed_s > s->capture_opts.max_duration_minutes * 60.0));
     pin_session_unlock(s);
+    rate_flush(s);
 
     if (handle_inline_commands(s, 0)) {
         s->loop_stop = 1;
+        rate_flush(s);
         return 1;
     }
     if (s->analog_restart)
@@ -3391,6 +3572,7 @@ static int analog_tick(void *user)
         capture_end(s, idle_stop ? PIN_STOP_NO_SIGNAL : PIN_STOP_TIME_LIMIT, detail, 0);
         set_state(s, PIN_STATE_READY);
         pin_session_unlock(s);
+        rate_flush(s);
     }
     return s->loop_stop ? 1 : 0;
 }
@@ -3425,7 +3607,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
 {
     char fw[PIN_PATH_MAX], why[PIN_TEXT_MAX];
     if (pin_session_firmware_path(s->dev.model, PIN_KIND_ANALOG, fw, sizeof(fw), why, sizeof(why)) != PIN_OK) {
-        set_error(s, PIN_ERR_FIRMWARE, why);
+        worker_error(s, PIN_ERR_FIRMWARE, why);
         return;
     }
 
@@ -3495,11 +3677,11 @@ static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
 
     pst = pinnacle_analog_start(&s->analog);
     if (pst != PINNACLE_OK) {
-        set_error(s, PIN_ERR_USB, NULL);
+        worker_error(s, PIN_ERR_USB, NULL);
         return;
     }
     s->analog_valid = 1;
-    set_state(s, PIN_STATE_READY);
+    worker_ready(s);
 
     analog_ctx_t ctx = { .s = s };
     pinnacle_capture_sink_t sink = { .video = analog_video_cb, .audio = analog_audio_cb,
@@ -3522,7 +3704,9 @@ static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
             break;
         }
         pin_session_lock(s);
-        int restart = s->analog_restart && !s->loop_stop && !s->worker_stop && !s->cmd.pending;
+        /* a capture start waits for the restart (handle_inline_commands()); an input switch or
+         * close does not */
+        int restart = s->analog_restart && !s->loop_stop && !superseded(s);
         pinnacle_std_t target = s->analog_target_std;
         s->analog_restart = 0;
         pin_session_unlock(s);
@@ -3541,9 +3725,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
         ctx.auto_mismatch = 0;
         s->ctl_dirty_gain = 1;
         if (pinnacle_analog_start(&s->analog) != PINNACLE_OK) {
-            pin_session_lock(s);
-            set_error(s, PIN_ERR_USB, NULL);
-            pin_session_unlock(s);
+            worker_error(s, PIN_ERR_USB, NULL);
             s->analog_valid = 0;
             break;
         }
@@ -3552,6 +3734,7 @@ static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
     pin_session_lock(s);
     capture_end(s, PIN_STOP_USER, NULL, 0); /* input switch / close */
     pin_session_unlock(s);
+    rate_flush(s);
     if (!device_gone)
         pinnacle_analog_stop(&s->analog);
 }
@@ -3572,6 +3755,14 @@ static void replay_handle_eot(pin_session_t *s)
     pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
     if (s->sink && s->pass < s->passes) {
         finish_file(s);
+        s->hdv_err_reset = 1;
+        if (s->disk_slow_pending) {
+            /* as a live pass change (dv_tick()): pass 1's last units overflowed its queue */
+            capture_end(s, PIN_STOP_DISK_SLOW, NULL, 0);
+            set_state(s, PIN_STATE_READY);
+            pin_session_unlock(s);
+            return;
+        }
         s->pass_index++;
         s->pass++;
         s->scene_index = first_scene_number(s);
@@ -3584,7 +3775,9 @@ static void replay_handle_eot(pin_session_t *s)
         /* as a live pass change (dv_tick()): the tape starts over, so does the scene
          * detector, and an HDV file starts on a GOP */
         s->scene_det_ready = 0;
-        pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
+        s->elapsed_s = 0;
+        if (s->state != PIN_STATE_ERROR)   /* (a failed open ended the capture) */
+            pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
     } else if (s->sink) {
         /* last pass: stop */
         capture_end(s, PIN_STOP_END_OF_TAPE, NULL, 0);
@@ -3594,6 +3787,22 @@ static void replay_handle_eot(pin_session_t *s)
         s->deck = PIN_DECK_PLAYING;
     }
     pin_session_unlock(s);
+}
+
+/* The replay deck's simulated rewind time (2 s), without sleeping through it: the loop goes
+ * on taking commands meanwhile. *until: when this rewind ends, 0 before it began. Returns 1
+ * while it still runs. */
+static int replay_rewinding(double *until)
+{
+    double now = pin_session_now();
+    if (*until == 0)
+        *until = now + 2.0;
+    if (now < *until) {
+        sleep_ms(50);
+        return 1;
+    }
+    *until = 0;
+    return 0;
 }
 
 /* Test seam: PIN_REPLAY_UNPLUG_AFTER=<frames> makes the replay device behave as if it
@@ -3656,9 +3865,11 @@ static void replay_stats(pin_session_t *s, double *last)
 static int replay_run_ts(pin_session_t *s, FILE *f)
 {
     p1394_init(&s->link, &s->dev);
+    pin_session_lock(s);
     s->camera_present = 1;
-    set_state(s, PIN_STATE_READY);
     s->deck = PIN_DECK_PLAYING;
+    pin_session_unlock(s);
+    worker_ready(s);
 
     dv_ctx_t ctx = { .s = s };
     memset(&s->hdv_psi, 0, sizeof(s->hdv_psi));
@@ -3675,6 +3886,7 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
     uint64_t unplug_after = replay_unplug_after();
     int unplugged = 0;
     double stats_t = 0;
+    double rewind_until = 0;
 
     s->loop_stop = 0;
     while (!s->loop_stop) {
@@ -3688,9 +3900,12 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
             unplugged = 1;
         pin_session_unlock(s);
         if (unplugged) { s->loop_stop = 1; break; }
+        if (d != PIN_DECK_REWINDING)
+            rewind_until = 0;
         if (d == PIN_DECK_STOPPED || d == PIN_DECK_PAUSED) { sleep_ms(50); continue; }
+        if (d == PIN_DECK_REWINDING && replay_rewinding(&rewind_until))
+            continue;
         if (d == PIN_DECK_REWINDING) {
-            sleep_ms(2000); /* simulated rewind time, per the plan */
             fseek(f, 0, SEEK_SET);
             pic_len = 0;
             memset(&map, 0, sizeof(map)); map.pmt_pid = -1; map.video_pid = -1; map.aux_pid = -1; map.audio_pid = -1;
@@ -3708,6 +3923,12 @@ static int replay_run_ts(pin_session_t *s, FILE *f)
 
         size_t n = fread(pkt, 1, sizeof(pkt), f);
         if (n != sizeof(pkt)) {
+            /* the file's last picture ends with the file: it goes into the pass that is ending */
+            if (pic_len > 0) {
+                dv_write_cb(pic, pic_len, &ctx);
+                if (pic_is_video)
+                    dv_on_unit(DV_FORMAT_HDV, pic, pic_len, &ctx);
+            }
             replay_handle_eot(s);
             fseek(f, 0, SEEK_SET);
             pic_len = 0;
@@ -3777,7 +3998,7 @@ static int replay_run(pin_session_t *s)
     const char *path = s->device_id + 7; /* "replay:<file>" */
     FILE *f = fopen(path, "rb");
     if (!f) {
-        set_error(s, PIN_ERR_NOT_FOUND, "replay file not found");
+        worker_error(s, PIN_ERR_NOT_FOUND, "replay file not found");
         return -1;
     }
     uint8_t head[4 * HDV_TS_PACKET_SIZE];
@@ -3795,9 +4016,11 @@ static int replay_run(pin_session_t *s)
         return replay_run_ts(s, f); /* closes f itself */
 
     p1394_init(&s->link, &s->dev); /* unused fields only; no real 1394 for replay */
+    pin_session_lock(s);
     s->camera_present = 1;
-    set_state(s, PIN_STATE_READY);
     s->deck = PIN_DECK_PLAYING;
+    pin_session_unlock(s);
+    worker_ready(s);
 
     dv_reassembler_t reasm;
     dv_ctx_t ctx = { .s = s };
@@ -3820,6 +4043,7 @@ static int replay_run(pin_session_t *s)
     int unplugged = 0;
     double stats_t = 0;
     double hold_until = pin_session_now() + replay_hold_s();
+    double rewind_until = 0;
     s->loop_stop = 0;
     while (!s->loop_stop) {
         if (handle_inline_commands(s, 0)) { s->loop_stop = 1; break; }
@@ -3833,9 +4057,12 @@ static int replay_run(pin_session_t *s)
             unplugged = 1;
         pin_session_unlock(s);
         if (unplugged) { s->loop_stop = 1; break; }
+        if (d != PIN_DECK_REWINDING)
+            rewind_until = 0;
         if (d == PIN_DECK_STOPPED || d == PIN_DECK_PAUSED) { sleep_ms(50); continue; }
+        if (d == PIN_DECK_REWINDING && replay_rewinding(&rewind_until))
+            continue;
         if (d == PIN_DECK_REWINDING) {
-            sleep_ms(2000); /* simulated rewind time, per the plan */
             fseek(f, 0, SEEK_SET);
             /* the tape starts over: so does the reassembly (no half frame from before the
              * rewind glued to the first one; a real deck sends nothing while winding) */
@@ -3858,6 +4085,13 @@ static int replay_run(pin_session_t *s)
         size_t want = frame_size ? (size_t)frame_size : 65536;
         size_t n = fread(chunk, 1, want, f);
         if (n == 0 || (frame_size && n != (size_t)frame_size)) {
+            if (!frame_size) {
+                /* the dump's last frame goes into the pass that is ending, and the next pass
+                 * starts on a fresh reassembler (no half frame from the end glued to the
+                 * start) */
+                dv_reassembler_finish(&reasm);
+                dv_reassembler_init(&reasm, &out);
+            }
             replay_handle_eot(s);
             /* Loop the source file either way (the plan's "and loops"),
              * whether or not a capture is/was attached, so the preview
@@ -4001,9 +4235,12 @@ static void *worker_main(void *arg)
         }
 
         /* Any other command with nothing streaming (e.g. capture/deck
-         * posted before pin_set_input has ever run): nothing to attach to. */
+         * posted before pin_set_input has ever run): nothing to attach to. A
+         * stop has nothing to stop, and after an error the error stays what
+         * the session shows. */
         pthread_mutex_lock(&s->mtx);
-        set_error(s, PIN_ERR_STATE, "no input selected yet");
+        if (cmd.kind != PIN_CMD_CAPTURE_STOP && s->state != PIN_STATE_ERROR)
+            set_error(s, PIN_ERR_STATE, "no input selected yet");
         s->cmd.pending = 0; s->cmd.kind = PIN_CMD_NONE;
         pthread_cond_broadcast(&s->cmd_idle);
         pthread_mutex_unlock(&s->mtx);
@@ -4011,20 +4248,60 @@ static void *worker_main(void *arg)
     return NULL;
 }
 
-/* Posts a command and waits for the worker to at least accept it (not for
- * it to finish -- most commands are documented non-blocking). */
-static void post_cmd(pin_session_t *s, const pin_cmd_t *cmd)
+/* How long a command waits for the worker to take the one before it. The worker takes a
+ * command within a tick while an input runs; it can take much longer while it finishes files
+ * (closer_drain_unlocked()) or brings a device up, and an API call must not block that long. */
+#define PIN_CMD_SLOT_WAIT_MS 1000
+
+/* Makes room for a command of the given kind in the mailbox: waits (the lock released meanwhile)
+ * until the worker took the one still pending, PIN_ERR_STATE if it does not in time. A new input
+ * may replace an input switch not taken yet. The caller checks the session's state after this (it
+ * may have changed while waiting) and then calls put_cmd() without releasing the lock in between.
+ * Caller holds the lock. */
+static pin_status_t cmd_slot_wait(pin_session_t *s, pin_cmd_kind_t kind)
 {
-    pthread_mutex_lock(&s->mtx);
+    if (kind == PIN_CMD_SET_INPUT && s->cmd.pending && s->cmd.kind == PIN_CMD_SET_INPUT)
+        return PIN_OK;
+    double deadline = pin_session_now() + PIN_CMD_SLOT_WAIT_MS / 1000.0;
+    while (s->cmd.pending && !s->worker_stop) {
+        double left = deadline - pin_session_now();
+        if (left <= 0)
+            break;
+        pin_cond_timedwait_ms(&s->cmd_idle, &s->mtx, (long)(left * 1000.0) + 1);
+    }
+    return s->cmd.pending || s->worker_stop ? PIN_ERR_STATE : PIN_OK;
+}
+
+/* Hands a command to the worker (after cmd_slot_wait()); returns at once, the command runs
+ * on the worker thread. Caller holds the lock. */
+static void put_cmd(pin_session_t *s, const pin_cmd_t *cmd)
+{
     s->cmd = *cmd;
     s->cmd.pending = 1;
     pthread_cond_signal(&s->cmd_posted);
-    pthread_mutex_unlock(&s->mtx);
 }
 
 /* ========================================================================
  * public (engine-level) API
  * ==================================================================== */
+
+/* What pin_session_open() made before the worker exists, and the session itself (a failed
+ * open). Each part may be missing. */
+static void session_free_parts(pin_session_t *s)
+{
+    pin_closer_destroy(s->closer);
+    pin_previewer_destroy(s->preview);
+    pin_hdv_audio_destroy(s->hdv_audio);
+    free(s->mon_buf);
+    pin_freeprobe_release(s->free_status);
+    pin_freeprobe_release(s->free_guard);
+    pthread_mutex_destroy(&s->mtx);
+    pthread_cond_destroy(&s->cmd_posted);
+    pthread_cond_destroy(&s->cmd_idle);
+    pthread_mutex_destroy(&s->evq_mtx);
+    pthread_mutex_destroy(&s->mon_mtx);
+    free(s);
+}
 
 pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
 {
@@ -4051,7 +4328,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->is_replay = strncmp(resolved, "replay:", 7) == 0;
     pthread_mutex_init(&s->mtx, NULL);
     pthread_cond_init(&s->cmd_posted, NULL);
-    pthread_cond_init(&s->cmd_idle, NULL);
+    pin_cond_init_timed(&s->cmd_idle);
     pthread_mutex_init(&s->evq_mtx, NULL);
     pthread_mutex_init(&s->mon_mtx, NULL);
     s->free_status = pin_freeprobe_create(fat32_and_free);
@@ -4070,24 +4347,15 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     pinnacle_analog_config_defaults(&s->analog.cfg);
     pinnacle_picture_defaults(&s->want_picture);
 
-    if (!s->closer) {
-        pin_previewer_destroy(s->preview);
-        pin_hdv_audio_destroy(s->hdv_audio);
-        free(s->mon_buf);
-        pthread_mutex_destroy(&s->mtx);
-        free(s);
+    if (!s->closer || !s->mon_buf) {
+        session_free_parts(s);
         return PIN_ERR_NOMEM;
     }
 
     if (!s->is_replay) {
         pinnacle_status_t pst = pinnacle_lock_acquire(resolved, &s->lock);
         if (pst != PINNACLE_OK) {
-            pin_closer_destroy(s->closer);
-            pin_previewer_destroy(s->preview);
-            pin_hdv_audio_destroy(s->hdv_audio);
-            free(s->mon_buf);
-            pthread_mutex_destroy(&s->mtx);
-            free(s);
+            session_free_parts(s);
             return pst == PINNACLE_ERR_BUSY ? PIN_ERR_BUSY : PIN_ERR_INTERNAL;
         }
     }
@@ -4095,12 +4363,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     s->state = PIN_STATE_CLOSED;
     if (pthread_create(&s->worker_thread, NULL, worker_main, s) != 0) {
         pinnacle_lock_release(s->lock);
-        pin_closer_destroy(s->closer);
-        pin_previewer_destroy(s->preview);
-        pin_hdv_audio_destroy(s->hdv_audio);
-        free(s->mon_buf);
-        pthread_mutex_destroy(&s->mtx);
-        free(s);
+        session_free_parts(s);
         return PIN_ERR_INTERNAL;
     }
     s->worker_started = 1;
@@ -4123,6 +4386,7 @@ void pin_session_close(pin_session_t *s)
     pthread_mutex_unlock(&s->mtx);
     if (s->worker_started)
         pthread_join(s->worker_thread, NULL);
+    rate_flush(s);
 
     hand_over_file(s);
     pin_closer_destroy(s->closer); /* before the event queue it reports to goes */
@@ -4151,9 +4415,14 @@ pin_status_t pin_session_set_input(pin_session_t *s, pin_input_t input)
 {
     if (!s) return PIN_ERR_ARG;
     pin_session_lock(s);
-    if (s->state == PIN_STATE_CAPTURING) { pin_session_unlock(s); return PIN_ERR_STATE; }
+    if (cmd_slot_wait(s, PIN_CMD_SET_INPUT) != PIN_OK || s->state == PIN_STATE_CAPTURING) {
+        pin_session_unlock(s);
+        return PIN_ERR_STATE;
+    }
     /* Say so at once: stopping the running input can take a moment, and until
-     * then the status would keep describing the old one. */
+     * then the status would keep describing the old one. The command is posted
+     * under the same lock, so the worker's READY for the old input cannot come
+     * in between (worker_ready()). */
     s->input = input;
     if (s->state != PIN_STATE_PREPARING)
         set_state(s, PIN_STATE_PREPARING);
@@ -4165,10 +4434,10 @@ pin_status_t pin_session_set_input(pin_session_t *s, pin_input_t input)
     s->deck_busy = 0;
     s->tape_percent = -1;
     s->timecode[0] = 0;
-    pin_session_unlock(s);
     s->loop_stop = 1;
     pin_cmd_t cmd = { .kind = PIN_CMD_SET_INPUT, .input = input };
-    post_cmd(s, &cmd);
+    put_cmd(s, &cmd);
+    pin_session_unlock(s);
     return PIN_OK;
 }
 
@@ -4249,14 +4518,23 @@ pin_status_t pin_session_set_control(pin_session_t *s, pin_control_t c, int32_t 
 pin_status_t pin_session_deck(pin_session_t *s, pin_deck_cmd_t cmd)
 {
     if (!s) return PIN_ERR_ARG;
+    if ((unsigned)cmd > PIN_DECK_CMD_REW) return PIN_ERR_ARG;
     pin_session_lock(s);
-    if (s->state == PIN_STATE_CAPTURING && cmd != PIN_DECK_CMD_STOP) {
+    pin_status_t st = cmd_slot_wait(s, PIN_CMD_DECK);
+    pin_state_t vs = visible_state(s);
+    /* no input running to send it with */
+    if (vs == PIN_STATE_CLOSED || vs == PIN_STATE_PREPARING || vs == PIN_STATE_ERROR)
+        st = PIN_ERR_STATE;
+    /* While a capture runs, or the deck rewinds for one, only Stop, which ends that capture:
+     * anything else would take the tape away from it (and a rewind would be taken as done
+     * when another command stopped the deck). */
+    if ((vs == PIN_STATE_CAPTURING || vs == PIN_STATE_REWINDING) && cmd != PIN_DECK_CMD_STOP)
+        st = PIN_ERR_STATE;
+    if (st != PIN_OK) {
         pin_session_unlock(s);
-        return PIN_ERR_STATE;
+        return st;
     }
-    pin_session_unlock(s);
     if (s->is_replay) {
-        pin_session_lock(s);
         switch (cmd) {
         case PIN_DECK_CMD_PLAY: s->deck = PIN_DECK_PLAYING; break;
         case PIN_DECK_CMD_PAUSE: s->deck = PIN_DECK_PAUSED; break;
@@ -4264,16 +4542,17 @@ pin_status_t pin_session_deck(pin_session_t *s, pin_deck_cmd_t cmd)
         case PIN_DECK_CMD_FF: s->deck = PIN_DECK_FAST_FORWARD; break;
         case PIN_DECK_CMD_REW: s->deck = PIN_DECK_REWINDING; break;
         }
-        if (cmd == PIN_DECK_CMD_STOP && s->state == PIN_STATE_CAPTURING) {
-            s->cmd.kind = PIN_CMD_CAPTURE_STOP;
-            s->cmd.pending = 1;
+        if (cmd == PIN_DECK_CMD_STOP && capture_active(s)) {
+            pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_STOP, .stop_deck = PIN_STOP_DECK_NO };
+            put_cmd(s, &c);
         }
         pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
         pin_session_unlock(s);
         return PIN_OK;
     }
     pin_cmd_t c = { .kind = PIN_CMD_DECK, .deck_cmd = cmd };
-    post_cmd(s, &c);
+    put_cmd(s, &c);
+    pin_session_unlock(s);
     return PIN_OK;
 }
 
@@ -4455,12 +4734,21 @@ pin_status_t pin_session_set_output_hint(pin_session_t *s, const pin_capture_opt
     return PIN_OK;
 }
 
+/* A capture can be started: READY with no capture running, waiting to start or rewinding for
+ * one. Caller holds the lock. */
+static int capture_can_start(const pin_session_t *s)
+{
+    return visible_state(s) == PIN_STATE_READY && !capture_active(s);
+}
+
 pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite)
 {
     if (!s || !o) return PIN_ERR_ARG;
     pin_session_lock(s);
-    if (s->state != PIN_STATE_READY) { pin_session_unlock(s); return PIN_ERR_STATE; }
+    int ok = cmd_slot_wait(s, PIN_CMD_CAPTURE_START) == PIN_OK && capture_can_start(s);
     pin_session_unlock(s);
+    if (!ok)
+        return PIN_ERR_STATE;
 
     pin_output_check_t chk;
     pin_status_t cs = pin_session_check_output(s, o, &chk);
@@ -4482,16 +4770,28 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
         if (!c.capture.start_deck)
             c.capture.passes = 1;
     }
-    post_cmd(s, &c);
+    /* checked again: another caller may have started one while the output was checked */
+    pin_session_lock(s);
+    if (cmd_slot_wait(s, PIN_CMD_CAPTURE_START) != PIN_OK || !capture_can_start(s)) {
+        pin_session_unlock(s);
+        return PIN_ERR_STATE;
+    }
+    put_cmd(s, &c);
+    pin_session_unlock(s);
     return PIN_OK;
 }
 
 pin_status_t pin_session_capture_stop(pin_session_t *s, pin_stop_deck_t stop_deck)
 {
     if (!s) return PIN_ERR_ARG;
-    pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_STOP, .stop_deck = stop_deck };
-    post_cmd(s, &c);
-    return PIN_OK;
+    pin_session_lock(s);
+    pin_status_t st = cmd_slot_wait(s, PIN_CMD_CAPTURE_STOP);
+    if (st == PIN_OK) {
+        pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_STOP, .stop_deck = stop_deck };
+        put_cmd(s, &c);
+    }
+    pin_session_unlock(s);
+    return st;
 }
 
 /* The whole snapshot, into a zeroed *out. Caller holds the lock. */
@@ -4501,7 +4801,7 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
     out->size = sizeof(*out);
     out->state = visible_state(s);
     out->last_error = s->last_error;
-    strncpy(out->error_text, s->error_text, sizeof(out->error_text) - 1);
+    pin_utf8_copy(out->error_text, sizeof(out->error_text), s->error_text);
     out->input = s->input;
     out->stream_kind = s->stream_kind;
     out->signal = s->signal;
@@ -4564,7 +4864,7 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
     out->stop_reason = s->stop_reason;
     out->stop_no_video = s->stop_no_video;
     out->stop_captured_s = s->stop_captured_s;
-    strncpy(out->stop_text, s->stop_text, sizeof(out->stop_text) - 1);
+    pin_utf8_copy(out->stop_text, sizeof(out->stop_text), s->stop_text_short);
     if (s->stream_kind == PIN_KIND_HDV) {
         out->video_fps_num = s->hdv_fps_num;
         out->video_fps_den = s->hdv_fps_den;

@@ -161,6 +161,12 @@ add_test(NAME test_replay_disk COMMAND test_replay_disk "${PIN_TEST_DATA}/dv-pal
 pin_engine_replay_test_env(test_replay_disk)
 set_tests_properties(test_replay_disk PROPERTIES TIMEOUT 60)
 
+# Commands in a row (none lost, a second start refused), a cut whose file cannot be opened
+# (PIN_TEST_OPEN_FAIL), a long non-ASCII name in the stop text, two passes of a raw dump ending by
+# themselves, and Ctrl-C followed by a failed close (exit 4).
+pin_engine_replay_test(test_replay_lifecycle "${PIN_TEST_DATA}/dv-pal.dv" "${PIN_TRACE_PAL}")
+set_tests_properties(test_replay_lifecycle PROPERTIES TIMEOUT 90)
+
 # FAT32 (the seam PIN_TEST_FAT32_LIMIT, with PIN_TEST_WRITE_FAIL_AFTER as the drive's refusal):
 # DV and HDV go on in a new file before the limit; raw DV, DV AVI and HDV files all finished.
 add_executable(test_replay_fat32 test_replay_fat32.c)
@@ -189,7 +195,7 @@ endif()
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
     test_replay_hdv test_replay_hdv_split test_replay_hdv_mov test_replay_unplug test_replay_hwenc
-    test_replay_mixed_dv test_replay_status_numbers test_replay_mixed_kind test_replay_dv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe
+    test_replay_mixed_dv test_replay_status_numbers test_replay_mixed_kind test_replay_dv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe test_replay_lifecycle
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

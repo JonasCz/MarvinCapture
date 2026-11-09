@@ -84,6 +84,19 @@ void pin_stop_message_no_video(pin_stop_reason_t reason, const char *path, const
 pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_error,
                                           int reencode_behind, char *detail, size_t cap);
 
+/* Cuts a string that ends in the middle of a UTF-8 character (snprintf() cut it at a byte
+ * count) back to the last whole character. */
+void pin_utf8_trim_end(char *s);
+
+/* Copies src into out (cap bytes); a src that does not fit is cut at a character boundary. */
+void pin_utf8_copy(char *out, size_t cap, const char *src);
+
+/* Appends " But NAME could not be written completely: ERROR." (" (and other files)" after
+ * NAME when more; ERROR is the error's text, pin_strerror()) to the sentence in out (cap bytes). That sentence always stays whole: when it
+ * does not fit, a long NAME is shortened in the middle and the text before it is cut, on
+ * character boundaries, with an ellipsis. */
+void pin_stop_append_close_failure(char *out, size_t cap, const char *name, int more, const char *error);
+
 #ifdef __cplusplus
 }
 #endif

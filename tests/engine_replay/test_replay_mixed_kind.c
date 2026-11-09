@@ -230,7 +230,7 @@ int main(int argc, char **argv)
     CHECK(pkt_pid(f2.data + 2 * TS) == 0x810 && gop_start(f2.data + 2 * TS)); /* a GOP */
     for (long i = 0; i < f2.len; i += TS)
         CHECK(f2.data[i] == 0x47);
-    CHECK(f3.len == ntsc.len - 120000 && !memcmp(f3.data, ntsc.data, (size_t)f3.len));
+    CHECK(f3.len == ntsc.len && !memcmp(f3.data, ntsc.data, (size_t)f3.len)); /* the last frame too */
     printf("OK: DV -> HDV -> DV gives .dv, .m2t (PAT, PMT, GOP first: no title, nothing added), .dv\n");
 
     /* 2. to standard output: the capture ends at the change, with the reason */
@@ -275,7 +275,7 @@ int main(int argc, char **argv)
     CHECK(!pin_test_file_exists(avi_names[3]) && !pin_test_file_exists(avi_names[4]));
     probed_t a1 = probe(avi_names[0]), a3 = probe(avi_names[2]);
     CHECK(a1.height == 576 && a1.frames == pal.len / 144000);
-    CHECK(a3.height == 480 && a3.frames == ntsc.len / 120000 - 1);
+    CHECK(a3.height == 480 && a3.frames == ntsc.len / 120000);
     CHECK(a1.dar_num == 16 && a1.dar_den == 9 && a3.dar_num == 16 && a3.dar_den == 9);
     CHECK(strcmp(a1.title, "Mixed tape") == 0 && strcmp(a3.title, "Mixed tape") == 0);
     check_ts_title(avi_names[1], "Mixed tape");
@@ -298,7 +298,7 @@ int main(int argc, char **argv)
         CHECK(!pin_test_file_exists(hd_names[i]));
     check_ts_title(hd_names[0], "Mixed tape");
     probed_t h2 = probe(hd_names[1]);
-    CHECK(h2.height == 576 && h2.frames == 49 && h2.dar_num == 16 && h2.dar_den == 9);
+    CHECK(h2.height == 576 && h2.frames == 50 && h2.dar_num == 16 && h2.dar_den == 9);
     CHECK(strcmp(h2.title, "Mixed tape") == 0);
     printf("OK: HDV -> DV: the raw HDV file has the title in its SDT, the DV AVI after it is 16:9 "
            "(aspect) with the title\n");

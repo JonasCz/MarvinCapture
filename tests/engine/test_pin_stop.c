@@ -110,6 +110,66 @@ int main(void)
     CHECK(pin_stop_writer_failure(PIN_FMT_DV_AVI, PIN_ERR_IO, 0, b, sizeof(b)) == PIN_STOP_WRITE_ERROR,
           "plain write error");
 
+    /* UTF-8: a cut never splits a character */
+    {
+        char u[16];
+        snprintf(u, sizeof(u), "ab\xc3\xa9");             /* "abé": whole */
+        pin_utf8_trim_end(u);
+        CHECK(strcmp(u, "ab\xc3\xa9") == 0, "whole 2-byte character kept");
+        snprintf(u, sizeof(u), "ab\xc3");                  /* lead byte alone */
+        pin_utf8_trim_end(u);
+        CHECK(strcmp(u, "ab") == 0, "lone lead byte cut");
+        snprintf(u, sizeof(u), "ab\xe2\x80");              /* 2 of 3 bytes */
+        pin_utf8_trim_end(u);
+        CHECK(strcmp(u, "ab") == 0, "incomplete 3-byte character cut");
+        snprintf(u, sizeof(u), "a\xf0\x9f\x8e\xa5");       /* a whole 4-byte character */
+        pin_utf8_trim_end(u);
+        CHECK(strcmp(u, "a\xf0\x9f\x8e\xa5") == 0, "whole 4-byte character kept");
+        pin_utf8_copy(u, 4, "ab\xc3\xa9");                   /* room for "ab" + half of é */
+        CHECK(strcmp(u, "ab") == 0, "copy cuts before the character");
+        pin_utf8_copy(u, sizeof(u), "ab\xc3\xa9");
+        CHECK(strcmp(u, "ab\xc3\xa9") == 0, "copy that fits");
+    }
+
+    /* the sentence about a file not written completely always stays whole */
+    {
+        char t[256];
+        snprintf(t, sizeof(t), "Capture stopped after capturing 5s.");
+        pin_stop_append_close_failure(t, sizeof(t), "clip.dv", 0, "I/O error");
+        CHECK(strcmp(t, "Capture stopped after capturing 5s. But clip.dv could not be written "
+                        "completely: I/O error.") == 0, "fits as is");
+        snprintf(t, sizeof(t), "x");
+        pin_stop_append_close_failure(t, sizeof(t), "a.dv", 1, "I/O error");
+        CHECK(strstr(t, "a.dv (and other files) could not") != NULL, "more files");
+
+        /* a long name of 2-byte characters and a long text before it, into 256 bytes */
+        char name[400] = "", before[300];
+        for (int i = 0; i < 120; i++)
+            strcat(name, "\xc3\xa9");                    /* 240 bytes of "é" */
+        strcat(name, "-end.dv");
+        memset(before, 'w', 250);
+        before[250] = 0;
+        snprintf(t, sizeof(t), "%s", before);
+        pin_stop_append_close_failure(t, sizeof(t), name, 0, "I/O error");
+        CHECK(strlen(t) < sizeof(t), "fits");
+        const char *tail = " could not be written completely: I/O error.";
+        CHECK(strlen(t) > strlen(tail) && strcmp(t + strlen(t) - strlen(tail), tail) == 0,
+              "the sentence ends whole");
+        CHECK(strstr(t, " But \xc3\xa9") != NULL && strstr(t, "-end.dv could not") != NULL,
+              "the name keeps its start and end");
+        CHECK(strstr(t, "\xe2\x80\xa6") != NULL, "an ellipsis where it was shortened");
+        /* every multi-byte sequence whole */
+        int valid = 1;
+        for (const unsigned char *p = (const unsigned char *)t; *p;) {
+            int len = *p < 0x80 ? 1 : (*p & 0xE0) == 0xC0 ? 2 : (*p & 0xF0) == 0xE0 ? 3 : (*p & 0xF8) == 0xF0 ? 4 : 0;
+            if (!len) { valid = 0; break; }
+            for (int k = 1; k < len; k++)
+                if ((p[k] & 0xC0) != 0x80) valid = 0;
+            p += len;
+        }
+        CHECK(valid, "valid UTF-8");
+    }
+
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

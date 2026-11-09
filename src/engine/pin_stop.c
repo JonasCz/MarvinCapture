@@ -133,6 +133,7 @@ void pin_stop_message_no_video(pin_stop_reason_t reason, const char *path, const
         detail = default_detail(reason);
     if (reason != PIN_STOP_USER && detail && n > 0 && (size_t)n < cap)
         snprintf(out + n, cap - (size_t)n, " The capture stopped because %s.", detail);
+    pin_utf8_trim_end(out);   /* a long path cut at the buffer's end */
 }
 
 void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *detail,
@@ -148,6 +149,7 @@ void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *d
         snprintf(out, cap, "Capture stopped after capturing %s.", dur);
     else
         snprintf(out, cap, "Capture stopped after capturing %s, because %s.", dur, detail);
+    pin_utf8_trim_end(out);
 }
 
 pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_error,
@@ -173,4 +175,107 @@ pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_er
         }
     }
     return PIN_STOP_WRITE_ERROR;
+}
+
+#define PIN_ELLIPSIS "\xe2\x80\xa6"   /* U+2026, 3 bytes */
+
+void pin_utf8_trim_end(char *s)
+{
+    if (!s)
+        return;
+    size_t n = strlen(s), i = n, cont = 0;
+    while (i > 0 && cont < 4 && ((unsigned char)s[i - 1] & 0xC0) == 0x80) {
+        i--;
+        cont++;
+    }
+    if (cont == 0) {
+        if (n && ((unsigned char)s[n - 1] & 0xC0) == 0xC0)
+            s[n - 1] = 0;       /* a lead byte without its continuation bytes */
+        return;
+    }
+    if (i == 0) {
+        s[0] = 0;               /* nothing but continuation bytes */
+        return;
+    }
+    unsigned char lead = (unsigned char)s[i - 1];
+    size_t need = (lead & 0xE0) == 0xC0 ? 2 : (lead & 0xF0) == 0xE0 ? 3 : (lead & 0xF8) == 0xF0 ? 4 : 0;
+    if (need == 0)
+        s[i] = 0;               /* stray continuation bytes */
+    else if (cont + 1 < need)
+        s[i - 1] = 0;           /* the last character is incomplete */
+}
+
+void pin_utf8_copy(char *out, size_t cap, const char *src)
+{
+    if (!out || !cap)
+        return;
+    snprintf(out, cap, "%s", src ? src : "");
+    if (src && strlen(src) >= cap)
+        pin_utf8_trim_end(out);
+}
+
+/* The first bytes of s, at most max, ending on a character boundary. */
+static size_t utf8_head(const char *s, size_t max)
+{
+    size_t n = strlen(s);
+    if (n <= max)
+        return n;
+    while (max > 0 && ((unsigned char)s[max] & 0xC0) == 0x80)
+        max--;
+    return max;
+}
+
+/* name, or its start and end around an ellipsis when it is longer than max bytes. */
+static void shorten_middle(const char *name, size_t max, char *out, size_t cap)
+{
+    size_t n = strlen(name);
+    if (n <= max || max < 8) {
+        pin_utf8_copy(out, cap, name);
+        return;
+    }
+    size_t keep = max - 3, head = utf8_head(name, keep / 2);
+    size_t tail_from = n - (keep - keep / 2);
+    while (tail_from < n && ((unsigned char)name[tail_from] & 0xC0) == 0x80)
+        tail_from++;
+    snprintf(out, cap, "%.*s" PIN_ELLIPSIS "%s", (int)head, name, name + tail_from);
+}
+
+void pin_stop_append_close_failure(char *out, size_t cap, const char *name, int more, const char *error)
+{
+    if (!out || !cap)
+        return;
+    if (!name)
+        name = "";
+    if (!error)
+        error = "";
+    const char *also = more ? " (and other files)" : "";
+    char tail[PIN_PATH_MAX + 160];
+    snprintf(tail, sizeof(tail), " But %s%s could not be written completely: %s.", name, also, error);
+    size_t len = strlen(out);
+    if (len + strlen(tail) < cap) {
+        memcpy(out + len, tail, strlen(tail) + 1);
+        return;
+    }
+    /* the name gets at most a third of the room, the rest of the sentence keeps its words */
+    char short_name[PIN_PATH_MAX];
+    shorten_middle(name, cap / 3, short_name, sizeof(short_name));
+    snprintf(tail, sizeof(tail), " But %s%s could not be written completely: %s.", short_name, also,
+             error);
+    size_t tl = strlen(tail);
+    if (tl + 1 > cap) {             /* a tiny buffer: as much of the sentence as fits */
+        pin_utf8_copy(out, cap, tail + 1);
+        return;
+    }
+    if (len + tl >= cap) {
+        /* the text before it is cut to make room: "..." where it was cut */
+        size_t room = cap - 1 - tl;
+        size_t keep = room >= 3 ? utf8_head(out, room - 3) : 0;
+        if (room >= 3) {
+            memcpy(out + keep, PIN_ELLIPSIS, 3);
+            keep += 3;
+        }
+        out[keep] = 0;
+        len = keep;
+    }
+    memcpy(out + len, tail, tl + 1);
 }

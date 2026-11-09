@@ -104,6 +104,28 @@ typedef struct {
 
 typedef enum { PIN_DECK_QUERY_STATE = 0, PIN_DECK_QUERY_TIMECODE } pin_deck_query_t;
 
+/* How often a transport command answered NOT_IMPLEMENTED (08) is sent again. */
+#define PIN_DECK_RETRIES 5
+
+typedef enum {
+    PIN_DECK_ANSWER_DONE = 0,   /* answered (ACCEPTED, STABLE, ...) */
+    PIN_DECK_ANSWER_RETRY,      /* a transport command got NOT_IMPLEMENTED: send it again */
+    PIN_DECK_ANSWER_FAILED,     /* REJECTED, too short, or still NOT_IMPLEMENTED after the retries */
+} pin_deck_answer_t;
+
+/* What an AV/C answer (resp, resp_len bytes; < 0 none) to cmd means, on the attempt-th retry
+ * (0 = the first send). */
+pin_deck_answer_t pin_deck_judge_answer(const uint8_t *cmd, unsigned cmd_len, const uint8_t *resp,
+                                        int resp_len, int attempt);
+
+/* The rewind a capture waits for (to the tape start, before pass 1 or between passes) has
+ * finished: the deck reports STOPPED, no command is in flight or queued, and the REW was
+ * answered (cmd_done_s, set only for a transport command the deck accepted) at or after
+ * rewind_start_s and more than 3 s ago (a status answer right after REW can still say the
+ * old "stopped"). */
+int pin_deck_rewind_finished(pin_deck_state_t deck, int cmd_in_flight, double cmd_done_s,
+                             double rewind_start_s, double now_s);
+
 /* Same, for a status query (TRANSPORT STATE or TIME CODE) instead of a command. */
 void pin_deck_async_start_query(pin_deck_async_t *a, pinnacle_1394_t *link, uint16_t node,
                                  pin_deck_query_t q, double now_s);

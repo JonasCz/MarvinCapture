@@ -163,6 +163,29 @@ pin_status_t pin_deck_query_timecode_sync(pinnacle_1394_t *link, uint16_t node,
 
 /* --- async ---------------------------------------------------------------- */
 
+int pin_deck_rewind_finished(pin_deck_state_t deck, int cmd_in_flight, double cmd_done_s,
+                             double rewind_start_s, double now_s)
+{
+    return deck == PIN_DECK_STOPPED && !cmd_in_flight && cmd_done_s >= rewind_start_s &&
+           now_s - cmd_done_s > 3.0;
+}
+
+pin_deck_answer_t pin_deck_judge_answer(const uint8_t *cmd, unsigned cmd_len, const uint8_t *resp,
+                                        int resp_len, int attempt)
+{
+    if (resp_len < 4)
+        return PIN_DECK_ANSWER_FAILED;
+    if (resp[0] == 0x0a)  /* REJECTED */
+        return PIN_DECK_ANSWER_FAILED;
+    if (is_transport_cmd(cmd, cmd_len) && resp[0] == 0x08) {
+        /* NOT_IMPLEMENTED to a transport command: the mechanism is still changing mode, ask
+         * again. A deck that keeps saying so never moved the tape: taking that as done would
+         * read the old "stopped" as the end of a rewind that never happened. */
+        return attempt < PIN_DECK_RETRIES ? PIN_DECK_ANSWER_RETRY : PIN_DECK_ANSWER_FAILED;
+    }
+    return PIN_DECK_ANSWER_DONE;
+}
+
 void pin_deck_async_start(pin_deck_async_t *a, pinnacle_1394_t *link, uint16_t node,
                            pin_deck_cmd_t cmd, double now_s)
 {
@@ -220,12 +243,13 @@ pin_deck_async_status_t pin_deck_async_poll(pin_deck_async_t *a, double now_s)
         return a->status;
     }
     a->resp_len = rl;
-    if (is_transport_cmd(a->cmd, a->cmd_len) && a->resp[0] == 0x08 && a->attempt < 5) {
+    pin_deck_answer_t ans = pin_deck_judge_answer(a->cmd, a->cmd_len, a->resp, rl, a->attempt);
+    if (ans == PIN_DECK_ANSWER_RETRY) {
         /* busy: retry at +0.7s */
         a->attempt++;
         a->next_send_at = now_s + 0.7;
         return a->status; /* still RUNNING */
     }
-    a->status = (rl >= 4 && a->resp[0] != 0x0a) ? PIN_DECK_ASYNC_DONE : PIN_DECK_ASYNC_FAILED;
+    a->status = ans == PIN_DECK_ANSWER_DONE ? PIN_DECK_ASYNC_DONE : PIN_DECK_ASYNC_FAILED;
     return a->status;
 }

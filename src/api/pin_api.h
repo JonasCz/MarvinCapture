@@ -273,7 +273,12 @@ PIN_API void pin_close(pin_session_t *s);
 
 /* Selects the input and (re)prepares the device for it: loads the right
  * FPGA design when switching between DV and analog. Non-blocking; state
- * goes PREPARING -> READY or ERROR. Not allowed while capturing. */
+ * goes PREPARING -> READY or ERROR. Not allowed while capturing.
+ * Commands (this one, pin_deck, pin_capture_start, pin_capture_stop[_ex]) go to
+ * the session's worker one at a time: a command posted while the one before is
+ * still waiting for the worker waits up to about a second for it to be taken,
+ * then fails with PIN_ERR_STATE (nothing is lost silently). An input switch
+ * replaces one that was not taken yet. */
 PIN_API pin_status_t pin_set_input(pin_session_t *s, pin_input_t input);
 
 /* ---- analog controls (live, also during capture) ----------------------- */
@@ -329,7 +334,9 @@ typedef enum {
     PIN_DECK_CMD_REW,
 } pin_deck_cmd_t;
 
-/* Non-blocking. While capturing only PIN_DECK_CMD_STOP is accepted. */
+/* Non-blocking. While a capture runs or the deck rewinds for one, only
+ * PIN_DECK_CMD_STOP is accepted (it ends the capture); before an input is up,
+ * while PREPARING and in ERROR none is (PIN_ERR_STATE). */
 PIN_API pin_status_t pin_deck(pin_session_t *s, pin_deck_cmd_t cmd);
 
 /* ---- output formats ----------------------------------------------------- */
@@ -628,7 +635,8 @@ PIN_API pin_status_t pin_set_output_hint(pin_session_t *s, const pin_capture_opt
  * overwrite is set (the GUI asks the user first), and with PIN_ERR_CODEC when the
  * format for the current input needs an encoder this machine does not have (see
  * pin_check_output() for the message). An encoder that fails later, while capturing,
- * ends the capture like a write error (PIN_STOP_ERROR, "the video encoder failed"). */
+ * ends the capture like a write error (PIN_STOP_ERROR, "the video encoder failed").
+ * PIN_ERR_STATE unless READY with no capture running or waiting to start. */
 PIN_API pin_status_t pin_capture_start(pin_session_t *s, const pin_capture_opts_t *o, int overwrite);
 
 /* Non-blocking. State goes STOPPING -> READY. Also stops the deck if the

@@ -92,6 +92,37 @@ int main(void)
     pin_deck_async_start_query(&a, NULL, 0, PIN_DECK_QUERY_STATE, 0);
     CHECK(a.status == PIN_DECK_ASYNC_FAILED, "no camera");
 
+    /* how an answer to a transport command is judged */
+    {
+        uint8_t rew[8];
+        unsigned rl = pin_deck_build_cmd(PIN_DECK_CMD_REW, rew);
+        const uint8_t accepted[4] = { 0x09, 0x20, 0xc4, 0x65 };
+        const uint8_t rejected[4] = { 0x0a, 0x20, 0xc4, 0x65 };
+        const uint8_t notimpl4[4] = { 0x08, 0x20, 0xc4, 0x65 };
+        CHECK(pin_deck_judge_answer(rew, rl, accepted, 4, 0) == PIN_DECK_ANSWER_DONE, "accepted");
+        CHECK(pin_deck_judge_answer(rew, rl, rejected, 4, 0) == PIN_DECK_ANSWER_FAILED, "rejected");
+        CHECK(pin_deck_judge_answer(rew, rl, accepted, 3, 0) == PIN_DECK_ANSWER_FAILED, "short");
+        CHECK(pin_deck_judge_answer(rew, rl, accepted, -1, 0) == PIN_DECK_ANSWER_FAILED, "no answer");
+        CHECK(pin_deck_judge_answer(rew, rl, notimpl4, 4, 0) == PIN_DECK_ANSWER_RETRY, "08: retry");
+        CHECK(pin_deck_judge_answer(rew, rl, notimpl4, 4, PIN_DECK_RETRIES - 1) == PIN_DECK_ANSWER_RETRY,
+              "08: last retry");
+        CHECK(pin_deck_judge_answer(rew, rl, notimpl4, 4, PIN_DECK_RETRIES) == PIN_DECK_ANSWER_FAILED,
+              "08 after the retries: the tape never moved, not done");
+        /* TIME CODE is no transport opcode: its 08 is an answer (the caller ignores it) */
+        pin_deck_async_t q;
+        pin_deck_async_start_query(&q, NULL, 1, PIN_DECK_QUERY_TIMECODE, 0);
+        const uint8_t qnot[8] = { 0x08, 0x20, 0x51, 0x71, 0xff, 0xff, 0xff, 0xff };
+        CHECK(pin_deck_judge_answer(q.cmd, q.cmd_len, qnot, 8, 0) == PIN_DECK_ANSWER_DONE, "query 08");
+
+        /* the rewind is finished only on a STOPPED deck, 3 s after an accepted REW */
+        CHECK(pin_deck_rewind_finished(PIN_DECK_STOPPED, 0, 10.0, 9.0, 13.5), "finished");
+        CHECK(!pin_deck_rewind_finished(PIN_DECK_STOPPED, 0, 10.0, 9.0, 12.0), "too soon after REW");
+        CHECK(!pin_deck_rewind_finished(PIN_DECK_REWINDING, 0, 10.0, 9.0, 20.0), "still winding");
+        CHECK(!pin_deck_rewind_finished(PIN_DECK_STOPPED, 1, 10.0, 9.0, 20.0), "command in flight");
+        /* a REW that failed leaves the answer time from before the rewind began */
+        CHECK(!pin_deck_rewind_finished(PIN_DECK_STOPPED, 0, 5.0, 9.0, 20.0), "REW never accepted");
+    }
+
     char buf[32];
     pin_format_remaining(330.0, buf, sizeof(buf));
     CHECK(!strcmp(buf, "5m30s"), "5m30s");

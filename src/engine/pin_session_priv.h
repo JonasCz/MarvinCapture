@@ -58,11 +58,12 @@ extern "C" {
 #endif
 
 /* ---- worker command mailbox ---------------------------------------------
- * One command in flight at a time (the API is documented as queuing to the
- * worker and returning at once); a second command while one is running
- * simply overwrites the mailbox -- fine for this session's command set,
- * where every command is either idempotent-ish (deck) or only valid in a
- * state that already implies the previous one finished (set_input/capture).
+ * One command at a time: the API calls return once it is posted, not done. A
+ * command posted while another still waits for the worker first waits a moment
+ * for the worker to take that one (post_cmd() in pin_session.c), and is refused
+ * with PIN_ERR_STATE if it does not; it never overwrites it. A new input
+ * replaces an input switch that has not been taken yet (only the last one
+ * matters), and closing replaces anything.
  */
 typedef enum {
     PIN_CMD_NONE = 0,
@@ -141,6 +142,7 @@ struct pin_session {
     uint64_t bytes_closed;      /* bytes of this capture's finished files (bytes_written is the open one) */
     pin_rate_window_t rate_win; /* last 10 minutes of (time, total bytes) for the measured rate */
     double rate_saved_s;        /* when the FFV1 rate was last saved to the settings */
+    double rate_save_bph;       /* an FFV1 rate to save, written off the lock (rate_flush()); 0 none */
     double ffv1_learned_bph;    /* core.ffv1_bytes_per_hour, 0 = none */
     int ffv1_learned_loaded;
     int hdv_err_reset;          /* restart the HDV continuity tracking at the next unit */
@@ -234,6 +236,13 @@ struct pin_session {
     double capture_start_s, last_data_s;
     int capture_began;       /* start_capture_now() opened the first file of this capture */
     int opening_first_file;  /* start_capture_now() is opening that first file */
+    /* a file could not be opened inside a cut (scene split, size or format cut, which run in
+     * the hold-back / split callbacks): the capture is ended by capture_guard() once those
+     * callbacks have returned, not from inside them (open_failed()) */
+    int open_fail_pending;
+    pin_status_t open_fail_status;
+    char open_fail_text[PIN_TEXT_MAX];
+    int open_fail_defer;     /* such a cut is opening the next file */
     int disk_slow_pending;   /* a file handed over mid-capture had overflowed its queue: the capture
                                 goes on in a new file with a hole before it (capture_guard() ends it) */
     double disk_check_s;     /* capture_guard(): last free-space check */
@@ -245,10 +254,13 @@ struct pin_session {
     /* test seams, read as a capture starts (test_seams_read() in pin_session.c), 0 = off */
     uint64_t test_free_space;
     uint64_t test_writer_queue;
+    uint64_t test_open_fail;      /* PIN_TEST_OPEN_FAIL: the n-th file open of a capture fails */
+    unsigned files_opened;        /* file opens of this capture (for that seam) */
     /* how the last capture ended (pin_status_snapshot_t.stop_*) */
     pin_stop_reason_t stop_reason;
     double stop_captured_s;
-    char stop_text[PIN_TEXT_MAX];
+    char stop_text[PIN_PATH_MAX];       /* the whole sentence, with full paths (the event's text) */
+    char stop_text_short[PIN_TEXT_MAX]; /* the same, fitted to pin_status_snapshot_t.stop_text */
     int stop_no_video;       /* the capture ended without a single video unit written */
     pin_status_snapshot_t end_status;   /* the status at that moment (pin_get_capture_end_status()) */
     int have_end_status;
@@ -278,6 +290,7 @@ struct pin_session {
     int rewind_done;              /* CAPTURE_START: the rewind-to-start has finished */
     int start_play_sent;          /* CAPTURE_START: PLAY already sent for this capture */
     int pass_rewinding;           /* between passes: REWINDING, next pass starts at the tape start */
+    int rewind_failed;            /* the deck refused or did not answer that rewind's REW */
     double rewind_wait_start_s;   /* when the current rewind was started */
 
     /* replay (virtual device) */

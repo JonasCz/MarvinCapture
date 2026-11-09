@@ -131,7 +131,8 @@ int main(int argc, char **argv)
     file_t f1 = read_file("mixed_std.dv"), f2 = read_file("mixed_std-0002.dv");
     printf("files: %ld PAL frame(s), %ld NTSC frame(s)\n", f1.len / 144000, f2.len / 120000);
     CHECK(f1.len == pal.len && !memcmp(f1.data, pal.data, (size_t)pal.len));     /* every PAL frame */
-    CHECK(f2.len == ntsc.len - 120000 && !memcmp(f2.data, ntsc.data, (size_t)f2.len));
+    /* every NTSC frame, the tape's last one too (it ends with the dump) */
+    CHECK(f2.len == ntsc.len && !memcmp(f2.data, ntsc.data, (size_t)f2.len));
     printf("OK: PAL -> NTSC gives two raw DV files, each frame at its own size\n");
 
     /* 2. 48 kHz -> 32 kHz, DV AVI: the audio track is fixed at open, so a new file */
@@ -150,7 +151,7 @@ int main(int argc, char **argv)
     probe("mixed_audio-0002.avi", &n2, &r2, &h2);
     printf("AVIs: %d frames at %d Hz, %d frames at %d Hz\n", n1, r1, n2, r2);
     CHECK(n1 == 50 && r1 == 48000 && h1 == 576);
-    CHECK(n2 == 13 && r2 == 32000 && h2 == 576);
+    CHECK(n2 == 14 && r2 == 32000 && h2 == 576);   /* with the tape's last frame */
     printf("OK: 48 -> 32 kHz gives two DV AVIs with their own audio rate\n");
 
     free(pal.data);

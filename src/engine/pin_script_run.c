@@ -22,8 +22,9 @@
  * evaluates the wait conditions (pin_script_eval.c) on status snapshots.
  *
  * Why it is shaped the way it is:
- *  - The session's command mailbox has a single slot, so after every command
- *    the sequencer waits until the worker has taken it (cmd.pending clear) and,
+ *  - The session's command mailbox has a single slot (a command posted while
+ *    another waits is refused after a moment), so after every command the
+ *    sequencer waits until the worker has taken it (cmd.pending clear) and,
  *    for a deck command, until the AV/C transaction is done (deck_busy clear).
  *  - A capture is open from pin_capture_start() until the next transport
  *    action, the next --capture or the end. Whether *its* end was abnormal is
@@ -77,7 +78,7 @@ typedef struct {
 
     int no_video;                   /* a capture of this script ended without any video: exit 5 at the end,
                                        unless something more severe happens */
-    char no_video_text[PIN_TEXT_MAX];
+    char no_video_text[PIN_PATH_MAX];
 
     int moved_tape;                 /* a transport command was sent */
     pin_deck_cmd_t last_cmd;
@@ -129,7 +130,7 @@ static int collect_capture_end(run_t *r)
     unsigned seq = r->s->capture_end_seq;
     pin_stop_reason_t why = r->s->stop_reason;
     int no_video = r->s->stop_no_video;
-    char text[PIN_TEXT_MAX];
+    char text[PIN_PATH_MAX];
     snprintf(text, sizeof(text), "%s", r->s->stop_text);
     pin_session_unlock(r->s);
     if (seq == r->end_seq0)
@@ -227,13 +228,21 @@ static int ensure_input(run_t *r, pin_input_t want)
 }
 
 /* Stops the open capture (the tape keeps running unless sd says so) and waits
- * until its files are closed. Not interruptible: finalising is the point. */
+ * until its files are closed. Not interruptible: finalising is the point. It
+ * ends when nothing is left to finish: the session in ERROR has ended its
+ * capture (fail_locked() in pin_session.c), and pin_session_capture_busy()
+ * says so. */
 static int close_capture(run_t *r, pin_stop_deck_t sd)
 {
     if (!r->capture_open)
         return 0;
-    pin_session_capture_stop(r->s, sd);
     double t0 = pin_session_now();
+    /* the start may still wait for the worker: the stop is refused until it was taken */
+    while (pin_session_capture_stop(r->s, sd) == PIN_ERR_STATE) {
+        if (pin_session_now() - t0 > 60.0)
+            return failf(r, EXIT_CAPTURE, "the capture could not be stopped");
+        nap(50);
+    }
     while (pin_session_capture_busy(r->s)) {
         if (pin_session_now() - t0 > 1800.0)
             return failf(r, EXIT_CAPTURE, "the capture did not finish closing");
@@ -544,9 +553,12 @@ static void *script_main(void *arg)
     char reason[sizeof(r->reason)];
     snprintf(reason, sizeof(reason), "%s", r->reason);
 
-    /* Whatever happened, an open capture is finalised (the tape keeps running). */
+    /* Whatever happened, an open capture is finalised (the tape keeps running). A capture
+     * that failed there (a file not written completely) is the failure the exit code reports,
+     * also after Ctrl-C or a deck error: losing data matters more to a caller than why the
+     * script stopped. */
     int rc2 = close_capture(r, PIN_STOP_DECK_NO);
-    if (code == 0 && rc2) {
+    if (rc2 && (code == 0 || code == EXIT_CANCELLED || code == EXIT_DECK)) {
         code = rc2;
         snprintf(reason, sizeof(reason), "%s", r->reason);
     }
