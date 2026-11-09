@@ -201,6 +201,22 @@ static int mp2_header(const uint8_t *d, int *sr, int *ch, int *kbps)
     return 144000 * *kbps / *sr + pad;
 }
 
+/* The n bytes at d can be the start of an MPEG-1 Layer II frame (with n >= 4, a whole valid
+ * header). */
+static int mp2_prefix(const uint8_t *d, size_t n)
+{
+    int sr, ch, kbps;
+    if (n >= 4)
+        return mp2_header(d, &sr, &ch, &kbps) > 0;
+    if (d[0] != 0xFF)
+        return 0;
+    if (n >= 2 && (d[1] & 0xFE) != 0xFC)
+        return 0;
+    if (n >= 3 && ((d[2] >> 4) == 0 || (d[2] >> 4) == 15 || ((d[2] >> 2) & 3) == 3))
+        return 0;
+    return 1;
+}
+
 /* ------------------------------------------------------------- state --- */
 
 struct hdv_demux {
@@ -277,8 +293,10 @@ static void on_picture(hdv_demux_t *m, hdv_pic_t *p)
         free(p->data);    /* nothing can be written before the first sequence header */
         return;
     }
-    if (hdv_pics_push(&m->gop, p) < 0)
+    if (hdv_pics_push(&m->gop, p) < 0) {
         free(p->data);
+        nomem(m);
+    }
 }
 
 /* --------------------------------------------- elementary stream -> AUs -- */
@@ -491,13 +509,18 @@ static void audio_pes_done(hdv_demux_t *m)
     memset(&w, 0, sizeof(w));
     int64_t cam = NOPTS;
     if (m->acarry.n && m->a_next_cam != NOPTS) {
-        buf_add(&w, m->acarry.d, m->acarry.n);
+        if (buf_add(&w, m->acarry.d, m->acarry.n) < 0)
+            goto oom;
         cam = m->a_next_cam;
     }
     size_t carried = w.n;
-    buf_add(&w, m->apes.d + off, (size_t)(limit - off));
+    if (buf_add(&w, m->apes.d + off, (size_t)(limit - off)) < 0)
+        goto oom;
     m->acarry.n = 0;
     m->a_next_cam = NOPTS;
+    /* Only a PES that lost nothing hands its last, cut frame on: a loss recorded at its very
+     * end (the gap ends on the next PES's first packet) took that frame's tail. */
+    int intact = m->apes_loss_at < 0;
     size_t pos = 0;
     int pts_used = 0;
     while (pos + 4 <= w.n) {
@@ -513,21 +536,30 @@ static void audio_pes_done(hdv_demux_t *m)
             if (pts != NOPTS)
                 cam = pts;   /* the PES's PTS is its first frame's */
         }
-        if (pos + (size_t)fl > w.n) {
-            if (limit == (long)m->apes.n && cam != NOPTS) {
-                buf_add(&m->acarry, w.d + pos, w.n - pos);
-                m->a_next_cam = cam;
-            }
+        if (pos + (size_t)fl > w.n)
             break;
-        }
         if (cam != NOPTS)
             m->cb.audio(m->cb.user, w.d + pos, fl, cam, sr, ch, kbps);
         if (cam != NOPTS)
             cam += 1152LL * 90000 / sr;
         pos += (size_t)fl;
     }
+    /* What is left is the start of a frame the PES end cut (a whole header, or 1 to 3 bytes
+     * that could begin one): it goes on in the next PES. */
+    if (intact && cam != NOPTS && pos < w.n && mp2_prefix(w.d + pos, w.n - pos)) {
+        if (buf_add(&m->acarry, w.d + pos, w.n - pos) < 0)
+            goto oom;
+        m->a_next_cam = cam;
+    }
     buf_free(&w);
     m->apes.n = 0;
+    return;
+oom:
+    buf_free(&w);
+    m->apes.n = 0;
+    m->acarry.n = 0;
+    m->a_next_cam = NOPTS;
+    nomem(m);
 }
 
 static void parse_psi(hdv_demux_t *m, const uint8_t *pkt, int pid)
@@ -605,12 +637,16 @@ static void ts_packet(hdv_demux_t *m, const uint8_t *pkt)
         off += 1 + pkt[4];
     int has_payload = (afc & 1) && off < TSP;
     int loss = tei != 0;
+    /* the sender says the counter restarts here: no packet was lost, none repeated */
+    int discontinuity = (afc & 2) && pkt[4] > 0 && (pkt[5] & 0x80);
     if (has_payload) {
         int last = m->cc[pid];
-        if (last >= 0 && cc == last && !tei)
-            return;                   /* a duplicate packet */
-        if (last >= 0 && cc != ((last + 1) & 0x0F))
-            loss = 1;
+        if (last >= 0 && !discontinuity) {
+            if (cc == last && !tei)
+                return;               /* a duplicate packet */
+            if (cc != ((last + 1) & 0x0F))
+                loss = 1;
+        }
         m->cc[pid] = cc;
     }
     if (tei) {

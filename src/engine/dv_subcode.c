@@ -260,12 +260,16 @@ int dv_subcode_parse_frame(const uint8_t *frame, size_t frame_len, dv_frame_info
     /* DSF (525/60 vs 625/50): header block, data byte right after the
      * 3-byte ID, bit 7. The header block is always block 0 of a sequence
      * in this project's layout, but we scan for section 0 rather than
-     * assume that, for the same robustness reason as the pack scan above. */
+     * assume that, for the same robustness reason as the pack scan above.
+     * Only a block with a whole header ID counts (the "1" bits of byte 1, this
+     * sequence's number, DBN 0): a sequence lost in transit is zero-filled, and
+     * an all-zero block would read as an NTSC header. */
     for (unsigned s = 0; s < seq_count && !out->dsf_valid; s++) {
         const uint8_t *seq = frame + (size_t)s * DV_SEQ_SIZE;
         for (unsigned b = 0; b < DV_SEQ_BLOCKS; b++) {
             const uint8_t *block = seq + (size_t)b * DV_BLOCK_SIZE;
-            if (dv_block_section(block[0]) != 0)
+            if (dv_block_section(block[0]) != 0 || (block[1] & 0x07) != 0x07 ||
+                (unsigned)(block[1] >> 4) != s || block[2] != 0)
                 continue;
             out->is_pal = (block[3] & 0x80) ? 1 : 0;
             out->dsf_valid = 1;

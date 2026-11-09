@@ -49,6 +49,10 @@
  * or 12 (PAL), and Dseq==0 starts a new frame. If a sequence is missing we
  * write 12,000 zero bytes in its place so every frame stays a fixed, aligned
  * size — without that, one dropped sequence would desync every later frame.
+ * A sequence that lost packets inside it keeps the blocks that arrived in their
+ * own slots: those after a hole are placed by their block ID (SCT, Dseq, DBN),
+ * also when the hole took the sequence's header, so only the lost blocks stay
+ * zero.
  * A frame that never arrived at all is not padded (nothing of it reaches the output) but
  * counted: frames_lost and dv_output_t.on_loss, worked out from the DBC jump and the
  * sequence numbers (handle_sequence).
@@ -216,7 +220,6 @@ typedef struct {
     unsigned long ts_cc_forgiven;       /* CC jumps explained by an already-counted
                                          * CIP/DBC discontinuity (one hole shows
                                          * up once per PID) */
-    unsigned long ts_join_base;         /* ts_packets when HDV last began (join window) */
     int ts_newpid;                      /* another video PID that opened a GOP, 0 = none */
     unsigned ts_newpid_gops;            /* GOPs on it with no picture of ts_video_pid between */
     unsigned long ts_pid_switches;      /* the video PID changed and was followed */

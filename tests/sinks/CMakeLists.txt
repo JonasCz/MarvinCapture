@@ -97,3 +97,9 @@ set_tests_properties(test_hwenc_sink PROPERTIES TIMEOUT 300 FIXTURES_REQUIRED pi
 add_executable(test_hdv_audio test_hdv_audio.c)
 target_link_libraries(test_hdv_audio PRIVATE pinnacle_sinks pinnacle_engine_pure)
 add_test(NAME test_hdv_audio COMMAND test_hdv_audio)
+
+# hdv_demux audio on synthetic TS: frames cut by a PES end, a lost last packet, the
+# discontinuity indicator
+add_executable(test_hdv_demux_audio test_hdv_demux_audio.c)
+target_link_libraries(test_hdv_demux_audio PRIVATE pinnacle_sinks)
+add_test(NAME test_hdv_demux_audio COMMAND test_hdv_demux_audio)

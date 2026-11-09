@@ -68,7 +68,16 @@ static void pat_pmt_scan_one(const uint8_t *pkt, hdv_pid_map_t *map)
     }
 
     int pid = ts_pid(pkt);
-    if (pid == 0x0000 && !map->pat_found) {
+    if (pkt[1] & 0x80)
+        return; /* transport error: the section cannot be trusted */
+    /* A table after the first one is only followed when its CRC is right, so one corrupt
+     * packet does not move the map. */
+    int whole = 0;
+    if (plen >= 3) {
+        size_t sl = ((size_t)(p[1] & 0x0F) << 8) | p[2];
+        whole = 3 + sl <= plen && sl >= 4 && hdv_crc32_mpeg(p, 3 + sl) == 0;
+    }
+    if (pid == 0x0000 && (!map->pat_found || (whole && p[0] == 0x00))) {
         /* table_id(1) section_length hi/lo(2) ... skip to program loop */
         if (plen < 8)
             return;
@@ -81,12 +90,15 @@ static void pat_pmt_scan_one(const uint8_t *pkt, hdv_pid_map_t *map)
             int program_number = (prog[0] << 8) | prog[1];
             int pmt_pid = ((prog[2] & 0x1F) << 8) | prog[3];
             if (program_number != 0) {
+                if (map->pat_found && pmt_pid != map->pmt_pid)
+                    map->pmt_found = 0; /* the program moved: take its new PMT */
                 map->pmt_pid = pmt_pid;
                 map->pat_found = 1;
                 break;
             }
         }
-    } else if (map->pat_found && pid == map->pmt_pid && !map->pmt_found) {
+    } else if (map->pat_found && pid == map->pmt_pid &&
+               (!map->pmt_found || (whole && p[0] == 0x02))) {
         if (plen < 12)
             return;
         int section_length = ((p[1] & 0x0F) << 8) | p[2];
@@ -95,24 +107,32 @@ static void pat_pmt_scan_one(const uint8_t *pkt, hdv_pid_map_t *map)
         int program_info_length = ((p[10] & 0x0F) << 8) | p[11];
         const uint8_t *es = p + 12 + program_info_length;
         const uint8_t *end = p + 3 + section_length - 4;
+        int audio_pid = -1, aux_pid = -1;
         while (es + 5 <= end) {
             int stream_type = es[0];
             int es_pid = ((es[1] & 0x1F) << 8) | es[2];
             int es_info_length = ((es[3] & 0x0F) << 8) | es[4];
+            /* the video PID stays: the session resets the map when the pictures it gets
+             * move to another one (the reassembler follows that after whole GOPs) */
             if (stream_type == 0x02 && map->video_pid < 0)
                 map->video_pid = es_pid;
             /* MPEG-1 Layer II (0x03) or MPEG-2 audio (0x04); HDV always uses
              * MPEG-1 Layer II in practice, but either stream_type decodes
              * with the same mp2 decoder. */
-            if ((stream_type == 0x03 || stream_type == 0x04) && map->audio_pid < 0)
-                map->audio_pid = es_pid;
+            if ((stream_type == 0x03 || stream_type == 0x04) && audio_pid < 0)
+                audio_pid = es_pid;
             /* Sony/Canon HDV AUX-V/AUX-A private streams are commonly
              * signalled with stream_type 0xA0/0xA1; best-effort, see
              * header comment. */
-            if ((stream_type == 0xA0 || stream_type == 0xA1) && map->aux_pid < 0)
-                map->aux_pid = es_pid;
+            if ((stream_type == 0xA0 || stream_type == 0xA1) && aux_pid < 0)
+                aux_pid = es_pid;
             es += 5 + es_info_length;
         }
+        /* the audio and AUX PIDs follow the latest PMT that names them */
+        if (audio_pid >= 0)
+            map->audio_pid = audio_pid;
+        if (aux_pid >= 0)
+            map->aux_pid = aux_pid;
         map->pmt_found = 1;
     }
 }

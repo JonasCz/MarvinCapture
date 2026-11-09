@@ -154,10 +154,13 @@ size_t hdv_ts_count_pid(const uint8_t *ts_packets, size_t n_packets, int pid);
 size_t hdv_ts_drop_pid(const uint8_t *ts_packets, size_t n_packets, int pid, uint8_t *out);
 
 /* Scans PAT (PID 0) and, once found, the PMT, across as many TS packets as
- * given. Safe to call repeatedly with more packets as they arrive; fields
- * already found are left alone (pass a *map already zeroed with pid -1 the
- * first time). Returns the number of packets consumed usefully (for stats
- * only); parsing is best-effort and never fails hard on garbage input. */
+ * given. Safe to call repeatedly with more packets as they arrive (pass a *map
+ * already zeroed with pid -1 the first time). The first PAT and PMT are taken
+ * as they come; a later one only with a correct CRC: a PAT that names another
+ * PMT PID makes the map wait for that PMT, and each PMT sets the audio and AUX
+ * PIDs it names. The video PID, once found, stays (the caller resets the map
+ * when the pictures move to another PID). Parsing is best-effort and never
+ * fails hard on garbage input. */
 void hdv_scan_pat_pmt(const uint8_t *ts_packets, size_t n_packets, hdv_pid_map_t *map);
 
 /* Extracts the elementary-stream bytes for the given PID from a run of TS

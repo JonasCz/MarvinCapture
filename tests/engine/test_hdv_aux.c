@@ -147,6 +147,55 @@ static void test_pat_pmt_discovery(void)
     CHECK(map.audio_pid == 0x0300, "audio PID (stream_type 0x03) from PMT");
 }
 
+/* Ends the PSI section of pkt (pointer_field 0) with its CRC-32. */
+static void set_crc(uint8_t *pkt)
+{
+    uint8_t *s = pkt + 5;
+    int section_length = ((s[1] & 0x0F) << 8) | s[2];
+    uint32_t crc = hdv_crc32_mpeg(s, (size_t)(3 + section_length - 4));
+    uint8_t *c = s + 3 + section_length - 4;
+    c[0] = (uint8_t)(crc >> 24); c[1] = (uint8_t)(crc >> 16); c[2] = (uint8_t)(crc >> 8); c[3] = (uint8_t)crc;
+}
+
+/* A later PMT with a correct CRC moves the audio and AUX PIDs; the video PID stays; a corrupt
+ * one changes nothing; a PAT naming another PMT PID is followed to that PMT. */
+static void test_pid_map_follows_pmt(void)
+{
+    uint8_t pat[HDV_TS_PACKET_SIZE], pmt[HDV_TS_PACKET_SIZE];
+    hdv_pid_map_t map;
+    memset(&map, 0, sizeof(map));
+    map.pmt_pid = map.video_pid = map.aux_pid = map.audio_pid = -1;
+    build_pat(pat, 0x0100);
+    hdv_scan_pat_pmt(pat, 1, &map);
+    build_pmt(pmt, 0x0100, 0x0200, 0x0811, 0x0300);
+    hdv_scan_pat_pmt(pmt, 1, &map);
+    CHECK(map.audio_pid == 0x0300 && map.aux_pid == 0x0811, "first PMT");
+
+    build_pmt(pmt, 0x0100, 0x0201, 0x0812, 0x0301);
+    hdv_scan_pat_pmt(pmt, 1, &map);
+    CHECK(map.audio_pid == 0x0300 && map.aux_pid == 0x0811, "a later PMT without a good CRC: ignored");
+
+    set_crc(pmt);
+    hdv_scan_pat_pmt(pmt, 1, &map);
+    CHECK(map.audio_pid == 0x0301, "a later PMT moves the audio PID");
+    CHECK(map.aux_pid == 0x0812, "and the AUX PID");
+    CHECK(map.video_pid == 0x0200, "the video PID stays");
+
+    pmt[5 + 12 + 5 + 2] ^= 0x01; /* the audio PID, with a matching CRC */
+    set_crc(pmt);
+    pmt[1] |= 0x80;               /* but a transport error */
+    hdv_scan_pat_pmt(pmt, 1, &map);
+    CHECK(map.audio_pid == 0x0301, "a packet with TEI changes nothing");
+
+    build_pat(pat, 0x0101);
+    set_crc(pat);
+    hdv_scan_pat_pmt(pat, 1, &map);
+    CHECK(map.pmt_pid == 0x0101 && !map.pmt_found, "a PAT naming another PMT PID");
+    build_pmt(pmt, 0x0101, 0x0200, 0x0813, 0x0302);
+    hdv_scan_pat_pmt(pmt, 1, &map);
+    CHECK(map.pmt_found && map.audio_pid == 0x0302 && map.aux_pid == 0x0813, "the new PMT");
+}
+
 static void test_gop_header_decode(void)
 {
     uint8_t pkt[HDV_TS_PACKET_SIZE];
@@ -426,6 +475,7 @@ int main(void)
     test_psi_tracking();
     test_gop_time_nonzero();
     test_pat_pmt_discovery();
+    test_pid_map_follows_pmt();
     test_gop_header_decode();
     test_no_gop_header();
     test_discontinuity_indicator();

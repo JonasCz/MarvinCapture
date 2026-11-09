@@ -98,3 +98,9 @@ add_executable(test_reassembler_holes test_reassembler_holes.c)
 target_link_libraries(test_reassembler_holes PRIVATE pinnacle_core)
 add_test(NAME test_reassembler_holes COMMAND test_reassembler_holes)
 set_tests_properties(test_reassembler_holes PROPERTIES TIMEOUT 300)
+
+# dv_reassembler: the blocks of a sequence that lost packets stay in their own slots.
+add_executable(test_reassembler_blocks test_reassembler_blocks.c)
+target_link_libraries(test_reassembler_blocks PRIVATE pinnacle_core pinnacle_engine_pure)
+add_test(NAME test_reassembler_blocks COMMAND test_reassembler_blocks)
+set_tests_properties(test_reassembler_blocks PROPERTIES TIMEOUT 300)

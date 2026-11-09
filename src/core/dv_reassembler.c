@@ -68,10 +68,6 @@ void dv_output_file(dv_output_t *out, FILE *fp)
 #define HDV_SOURCE_PACKET_BYTES 192   /* 4-byte timestamp + 188-byte TS packet */
 #define HDV_SPH_BYTES 4
 #define TS_PACKET_BYTES 188
-/* HDV analogue of DV's "until the first frame starts": a discontinuity in the
- * first ~60 ms (1000 TS packets at 25 Mbit/s) is the join into the already
- * running ring, not loss. */
-#define HDV_JOIN_TS_PACKETS 1000
 
 /* ------------------------------------------------------------------ */
 /* Layer 3: DIF sequences -> frame-aligned output                      */
@@ -262,12 +258,14 @@ static void frame_begin(dv_reassembler_t *r, const uint8_t *p, unsigned dseq)
  * Without a fitting answer (no hole, or a stream that does not add up): a dseq 0 is a new
  * frame, a later dseq is the same frame (the ones between lost), and a dseq that goes back
  * is a new frame whose start was lost if a hole happened, else a stray match (-1: ignore
- * it). */
+ * it). *fit (may be NULL) says whether the answer is the fitting one. */
 static int frames_between(const dv_reassembler_t *r, unsigned dseq, unsigned n, uint64_t pos,
-                          unsigned *lost)
+                          unsigned *lost, int *fit)
 {
     unsigned last = r->expected_dseq - 1;
     *lost = 0;
+    if (fit)
+        *fit = 0;
     if (r->dbc_gap_n && r->last_seq_valid && pos > r->last_seq_pos &&
         (pos - r->last_seq_pos) % EP88_BLOCK_BYTES == 0) {
         uint64_t blocks = (pos - r->last_seq_pos) / EP88_BLOCK_BYTES;
@@ -282,6 +280,8 @@ static int frames_between(const dv_reassembler_t *r, unsigned dseq, unsigned n, 
                 continue;
             unsigned j = (unsigned)((last + k) / n);
             *lost = j ? j - 1 : 0;
+            if (fit)
+                *fit = 1;
             return (int)j;
         }
     }
@@ -305,7 +305,7 @@ static int place_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq, 
     }
 
     unsigned lost;
-    int boundaries = frames_between(r, dseq, frame_seq_total(r), pos, &lost);
+    int boundaries = frames_between(r, dseq, frame_seq_total(r), pos, &lost, NULL);
     if (boundaries < 0)
         return 0; /* stale/duplicate match; ignore rather than rewind */
 
@@ -334,19 +334,81 @@ static int place_sequence(dv_reassembler_t *r, const uint8_t *p, unsigned dseq, 
     return 1;
 }
 
+#define DIF_SEQ_BLOCKS 150
+
+/* The slot (0..149) a DIF block belongs in by its own ID (SCT, DBN, the three "1" bits of
+ * byte 1), and its sequence number in *dseq. -1 if the bytes are not a valid block ID. Slots:
+ * 0 header, 1-2 subcode, 3-5 VAUX, then 9 groups of 1 audio + 15 video blocks. */
+static int block_slot(const uint8_t *b, unsigned *dseq)
+{
+    if ((b[1] & 0x07) != 0x07)
+        return -1;
+    unsigned sct = b[0] >> 5, dbn = b[2];
+    *dseq = b[1] >> 4;
+    switch (sct) {
+    case 0: return dbn == 0 ? 0 : -1;
+    case 1: return dbn < 2 ? 1 + (int)dbn : -1;
+    case 2: return dbn < 3 ? 3 + (int)dbn : -1;
+    case 3: return dbn < 9 ? 6 + 16 * (int)dbn : -1;
+    case 4: return dbn < 135 ? 6 + 16 * (int)(dbn / 15) + 1 + (int)(dbn % 15) : -1;
+    default: return -1;
+    }
+}
+
+/* The slot the block `off` bytes into the span of the sequence at stream offset pos has if
+ * only the DBC holes in front of it lost data: its place with those blocks filled in. */
+static uint64_t slot_after_holes(const dv_reassembler_t *r, uint64_t pos, size_t off)
+{
+    uint64_t slot = off / DIF_BLOCK_BYTES;
+    for (unsigned i = 0; i < r->dbc_gap_n; i++)
+        if (r->dbc_gap_pos[i] > pos && r->dbc_gap_pos[i] <= pos + off)
+            slot += (uint64_t)r->dbc_gap_blocks[i] * (EP88_BLOCK_BYTES / DIF_BLOCK_BYTES);
+    return slot;
+}
+
+/* A block after a hole in the span of sequence `dseq` that cannot be part of it: its ID is
+ * valid but names another sequence, or another slot than the one the DBC holes leave for
+ * it (the hole was longer than the rest of the sequence, a frame's worth or more). */
+static int foreign_block(const dv_reassembler_t *r, const uint8_t *b, unsigned dseq,
+                         uint64_t pos, size_t off)
+{
+    unsigned d;
+    int slot = block_slot(b, &d);
+    return slot >= 0 && (d != dseq || (uint64_t)slot != slot_after_holes(r, pos, off));
+}
+
+/* Builds sequence `dseq` from the `have` bytes at p (stream offset pos) that arrived for it,
+ * with data lost inside them: each block goes to its own slot, the one the DBC holes in front
+ * of it leave (its ID, where it is valid, has to agree), so only the blocks that were really
+ * lost stay zero. A decoder places macroblocks and audio by slot: a shifted block would show
+ * wrong picture and audio. */
+static void assemble_damaged(const dv_reassembler_t *r, uint8_t *dst, const uint8_t *p,
+                             size_t have, unsigned dseq, uint64_t pos)
+{
+    memset(dst, 0, DIF_SEQUENCE_BYTES);
+    for (size_t off = 0; off + DIF_BLOCK_BYTES <= have; off += DIF_BLOCK_BYTES) {
+        uint64_t slot = slot_after_holes(r, pos, off);
+        if (slot < DIF_SEQ_BLOCKS && !foreign_block(r, p + off, dseq, pos, off))
+            memcpy(dst + (size_t)slot * DIF_BLOCK_BYTES, p + off, DIF_BLOCK_BYTES);
+    }
+}
+
 /* Handles one located DIF sequence at buf+p with the given dseq and stream offset. Advances
  * frame/sequence bookkeeping and copies real data into the in-progress
  * frame buffer; a frame is only handed to the output callbacks once it's
  * complete (the next frame's first sequence arrived, or dv_reassembler_finish
- * at end of capture). `have` < a whole sequence means data was lost inside it: the rest
- * stays zero. */
+ * at end of capture). `have` < a whole sequence, or a DBC hole inside its span, means data
+ * was lost inside it (assemble_damaged()). */
 static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, size_t have, unsigned dseq,
                            uint64_t pos)
 {
     uint8_t part[DIF_SEQUENCE_BYTES];
-    if (have < DIF_SEQUENCE_BYTES) {
-        memset(part, 0, sizeof(part));
-        memcpy(part, p, have);
+    int hole = have < DIF_SEQUENCE_BYTES;
+    for (unsigned i = 0; i < r->dbc_gap_n && !hole; i++)
+        if (r->dbc_gap_pos[i] > pos && r->dbc_gap_pos[i] < pos + have)
+            hole = 1;
+    if (hole) {
+        assemble_damaged(r, part, p, have, dseq, pos);
         p = part;
     }
     int rc = place_sequence(r, p, dseq, pos);
@@ -368,11 +430,29 @@ static int handle_sequence(dv_reassembler_t *r, const uint8_t *p, size_t have, u
     return 0;
 }
 
+/* Blocks of a sequence whose header was lost in a DBC hole: they arrived between the span of
+ * the sequence placed last and the next header. Each goes by its ID into the frame in
+ * progress if its sequence number lies strictly between lo and hi (lo -1: from 0). */
+static void place_orphans(dv_reassembler_t *r, const uint8_t *p, size_t len, int lo, unsigned hi)
+{
+    for (size_t off = 0; off + DIF_BLOCK_BYTES <= len; off += DIF_BLOCK_BYTES) {
+        unsigned d;
+        int slot = block_slot(p + off, &d);
+        if (slot < 0 || (int)d <= lo || d >= hi)
+            continue;
+        memcpy(r->frame_buf + (size_t)d * DIF_SEQUENCE_BYTES + (size_t)slot * DIF_BLOCK_BYTES,
+               p + off, DIF_BLOCK_BYTES);
+    }
+}
+
 /* Feeds recovered DIF bytes (layers 1+2 already stripped) into sequence
  * assembly. The stream is contiguous, so the header search normally hits
  * immediately at offset 0 of each 12,000-byte step; it stays a search only as
  * a resync safety net. A header inside the 12,000 bytes after a header means
- * the sequence lost data: it ends there, so the next sequence is not swallowed. */
+ * the sequence lost data: it ends there, so the next sequence is not swallowed.
+ * So does, after a DBC hole, a block whose ID names another sequence (the header of that
+ * one was lost): such blocks are kept until the next header is found and then placed by
+ * their ID (place_orphans()). */
 static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
 {
     r->dif_bytes += len;
@@ -398,8 +478,15 @@ static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
                 consumed = r->buf_len - DIF_SEQUENCE_BYTES;
             break;
         }
+        /* what lies between the last span and this header: blocks of a sequence that lost
+         * its header, if a DBC hole is known since the last sequence, else noise */
+        size_t orphans = p - consumed;
+        if (orphans > DIF_SEQUENCE_BYTES || !r->dbc_gap_n || !r->last_seq_valid ||
+            !r->frame_started)
+            orphans = 0;
         if (need_more || p + DIF_SEQUENCE_BYTES > r->buf_len) {
-            consumed = p;
+            if (!orphans)
+                consumed = p;
             break;
         }
 
@@ -413,9 +500,41 @@ static int dif_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
                 break;
             }
         }
+        /* after a hole in the span, a block that is not part of this sequence */
+        uint64_t pos = r->dif_pos + p;
+        uint64_t first_gap = pos + take;
+        for (unsigned i = 0; i < r->dbc_gap_n; i++)
+            if (r->dbc_gap_pos[i] > pos && r->dbc_gap_pos[i] < first_gap)
+                first_gap = r->dbc_gap_pos[i];
+        for (size_t q = (size_t)(first_gap - pos); q + DIF_BLOCK_BYTES <= take; q += DIF_BLOCK_BYTES) {
+            if (foreign_block(r, r->buf + p + q, dseq, pos, q)) {
+                take = q - q % DIF_BLOCK_BYTES;
+                break;
+            }
+        }
+        if (take < DIF_BLOCK_BYTES)
+            take = DIF_BLOCK_BYTES;
 
-        if (handle_sequence(r, r->buf + p, take, dseq, r->dif_pos + p) != 0)
+        /* Where the orphans go depends on whether this header starts a new frame: those
+         * of a later sequence of the same frame, or of the end of the frame that ends here,
+         * before it is placed; those of an earlier sequence of the frame it starts, after. */
+        /* Only by a count that fits the DBC holes: a guess could put a later frame's blocks
+         * into this one. */
+        unsigned lost, n = frame_seq_total(r);
+        int last = (int)r->expected_dseq - 1, fit = 0;
+        int bounds = orphans ? frames_between(r, dseq, n, pos, &lost, &fit) : -1;
+        if (!fit)
+            bounds = -1;
+        if (bounds == 0)
+            place_orphans(r, r->buf + consumed, orphans, last, dseq);
+        else if (bounds == 1)
+            place_orphans(r, r->buf + consumed, orphans, last > (int)dseq ? last : (int)dseq, n);
+
+        if (handle_sequence(r, r->buf + p, take, dseq, pos) != 0)
             return -1;
+
+        if (bounds >= 1 && r->frame_started && r->expected_dseq == dseq + 1)
+            place_orphans(r, r->buf + consumed, orphans, -1, dseq);
 
         consumed = p + take;
     }
@@ -515,15 +634,14 @@ static void check_dbc(dv_reassembler_t *r, unsigned dbc, unsigned blocks)
     }
 
     if (dbc != r->dbc_next) {
-        /* Before frame assembly has locked on we are joining a ring that was
+        /* Before frame assembly has locked on (DV: a frame started; HDV: the
+         * gate opened on a GOP) we are joining a ring that was
          * already running: the first read lands mid-record and layer 2
          * resyncs a quadlet at a time, discarding bytes by design. Exactly
          * one discontinuity always showed up there, independent of run length
          * (measured over 20 s, 30 s, 60 s and 300 s captures), so counting it
          * as loss would put a permanent false positive on every run. */
-        int joining = (r->format == DV_FORMAT_HDV)
-                          ? r->ts_packets - r->ts_join_base < HDV_JOIN_TS_PACKETS
-                          : !r->frame_started;
+        int joining = (r->format == DV_FORMAT_HDV) ? !r->ts_gate_open : !r->frame_started;
         r->dbc_epoch++;
         if (!joining) {
             /* Distance forward, modulo 256: a hole of up to 255 blocks (a whole
@@ -815,7 +933,6 @@ static void hdv_reset(dv_reassembler_t *r)
     r->ts_pat_valid = r->ts_pmt_valid = 0;
     r->ts_have = 0;
     memset(r->ts_cc, 0xFF, sizeof(r->ts_cc));
-    r->ts_join_base = r->ts_packets;
 }
 
 /* Forgets the run of other-format packets (it was too short to switch). */
@@ -827,8 +944,9 @@ static void fmt_cand_drop(dv_reassembler_t *r)
     r->fmt_cand_len = 0;
 }
 
-/* Keeps a payload of the run aside (at most DV_FMT_SWITCH_PACKETS of them). Out of
- * memory it is just not kept: the replay then has a gap, as a lost packet would. */
+/* Keeps a payload of the run aside (at most DV_FMT_SWITCH_PACKETS of them). Out of memory
+ * the capture ends with an error: we prefer to fail fast over a replay with a piece missing
+ * from the middle of a packet. */
 static int fmt_cand_append(dv_reassembler_t *r, const uint8_t *data, size_t n)
 {
     if (r->fmt_cand_len + n > r->fmt_cand_cap) {
@@ -837,7 +955,7 @@ static int fmt_cand_append(dv_reassembler_t *r, const uint8_t *data, size_t n)
             cap *= 2;
         uint8_t *nb = realloc(r->fmt_cand_buf, cap);
         if (!nb)
-            return 0;
+            return -1;
         r->fmt_cand_buf = nb;
         r->fmt_cand_cap = cap;
     }
@@ -934,6 +1052,9 @@ static int ring_feed(dv_reassembler_t *r, const uint8_t *data, size_t len)
                 }
             }
             r->iso_pos = 0;
+            /* a TS packet starts with each source packet: nothing of an earlier packet's is
+             * left over (ts_feed() relies on it to stay inside ts_buf) */
+            r->ts_have = 0;
             /* CIP data block size is DBS quadlets (0x78 = 480 bytes for DV,
              * 6 = 24 bytes for HDV), not one 80-byte DIF block. A packet kept
              * aside is not checked: if it was a stray, the next packet of the
@@ -1007,10 +1128,12 @@ int dv_reassembler_init(dv_reassembler_t *r, const dv_output_t *out)
 {
     memset(r, 0, sizeof(*r));
     r->out = *out;
-    r->buf_cap = MAX_RESYNC_WINDOW + DIF_SEQUENCE_BYTES;
-    r->buf = malloc(r->buf_cap);
+    /* out of memory buf stays NULL with no capacity: dif_feed() then tries to grow it and
+     * fails the feed, rather than copying into nothing */
+    r->buf = malloc(MAX_RESYNC_WINDOW + DIF_SEQUENCE_BYTES);
     if (!r->buf)
         return -1;
+    r->buf_cap = MAX_RESYNC_WINDOW + DIF_SEQUENCE_BYTES;
     r->system_seq_count = NTSC_SEQ_COUNT;
     memset(r->ts_cc, 0xFF, sizeof(r->ts_cc));
     return 0;

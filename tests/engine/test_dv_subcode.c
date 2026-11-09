@@ -53,8 +53,8 @@ static void set_block_section(uint8_t *frame, unsigned seq, unsigned block, int 
 {
     size_t off = seq * DV_SEQ_SIZE + (size_t)block * DV_BLOCK_SIZE;
     frame[off + 0] = (uint8_t)(section << 5);
-    frame[off + 1] = 0xFF;
-    frame[off + 2] = 0xFF;
+    frame[off + 1] = (uint8_t)((seq << 4) | 0x0F); /* Dseq, FSC, the three "1" bits */
+    frame[off + 2] = section == 0 ? 0x00 : 0xFF;   /* DBN 0 for the header */
 }
 
 /* Lays out a synthetic frame: block 0 = header, 1-2 = subcode, 3-5 = VAUX,
@@ -210,6 +210,28 @@ static void test_pal_frame_century_heuristic(void)
     free(frame);
 }
 
+/* A PAL frame whose sequence 0 was lost in transit (zero-filled by the reassembler): the zero
+ * block 0 is no header, the DSF comes from sequence 1. */
+static void test_pal_frame_lost_first_sequence(void)
+{
+    unsigned seq_count = DV_SEQ_COUNT_PAL;
+    uint8_t *frame = calloc(seq_count, DV_SEQ_SIZE);
+    build_frame_skeleton(frame, seq_count, 1);
+    memset(frame, 0, DV_SEQ_SIZE);
+
+    dv_frame_info_t info;
+    int rc = dv_subcode_parse_frame(frame, (size_t)seq_count * DV_SEQ_SIZE, &info);
+    CHECK(rc == 0, "parse should succeed");
+    CHECK(info.dsf_valid && info.is_pal == 1, "a zeroed sequence 0 does not make it NTSC");
+
+    /* every header lost: no DSF at all (the caller goes by the sequence count) */
+    for (unsigned s = 0; s < seq_count; s++)
+        memset(frame + (size_t)s * DV_SEQ_SIZE, 0, DV_BLOCK_SIZE);
+    rc = dv_subcode_parse_frame(frame, (size_t)seq_count * DV_SEQ_SIZE, &info);
+    CHECK(rc == 0 && !info.dsf_valid, "no header block: DSF not valid");
+    free(frame);
+}
+
 static void test_missing_pack_is_invalid(void)
 {
     unsigned seq_count = DV_SEQ_COUNT_NTSC;
@@ -286,6 +308,7 @@ int main(void)
 {
     test_clean_ntsc_frame();
     test_pal_frame_century_heuristic();
+    test_pal_frame_lost_first_sequence();
     test_missing_pack_is_invalid();
     test_corrupted_copy_outvoted();
     test_all_copies_invalid_marker();

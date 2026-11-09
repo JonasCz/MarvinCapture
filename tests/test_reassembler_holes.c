@@ -7,7 +7,8 @@
  *   - a hole in the last sequence of a frame does not swallow the next frame;
  *   - header-like bytes in video data do not start sequences or frames;
  *   - whole frames lost at any alignment are counted, and holes of 128..255 blocks report
- *     their length.
+ *     their length;
+ *   - HDV: a DBC hole before the gate opens is the join, one right after it is loss.
  *
  * Usage: test_reassembler_holes
  */
@@ -273,8 +274,78 @@ static void test_large_holes(void)
     }
 }
 
+/* One HDV CIP packet (FMT 0x20, DBS 6, one 192-byte source packet = 8 data blocks) carrying
+ * the TS packet `ts`, as a type-9 message into the receive ring. */
+static void hdv_packet(ep88_synth_t *w, const uint8_t *ts, unsigned dbc)
+{
+    uint8_t rec[4 + 8 + 192 + 4];
+    uint8_t msg[4];
+    ep88_le32(rec, ((uint32_t)(8 + 192) << 16) | (1u << 14) | (63u << 8) | (0xAu << 4));
+    rec[4] = 0x01; rec[5] = 0x06; rec[6] = 0xC4; rec[7] = (uint8_t)dbc;
+    rec[8] = 0xA0; rec[9] = 0x00; rec[10] = 0xFF; rec[11] = 0xFF;
+    memset(rec + 12, 0, 4); /* source packet header */
+    memcpy(rec + 16, ts, 188);
+    ep88_le32(rec + 12 + 192, 0x84110000u);
+    ep88_le32(msg, (9u << 28) | ((uint32_t)sizeof(rec) << 16) | 0x7000u);
+    ep88_put(w, msg, 4);
+    ep88_put(w, rec, sizeof(rec));
+}
+
+/* HDV: a DBC hole before the gate opens is the join into the running ring; one right after
+ * it opens is loss. */
+static void test_hdv_join(void)
+{
+    uint8_t other[188], gop[188], next[188];
+    memset(other, 0xFF, sizeof(other));
+    other[0] = 0x47; other[1] = 0x01; other[2] = 0x00; other[3] = 0x10; /* PID 0x100 */
+    memset(gop, 0xFF, sizeof(gop));
+    static const uint8_t gop_hdr[] = { 0x47, 0x48, 0x10, 0x10,                  /* PID 0x810, PUSI */
+                                       0x00, 0x00, 0x01, 0xE0, 0x00, 0x00, 0x80, 0x00, 0x00,
+                                       0x00, 0x00, 0x01, 0xB3 };
+    memcpy(gop, gop_hdr, sizeof(gop_hdr));
+    memcpy(next, gop, sizeof(next));
+    next[1] = 0x08; /* the same PID, no PUSI */
+    ep88_synth_t w;
+    memset(&w, 0, sizeof(w));
+    unsigned dbc = 0, cc = 0;
+    for (int i = 0; i < 5; i++, dbc += 8)
+        hdv_packet(&w, other, dbc & 0xFF);
+    dbc += 3 * 8; /* the join */
+    for (int i = 0; i < 5; i++, dbc += 8)
+        hdv_packet(&w, other, dbc & 0xFF);
+    gop[3] = (uint8_t)(0x10 | cc++);
+    hdv_packet(&w, gop, dbc & 0xFF);
+    dbc += 8;
+    for (int i = 0; i < 10; i++, dbc += 8) {
+        next[3] = (uint8_t)(0x10 | (cc++ & 0x0F));
+        hdv_packet(&w, next, dbc & 0xFF);
+    }
+    dbc += 2 * 8; /* loss, 10 packets after the gate opened */
+    for (int i = 0; i < 10; i++, dbc += 8) {
+        next[3] = (uint8_t)(0x10 | (cc++ & 0x0F));
+        hdv_packet(&w, next, dbc & 0xFF);
+    }
+    got_t g;
+    memset(&g, 0, sizeof(g));
+    dv_output_t out = { .on_loss = on_loss, .user = &g };
+    dv_reassembler_t *r = malloc(sizeof(*r));
+    CHECK(r && dv_reassembler_init(r, &out) == 0);
+    CHECK(dv_reassembler_feed(r, w.data, w.len) == 0);
+    snprintf(ctx, sizeof(ctx), "hdv join");
+    CHECK_EQ(r->format, DV_FORMAT_HDV);
+    CHECK(r->ts_gate_open);
+    CHECK_EQ(r->dbc_joins, 1);
+    CHECK_EQ(r->dbc_gaps, 1);
+    CHECK_EQ(r->dbc_lost_blocks, 16);
+    CHECK_EQ(g.loss_blocks, 16);
+    dv_reassembler_finish(r);
+    free(r);
+    free(w.data);
+}
+
 int main(void)
 {
+    test_hdv_join();
     test_large_holes();
     test_false_headers();
     test_last_sequence();
