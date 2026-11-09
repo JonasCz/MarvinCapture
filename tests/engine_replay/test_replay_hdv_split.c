@@ -303,6 +303,8 @@ int main(int argc, char **argv)
     pin_session_t *s = pin_test_open_replay(src_path);
     pin_test_prepare_dv(s);
     pin_status_snapshot_t snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.size = sizeof(snap);
     int is_hdv = 0;
     for (int i = 0; i < 100 && !is_hdv; i++) {
         pin_get_status(s, &snap);

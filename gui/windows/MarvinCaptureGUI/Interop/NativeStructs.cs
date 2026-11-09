@@ -278,7 +278,7 @@ public unsafe struct PinStatusSnapshot
     public ulong Frames;
     public ulong FramesDropped;
     public ulong FramesDamaged;     // analog: dropped frames that arrived short; DV: units that could not be parsed as a frame (not the frames with errors)
-    public ulong LostBlocks;
+    public ulong LostBlocks;        // diagnostic only, not shown (frames_error / frames_dropped say what a loss did)
     public ulong TsErrors;          // HDV: packets that set discontinuity_indicator (not continuity errors)
     public ulong BytesWritten;
     public ulong WriterBacklog;
@@ -312,7 +312,7 @@ public unsafe struct PinStatusSnapshot
     public ulong ClipFrames;
     public ulong ClipFramesError;
     public ulong ClipFramesDropped;
-    public ulong ErrVideoBlocks;
+    public ulong ErrVideoBlocks;    // Err*Blocks: diagnostic only, not shown
     public ulong ErrAudioBlocks;
     public ulong ErrMissingBlocks;
 
@@ -333,6 +333,13 @@ public unsafe struct PinStatusSnapshot
     public double StopCapturedS;
     public fixed byte StopTextBuf[PinLimits.TextMax];
     public int StopNoVideoValue;    // 1: the capture ended without any video; no file was left
+
+    // Appended later: the running capture's own limits (0 = off / no capture), whoever started it,
+    // and the files it has put video into so far.
+    public int CaptureWithDeck;       // 1: it drives the deck (start_deck)
+    public uint CaptureFiles;
+    public double CaptureIdleStopS;   // the no-signal timeout in seconds
+    public double CaptureDurationS;   // the per-pass time limit in seconds
 
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string VideoLabel { get { fixed (byte* p = VideoLabelBuf) return Utf8Fixed.Get(p, 16); } }

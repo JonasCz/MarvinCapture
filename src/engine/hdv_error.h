@@ -31,6 +31,9 @@
  *    unit counts against that unit (the loss is between the two pictures),
  *  - the video PES does not start with 00 00 01 E0..EF, no picture header in the
  *    unit, or a non-zero PES_packet_length that the payload does not match.
+ *  - data lost in transit in front of or inside the unit, as the caller knows from
+ *    the transport (hdv_err_state_t.lost_data): the continuity counters miss a
+ *    loss of a multiple of 16 packets of a PID, the 1394 block count does not.
  * Only video-PID damage propagates through the GOP; an audio-only gap marks the
  * unit "with error" but leaves the references alone.
  *
@@ -56,6 +59,9 @@ typedef struct {
     int ref_dmg_last;       /* the latest reference picture (I/P) is damaged/tainted */
     int ref_dmg_prev;       /* the one before it */
     int init;
+    int lost_data;          /* set by the caller: data was lost in transit (the 1394 DBC) before
+                               the next unit ended, so that unit is damaged; cleared by
+                               hdv_error_analyze() */
 } hdv_err_state_t;
 
 typedef struct {
@@ -68,6 +74,7 @@ typedef struct {
     int video_damaged;      /* the unit's own video data is damaged */
     int tainted;            /* damaged only through a reference it depends on */
     int frame_error;        /* video_damaged || tainted || any other error */
+    int lost_data;          /* the caller's lost_data was set for this unit */
     int seq_found;          /* an MPEG-2 sequence header was in the unit: */
     int seq_width, seq_height;  /* its horizontal_size / vertical_size */
     int seq_aspect;             /* its aspect_ratio_information (2 = 4:3, 3 = 16:9, see pin_vidfmt.h) */
@@ -91,6 +98,11 @@ void hdv_error_init(hdv_err_state_t *st);
  * which runs across TS packet boundaries. */
 void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n_packets,
                        int video_pid, hdv_unit_errors_t *out);
+
+/* 1 if the payload of PID `pid` in the unit carries an MPEG-2 sequence header (00 00 01 B3),
+ * past the PES headers (their time stamps are no start codes) and across TS packet
+ * boundaries: a header can straddle two packets. Where a file may start. */
+int hdv_unit_has_seq_header(const uint8_t *ts, size_t n_packets, int pid);
 
 #ifdef __cplusplus
 }

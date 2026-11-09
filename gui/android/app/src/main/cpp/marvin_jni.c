@@ -652,7 +652,7 @@ MJ_FN(jint, pollEvent)(JNIEnv *env, jclass c, jlong s, jintArray a, jobjectArray
  * Index order = Core.ST_* (ints), SL_* (longs), SD_* (doubles), SS_* (strings). */
 #define N_INTS 30
 #define N_LONGS 7
-#define N_DOUBLES 8
+#define N_DOUBLES 10
 #define N_STRS 20
 
 MJ_FN(jint, getStatus)(JNIEnv *env, jclass c, jlong h, jintArray ints, jlongArray longs,
@@ -692,7 +692,7 @@ MJ_FN(jint, getStatus)(JNIEnv *env, jclass c, jlong h, jintArray ints, jlongArra
     jdouble dv[N_DOUBLES] = {
         st.elapsed_s, st.idle_stop_remaining_s, st.duration_remaining_s,
         st.audio_peak_db[0], st.audio_peak_db[1], st.est_seconds_left,
-        st.audio_rms_db[0], st.audio_rms_db[1],
+        st.audio_rms_db[0], st.audio_rms_db[1], st.capture_idle_stop_s, st.capture_duration_s,
     };
     if (ints && (*env)->GetArrayLength(env, ints) >= N_INTS)
         (*env)->SetIntArrayRegion(env, ints, 0, N_INTS, iv);

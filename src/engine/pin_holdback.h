@@ -34,9 +34,9 @@
  * split lookahead, pin_split.h, then the file).
  *
  * A cut (pin_holdback_cut) lands on a unit flagged PIN_HOLD_CUT_OK, where a
- * file may start: every DV frame; an HDV picture that opens a GOP (it carries
- * the GOP header and, on HDV, the sequence header in front of it), since a
- * transport stream that starts elsewhere does not decode from its start.
+ * file may start: every DV frame; an HDV picture that carries a sequence
+ * header (HDV puts one in front of every GOP), since a transport stream that
+ * starts elsewhere does not decode from its start.
  *
  * max_bytes bounds the memory: beyond it the oldest units are committed even
  * if a pending cut would still need them (it then lands on the oldest

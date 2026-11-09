@@ -248,9 +248,10 @@ static void test_hdv(const char *trace)
     }
     CHECK(files >= 2);
     CHECK((unsigned long long)total == snap.total_bytes_written);
-    /* every picture from the first GOP on (12 pictures each) */
+    /* every picture from the first GOP on: the captured length counts the pictures in the files,
+     * not those before the first GOP that no file gets */
     long captured = (long)(snap.stop_captured_s * 25.0 + 0.5);
-    CHECK(pictures <= captured && pictures > captured - 12);
+    CHECK(pictures == captured);
 }
 
 int main(int argc, char **argv)

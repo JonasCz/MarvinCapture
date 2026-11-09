@@ -31,13 +31,24 @@ Traps (all learned the hard way):
   pictures). PES_packet_length is 0 for HDV video; only checked if non-zero.
   Continuity tracking must restart after a stream break (`hdv_err_reset`, >1 s
   without data) or every rewind/pause shows a false loss.
+- Counted only while a file can get the unit (`counting()`: a file is open, or no capture is
+  running at all, the "since the app started" preview totals): not between passes, during a
+  rewind or before the first file opens. A unit counted at arrival that then misses its file
+  is taken out again (`uncount_frame()`): refused by the writer queue (`writer_commit()`,
+  decided by the bytes, `unit_is_frame()`, so PAT / PMT never count; it goes to
+  `write_dropped`), or an HDV picture dropped by the file gate before the first sequence
+  header (from before the capture's start, or a dropped frame after a format change,
+  `hdv_gate_lossy`). A DV unit of neither 10 nor 12 sequences is not in `frames`: it is a
+  dropped frame (and `frames_damaged`). A DV frame with >= 90 % of its blocks missing is in
+  `frames`, `frames_error` and `frames_dropped` (it is written zero-padded).
 - Clip counters count at arrival, not at commit, so units held by the split
   lookahead (and by the hold-back FIFO, `pin_holdback.h`, for a scene cut or a
   format change) are charged to the previous clip.
 - A PAL / NTSC change no longer pads NTSC frames to 12 sequences: the reassembler
   sizes each frame by its own DSF bits / sequences 10-11, so a clean mixed tape has
   no error frames (`test_replay_mixed_dv` asserts zero). Units of the other kind
-  (DV <-> HDV) are counted at arrival like any unit, even those a file never gets.
+  (DV <-> HDV) are counted at arrival like any unit; those a file never gets (a stray, the
+  new kind on a pipe) are taken out of `frames` again in `commit_unit_fi()`.
 - The HDV replay (`replay_run_ts()`) hands what precedes the first video PES
   (SDT, PAT, PMT) to the write callback only, like the reassembler's PAT/PMT
   unit: on `dv_on_unit()` it would count as a picture with a PES error.
@@ -54,8 +65,12 @@ Traps (all learned the hard way):
   (`dv_reassembler.c` `place_sequence()` starts a new frame when the numbering goes back
   or the DBC says a frame's worth was lost, so two damaged neighbours stay two frames); a
   frame that never arrived is only counted: `frames_lost` and the `on_loss` callback, which
-  the session adds to `frames_dropped` / `clip_frames_dropped` (not to `frames`) next to
-  `lost_blocks` (the DBC jump in blocks). The number of lost frames is worked out from the
+  the session adds to `frames_dropped` / `clip_frames_dropped` (not to `frames`). The DBC
+  jump in blocks goes to `lost_blocks`, a diagnostic that is never shown (it wraps at 256):
+  users see frames. An HDV hole has no padding: `dv_on_loss()` sets `hdv_loss_pending` and the
+  next picture (the one the hole fell into) gets `hdv_err_state_t.lost_data`, so it is damaged
+  and taints like a lost video packet, even when the CC check misses it (16 packets of a PID);
+  a stream break (>1 s) clears it. `test_replay_hdv_loss` has the case. The number of lost frames is worked out from the
   blocks received between two sequence headers (stream offsets) plus the blocks the DBC
   holes between them lost (25 per sequence, known modulo 256), matched against the DIF
   numbering, so it is right for holes of any length at any packet offset, up to about 25

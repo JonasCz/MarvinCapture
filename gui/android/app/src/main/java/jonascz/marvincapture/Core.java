@@ -99,7 +99,8 @@ final class Core {
             SL_TOTAL_BYTES = 4, SL_DISK_FREE = 5, SL_WRITE_DROPPED = 6, SL_COUNT = 7;
     // doubles
     static final int SD_ELAPSED = 0, SD_IDLE_LEFT = 1, SD_DURATION_LEFT = 2, SD_PEAK_L = 3, SD_PEAK_R = 4,
-            SD_EST_LEFT = 5, SD_RMS_L = 6, SD_RMS_R = 7, SD_COUNT = 8;
+            SD_EST_LEFT = 5, SD_RMS_L = 6, SD_RMS_R = 7, SD_IDLE_TOTAL = 8, SD_DURATION_TOTAL = 9,
+            SD_COUNT = 10;
     // strings
     static final int SS_SHORT = 0, SS_STATE = 1, SS_SIGNAL = 2, SS_FRAMES = 3, SS_FRAMES_DETAIL = 4,
             SS_SIZES = 5, SS_STORAGE_FREE = 6, SS_STORAGE_DETAIL = 7, SS_DETAIL = 8, SS_ERROR = 9,

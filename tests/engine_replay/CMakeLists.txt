@@ -111,6 +111,10 @@ set_tests_properties(test_replay_hdv_mov PROPERTIES TIMEOUT 60)
 # the holes errors, the first frame of the tape written.
 pin_engine_replay_test(test_replay_dv_loss "${PIN_TEST_DATA}/dv-ntsc.dv")
 
+# HDV data lost in transit that the continuity counters miss (16 packets of one PID): the
+# picture it fell into is a frame with error, from the DBC.
+pin_engine_replay_test(test_replay_hdv_loss "${PIN_HDV_CAPTURE}")
+
 # Stop while a capture waits for its first frame (no timeout there): ends cleanly, no file.
 pin_engine_replay_test(test_replay_stop_waiting "${PIN_TEST_DATA}/dv-ntsc.dv")
 
@@ -195,7 +199,7 @@ endif()
 set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
     test_replay_hdv test_replay_hdv_split test_replay_hdv_mov test_replay_unplug test_replay_hwenc
-    test_replay_mixed_dv test_replay_status_numbers test_replay_mixed_kind test_replay_dv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe test_replay_lifecycle
+    test_replay_mixed_dv test_replay_status_numbers test_replay_mixed_kind test_replay_dv_loss test_replay_hdv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe test_replay_lifecycle
     PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # The preview colour matrix every GUI shader relies on, and pin_fit_rect.

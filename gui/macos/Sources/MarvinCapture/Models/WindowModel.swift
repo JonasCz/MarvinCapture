@@ -1205,6 +1205,13 @@ final class WindowModel {
         set(\.storageTip, Pin.formatStorageDetail(st))
         set(\.hasDiskInfo, st.disk_free_bytes > 0)
 
+        if capturingState {
+            // the running capture's own limits and deck mode, from the core: a capture a script
+            // started has them too, and an earlier capture's never linger
+            set(\.captureWithDeck, st.capture_with_deck != 0)
+            activeIdleStopS = st.capture_idle_stop_s
+            activeDurationS = st.capture_duration_s
+        }
         set(\.isCapturing, capturingState)
 
         applyDeckStatus(st.deck, busy: st.deck_busy != 0)

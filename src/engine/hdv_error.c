@@ -31,7 +31,10 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
                        int video_pid, hdv_unit_errors_t *out)
 {
     memset(out, 0, sizeof(*out));
+    int lost = st->lost_data;
     if (!st->init) hdv_error_init(st);
+    st->lost_data = 0;
+    out->lost_data = lost != 0;
 
     int video_cc_err = 0, pes_seen = 0, pes_bad = 0;
     unsigned long vpayload = 0;
@@ -152,7 +155,8 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
         if (pes_len && pes_len + 6 != vpayload) out->pes_errors++;
         if (pes_bad || pics == 0) out->pes_errors++;
     }
-    int own = out->tei || out->sync_lost || video_cc_err || out->pes_errors;
+    /* lost data is charged to the video: which PID lost it is unknown */
+    int own = out->tei || out->sync_lost || video_cc_err || out->pes_errors || out->lost_data;
     if (video_pid > 0 && (out->tei || out->sync_lost)) own = 1;
     out->video_damaged = own;
 
@@ -177,4 +181,23 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
     }
     out->tainted = tainted;
     out->frame_error = own || tainted || out->cc_errors;
+}
+
+int hdv_unit_has_seq_header(const uint8_t *ts, size_t n, int pid)
+{
+    uint32_t win = 0xFFFFFFFFu;
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *p = ts + i * 188;
+        if (p[0] != 0x47 || (((p[1] & 0x1F) << 8) | p[2]) != pid || !(p[3] & 0x10))
+            continue;
+        size_t po = (p[3] & 0x20) ? 5u + p[4] : 4u;
+        if ((p[1] & 0x40) && po + 9 <= 188 && !p[po] && !p[po + 1] && p[po + 2] == 1)
+            po += 9u + p[po + 8];   /* the PES header */
+        for (size_t k = po; k < 188; k++) {
+            win = (win << 8) | p[k];
+            if (win == 0x000001B3u)
+                return 1;
+        }
+    }
+    return 0;
 }

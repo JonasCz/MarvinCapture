@@ -628,7 +628,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             show(countdownBar, counting);
             if (counting) {
                 set(countdownText, "Stopping capture in " + st.text(Core.SS_IDLE_LEFT));
-                double total = Settings.idleStop(st.analog() ? Core.KIND_ANALOG : svc.streamKind()) * 60.0;
+                double total = st.d[Core.SD_IDLE_TOTAL];   // the running capture's own timeout
                 countdownBar.setProgress(total > 0 ? (int) (1000 * Math.min(1, st.d[Core.SD_IDLE_LEFT] / total)) : 0);
             }
         }

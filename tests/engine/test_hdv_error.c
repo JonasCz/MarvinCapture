@@ -155,6 +155,72 @@ static void test_synthetic(void)
     memset(u + 4 + 9, 0x55, 30);
     hdv_error_analyze(&st, u, 4, VPID, &e);
     CHECK(e.frame_error && e.pes_errors, "no picture header");
+
+    /* data lost in transit that the continuity counters cannot see (16 packets of every PID):
+     * the caller's flag damages the unit, it propagates like a lost video packet, and it is
+     * used once */
+    make_pic(u, 1, 1, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error, "clean I before the hole");
+    make_pic(u, 2, 0, 0);
+    st.lost_data = 1;
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.video_damaged && e.lost_data && e.cc_errors == 0, "P with lost data");
+    CHECK(!st.lost_data, "the flag is used up");
+    make_pic(u, 3, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.tainted && !e.lost_data, "B after it is tainted");
+    make_pic(u, 1, 1, 1);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error, "the next I is clean");
+
+    /* set on a state that was never initialised: still counted */
+    hdv_err_state_t fresh;
+    memset(&fresh, 0, sizeof(fresh));
+    fresh.lost_data = 1;
+    make_pic(u, 1, 1, 0);
+    hdv_error_analyze(&fresh, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.lost_data, "lost data on a fresh state");
+}
+
+/* Where a file may start: a sequence header in the picture's PID, also one that straddles two
+ * packets; not in another PID, not in the PES header. */
+static void test_seq_header(void)
+{
+    uint8_t u[3 * 188], pl[184];
+    memset(pl, 0x55, sizeof(pl));
+    pl[0] = 0; pl[1] = 0; pl[2] = 1; pl[3] = 0xE0; pl[4] = 0; pl[5] = 0;
+    pl[6] = 0x80; pl[7] = 0; pl[8] = 0;
+    pl[9] = 0; pl[10] = 0; pl[11] = 1; pl[12] = 0xB3;
+    pkt(u, VPID, 1, 0, pl);
+    memset(pl, 0x55, sizeof(pl));
+    pkt(u + 188, APID, 0, 0, pl);
+    pkt(u + 376, VPID, 0, 1, pl);
+    CHECK(hdv_unit_has_seq_header(u, 3, VPID), "header behind the PES header");
+    CHECK(!hdv_unit_has_seq_header(u, 3, APID), "not in another PID");
+
+    /* 00 00 | 01 B3 across the two video packets, an audio packet between them */
+    memset(pl, 0x55, sizeof(pl));
+    pl[0] = 0; pl[1] = 0; pl[2] = 1; pl[3] = 0xE0; pl[4] = 0; pl[5] = 0;
+    pl[6] = 0x80; pl[7] = 0; pl[8] = 0;
+    pl[182] = 0; pl[183] = 0;
+    pkt(u, VPID, 1, 0, pl);
+    memset(pl, 0x55, sizeof(pl));
+    pl[0] = 1; pl[1] = 0xB3;
+    pkt(u + 376, VPID, 0, 1, pl);
+    CHECK(hdv_unit_has_seq_header(u, 3, VPID), "header straddling two packets");
+    u[376 + 5] = 0xB8;   /* a GOP header there instead */
+    CHECK(!hdv_unit_has_seq_header(u, 3, VPID), "a GOP header alone does not open a file");
+
+    /* 00 00 01 B3 inside the PES header's own bytes is no header */
+    memset(pl, 0x55, sizeof(pl));
+    pl[0] = 0; pl[1] = 0; pl[2] = 1; pl[3] = 0xE0; pl[4] = 0; pl[5] = 0;
+    pl[6] = 0x80; pl[7] = 0xC0; pl[8] = 4;
+    pl[9] = 0; pl[10] = 0; pl[11] = 1; pl[12] = 0xB3;
+    pkt(u, VPID, 1, 0, pl);
+    memset(pl, 0x55, sizeof(pl));
+    pkt(u + 376, VPID, 0, 1, pl);
+    CHECK(!hdv_unit_has_seq_header(u, 3, VPID), "not inside the PES header");
 }
 
 #ifdef TEST_DATA_DIR
@@ -226,6 +292,7 @@ static void test_fixture(void)
 int main(void)
 {
     test_synthetic();
+    test_seq_header();
 #ifdef TEST_DATA_DIR
     test_fixture();
 #endif

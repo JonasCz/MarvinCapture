@@ -784,7 +784,9 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
         snprintf(deck, sizeof(deck), " [%s]", deck_name(st->deck));
 
     if (st->state == PIN_STATE_CAPTURING) {
-        double mb = st->bytes_written / (1024.0 * 1024.0);
+        /* the capture's total, like the frame counts next to it (a new file restarts
+         * bytes_written, not them) */
+        double mb = st->total_bytes_written / (1024.0 * 1024.0);
         snprintf(out, cap, "REC%s%s  pass %d/%d  scene %d  %.1f MB  %.0f s  err %llu  drops %llu",
                  tc, deck, st->pass, st->passes, st->scene, mb, st->elapsed_s,
                  (unsigned long long)st->frames_error,
@@ -1011,16 +1013,20 @@ void pin_format_capture_summary(const pin_status_snapshot_t *st, char *out, size
 {
     if (!st || !out || cap == 0)
         return;
-    char f[32], e[32], d[32], l[48] = "";
+    char f[32], e[32], d[32], w[64];
     pin_ui_format_count(st->frames, f, sizeof(f));
     pin_ui_format_count(st->frames_error, e, sizeof(e));
     pin_ui_format_count(st->frames_dropped + st->write_dropped, d, sizeof(d));
-    if (st->lost_blocks) {
-        char n[32];
-        pin_ui_format_count(st->lost_blocks, n, sizeof(n));
-        snprintf(l, sizeof(l), ", %s lost blocks", n);
+    /* lost_blocks is not shown: what a loss did is in the frame counts (pin_api.h) */
+    if (st->capture_files > 0) {
+        char b[32], n[32];
+        pin_ui_format_bytes(st->total_bytes_written, b, sizeof(b));
+        pin_ui_format_count(st->capture_files, n, sizeof(n));
+        snprintf(w, sizeof(w), "%s in %s file%s", b, n, st->capture_files == 1 ? "" : "s");
+    } else {
+        snprintf(w, sizeof(w), "nothing written");
     }
-    snprintf(out, cap, "Frames %s, with errors %s, dropped %s%s", f, e, d, l);
+    snprintf(out, cap, "Frames %s, with errors %s, dropped %s; %s", f, e, d, w);
 }
 
 void pin_format_frames_detail(const pin_status_snapshot_t *st, char *out, size_t cap)

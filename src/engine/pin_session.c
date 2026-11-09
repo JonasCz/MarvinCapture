@@ -697,16 +697,22 @@ static int resolve_device_id(const char *want, char *out, size_t out_size)
  * ==================================================================== */
 
 static double unit_seconds(const pin_session_t *s);
+static int unit_is_frame(const uint8_t *data, size_t len);
+static void uncount_frame(pin_session_t *s);
+static void count_lost_frames(pin_session_t *s, uint64_t n);
 
 static void writer_commit(void *user, const uint8_t *data, size_t len)
 {
     pin_session_t *s = user;
     if (!s->writer)
         return;
-    if (!pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len)) {
+    if (!pin_writer_push(s->writer, PIN_UNIT_RAW, s->unit_index++, data, len) &&
+        unit_is_frame(data, len)) {
+        /* counted on arrival, but it never reached the file: a dropped frame instead. Units
+         * that are no frame (PAT / PMT / SDT, a DV unit no sink takes) were never counted. */
+        uncount_frame(s);
         s->write_dropped++;
         s->clip_write_dropped++;
-        s->captured_s -= unit_seconds(s);   /* counted on arrival, but never reached the file */
     }
 }
 
@@ -759,8 +765,11 @@ static double learned_ffv1_bph(pin_session_t *s)
 }
 
 /* Folds what the closed files had beyond their hand-over counts into the
- * capture's totals. Caller holds the lock. */
-static void closer_collect(pin_session_t *s)
+ * capture's totals; from every tick, so a multi-file capture's totals (bytes, the rate window,
+ * HDV MOV / MKV frame counts) follow its files as they close. Not the failures: those
+ * capture_guard() asks the closer for, and closer_collect() takes at the end. Caller holds the
+ * lock. */
+static void closer_collect_counts(pin_session_t *s)
 {
     int64_t bytes, units;
     pin_closer_frames_t fr;
@@ -769,6 +778,13 @@ static void closer_collect(pin_session_t *s)
     s->units_total = (uint64_t)((int64_t)s->units_total + units);
     s->sinkf_error = (uint64_t)((int64_t)s->sinkf_error + fr.error);
     s->sinkf_repeated = (uint64_t)((int64_t)s->sinkf_repeated + fr.repeated);
+    s->files_closed += (uint64_t)pin_closer_take_files(s->closer);
+}
+
+/* closer_collect_counts(), and the files whose close failed. Caller holds the lock. */
+static void closer_collect(pin_session_t *s)
+{
+    closer_collect_counts(s);
     pin_status_t fst = PIN_OK;
     char fpath[PIN_PATH_MAX];
     fpath[0] = 0;
@@ -839,6 +855,8 @@ static void hand_over_file(pin_session_t *s)
         sst.bytes_written = s->bytes_written;
     s->bytes_closed += sst.bytes_written;
     s->units_total += sst.units_written;
+    if (sst.units_written > 0)
+        s->files_closed++;      /* else the closer counts it if its queue brings a unit */
     /* The file now counts in bytes_closed; until the next tick the new file would be added
      * on top of the old one's bytes_written in the total. */
     s->bytes_written = 0;
@@ -957,6 +975,24 @@ static int hdv_picture_pid(const uint8_t *d, size_t len)
     return ((d[1] & 0x1F) << 8) | d[2];
 }
 
+/* A unit that count_frame() counted when it arrived: a DV frame of 10 or 12 whole sequences (the
+ * only ones a sink writes, see dv_reassembler.h) or an HDV picture. Decided by the bytes, as the
+ * file gets them: PAT / PMT units travel with the index of the picture after them. */
+static int unit_is_frame(const uint8_t *data, size_t len)
+{
+    if (unit_kind(data, len) == PIN_KIND_HDV)
+        return hdv_picture_pid(data, len) >= 0;
+    return len == (size_t)DV_SEQ_SIZE * DV_SEQ_COUNT_NTSC || len == (size_t)DV_SEQ_SIZE * DV_SEQ_COUNT_PAL;
+}
+
+/* HDV: the picture carries a sequence header, so a file may start with it (decoders need one
+ * before the first picture). */
+static int hdv_unit_opens_gop(const uint8_t *d, size_t len)
+{
+    int pid = hdv_picture_pid(d, len);
+    return pid >= 0 && hdv_unit_has_seq_header(d, len / HDV_TS_PACKET_SIZE, pid);
+}
+
 static void commit_unit(pin_session_t *s, const uint8_t *data, size_t len);
 
 static void commit_push(pin_session_t *s, const uint8_t *data, size_t len, long frame_index);
@@ -995,14 +1031,38 @@ static int hdv_write_gate(pin_session_t *s, const uint8_t *data, size_t len)
 {
     if (!s->hdv_await_gop)
         return 1;
-    static const uint8_t seq_hdr[4] = { 0x00, 0x00, 0x01, 0xB3 };
-    int found = 0;
-    for (size_t i = 0; i + 4 <= len; i++)
-        if (!memcmp(data + i, seq_hdr, 4)) { found = 1; break; }
-    if (!found)
+    /* the same test as the cut flag (dv_on_unit()), so a cut never lands on a picture the gate
+     * then refuses */
+    if (!hdv_unit_opens_gop(data, len)) {
+        if (hdv_picture_pid(data, len) >= 0) {
+            /* a picture counted on arrival that no file gets. At a capture's or a pass's start it
+             * is from before the capture began (the file starts at the first GOP); after a
+             * format change it is lost, a dropped frame. */
+            uncount_frame(s);
+            if (s->hdv_gate_lossy)
+                count_lost_frames(s, 1);
+        }
         return 0;
+    }
     s->hdv_await_gop = 0;
     hdv_emit_psi(s);
+    return 1;
+}
+
+static void commit_unit_fi(pin_session_t *s, const uint8_t *data, size_t len, long frame_index);
+
+/* HDV: while the open file waits for its first GOP (hdv_write_gate()) and nothing is held for
+ * it, a unit that cannot open one would only be dropped at the gate once released, so it goes
+ * there at once. Held, it would count in file_bytes_due() for a file it never reaches (the
+ * provisional format hold, pin_fmtwatch_hold_from(), keeps up to three GOPs), and a small file
+ * size limit could end the capture before its first cut. Returns 1 if the unit was handled.
+ * Caller holds the lock. */
+static int hdv_gate_now(pin_session_t *s, const uint8_t *data, size_t len)
+{
+    if (!s->hdv_await_gop || s->hold.count || s->file_kind != PIN_KIND_HDV ||
+        unit_kind(data, len) != PIN_KIND_HDV || hdv_unit_opens_gop(data, len))
+        return 0;
+    commit_unit_fi(s, data, len, -1);
     return 1;
 }
 
@@ -1012,8 +1072,13 @@ static int hdv_write_gate(pin_session_t *s, const uint8_t *data, size_t len)
  * one of a change that is cut elsewhere (a new file, or the end of a pipe). */
 static void commit_unit_fi(pin_session_t *s, const uint8_t *data, size_t len, long frame_index)
 {
-    if (!s->sink || unit_kind(data, len) != s->file_kind)
+    if (!s->sink)
         return;
+    if (unit_kind(data, len) != s->file_kind) {
+        if (unit_is_frame(data, len))
+            uncount_frame(s);   /* counted on arrival, but in no file */
+        return;
+    }
     if (s->file_kind == PIN_KIND_HDV && !hdv_write_gate(s, data, len))
         return;
     size_t n = len / HDV_TS_PACKET_SIZE;
@@ -1121,6 +1186,7 @@ static void format_cut_begin(void *user, long index)
             s->fmt_numbered = 1;
     }
     file_format_for_stream(s);
+    s->hdv_gate_lossy = 1;  /* the stream ran on into this file: what the gate drops is lost */
     s->scene_det_ready = 0; /* the scene detector starts over at the new frame rate */
     s->open_fail_defer = 1;
     open_sink_for_scene(s);
@@ -1564,9 +1630,20 @@ static void reset_frame_counters(pin_session_t *s)
     s->hdv_err_reset = 1;
 }
 
+/* Whether what arrives now counts. During a capture only what has a file to go to does (not
+ * what arrives between two passes, during a rewind, or before the file opens); with no capture
+ * running everything does, so the totals say what the input brings ("since the app started").
+ * Caller holds the lock. */
+static int counting(const pin_session_t *s)
+{
+    return s->sink || !capture_active(s);
+}
+
 /* One video unit (DV frame / HDV picture / analog frame) arrived. Caller holds the lock. */
 static void count_frame(pin_session_t *s, int err, int dropped)
 {
+    if (!counting(s))
+        return;
     s->frames++;
     s->clip_frames++;
     /* the length is summed per unit, at the rate it came in: a tape can change from PAL to NTSC,
@@ -1578,16 +1655,48 @@ static void count_frame(pin_session_t *s, int err, int dropped)
     if (dropped) { s->frames_dropped++; s->clip_frames_dropped++; }
 }
 
+/* Frames that are not in the output at all (lost in transit, a DV unit no sink can take, an HDV
+ * picture lost at a file's gate): dropped ones, not in `frames`. Caller holds the lock. */
+static void count_lost_frames(pin_session_t *s, uint64_t n)
+{
+    if (!counting(s))
+        return;
+    s->frames_dropped += n;
+    s->clip_frames_dropped += n;
+}
+
+/* A unit count_frame() counted on arrival did not reach its file after all (the writer queue
+ * refused it, the HDV gate). It is taken out of `frames` and the captured length; the caller
+ * counts it as dropped where it was lost. Never below zero: a new file or capture may have
+ * reset the counters since it arrived. Caller holds the lock. */
+static void uncount_frame(pin_session_t *s)
+{
+    if (s->frames) s->frames--;
+    if (s->clip_frames) s->clip_frames--;
+    s->captured_s -= unit_seconds(s);
+    if (s->captured_s < 0)
+        s->captured_s = 0;
+}
+
 /* What one DV frame / HDV picture adds to the error counters; applied once the unit has a file
  * (apply_unit_counts()). */
 typedef struct {
     int err, dropped;
+    int unparsed;                /* a DV unit of neither 10 nor 12 sequences: no sink writes it */
     int hdv;                     /* an HDV picture: into HDV MOV / MKV the file counts instead */
     uint64_t video, audio, missing;
 } unit_counts_t;
 
 static void apply_unit_counts(pin_session_t *s, const unit_counts_t *uc)
 {
+    if (!counting(s))
+        return;
+    if (uc->unparsed) {
+        /* not in the output, so not in `frames` (nor the captured length): a dropped one */
+        s->frames_damaged++;
+        count_lost_frames(s, 1);
+        return;
+    }
     int file_counts = uc->hdv && s->sink && s->file_kind == PIN_KIND_HDV &&
                       (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV);
     count_frame(s, file_counts ? 0 : uc->err, uc->dropped);
@@ -1948,7 +2057,7 @@ static int dv_write_cb(const uint8_t *data, size_t len, void *user)
      * held units here with the index of the picture that follows it, so it goes where that
      * picture goes (after a new video PID or a DV -> HDV change: the new file, where the
      * gate writes the latest PAT/PMT in front of the first GOP anyway). */
-    if (s->sink && hdv_picture_pid(data, len) < 0)
+    if (s->sink && hdv_picture_pid(data, len) < 0 && !hdv_gate_now(s, data, len))
         hold_push(s, data, len, s->unit_seq, 0);
     pin_session_unlock(s);
     return 0;
@@ -2060,7 +2169,8 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
                    !pin_fmtwatch_pending(&s->fmtw, NULL) &&
                    file_bytes_due(s) + ahead > pin_stop_file_cap(s->file_limit);
 
-    hold_push(s, data, len, idx, flags);
+    if (!hdv_gate_now(s, data, len))
+        hold_push(s, data, len, idx, flags);
 
     if (size_cut) {
         pin_logf(PIN_LOG_INFO, "session: %s is %.0f MB, near the drive's file size limit: "
@@ -2129,15 +2239,21 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
 }
 
 /* Data lost in transit (dv_output_t.on_loss): the blocks, and the whole frames that never
- * reached dv_on_unit(), which are dropped ones. */
+ * reached dv_on_unit(), which are dropped ones. A DV frame that lost only some of its blocks comes
+ * out zero-padded and dv_error.c counts it as a frame with error. An HDV picture has no such
+ * padding: the next picture to arrive is the one the hole fell into (the reassembler reports the
+ * hole before it hands that picture on), so it is marked as damaged (hdv_loss_pending). The block
+ * count itself is a diagnostic (lost_blocks): the DBC is modulo 256 and frames are what count. */
 static void dv_on_loss(unsigned long blocks, unsigned long frames, void *user)
 {
     dv_ctx_t *ctx = user;
     pin_session_t *s = ctx->s;
     pin_session_lock(s);
-    s->lost_blocks += blocks;
-    s->frames_dropped += frames;
-    s->clip_frames_dropped += frames;
+    if (counting(s))
+        s->lost_blocks += blocks;
+    count_lost_frames(s, frames);
+    if (blocks)
+        s->hdv_loss_pending = 1;
     pin_session_unlock(s);
 }
 
@@ -2159,7 +2275,12 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         ctx->hdv_map_init = 0;
         s->hdv_err_reset = 1;
         s->hdv_tc_live = 0;
+        s->hdv_loss_pending = 0;
     }
+    /* data lost since the previous unit: an HDV picture is damaged by it (dv_on_loss()); a DV
+     * frame shows it itself (zero-padded blocks) */
+    int hdv_loss = s->hdv_loss_pending;
+    s->hdv_loss_pending = 0;
     long idx = s->unit_seq++;
     pin_stream_fmt_t obs;          /* what this unit says about the format */
     pin_stream_fmt_init(&obs, kind);
@@ -2247,8 +2368,7 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         } else {
             /* not 10 or 12 whole sequences (a bogus resync): says nothing about the format;
              * the sink counts it as damaged and drops it */
-            s->frames_damaged++;
-            uc.err = uc.dropped = 1;
+            uc.unparsed = 1;
         }
     } else { /* HDV */
         if (!ctx->hdv_map_init) {
@@ -2303,14 +2423,16 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
             if (s->hdv_err_reset || pin_session_now() - s->last_data_s > 1.0) {
                 hdv_error_init(&ctx->hdv_err);
                 s->hdv_err_reset = 0;
+                hdv_loss = 0;   /* the DBC jumps across the break too */
             }
+            ctx->hdv_err.lost_data = hdv_loss;
             hdv_error_analyze(&ctx->hdv_err, data, len / 188, vpid, &herr);
             /* into HDV MOV / MKV: whether it is "with error" is the file's to say (what it
              * re-encoded or played with silence, sink_hdvmux.c), not the packets' */
             uc.hdv = 1;
             uc.err = herr.frame_error;
             uc.video = herr.video_damaged || herr.tainted;
-            uc.missing = herr.cc_errors + herr.tei + herr.sync_lost;
+            uc.missing = herr.cc_errors + herr.tei + herr.sync_lost + (unsigned)herr.lost_data;
         }
         /* the video format, from a sequence header (and its extension) */
         if (herr.seq_found && herr.seq_width > 0 && herr.seq_height > 0) {
@@ -2335,14 +2457,14 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         if (herr.picext_found && !herr.pic_progressive)
             hdv_bff = herr.pic_structure == 3 ? !herr.pic_tff : herr.pic_structure == 2;
 
-        /* A file may start on a picture that opens a GOP (HDV puts a sequence header in
-         * front of every GOP; a GOP without one is cut at its first picture all the same,
-         * and the file then decodes from the next sequence header). Scene split: the GOP
+        /* A file may start on a picture that carries a sequence header (HDV puts one in front
+         * of every GOP): decoders need one first, and the file gate (hdv_write_gate()) waits for
+         * the same. Scene split: the GOP
          * header's timecode on the picture that carries it is the only signal (HDV has no
          * per-frame recording date/time here -- see hdv_aux.h's file header comment); the
          * other pictures are neutral, and the detector debounces over GOPs
          * (pin_scene_config_hdv()). */
-        flags = gop.found || herr.seq_found ? PIN_HOLD_CUT_OK : 0;
+        flags = hdv_unit_opens_gop(data, len) ? PIN_HOLD_CUT_OK : 0;
         have_rec = 1;
         if (gop.found) {
             rec.tc_valid = 1;
@@ -2768,6 +2890,7 @@ static void file_format_for_stream(pin_session_t *s)
                            : s->file_kind == PIN_KIND_ANALOG ? PIN_FMT_ANALOG_AVI : PIN_FMT_DV_RAW;
     format_ext(&s->capture_opts, s->active_format, s->naming_ext, sizeof(s->naming_ext));
     s->hdv_await_gop = s->file_kind == PIN_KIND_HDV;
+    s->hdv_gate_lossy = 0;
 }
 
 /* Test seams, like PIN_REPLAY_UNPLUG_AFTER: environment variables the ctest suite sets, read as a
@@ -2830,6 +2953,7 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     reset_frame_counters(s);
     s->bytes_written = 0;
     s->bytes_closed = 0;
+    s->files_closed = 0;
     pin_rate_reset(&s->rate_win);
     s->rate_saved_s = pin_session_now();
     s->capture_start_s = pin_session_now();
@@ -3148,6 +3272,7 @@ static void dv_tick(void *user)
     if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
         s->elapsed_s = pin_session_now() - s->capture_start_s;
     s->idle_s = pin_session_now() - s->last_data_s;
+    closer_collect_counts(s);
     if (s->writer) {
         pin_writer_stats_t wst;
         pin_writer_get_stats(s->writer, &wst);
@@ -3426,8 +3551,6 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
     s->dar_num = asp == PIN_ASPECT_16_9 ? 16 : 4;
     s->dar_den = asp == PIN_ASPECT_16_9 ? 9 : 3;
 
-    count_frame(s, f->repeated, f->repeated);              /* a repeated frame is a dropped one */
-    if (f->repeated && f->received) s->frames_damaged++;   /* ...because it arrived short */
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
     if (s->capture_start_s > 0)
@@ -3437,9 +3560,14 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
 
     if (s->writer && !pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
                                       (size_t)f->width * f->height * 2)) {
-        s->write_dropped++;
-        s->clip_write_dropped++;
-        s->captured_s -= unit_seconds(s);
+        /* not in the file: dropped by the queue, and only that (a repeated frame too) */
+        if (counting(s)) {
+            s->write_dropped++;
+            s->clip_write_dropped++;
+        }
+    } else {
+        count_frame(s, f->repeated, f->repeated);                           /* a repeated frame is a dropped one */
+        if (f->repeated && f->received && counting(s)) s->frames_damaged++; /* ...because it arrived short */
     }
 
     if (kind_newly_known)
@@ -3524,6 +3652,7 @@ static int analog_tick(void *user)
         s->idle_s = now - s->last_data_s;
     if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
         s->elapsed_s = now - s->capture_start_s;
+    closer_collect_counts(s);
     if (s->writer) {
         pin_writer_stats_t wst;
         pin_writer_get_stats(s->writer, &wst);
@@ -3593,7 +3722,8 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
         /* A lost audio packet is not a frame: the video side already counts the frames it had to
          * stand in for as errors, and a second error per outage frame would push the share of
          * frames with errors past 100 %. It is counted as the audio block it is. */
-        s->err_audio_blocks++;
+        if (counting(s))
+            s->err_audio_blocks++;
     }
     if (s->writer && b->samples &&
         !pin_writer_push(s->writer, PIN_UNIT_AUDIO, b->seq, (const uint8_t *)b->pcm,
@@ -3835,6 +3965,7 @@ static void replay_stats(pin_session_t *s, double *last)
     *last = now;
     if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
         s->elapsed_s = now - s->capture_start_s;
+    closer_collect_counts(s);
     if (!s->writer)
         return;
     pin_writer_stats_t wst;
@@ -4846,6 +4977,15 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
     out->err_video_blocks = s->err_video_blocks;
     out->err_audio_blocks = s->err_audio_blocks;
     out->err_missing_blocks = s->err_missing_blocks;
+    /* the open file counts once it has something in it (a file is created by its first unit) */
+    out->capture_files = (uint32_t)(s->files_closed + (s->sink && s->bytes_written > 0 ? 1 : 0));
+    if (capture_active(s) || s->state == PIN_STATE_STOPPING) {
+        out->capture_with_deck = s->capture_opts.start_deck != 0;
+        if (s->capture_opts.idle_stop_minutes > 0)
+            out->capture_idle_stop_s = s->capture_opts.idle_stop_minutes * 60.0;
+        if (s->capture_opts.max_duration_minutes > 0)
+            out->capture_duration_s = s->capture_opts.max_duration_minutes * 60.0;
+    }
     out->idle_stop_remaining_s = -1;
     out->duration_remaining_s = -1;
     if (s->state == PIN_STATE_CAPTURING) {

@@ -141,8 +141,9 @@ when done).
 ## Progress and summary
 
 While capturing, the CLI rewrites one status line on stderr, e.g.
-`REC 00:01:02:03  pass 1/1  scene 1  12.5 MB  4 s  err 2  drops 0`. `err` counts frames
-with errors (damaged DV/HDV data, see [usage.md](usage.md)); `drops` counts frames missing
-from the output. When a capture ends, a line stays on screen with the totals, e.g.
-`Frames 1,234, with errors 2, dropped 0` (plus `, N lost blocks` if any). Errors do not change
-the exit code.
+`REC 00:01:02:03  pass 1/1  scene 1  12.5 MB  4 s  err 2  drops 0`, all of it for the
+whole capture (MB = every file so far). `err` counts frames with errors (damaged DV/HDV data,
+data lost on the way, see [usage.md](usage.md)); `drops` counts frames missing from the
+output. When a capture ends, a line stays on screen with the totals, e.g.
+`Frames 1,234, with errors 2, dropped 0; 1.5 GB in 2 files`. Errors do not change the exit
+code.

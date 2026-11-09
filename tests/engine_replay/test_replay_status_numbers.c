@@ -26,7 +26,9 @@
  *   - a PAL then NTSC tape captured as raw DV: stop_captured_s is the sum of both rates'
  *     durations, the total bytes never exceed what the files hold (a file handed over at the
  *     format change is not counted twice), and pin_get_capture_end_status() shows the ended
- *     capture's totals.
+ *     capture's totals; `frames` is the frames in the files; the snapshot carries the running
+ *     capture's own limits (for countdowns) and its file count, and a closed file's bytes are in
+ *     the total while the capture still runs; the end summary names the bytes and files.
  *
  * Usage: test_replay_status_numbers <data dir>
  */
@@ -108,6 +110,8 @@ int main(int argc, char **argv)
     remove("status_numbers.dv");
     remove("status_numbers-0002.dv");
     pin_status_snapshot_t snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.size = sizeof(snap);
     CHECK(pin_deck(s, PIN_DECK_CMD_REW) == PIN_OK);
     int stopped = 0;
     for (int i = 0; i < 300 && !stopped; i++) {
@@ -120,21 +124,52 @@ int main(int argc, char **argv)
     pin_capture_opts_defaults(&opts);
     strncpy(opts.path, "status_numbers", sizeof(opts.path) - 1);
     opts.format_dv = PIN_FMT_DV_RAW;
+    opts.idle_stop_minutes = 7;
+    opts.max_duration_minutes = 9;
+    opts.start_deck = 0;
+    /* a drive a little slower than the tape: the first file still has a queue when it is handed
+     * over, so its bytes reach the total only as the closer finishes it */
+    pin_test_setenv("PIN_TEST_SINK_DELAY_MS", "45");
     CHECK(pin_deck(s, PIN_DECK_CMD_PLAY) == PIN_OK);
     CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
 
-    /* the total while it runs: it never passes what the files end up holding */
+    /* the total while it runs: it never passes what the files end up holding; once the first
+     * file is closed, its bytes are in it while the capture goes on */
     uint64_t max_total = 0;
+    int saw_limits = 0, first_closed = 0, closed_in_total = 0;
     for (int i = 0; i < 20000; i++) {
         memset(&snap, 0, sizeof(snap));
         snap.size = sizeof(snap);
         pin_get_status(s, &snap);
         if (snap.total_bytes_written > max_total)
             max_total = snap.total_bytes_written;
+        if (snap.state == PIN_STATE_CAPTURING) {
+            saw_limits |= snap.capture_idle_stop_s == 420.0 && snap.capture_duration_s == 540.0 &&
+                          snap.capture_with_deck == 0 && snap.capture_files >= 1;
+            if (first_closed && !closed_in_total &&
+                snap.total_bytes_written >= (uint64_t)file_size("status_numbers.dv"))
+                closed_in_total = 1;
+        }
+        pin_event_t ev;
+        memset(&ev, 0, sizeof(ev));
+        ev.size = sizeof(ev);
+        while (pin_poll_event(s, &ev)) {
+            if (ev.kind == PIN_EVT_FILE_CLOSED && !first_closed && strstr(ev.text, "status_numbers.dv")) {
+                first_closed = 1;
+                printf("first file closed at poll %d, state %d, total %llu\n", i, (int)snap.state,
+                       (unsigned long long)snap.total_bytes_written);
+            }
+            ev.size = sizeof(ev);
+        }
         if (snap.stop_reason != PIN_STOP_NONE && snap.state == PIN_STATE_READY)
             break;
         pin_test_sleep_ms(2);
     }
+    pin_test_setenv("PIN_TEST_SINK_DELAY_MS", "");
+    CHECK(saw_limits);
+    CHECK(first_closed);
+    CHECK(closed_in_total);
+    CHECK(snap.capture_idle_stop_s == 0 && snap.capture_duration_s == 0);   /* no capture now */
     CHECK(snap.state == PIN_STATE_READY);
     CHECK_EQ_I(snap.stop_reason, PIN_STOP_END_OF_TAPE);
 
@@ -155,7 +190,13 @@ int main(int argc, char **argv)
     CHECK(pin_get_capture_end_status(s, &end) == PIN_OK);
     CHECK_EQ_I(end.total_bytes_written, on_disk);
     CHECK_EQ_I(end.frames, snap.frames);
+    CHECK_EQ_I(end.frames, (uint64_t)(pal_frames + ntsc_frames));   /* the frames in the files */
     CHECK_EQ_I(end.stop_reason, PIN_STOP_END_OF_TAPE);
+    CHECK_EQ_I(end.capture_files, 2);
+    char line[256];
+    pin_format_capture_summary(&end, line, sizeof(line));
+    printf("summary: %s\n", line);
+    CHECK(strstr(line, " in 2 files") != NULL);
     printf("OK: captured length, byte totals and the ended capture's status\n");
     pin_close(s);
     return 0;

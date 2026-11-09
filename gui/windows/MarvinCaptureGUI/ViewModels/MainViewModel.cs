@@ -1076,6 +1076,14 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         StatusLine = Native.FormatStatusLine(in st);
         StatusShortText = Native.FormatStatusShort(in st, OpenDeviceBehindHub, out bool hubReady);
         bool capturingState = Native.StateIsCapturing(st.State);
+        if (capturingState)
+        {
+            // the running capture's own limits and deck mode, from the core: a capture a script
+            // started has them too
+            _captureWithDeck = st.CaptureWithDeck != 0;
+            _activeIdleStopS = st.CaptureIdleStopS;
+            _activeDurationS = st.CaptureDurationS;
+        }
         StatusSubText = capturingState ? SessionStateText : "";
         StatusTip = StatusSubText.Length > 0 && StatusSubText != StatusShortText
             ? $"{StatusSubText}\n{StatusShortText}" : StatusShortText;

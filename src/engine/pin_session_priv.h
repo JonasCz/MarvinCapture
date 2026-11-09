@@ -140,6 +140,9 @@ struct pin_session {
     uint64_t sinkf_error, sinkf_repeated;
     uint64_t err_video_blocks, err_audio_blocks, err_missing_blocks;
     uint64_t bytes_closed;      /* bytes of this capture's finished files (bytes_written is the open one) */
+    uint64_t files_closed;      /* this capture's files handed to the closer that got a video unit */
+    int hdv_loss_pending;       /* HDV: the DBC said data was lost since the last picture; the next
+                                   picture to arrive held it (dv_on_loss()) */
     pin_rate_window_t rate_win; /* last 10 minutes of (time, total bytes) for the measured rate */
     double rate_saved_s;        /* when the FFV1 rate was last saved to the settings */
     double rate_save_bph;       /* an FFV1 rate to save, written off the lock (rate_flush()); 0 none */
@@ -199,6 +202,8 @@ struct pin_session {
     int scene_det_ready;
     unsigned opts_scene_split_window;
     int hdv_await_gop;       /* HDV capture: nothing written until a GOP (sequence header) arrives */
+    int hdv_gate_lossy;      /* the pictures that gate drops are lost ones (after a format change),
+                                not from before the capture's or pass's start */
     int stream_kind_known;   /* first frame/GOP seen: DV-vs-HDV (or analog) is settled */
     int capture_want_start;  /* CAPTURE_START arrived before stream_kind_known, or is
                                  waiting on rewind_before_capture; deferred */

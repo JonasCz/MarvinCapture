@@ -58,7 +58,8 @@ typedef struct {
     int64_t frames, error, repeated;
 } pin_closer_frames_t;
 
-/* Called on the closer thread, without its lock, after each file. */
+/* Called on the closer thread, without its lock, after each file; the file's counts are in
+ * pin_closer_take() by then. */
 typedef void (*pin_closer_done_fn)(void *user, const pin_closer_done_t *d);
 
 pin_closer_t *pin_closer_create(pin_closer_done_fn done, void *user);
@@ -84,6 +85,12 @@ int pin_closer_busy(pin_closer_t *c);
 /* Bytes, video units and (frames != NULL) frame counts the closed files had beyond what
  * submit() was told, since the last call (then zeroed). */
 void pin_closer_take(pin_closer_t *c, int64_t *bytes, int64_t *units, pin_closer_frames_t *frames);
+
+/* Files whose first video unit came out of the writer queue while closing (submitted with units
+ * 0, closed with some), since the last call (then zeroed): the caller counts a file that had
+ * units when it handed it over itself. Like pin_closer_take(), already counted when the done
+ * callback of a file runs. */
+int64_t pin_closer_take_files(pin_closer_t *c);
 
 /* Disk space the files not yet closed still need. */
 /* Files whose close failed (the sink's close(), or a write error while draining) and that

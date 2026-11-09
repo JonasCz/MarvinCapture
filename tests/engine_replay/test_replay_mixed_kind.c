@@ -103,6 +103,8 @@ static pin_status_snapshot_t capture_tape(const char *dump, const pin_capture_op
     pin_session_t *s = pin_test_open_replay(dump);
     pin_test_prepare_dv(s);
     pin_status_snapshot_t snap;
+    memset(&snap, 0, sizeof(snap));
+    snap.size = sizeof(snap);
     CHECK(pin_deck(s, PIN_DECK_CMD_REW) == PIN_OK);
     int stopped = 0;
     for (int i = 0; i < 300 && !stopped; i++) {

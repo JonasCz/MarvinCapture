@@ -707,10 +707,15 @@ typedef struct {
     char current_file[PIN_PATH_MAX];
     double elapsed_s;
     uint64_t frames;
-    uint64_t frames_dropped;    /* not in the output (DV: lost in transit; analog: the previous frame repeated) */
+    uint64_t frames_dropped;    /* frames lost: see "frames_dropped" below the error statistics */
     uint64_t frames_damaged;    /* analog: the dropped frames that arrived short; DV: units that could not be parsed
-                                   as a frame (neither 10 nor 12 sequences); HDV 0. Not the count of frames with errors (frames_error) */
-    uint64_t lost_blocks;       /* DV/HDV: CIP data blocks (DV 480 bytes, HDV 24) the DBC says were lost in transit */
+                                   as a frame (neither 10 nor 12 sequences; dropped, not in `frames`); HDV 0. Not
+                                   the count of frames with errors (frames_error) */
+    uint64_t lost_blocks;       /* Diagnostic only, not for display: DV/HDV CIP data blocks (DV 480 bytes, HDV 24)
+                                   the DBC says were lost in transit. The DBC counts modulo 256, so a hole of 256
+                                   blocks or more is undercounted. What the loss did to frames is in
+                                   frames_error / frames_dropped: a frame that lost a block is a frame with error
+                                   (or a dropped one), and that is what to show. */
     uint64_t ts_errors;         /* HDV: transport packets whose adaptation field sets discontinuity_indicator (the
                                    camera marking a break in the stream), not continuity errors; those are in
                                    frames_error / err_missing_blocks */
@@ -786,17 +791,27 @@ typedef struct {
      *           or played with its audio replaced by silence; it lags the
      *           picture count by a GOP or a repair;
      *   analog: a repeated (dropped) frame.
-     * frames_dropped: DV frames with >= 90 % of their blocks missing and DV frames
-     * lost in transit whole (not in the output at all, so not in `frames`;
-     * estimated from the DBC and the DIF sequence numbering, see dv_reassembler.c;
-     * a frame that loses only some sequences, or only its first, comes out padded
-     * and counts as an error instead), analog repeated frames; HDV MOV / MKV frames that repeat a neighbour because
-     * their picture was lost (also "with error"); raw HDV 0.
-     * err_*_blocks: running totals behind the verdicts (DV: video blocks with
+     * HDV data lost in transit (the 1394 block count jumped) makes the picture it
+     * fell into "with error" too.
+     * frames_dropped: frames whose picture is lost. Two kinds:
+     *   in the output (also in `frames` and frames_error): DV frames with >= 90 %
+     *     of their blocks missing (written zero-padded), analog repeated frames,
+     *     HDV MOV / MKV frames that repeat a neighbour because their picture was lost;
+     *   not in the output at all (so not in `frames`): DV frames lost in transit
+     *     whole (estimated from the DBC and the DIF sequence numbering, see
+     *     dv_reassembler.c; a frame that loses only some sequences, or only its
+     *     first, comes out padded and counts as an error instead), DV units that
+     *     cannot be parsed as a frame (frames_damaged), and HDV pictures lost
+     *     after a format change because a file must start on a sequence header.
+     * Raw HDV has no other dropped frames. Frames that arrive while a capture runs
+     * but have no file to go to (between passes, during a rewind) are not counted
+     * at all; frames the disk writer's queue refused are in write_dropped instead
+     * (not in `frames`).
+     * err_*_blocks: diagnostic only, running totals behind the verdicts (DV: video blocks with
      * STA != 0, audio blocks bad or muted, blocks missing; analog: audio
      * packets replaced by silence (they add no frame with error); HDV: damaged
-     * pictures in err_video_blocks, TEI + continuity gaps + sync losses in
-     * err_missing_blocks). */
+     * pictures in err_video_blocks, TEI + continuity gaps + sync losses + transit
+     * losses in err_missing_blocks). Show the frame counts, not these. */
     uint64_t frames_error;
     uint64_t clip_frames;
     uint64_t clip_frames_error;
@@ -806,7 +821,8 @@ typedef struct {
     uint64_t err_missing_blocks;
 
     /* Appended fields, ABI-compatible. Sizes and the time-left estimate.
-     * bytes_written above is the CURRENT file; clip_bytes_written is the same
+     * bytes_written above is the CURRENT file (show total_bytes_written next to
+     * the total frame counts, not this); clip_bytes_written is the same
      * value under a clearer name and total_bytes_written adds the files this
      * capture already finished (0 before the first capture; stays at the last
      * capture's total until the next one starts).
@@ -851,6 +867,21 @@ typedef struct {
      * "Capture stopped after capturing 0s ..." and PIN_EVT_NO_VIDEO was sent. Cleared
      * when a capture starts. */
     int stop_no_video;
+
+    /* Appended. The running capture's own limits, however it was started (a GUI, a script, the
+     * CLI), so every caller can show the countdowns and progress against them
+     * (pin_status_progress()): capture_idle_stop_s the no-signal timeout (idle_stop_minutes)
+     * and capture_duration_s the per-pass time limit (max_duration_minutes), in seconds, 0 when
+     * off; capture_with_deck 1 if the capture drives the deck (start_deck). Set from the
+     * capture start until its files are finished (waiting to start, rewinding between passes
+     * and STOPPING included), else all 0.
+     * capture_files: the files this capture has put video into so far (the finished ones and
+     * the open one); like total_bytes_written it stays at the last capture's count until the
+     * next one starts. */
+    int capture_with_deck;
+    uint32_t capture_files;
+    double capture_idle_stop_s;
+    double capture_duration_s;
 } pin_status_snapshot_t;
 
 /* Non-blocking. out->size is the caller's sizeof(): a caller built against an older, shorter
@@ -864,7 +895,9 @@ PIN_API pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out
  * until a capture has ended. */
 PIN_API pin_status_t pin_get_capture_end_status(pin_session_t *s, pin_status_snapshot_t *out);
 
-/* Ready-made text so every GUI shows the same thing. */
+/* Ready-made text so every GUI shows the same thing. While capturing:
+ * "REC <timecode> [deck]  pass 1/1  scene 2  123.4 MB  60 s  err 0  drops 0", all of it the
+ * whole capture's (MB = total_bytes_written, frames since the capture started). */
 PIN_API void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t cap);
 /* Seconds as "5m30s" / "1h02m10s" / "45s" (rounded up), for the stop countdowns
  * (idle_stop_remaining_s, duration_remaining_s). */
@@ -1254,8 +1287,8 @@ PIN_API void pin_format_signal(const pin_status_snapshot_t *st, char *out, size_
  * and its multi-line tooltip: totals (since capture start while capturing, else since
  * the app started), the current clip, and what counts as an error. */
 PIN_API void pin_format_frames(const pin_status_snapshot_t *st, char *out, size_t cap);
-/* One line for the end of a capture: "Frames 1,234, with errors 2, dropped 0" plus
- * ", N lost blocks" when lost_blocks is non-zero. */
+/* One line for the end of a capture: "Frames 1,234, with errors 2, dropped 0; 1.5 GB in 2 files"
+ * (total_bytes_written, capture_files; "nothing written" when no file got video). */
 PIN_API void pin_format_capture_summary(const pin_status_snapshot_t *st, char *out, size_t cap);
 PIN_API void pin_format_frames_detail(const pin_status_snapshot_t *st, char *out, size_t cap);
 

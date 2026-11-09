@@ -65,10 +65,33 @@ int main(int argc, char **argv)
     pin_test_sleep_ms(1000); /* let pass 2 write a little */
     CHECK(pin_capture_stop(s) == PIN_OK);
     pin_test_wait_state(s, PIN_STATE_READY, -1, 3000, &snap);
+    pin_status_snapshot_t end;
+    memset(&end, 0, sizeof(end));
+    end.size = sizeof(end);
+    CHECK(pin_get_capture_end_status(s, &end) == PIN_OK);
     pin_close(s);
 
     CHECK(pin_test_file_exists("mp_base.dv"));
     CHECK(pin_test_file_exists("mp_base-pass-2.dv"));
     printf("OK: mp_base.dv and mp_base-pass-2.dv both exist\n");
+
+    /* the totals are the frames in the two files: none of what arrived between the passes */
+    long bytes = 0;
+    const char *names[2] = { "mp_base.dv", "mp_base-pass-2.dv" };
+    for (int k = 0; k < 2; k++) {
+        FILE *f = fopen(names[k], "rb");
+        CHECK(f);
+        fseek(f, 0, SEEK_END);
+        bytes += ftell(f);
+        fclose(f);
+    }
+    printf("frames %llu, dropped %llu, %ld bytes in %u files\n", (unsigned long long)end.frames,
+           (unsigned long long)end.frames_dropped, bytes, end.capture_files);
+    CHECK(bytes % 144000 == 0);
+    CHECK_EQ_I(end.frames, bytes / 144000);
+    CHECK_EQ_I(end.frames_dropped + end.write_dropped, 0);
+    CHECK_EQ_I(end.capture_files, 2);
+    CHECK_EQ_I(end.total_bytes_written, bytes);
+    printf("OK: the totals count the frames in the files\n");
     return 0;
 }

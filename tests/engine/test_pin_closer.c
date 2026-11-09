@@ -118,6 +118,9 @@ typedef struct {
     char order[32][16];
     uint64_t units[32];
     int n;
+    pin_closer_t *peek;      /* set: the callback takes the closer's counts, as a GUI asking for
+                              * the status on PIN_EVT_FILE_CLOSED would see them */
+    int64_t peek_bytes, peek_files;
 } log_t;
 
 static void on_done(void *user, const pin_closer_done_t *d)
@@ -128,6 +131,12 @@ static void on_done(void *user, const pin_closer_done_t *d)
         snprintf(l->order[l->n], sizeof(l->order[0]), "%s", d->path);
         l->units[l->n] = d->units;
         l->n++;
+    }
+    if (l->peek) {
+        int64_t b, u;
+        pin_closer_take(l->peek, &b, &u, NULL);
+        l->peek_bytes += b;
+        l->peek_files += pin_closer_take_files(l->peek);
     }
     pthread_mutex_unlock(&l->lock);
 }
@@ -164,6 +173,7 @@ int main(void)
     pin_closer_frames_t fr;
     pin_closer_take(c, &bytes, &units, &fr);
     CHECK(bytes == 800 && units == 8, "only what the caller had not counted");
+    CHECK(pin_closer_take_files(c) == 0, "a file handed over with units is the caller's to count");
     CHECK(fr.frames == 0 && fr.error == 0 && fr.repeated == 0, "a sink that counts no frames");
     pin_closer_take(c, &bytes, &units, NULL);
     CHECK(bytes == 0 && units == 0, "taken once");
@@ -206,6 +216,21 @@ int main(void)
     CHECK(pin_closer_take_failure(c2, &fst, fpath, sizeof(fpath)) == 1 && fst == PIN_ERR_IO &&
               strcmp(fpath, "seam2") == 0, "seam: the 2nd close fails");
     pin_closer_destroy(c2);
+
+    /* the counts are in before the file is reported closed */
+    pin_closer_take(c, &bytes, &units, NULL);
+    (void)pin_closer_take_files(c);
+    log.peek = c;
+    pin_sink_t *p = fake_sink(0);
+    pin_writer_t *wp = pin_writer_start(1 << 20, consume, p);
+    for (int i = 0; i < 3; i++)
+        pin_writer_push(wp, PIN_UNIT_RAW, (uint64_t)i, buf, sizeof(buf));
+    pin_closer_submit(c, wp, p, "peek", 1, 0, 0, 0, NULL);
+    pin_closer_wait(c);
+    log.peek = NULL;
+    CHECK(log.peek_bytes == 300 && log.peek_files == 1,
+          "counted before FILE_CLOSED (a file whose first unit was still queued)");
+    CHECK(pin_closer_take_files(c) == 0, "files taken once");
     int n_before = log.n;
 
     /* destroy closes what is still queued */
