@@ -88,6 +88,18 @@ target_link_libraries(test_lock PRIVATE pinnacle_core)
 add_test(NAME pinnacle_lock COMMAND test_lock)
 set_tests_properties(pinnacle_lock PROPERTIES TIMEOUT 60)
 
+# pin_cond.h: the monotonic timed wait waits the requested time and wakes on a signal.
+add_executable(test_pin_cond test_pin_cond.c)
+target_link_libraries(test_pin_cond PRIVATE pinnacle_core)
+add_test(NAME pin_cond COMMAND test_pin_cond)
+set_tests_properties(pin_cond PROPERTIES TIMEOUT 60)
+
+# pinnacle_1394: EP 0x84 parsing, response matching and the async AT queue (owed write
+# responses, AV/C command acks) on synthetic records; pinnacle_cfg reply matching.
+add_executable(test_p1394 test_p1394.c)
+target_link_libraries(test_p1394 PRIVATE pinnacle_core)
+add_test(NAME pinnacle_1394 COMMAND test_p1394)
+
 add_executable(test_fx2 test_fx2.c)
 target_link_libraries(test_fx2 PRIVATE pinnacle_core)
 add_test(NAME pinnacle_fx2 COMMAND test_fx2)

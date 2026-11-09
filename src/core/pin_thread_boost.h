@@ -44,6 +44,8 @@ typedef struct {
 #if defined(_WIN32)
     void *mmcss;                /* MMCSS handle, or NULL */
     int old_priority;
+#elif defined(__APPLE__)
+    int old_qos;                /* qos_class_t before the boost */
 #elif defined(__linux__)
     int rt, niced;              /* which of SCHED_FIFO / nice took effect */
     int old_policy, old_nice;
@@ -62,6 +64,14 @@ const char *pin_thread_boost_desc(const pin_thread_boost_t *b);
 /* The CPU idle-state limit of a boosted thread for the log: "set", "not available, keeping a
  * core busy instead", ... */
 const char *pin_thread_boost_latency_desc(const pin_thread_boost_t *b);
+
+/* pthread_create(t, NULL, fn, arg) for a thread that must run at normal priority (writers,
+ * encoders, the closer), whichever thread creates it. On Linux a new thread inherits
+ * SCHED_FIFO and the nice value, and on macOS the QoS class, so one created from the boosted
+ * USB thread (a file opened from the read loop's callback) would otherwise compete with the
+ * USB thread and starve the GUI: it gets the creator's priority from before the boost.
+ * Windows threads always start at normal priority. Same return value as pthread_create. */
+int pin_thread_create_normal(pthread_t *t, void *(*fn)(void *), void *arg);
 
 /* Process-wide keep-busy mode for the Linux read loops (pin_api.h's pin_set_cpu_keep_busy(),
  * same values): AUTO keeps a core busy only when /dev/cpu_dma_latency cannot be held (always

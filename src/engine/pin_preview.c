@@ -17,6 +17,7 @@
  */
 
 #include "pin_preview.h"
+#include "pin_thread_boost.h"
 
 #include <libavcodec/avcodec.h>
 #include <libavutil/frame.h>
@@ -126,7 +127,7 @@ static pin_status_t ensure_started(pin_preview_t *p)
     if (p->started)
         return PIN_OK;
     p->stop = 0;
-    if (pthread_create(&p->thread, NULL, pv_thread, p) != 0)
+    if (pin_thread_create_normal(&p->thread, pv_thread, p) != 0)
         return PIN_ERR_INTERNAL;
     p->started = 1;
     return PIN_OK;

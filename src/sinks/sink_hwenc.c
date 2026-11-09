@@ -79,6 +79,7 @@
  */
 
 #include "pin_sink.h"
+#include "pin_thread_boost.h"
 #include "sinks_internal.h"
 #include "pin_hwenc.h"
 #include "hwenc_convert.h"
@@ -942,7 +943,7 @@ static pin_status_t track_start(hwenc_priv_t *p, int i, int rate, int channels)
     t->ring = malloc(t->ring_frames * (size_t)channels * sizeof(int16_t));
     if (!t->ring)
         return PIN_ERR_NOMEM;
-    if (pthread_create(&t->thread, NULL, audio_thread_fn, t) != 0)
+    if (pin_thread_create_normal(&t->thread, audio_thread_fn, t) != 0)
         return PIN_ERR_INTERNAL;
     t->started = 1;
     p->ntracks = i + 1;
@@ -1179,7 +1180,7 @@ static pin_status_t hwenc_open(pin_sink_t *s, const char *path, const pin_sink_p
     }
 
     /* the encoder opens on its own thread (see the top of the file); wait for the verdict */
-    if (pthread_create(&p->enc_thread, NULL, encoder_thread_fn, p) != 0)
+    if (pin_thread_create_normal(&p->enc_thread, encoder_thread_fn, p) != 0)
         return PIN_ERR_INTERNAL;
     p->enc_started = 1;
     pthread_mutex_lock(&p->qlock);

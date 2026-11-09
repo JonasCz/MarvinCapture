@@ -31,18 +31,12 @@ Severity is high, medium or low, judged by how much data can go missing and how 
 
 ### 17.6 Smaller items
 
-- **Thread priority inheritance** (Linux). Medium. Testing required.
-  - `pin_thread_boost()` sets SCHED_FIFO 10 or nice -10 on the USB thread. The writer and encoder threads are created from that thread with default attributes, so they inherit the boost.
-  - CPU-heavy encoders could then delay the USB reaper or starve the GUI.
 - **OHCI `xferStatus` is not checked** (`iso_header_ok()`). Low. Testing required.
   - Packets that completed with an error event are accepted as data. Count them on real dumps (normal is `0x8411`).
-- **EP 0x84 resubmit loop** (`ep84_cb`). Low.
-  - A stalled endpoint spins the loop, because every status but CANCELLED and NO_DEVICE resubmits. A record longer than 512 bytes is lost.
-  - At stop, transfers that completed but were not yet delivered (up to about 290 ms) are discarded.
-  - Second pass: the completed-but-undelivered transfers discarded at stop are those of the EP 0x88 read loop (`pinnacle_stream_read_loop_ex()`), not EP 0x84.
-- **Device locks.** Low. Testing required.
-  - Windows: a thread-owned mutex lets the same thread open a device twice. If the opening thread exits, the abandoned mutex is accepted by the next process.
-  - Windows: the `Local\` mutex is per logon session, so a second logged-in user is not excluded.
+- **EP 0x84 failure retry** (`ep84_retry()`). Low. Testing required.
+  - A failed EP 0x84 transfer is now resubmitted from the read loop every 100 ms (after `libusb_clear_halt` on a stall), up to 20 failures in a row. Not seen on hardware: check that a stall clears and deck control keeps working.
+- **Device locks (Windows).** Low. Testing required.
+  - The lock is now a named event in `Global\` (falls back to `Local\` if refused), thread-independent, with the status record in a `Local\` mapping. Not built or run on Windows here: build with MSYS2 and run `test_lock` (cross-thread case), and check that a second logged-on user gets BUSY.
 
 ### 17.7 Checked, nothing found
 
@@ -92,9 +86,6 @@ items are marked "Second pass" under those items.
   - A slow drive with a full 256 / 512 MiB ring, or an encoder tail, can take longer than the shutdown kill timeout; the process is then killed mid-flush. Window geometry is also not saved on logoff (`SaveWindowGeometry` only in `Closing` / `Closed`).
 - **N23. Windows: the final `pin_close` can run late on the preview render thread** (`D3DPreview.Dispose` joins for 500 ms; the render loop holds a `DangerousAddRef` on the session handle). Low. Testing required.
   - If the join times out, the real `pin_close` runs later on the render thread, and the process may exit first. On a device replug the old session and its device lock are released up to 100 ms late, so the reopen can fail as busy.
-- **N29. A partly failed initial URB submit ends the capture at the first wrap** (`pinnacle_stream_read_loop_ex()`). Low-medium. Testing required (usbfs ENOMEM, a small `usbfs_memory_mb`).
-  - A failed submit marks only that slot; later slots stay submitted, and in-order delivery ends the capture with a USB error when `head` reaches the failed slot. Only `submitted == 0` is handled. Fix: shrink the queue to the first failing slot. `pinnacle_analog.c` `queue_init()` has a similar fault: a failed submit leaves `done = 0`, and `queue_free()` waits 2 s and leaks the queue.
-- **N30. Any non-zero return of `libusb_handle_events_timeout_completed()` ends the capture** (DV read loop and `pinnacle_analog_read_loop()`), LIBUSB_ERROR_INTERRUPTED included. Low. Testing required (a signal on the USB thread). DV reports it as a USB failure; analog skips the drain.
 
 ### 18.3 Wrong numbers on screen
 
@@ -114,7 +105,6 @@ items are marked "Second pass" under those items.
 
 ### 18.5 Smaller items
 
-- **I2C write NAK ignored, config replies not matched** (`pinnacle_cfg.c` `pinnacle_i2c_write()`, `cfg_xfer()`): after one reply timeout every later exchange is one reply off. Testing required.
 - **`pin_deck_parse_timecode()`** reads drop frame from bit 7 of the frame byte; a camera using the DV convention (bit 6) shows non-drop. Testing required.
 - **`hdv_aux_scan_datetime()`** matches 0x62 / 0x63 / 0x13 at any byte offset. It has no caller today; it needs pack framing before it is used for splits.
 
@@ -159,9 +149,6 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 - **E3. Android: events from `pin_close` are never polled.** Low (verified, narrowed). Fix required. `CaptureService.closeSession()` sets `session = 0` before `Core.close` (339, 352), and the CAPTURE_ENDED / FILE_CLOSED events pushed during `pin_close` are lost with the session; no alert. Reached on the 15 s detach timeout (505), `onDestroy` (188) and the error card (385); normally the core reports DEVICE_LOST first. Files are still finalised. Swapping the order is not the fix (polling during close would be a use after free): stop the capture and wait for CAPTURE_ENDED before closing, or let close return the end status.
 - **E2. Android: the "Capture finished" notification can be dropped** (`CaptureService.tick()` 514-525, `flushPendingFinished()` 561, `onDestroy()` 186). With the app swiped away the flush waits one tick, `leaveForeground` stops the unbound service, and `onDestroy` removes the handler messages. Low-medium. Fix required. Files are fine.
 - **E5. Android: a service destroyed during a pending open leaks the session and the USB connection** (`onDestroy()` 185-199, `open()` 280-300). The device lock is held until the process dies; a reopen in the same process fails as busy. `onDestroy` can also block the main thread up to 8 s. Low. Fix required.
-- **T1. EP 0x84 transfer is resubmitted after the stop-time cancel** (`pinnacle_stream.c` `ep84_cb` 390-428, teardown 614-651). Low-medium. Fix required. If a record completes just before `libusb_cancel_transfer` (NOT_FOUND, return value unchecked), the callback resubmits, the drain pump runs the full 8 s, the queue is leaked and Stop / Close blocks. The leaked transfer keeps a stale link pointer and competes with the synchronous reads in `pinnacle_stream_stop`. Fix: a `stopping` flag checked in `ep84_cb`.
-- **T2 / U4. The camera's oPCR connection can be left connected.** Low-medium. Fix required (T2), Testing required (U4). If `p1394_ir_start` fails after `p1394_connect`, `pin_session.c` ~3154 returns without `pinnacle_stream_stop`; `pinnacle_stream_stop` also skips the disconnect when `p1394_ir_stop` fails (296-312), and a lost compare-swap response (`pcr_adjust()` 1171-1196) leaves `pcr_connected = 0` with the count raised on the camera. The camera keeps its point-to-point count and channel until a bus reset. A repeated connect increments the count (shared), it is not refused.
-- **T3. Windows device lock: the mutex is thread-owned and `ReleaseMutex` is not checked** (`pinnacle_lock.c` 202-220). Medium. Testing required. When the session is opened on thread A and closed on thread B (worker / render thread, see N22 and N23), `ReleaseMutex` fails with `ERROR_NOT_OWNER` silently; later opens get `PIN_ERR_BUSY` until thread A exits. Different from the existing "Device locks" item (abandoned mutex, same-thread reopen).
 - **Z3. `pin_writer_abort()` cannot interrupt a blocked pipe write** (`pin_stdout.c` 103-138, `pin_writer_stop()` join). Low. Testing required. With `--capture -` and a stalled reader, the unit in flight blocks the join.
 - **O2. Windows quits silently when a script-driven capture's finalise failed** (`MainWindow.xaml.cs` 856-859: `_quitEndError` is not set while `_scriptRunning`). Low. Fix required. macOS stays open and shows the alert.
 - **D7. The macOS GUI has no SIGINT / SIGTERM / SIGHUP handler** (only SIGPIPE, `ConsoleOutput.swift:31`). Medium-low. Fix required. Started from Terminal with script arguments, Ctrl+C or `kill` ends the process with no `pin_close`: AVI and MOV outputs stay unfinalised. The CLI got Ctrl+C handling in 4d97c72; the GUI process did not.
@@ -172,11 +159,10 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 - **E4. Android: a launcher input shortcut at cold start changes the saved input while a capture runs** (`applyInputExtra()` 241-248; the guard needs `svc != null`, which is not set before binding). Low. Fix required. The live session stays DV while Settings says analog; the aspect and the next file name follow the wrong kind.
 - **E6. Android: `ST_IS_CAPTURING` stays set after `closeSession()`** (:348 resets only `ST_STATE`). Low. Fix required. A reopen before the next status read skips `pushOutputHint`, and the record button acts as Stop.
 - **E7. Android output volume.** Low. Testing required (Android 11-15). The write test creates only `.write-test.mkv` in `Movies/MarvinCapture` (`Storage.canCreateIn()` 120-131), while real captures use `.dv`, `.m2t`, `.avi`, `.mov`; MediaProvider may refuse some. `current()` falls back to phone storage silently if the chosen SD card or USB drive is unmounted. A file left by a previous install is not writable by the new one.
-- **T4. `pin_cond.h` monotonic timed wait on winpthreads.** High if true. Testing required, speculative. If `pthread_cond_timedwait` there ignores `CLOCK_MONOTONIC`, the FFV1 / hwenc 10 s watchdog (`sink_ffv1.c` 532/570, `sink_hwenc.c` 767/880) fires at once with `PIN_ERR_CODEC` the first time the encoder queue is full, and `pinnacle_analog.c:895` spins. Check on a Windows FFV1 capture with a slow encoder.
-- **U1. Owed AV/C write responses are answered with a blocking submit on the USB thread** (`pinnacle_1394.c` 673 -> `p1394_submit` 404-417 -> `p1394_pump` 222; called from the read-loop tick, `pinnacle_stream.c:535`). Medium. Testing required. A camera that answers a deck command with an FCP write makes the tick block 500 ms (up to about 4 s on busy acks) while EP 0x88 URBs are not resubmitted; the DV queue holds about 290 ms, so packets can be lost. A synchronous read racing the outstanding async EP 0x84 URB can also swallow a message. Needs a camera that sends such writes.
-- **U2. Owed responses are answered only while an async command is pending, and the async path never checks the ack** (`pinnacle_1394.c` 670, 599-660, 168; `pin_deck.c` 208-225). Medium. Testing required. A command sent while a response is owed gets a busy ack that `p1394_avc_begin()` ignores; the deck goes FAILED after 3 s. The owed table drops silently at 64 entries.
-- **U3 - U7. Smaller 1394 / analog items** (low, Testing required, speculative). U3: `p1394_pump()` ignores `n` on a libusb timeout and drops the rest of a transfer at an unknown message type (211, 224). U5: one response slot, so a stray AR response overwrites the match (124-146, 430-441). U6: async AV/C answers match by subunit and opcode only, so a late or duplicate response is taken as the current one (682-685). U7: analog slot `done` / `actual_length` are plain ints shared with the libusb callback thread, no barrier (`pinnacle_analog.c` 621-638, 672-680). Open question: a truncated analog video frame ending on an exact 512-byte multiple (`on_video` `wire % 512`).
-- **T5, T6. Firmware and config exchange.** Low. Fix required. T5: `upload_bitstream()` (`pinnacle_device.c` 391-398) reads at most 78422 bytes and so accepts a longer file silently (`pinnacle_cfg.c` reads TOTAL+1 and rejects). T6: `config_exchange()` (~480) treats an empty or 1-byte reply to the 05/06 status read as ready, and the GUID / id0 reply is not matched to the request (extends the I2C item in 18.5).
+- **T4. `pin_cond.h` timed wait on winpthreads.** Testing required (Windows). The wait now resumes until the monotonic clock says the time is up (Windows uses a wall-clock deadline per slice, no `pthread_condattr_setclock`), so an early ETIMEDOUT cannot fire the FFV1 / hwenc watchdog. Run `test_pin_cond` in an MSYS2 build.
+- **U1 / U2. Owed AV/C write responses while capturing.** Testing required (a camera that answers with FCP writes acked pending). They are now sent from `p1394_async_service()` on every read-loop tick without blocking or reading EP 0x84, before a queued AV/C command; the command's ack is checked (ack_busy resent, others fail the command); a full owed table is logged and counted (`owed_dropped`).
+- **T2 / U4, config replies: left to check on hardware.** Low. A failed receive start now stops the stream and disconnects; the disconnect is tried even when the receive stop failed; a lost compare-swap response is followed by a read of the oPCR to learn whether the swap happened. Config replies must echo the request (late ones are read past), short 05/06 / `cfg_op` replies are errors, and an I2C write that is not acknowledged (`01 01 08`) now fails: check that analog bring-up sees no NAKs on the 500-USB and 510-USB.
+- **Analog open question** (low, Testing required): a truncated analog video frame ending on an exact 512-byte multiple (`on_video` `wire % 512`).
 
 ### 19.3 Wrong numbers on screen
 
@@ -189,9 +175,8 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 
 - **B7, B9. Settings.** Low. B7 Testing required: load, modify, save without a lock in `pin_settings_set`, `update_remember` (four rounds) and `pin_est_store_ffv1`, so a concurrent save loses a key; on Windows the reader opens without `FILE_SHARE_DELETE`, so `MoveFileExW` can fail, and callers ignore the result. B9 Fix required: `pin_settings_get()` (`pin_api.c` 1357, 1368) hides a load failure behind `PIN_OK` and an empty value, truncates silently, and a section name of 64 characters or more falls back to General.
 - **B8. INI round trip** (`pin_settings.c` 359-366). Low. Fix required. A value containing a newline injects a key or section; keys starting with `;`, `#` or `[` are dropped on reload; `get_int` truncates a long to int and accepts `12abc`; `get_double` accepts `nan` and `inf`.
-- **B10. Ctrl+C can reach the USB thread** (`marvin_capture_cli.c` 129-135: `signal()` without `pthread_sigmask`). Low. Testing required (macOS). The signal interrupts `libusb_handle_events` and N30 ends the capture as a USB failure.
+- **B10. Ctrl+C can reach the USB thread** (`marvin_capture_cli.c` 129-135: `signal()` without `pthread_sigmask`). Low. Testing required (macOS). The signal interrupts `libusb_handle_events`; the read loops now carry on after LIBUSB_ERROR_INTERRUPTED, so only the CLI side is left to check.
 - **B3, B11, B12.** Cosmetic or speculative. B3: the CLI prints the error reason twice for exit 4 (576-587). B11: debug log lines beyond about 5000 per second are dropped without a marker (`PIN_EVQ_CAP` 256). B12: a failed serial probe stays failed for that plug-in, so per-device settings can be stored under two keys (`probe_guid()` 240-254).
-- **T7.** `open_fd()` logs an uninitialised descriptor when `libusb_get_device_descriptor` fails (`pinnacle_device.c` 267-274); log only.
 
 ### 19.5 Checked and refuted in this pass
 
@@ -211,5 +196,5 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 ### 19.7 Suggested order for fixes and tests
 
 1. **Fix required, data in the file:** E1, Z1 (Windows, test in a `Café` folder).
-2. **Fix required, silent loss or missing report:** D7, T1, T2, E3, E2, O2.
-4. **Hardware or OS first:** A1, Z2, T3, T4, U1, U2, V4.
+2. **Fix required, silent loss or missing report:** D7, E3, E2, O2.
+4. **Hardware or OS first:** A1, Z2, T4, U1 / U2, V4.

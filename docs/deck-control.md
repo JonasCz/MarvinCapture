@@ -132,7 +132,9 @@ into those ranges:
   land in the AR response buffer.
 - Its FCP reply is a write to our `0xFFFFF0000D00` in the AR request
   buffer, acked `ack_pending`. We owe it a write response (tcode 2, its
-  tlabel, rcode 0), which `p1394_answer_owed()` sends.
+  tlabel, rcode 0), which `p1394_answer_owed()` sends (while capturing,
+  `p1394_async_service()` on every read-loop tick, without waiting and
+  before the next queued AV/C command).
 
 ## AV/C commands (VCR subunit, `0x20`)
 

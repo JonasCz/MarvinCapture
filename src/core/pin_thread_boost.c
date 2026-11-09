@@ -43,6 +43,10 @@
 
 static volatile int g_keep_busy = PIN_THREAD_KEEP_BUSY_AUTO;
 
+/* The boost in effect on this thread (between pin_thread_boost and pin_thread_unboost), for
+ * pin_thread_create_normal(). */
+static _Thread_local const pin_thread_boost_t *t_boost;
+
 void pin_thread_set_keep_busy(int mode)
 {
     if (mode == PIN_THREAD_KEEP_BUSY_AUTO || mode == PIN_THREAD_KEEP_BUSY_ON ||
@@ -86,7 +90,10 @@ void pin_thread_boost(pin_thread_boost_t *b)
     b->raised = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST) != 0;
 #elif defined(__APPLE__)
     /* The closest thing to MMCSS: the top QoS class (user-interactive). */
+    b->old_qos = (int)qos_class_self();
     b->raised = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
+    if (b->raised)
+        t_boost = b;
 #elif defined(__linux__)
     /* Idle states: on a quiet machine, wake-ups from deep package C-states stall the xHCI for
      * 15-35 ms now and then, which cuts frames short (any busy core stopped it). A PM QoS
@@ -125,6 +132,7 @@ void pin_thread_boost(pin_thread_boost_t *b)
     if (pthread_getschedparam(self, &b->old_policy, &b->old_param) == 0 &&
         pthread_setschedparam(self, SCHED_FIFO, &sp) == 0) {
         b->rt = b->raised = 1;
+        t_boost = b;
         return;
     }
     pid_t tid = (pid_t)syscall(SYS_gettid);
@@ -132,19 +140,26 @@ void pin_thread_boost(pin_thread_boost_t *b)
     int old = getpriority(PRIO_PROCESS, (id_t)tid);
     if (errno == 0) {
         b->old_nice = old;
-        if (setpriority(PRIO_PROCESS, (id_t)tid, -10) == 0)
+        if (setpriority(PRIO_PROCESS, (id_t)tid, -10) == 0) {
             b->niced = b->raised = 1;
+            t_boost = b;
+        }
     }
 #endif
 }
 
 void pin_thread_unboost(pin_thread_boost_t *b)
 {
+    if (t_boost == b)
+        t_boost = NULL;
 #if defined(_WIN32)
     if (b->mmcss)
         AvRevertMmThreadCharacteristics((HANDLE)b->mmcss);
     else if (b->raised)
         SetThreadPriority(GetCurrentThread(), b->old_priority);
+#elif defined(__APPLE__)
+    if (b->raised)
+        pthread_set_qos_class_self_np((qos_class_t)b->old_qos, 0);
 #elif defined(__linux__)
     if (b->rt)
         pthread_setschedparam(pthread_self(), b->old_policy, &b->old_param);
@@ -160,6 +175,69 @@ void pin_thread_unboost(pin_thread_boost_t *b)
     }
 #endif
     b->raised = 0;
+}
+
+#if defined(__linux__)
+struct normal_start {
+    void *(*fn)(void *);
+    void *arg;
+    int nice;
+};
+
+/* Runs first on a thread created by a niced one: back to the creator's old nice value. */
+static void *normal_start_main(void *p)
+{
+    struct normal_start ns = *(struct normal_start *)p;
+    free(p);
+    setpriority(PRIO_PROCESS, (id_t)syscall(SYS_gettid), ns.nice);
+    return ns.fn(ns.arg);
+}
+#endif
+
+int pin_thread_create_normal(pthread_t *t, void *(*fn)(void *), void *arg)
+{
+    const pin_thread_boost_t *b = t_boost;
+#if defined(__APPLE__)
+    if (b && b->raised) {
+        pthread_attr_t a;
+        if (pthread_attr_init(&a) == 0) {
+            int rc = -1;
+            if (pthread_attr_set_qos_class_np(&a, (qos_class_t)b->old_qos, 0) == 0)
+                rc = pthread_create(t, &a, fn, arg);
+            pthread_attr_destroy(&a);
+            if (rc == 0)
+                return 0;
+        }
+    }
+#elif defined(__linux__)
+    if (b && b->rt) {
+        pthread_attr_t a;
+        if (pthread_attr_init(&a) == 0) {
+            int rc = -1;
+            if (pthread_attr_setinheritsched(&a, PTHREAD_EXPLICIT_SCHED) == 0 &&
+                pthread_attr_setschedpolicy(&a, b->old_policy) == 0 &&
+                pthread_attr_setschedparam(&a, &b->old_param) == 0)
+                rc = pthread_create(t, &a, fn, arg);
+            pthread_attr_destroy(&a);
+            if (rc == 0)
+                return 0;
+        }
+    } else if (b && b->niced) {
+        struct normal_start *ns = malloc(sizeof(*ns));
+        if (ns) {
+            ns->fn = fn;
+            ns->arg = arg;
+            ns->nice = b->old_nice;
+            int rc = pthread_create(t, NULL, normal_start_main, ns);
+            if (rc != 0)
+                free(ns);
+            return rc;
+        }
+    }
+#else
+    (void)b;
+#endif
+    return pthread_create(t, NULL, fn, arg);
 }
 
 const char *pin_thread_boost_desc(const pin_thread_boost_t *b)

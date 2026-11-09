@@ -55,6 +55,7 @@
  */
 
 #include "pin_sink.h"
+#include "pin_thread_boost.h"
 #include "sinks_internal.h"
 #include "hdv_demux.h"
 #include "hdv_decode.h"
@@ -1318,11 +1319,11 @@ static pin_status_t hdvmux_open(pin_sink_t *s, const char *path, const pin_sink_
     int cpus = av_cpu_count();
     m->nthr = cpus >= 8 ? 3 : cpus >= 4 ? 2 : 1;
     m->enc_threads = cpus / m->nthr > 1 ? cpus / m->nthr : 1;
-    if (pthread_create(&m->dec_thr, NULL, dec_main, m) != 0)
+    if (pin_thread_create_normal(&m->dec_thr, dec_main, m) != 0)
         return PIN_ERR_NOMEM;
     m->dec_started = 1;
     for (int i = 0; i < m->nthr; i++) {
-        if (pthread_create(&m->thr[i], NULL, worker_main, m) != 0) {
+        if (pin_thread_create_normal(&m->thr[i], worker_main, m) != 0) {
             m->nthr = i;
             break;
         }

@@ -54,6 +54,7 @@
  */
 
 #include "pin_sink.h"
+#include "pin_thread_boost.h"
 #include "sinks_internal.h"
 #include "../core/pin_log.h"
 
@@ -462,10 +463,10 @@ static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_pa
     }
     p->header_written = 1;
 
-    if (pthread_create(&p->enc_thread, NULL, encoder_thread_fn, p) != 0)
+    if (pin_thread_create_normal(&p->enc_thread, encoder_thread_fn, p) != 0)
         return PIN_ERR_INTERNAL;
     p->enc_started = 1;
-    if (pthread_create(&p->aud_thread, NULL, audio_thread_fn, p) != 0)
+    if (pin_thread_create_normal(&p->aud_thread, audio_thread_fn, p) != 0)
         return PIN_ERR_INTERNAL;
     p->aud_started = 1;
     return PIN_OK;

@@ -45,14 +45,21 @@
 extern "C" {
 #endif
 
-/* One request/reply exchange. reply may be NULL. */
+/* One request/reply exchange. reply may be NULL. Only a reply that answers this request
+ * counts (pinnacle_cfg_reply_matches); a few late replies to earlier requests are read past. */
 pinnacle_status_t pinnacle_cfg_xfer(pinnacle_device_t *dev, const uint8_t *req, int req_len,
                                     uint8_t *reply, int reply_cap, int *reply_len);
 
-/* Two-byte opcode request "op arg"; returns the reply's second byte in *result. */
+/* 1 if the n-byte reply answers req: it starts with the opcode and, for "80 idx 08", repeats
+ * the request header and carries the 8 bytes. An empty reply never answers. */
+int pinnacle_cfg_reply_matches(const uint8_t *req, int req_len, const uint8_t *reply, int n);
+
+/* Two-byte opcode request "op arg"; returns the reply's second byte in *result (a reply
+ * shorter than two bytes is then an error). */
 pinnacle_status_t pinnacle_cfg_op(pinnacle_device_t *dev, uint8_t op, uint8_t arg,
                                   uint8_t *result);
 
+/* Fails (PINNACLE_ERR_USB_TRANSFER) when the chip does not acknowledge the write. */
 pinnacle_status_t pinnacle_i2c_write(pinnacle_device_t *dev, uint8_t addr, uint8_t sub,
                                      uint8_t val);
 pinnacle_status_t pinnacle_i2c_read(pinnacle_device_t *dev, uint8_t addr, uint8_t sub,

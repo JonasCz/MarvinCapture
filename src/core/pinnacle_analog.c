@@ -30,6 +30,7 @@
 #include "pin_thread_boost.h"
 
 #include <pthread.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -613,9 +614,13 @@ pinnacle_status_t pinnacle_analog_stop(pinnacle_analog_t *a)
 #endif
 #define AUDIO_QUEUE 8
 
+/* done is written by the completion callback and read by the read loop; with libusb's darwin
+ * backend the callback runs on libusb's own thread, so it is an atomic, published (release)
+ * after failed and status. */
 struct slot {
     struct libusb_transfer *xfer;
-    int done, failed, status;
+    atomic_int done;
+    int failed, status;
 };
 
 static void LIBUSB_CALL slot_cb(struct libusb_transfer *xfer)
@@ -630,11 +635,11 @@ static void LIBUSB_CALL slot_cb(struct libusb_transfer *xfer)
         pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     }
 #endif
-    s->done = 1;
     if (xfer->status != LIBUSB_TRANSFER_COMPLETED) {
         s->failed = 1;
         s->status = xfer->status;
     }
+    atomic_store_explicit(&s->done, 1, memory_order_release);
 }
 
 struct queue {
@@ -648,41 +653,47 @@ static int queue_init(struct queue *q, pinnacle_device_t *dev, uint8_t ep, unsig
 {
     memset(q, 0, sizeof(*q));
     q->ep = ep;
-    q->depth = depth;
     for (unsigned i = 0; i < depth; i++) {
         struct libusb_transfer *x = libusb_alloc_transfer(0);
         uint8_t *buf = x ? malloc(bytes) : NULL;
-        if (!buf) {
+        if (buf)
+            libusb_fill_bulk_transfer(x, dev->handle, ep, buf, (int)bytes, slot_cb, &q->slots[i], 0);
+        if (!buf || libusb_submit_transfer(x) != 0) {
+            /* Delivery is in order, so the queue is the slots submitted so far (q->depth),
+             * and only those are waited for and freed. */
+            free(buf);
             libusb_free_transfer(x);
-            return -1;
+            break;
         }
-        libusb_fill_bulk_transfer(x, dev->handle, ep, buf, (int)bytes, slot_cb, &q->slots[i], 0);
         q->slots[i].xfer = x;
-        if (libusb_submit_transfer(x) != 0)
-            return -1;
+        q->depth = i + 1;
         q->active++;
     }
-    return 0;
+    if (q->depth < depth)
+        pin_logf(PIN_LOG_WARN, "pinnacle: only %u of %u EP 0x%02x transfers could be queued\n",
+                 q->depth, depth, ep);
+    return q->depth > 0 ? 0 : -1;
 }
 
 /* Delivers completed transfers in submission order and resubmits them.
  * Returns -1 on a transfer error, 1 if the callback asked to stop. */
-static int queue_poll(struct queue *q, pinnacle_analog_raw_cb cb, void *user, int stopping)
+static int queue_poll(struct queue *q, pinnacle_analog_raw_cb cb, void *user)
 {
-    while (q->slots[q->head].done) {
+    while (atomic_load_explicit(&q->slots[q->head].done, memory_order_acquire)) {
         struct slot *s = &q->slots[q->head];
         if (s->failed) {
-            if (s->status != LIBUSB_TRANSFER_CANCELLED && !stopping)
+            if (s->status != LIBUSB_TRANSFER_CANCELLED)
                 pin_logf(PIN_LOG_ERROR, "pinnacle: EP 0x%02x transfer failed (status %d)\n", q->ep,
                         s->status);
             return -1;
         }
         int r = cb(q->ep, s->xfer->buffer, (size_t)s->xfer->actual_length, user);
-        s->done = 0;
-        if (!stopping && libusb_submit_transfer(s->xfer) != 0) {
-            s->done = 1;
+        atomic_store(&s->done, 0);
+        if (libusb_submit_transfer(s->xfer) != 0) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle: EP 0x%02x transfer could not be resubmitted\n", q->ep);
             s->failed = 1;
             s->status = LIBUSB_TRANSFER_ERROR;
+            atomic_store(&s->done, 1);
             return -1;
         }
         q->head = (q->head + 1) % q->depth;
@@ -695,12 +706,12 @@ static int queue_poll(struct queue *q, pinnacle_analog_raw_cb cb, void *user, in
 static void queue_free(struct queue *q, pinnacle_device_t *dev)
 {
     for (unsigned i = 0; i < q->depth; i++)
-        if (q->slots[i].xfer && !q->slots[i].done)
+        if (q->slots[i].xfer && !atomic_load(&q->slots[i].done))
             libusb_cancel_transfer(q->slots[i].xfer);
     for (int spin = 0; spin < 100; spin++) {
         int pending = 0;
         for (unsigned i = 0; i < q->depth; i++)
-            if (q->slots[i].xfer && !q->slots[i].done)
+            if (q->slots[i].xfer && !atomic_load(&q->slots[i].done))
                 pending = 1;
         if (!pending)
             break;
@@ -710,7 +721,7 @@ static void queue_free(struct queue *q, pinnacle_device_t *dev)
     /* A cancelled transfer that never completed (device gone) is still libusb's: freeing it
      * would be a use after free. Leak the queue then (a few MB, once), like the DV loop. */
     for (unsigned i = 0; i < q->depth; i++) {
-        if (q->slots[i].xfer && !q->slots[i].done) {
+        if (q->slots[i].xfer && !atomic_load(&q->slots[i].done)) {
             pin_logf(PIN_LOG_WARN, "pinnacle: a cancelled USB transfer did not complete; "
                      "leaking the read queue instead of freeing it\n");
             return;
@@ -783,12 +794,17 @@ pinnacle_status_t pinnacle_analog_read_loop(pinnacle_analog_t *a, pinnacle_analo
      * depth (see VIDEO_XFER); docs/analog.md has the method. */
     while (!*stop_flag) {
         struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };
-        if (libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL) != 0) {
+        int erc = libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL);
+        if (erc == LIBUSB_ERROR_INTERRUPTED)
+            continue;     /* a signal reached this thread: nothing is wrong with the device */
+        if (erc != 0) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle: USB event handling failed (%s)\n",
+                     libusb_error_name(erc));
             status = PINNACLE_ERR_USB_TRANSFER;
             break;
         }
-        int rv = queue_poll(vq, cb, user, 0);
-        int ra = rv == 0 ? queue_poll(aq, cb, user, 0) : 0;
+        int rv = queue_poll(vq, cb, user);
+        int ra = rv == 0 ? queue_poll(aq, cb, user) : 0;
         if (rv < 0 || ra < 0) {
             status = PINNACLE_ERR_USB_TRANSFER;
             break;
@@ -927,7 +943,7 @@ static int deliver_start(deliver_t *d, const pinnacle_capture_sink_t *sink, size
     pin_cond_init_timed(&d->wake);
     pthread_cond_init(&d->space, NULL);
     d->started = 1;
-    if (pthread_create(&d->thread, NULL, deliver_thread, d) != 0)
+    if (pin_thread_create_normal(&d->thread, deliver_thread, d) != 0)
         goto fail;
     return 0;
 fail:

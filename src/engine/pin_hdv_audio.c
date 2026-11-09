@@ -17,6 +17,7 @@
  */
 
 #include "pin_hdv_audio.h"
+#include "pin_thread_boost.h"
 #include "pin_audio_resample.h"
 
 #include <libavcodec/avcodec.h>
@@ -278,7 +279,7 @@ pin_hdv_audio_t *pin_hdv_audio_create(pin_hdv_audio_feed_cb cb, void *user)
     a->last_pid = -1;
     pthread_mutex_init(&a->mtx, NULL);
     pthread_cond_init(&a->cond, NULL);
-    if (pthread_create(&a->thread, NULL, hdv_audio_thread, a) != 0) {
+    if (pin_thread_create_normal(&a->thread, hdv_audio_thread, a) != 0) {
         pthread_mutex_destroy(&a->mtx);
         pthread_cond_destroy(&a->cond);
         free(a);

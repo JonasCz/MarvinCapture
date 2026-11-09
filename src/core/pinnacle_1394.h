@@ -57,6 +57,16 @@ extern "C" {
 
 #define P1394_FCP_SLOTS 16
 
+/* pinnacle_1394_t.at_async */
+#define P1394_AT_WRITE_RESP 1
+#define P1394_AT_AVC        2
+
+/* pinnacle_1394_t.avc_state */
+#define P1394_AVC_QUEUED    0   /* waiting for the AT context (owed write responses go first) */
+#define P1394_AVC_SENT      1   /* written, waiting for its ack (xferStatus) */
+#define P1394_AVC_DELIVERED 2   /* acked, waiting for the FCP response */
+#define P1394_AVC_FAILED    3
+
 /* Incoming asynchronous request hook (target side). rec is the whole OHCI AR
  * record as handle_ar_packet() got it: header quadlets in host order (12
  * bytes for a quadlet read, 16 otherwise), payload in wire order, then the
@@ -85,24 +95,41 @@ typedef struct {
     uint32_t reg_addr, reg_val;
     int vreg_seq;              /* type-5 (vendor register) read replies */
     uint32_t vreg_val;
-    /* last response packet received into the AR response buffer */
-    int rsp_seq;
-    unsigned rsp_tl, rsp_tcode, rsp_rcode;
-    uint16_t rsp_src;
-    uint8_t rsp_data[8];
+    /* Responses received into the AR response buffer, one slot per transaction label, so a
+     * stray or late response to another request cannot overwrite the one being waited for.
+     * valid is cleared when a request with that label is sent. */
+    struct {
+        int valid;
+        unsigned tcode, rcode;
+        uint16_t src;
+        uint8_t data[8];
+    } rsp[64];
     /* FCP responses written to us (ring), and write responses we owe */
     int fcp_seq;
     uint8_t fcp[P1394_FCP_SLOTS][512];
     int fcp_len[P1394_FCP_SLOTS];
     struct { uint8_t tl; uint16_t src; } owed[64];
     int n_owed;
+    unsigned long owed_dropped;  /* write responses not owed-listed because the table was full */
+
+    /* AT packets sent without waiting (p1394_async_service): 0 none in flight, else
+     * P1394_AT_WRITE_RESP or P1394_AT_AVC. */
+    int at_async;
+    int at_async_tries;          /* sends of the packet in flight (ack_busy is retried) */
+    unsigned long long at_async_deadline_ms;
 
     /* async AV/C (p1394_avc_begin/poll), one outstanding command at a time */
     int avc_pending;
-    uint8_t avc_match_subunit, avc_match_opcode;
+    int avc_state;               /* P1394_AVC_QUEUED / _SENT / _DELIVERED / _FAILED */
+    uint16_t avc_node;
+    uint8_t avc_cmd[128];
+    unsigned avc_cmd_len;
     int avc_fcp_seq0;
-    unsigned avc_status_addr;
     unsigned long long avc_deadline_ms;
+
+    /* tests only: replaces the EP 0x02 write of p1394_send() (0 = sent) */
+    int (*send_hook)(void *user, const uint8_t *msg, int len);
+    void *send_hook_user;
 
     /* target side (MarvinPlayout's virtual deck); all unused by the capture path */
     p1394_request_fn req_fn;   /* see p1394_set_request_handler(); NULL = log requests as unexpected */
@@ -168,7 +195,9 @@ int p1394_compare_swap(pinnacle_1394_t *l, uint16_t node, uint32_t off,
                        uint32_t arg, uint32_t data, uint32_t *old);
 
 /* Answers every FCP response the camera wrote to us with a write response
- * (it retries until it gets one). */
+ * (it retries until it gets one). Blocking: reads EP 0x84 itself, so not for
+ * use while a read loop owns that endpoint (p1394_async_service() does the
+ * same there). */
 void p1394_answer_owed(pinnacle_1394_t *l);
 
 /* Sends an AV/C command frame to node's FCP_COMMAND register and waits up
@@ -181,17 +210,35 @@ int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned le
  * read loop's own async queue, see pinnacle_stream_read_loop_ex()). Same
  * parsing p1394_pump() does after its own blocking read; exposed separately
  * so exactly one thing ever issues the EP 0x84 libusb read while streaming
- * is active. */
-void p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len);
+ * is active. Returns the number of bytes used: a message cut off at the end of
+ * p (it continues in the next transfer) is left unused, so the caller can
+ * prepend those bytes to the next transfer. */
+int p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len);
 
-/* Non-blocking AV/C: begin() writes the command (one EP 0x02 send, no wait)
- * and returns at once; poll() (call it every tick, after new EP 0x84 bytes
+/* 1 if the FCP frame resp (rlen bytes) answers the AV/C command cmd: same
+ * subunit, same opcode (TRANSPORT STATE, 0xd0, answers with the transport
+ * opcode 0xc1..0xc4), and the same first operand unless the command left it
+ * open (0xff) or asked for the transport state. */
+int p1394_avc_response_matches(const uint8_t *cmd, unsigned len, const uint8_t *resp,
+                               unsigned rlen);
+
+/* Drives the AT packets sent without waiting while a read loop owns EP 0x84:
+ * collects the ack of the packet in flight (from p1394_parse_ep84()), resends
+ * on ack_busy, answers owed write responses one at a time and then sends a
+ * queued async AV/C command. Never reads EP 0x84 itself and never blocks.
+ * Call it every tick, after new EP 0x84 bytes have been parsed
+ * (pinnacle_stream_read_loop_ex() does). */
+void p1394_async_service(pinnacle_1394_t *l);
+
+/* Non-blocking AV/C: begin() queues the command and sends it at once when no
+ * write response is owed and the AT context is free (else at a later
+ * p1394_async_service()); poll() (call it every tick, after new EP 0x84 bytes
  * have gone through p1394_parse_ep84()) reports 0 while still waiting, the
  * response length once one arrives (matching p1394_avc()'s ctype-byte
  * convention, including NOT_IMPLEMENTED == busy, the caller's job to
- * retry), or -1 on send failure / timeout. One outstanding command per
- * link; begin() while another is still pending fails it silently (the
- * caller in engine/pin_deck.c never does this). */
+ * retry), or -1 on send failure, a refused or lost ack, or timeout. One
+ * outstanding command per link; begin() while another is still pending
+ * replaces it (the caller in engine/pin_deck.c never does this). */
 int p1394_avc_begin(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len);
 int p1394_avc_poll(pinnacle_1394_t *l, uint8_t *resp, unsigned resp_max);
 /* Gives up on the outstanding async command, if any (e.g. the session is

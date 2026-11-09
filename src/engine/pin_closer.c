@@ -17,6 +17,7 @@
  */
 
 #include "pin_closer.h"
+#include "pin_thread_boost.h"
 #include "../core/pin_log.h"
 
 #include <pthread.h>
@@ -176,7 +177,7 @@ pin_closer_t *pin_closer_create(pin_closer_done_fn done, void *user)
     pthread_mutex_init(&c->lock, NULL);
     pthread_cond_init(&c->wake, NULL);
     pthread_cond_init(&c->idle, NULL);
-    if (pthread_create(&c->thread, NULL, closer_thread, c) != 0) {
+    if (pin_thread_create_normal(&c->thread, closer_thread, c) != 0) {
         pthread_mutex_destroy(&c->lock);
         pthread_cond_destroy(&c->wake);
         pthread_cond_destroy(&c->idle);

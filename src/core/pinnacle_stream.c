@@ -21,6 +21,7 @@
 #include "pin_log.h"
 #include "pin_thread_boost.h"
 
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -266,6 +267,9 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
     pinnacle_progress(dev, "Starting video reception", -1);
     if (p1394_ir_start(&link, (unsigned)dev->iso_channel) != 0) {
         stream_fail(dev, &link, "FireWire receive start failed");
+        /* Undo what did start: receive may be half on, and the camera would keep our
+         * point-to-point connection (and its channel) until the next bus reset. */
+        pinnacle_stream_stop(dev);
         return PINNACLE_ERR_USB_TRANSFER;
     }
 
@@ -302,16 +306,21 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
                 break;
             pinnacle_sleep_ms(2);
         }
-        /* hand the camera's plug back */
-        if (dev->pcr_connected && dev->camera_node) {
-            uint32_t opcr = 0;
-            if (p1394_disconnect(&link, dev->camera_node, &opcr) == 0) {
-                dev->pcr_connected = 0;
-                pin_logf(PIN_LOG_DEBUG, "pinnacle: released oPCR[0], now 0x%08x\n", opcr);
-            } else
-                pin_logf(PIN_LOG_INFO, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
-                        opcr);
+    }
+    /* Hand the camera's plug back even when the receive stop failed: the camera keeps a
+     * connection we leave counted (and its channel) until the next bus reset. */
+    if (dev->pcr_connected && dev->camera_node) {
+        uint32_t opcr = 0;
+        if (p1394_disconnect(&link, dev->camera_node, &opcr) == 0) {
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: released oPCR[0], now 0x%08x\n", opcr);
+        } else {
+            pin_logf(PIN_LOG_INFO, "pinnacle: releasing the camera's oPCR[0] failed (0x%08x)\n",
+                    opcr);
+            status = PINNACLE_ERR_USB_TRANSFER;
         }
+        /* One try only: a repeated disconnect after one that did go through would take away
+         * another controller's connection. */
+        dev->pcr_connected = 0;
     }
 
     dv_drain_join(&drain, drain_thread, drain_started);
@@ -353,11 +362,14 @@ pinnacle_status_t pinnacle_stream_stop(pinnacle_device_t *dev)
 #define DV_QUEUE_DEPTH 256
 #define DV_XFER_BYTES  16384
 
+/* done / failed / submitted are written by the completion callback and read by the loop; on
+ * some libusb backends the callback runs on libusb's own thread, so they are atomics and the
+ * callback publishes done last (release), after status and failed. */
 struct rx_slot {
     struct libusb_transfer *xfer;
-    volatile int submitted;    /* libusb owns the buffer while this is set */
-    volatile int done;         /* set by the callback, cleared on resubmit */
-    volatile int failed;
+    atomic_int submitted;      /* libusb owns the buffer while this is set */
+    atomic_int done;           /* set by the callback, cleared on resubmit */
+    atomic_int failed;
     int status;                /* libusb transfer status, when it failed */
     struct timespec t_done;    /* when the completion callback ran (debug timing) */
 };
@@ -368,9 +380,10 @@ static void LIBUSB_CALL dv_xfer_cb(struct libusb_transfer *xfer)
 
     clock_gettime(CLOCK_MONOTONIC, &slot->t_done);
     slot->status = xfer->status;
-    slot->failed = (xfer->status != LIBUSB_TRANSFER_COMPLETED);
-    slot->submitted = 0;
-    slot->done = 1;
+    atomic_store_explicit(&slot->failed, xfer->status != LIBUSB_TRANSFER_COMPLETED,
+                          memory_order_relaxed);
+    atomic_store_explicit(&slot->submitted, 0, memory_order_relaxed);
+    atomic_store_explicit(&slot->done, 1, memory_order_release);
 }
 
 /* EP 0x84 carries unsolicited status/event records while streaming: a real
@@ -378,14 +391,57 @@ static void LIBUSB_CALL dv_xfer_cb(struct libusb_transfer *xfer)
  * with no host request to prompt them, and MarvinBus64 has a worker thread for
  * exactly this. Leaving them unread lets the FX2's IN buffer fill, which is
  * one way to stop the command processor accepting writes. One transfer,
- * resubmitted forever, costs nothing. */
+ * resubmitted from its callback while records arrive.
+ *
+ * A transfer that fails (a stalled endpoint, say) is not resubmitted from the
+ * callback, which would spin on the error: the read loop resubmits it after a
+ * pause, clearing a stall first, and gives up after EP84_MAX_FAILS failures in
+ * a row (the capture goes on; deck control then has no answers). */
+#define EP84_XFER_BYTES 512
+#define EP84_RETRY_MS   100
+#define EP84_MAX_FAILS  20
+
 struct ep84_state {
-    unsigned char buf[512];
-    volatile int active;
+    unsigned char buf[EP84_XFER_BYTES];
+    /* a message cut off at the end of a full transfer, completed by the next one */
+    unsigned char carry[2048 + EP84_XFER_BYTES];
+    int carry_len;
+    atomic_int active;        /* libusb owns the transfer */
+    atomic_int stopping;      /* teardown: the callback must not resubmit */
+    int failed_status;        /* the transfer ended with this error, waiting for a retry */
+    int fails;                /* failures in a row */
     unsigned long packets;
     unsigned long bytes;
     pinnacle_1394_t *link;   /* non-NULL: also feed completions to p1394_parse_ep84() */
 };
+
+/* Hands one completed transfer to the 1394 layer, joining a message split over transfers. */
+static void ep84_feed(struct ep84_state *st, const unsigned char *d, int n)
+{
+    if (!st->link)
+        return;
+    const unsigned char *p = d;
+    int len = n;
+    if (st->carry_len > 0) {
+        if (st->carry_len + n <= (int)sizeof(st->carry)) {
+            memcpy(st->carry + st->carry_len, d, (size_t)n);
+            p = st->carry;
+            len = st->carry_len + n;
+        } else {
+            st->carry_len = 0;   /* longer than any message: drop the piece */
+        }
+    }
+    int used = p1394_parse_ep84(st->link, p, len);
+    int left = len - used;
+    /* Only a transfer that filled its buffer can end inside a message; after a short
+     * transfer the device has finished what it had, so the rest is not kept. */
+    if (left > 0 && n == EP84_XFER_BYTES && left <= (int)sizeof(st->carry)) {
+        memmove(st->carry, p + used, (size_t)left);
+        st->carry_len = left;
+    } else {
+        st->carry_len = 0;
+    }
+}
 
 static void LIBUSB_CALL ep84_cb(struct libusb_transfer *xfer)
 {
@@ -394,8 +450,7 @@ static void LIBUSB_CALL ep84_cb(struct libusb_transfer *xfer)
     if (xfer->status == LIBUSB_TRANSFER_COMPLETED && xfer->actual_length > 0) {
         st->packets++;
         st->bytes += (unsigned long)xfer->actual_length;
-        if (st->link)
-            p1394_parse_ep84(st->link, xfer->buffer, xfer->actual_length);
+        ep84_feed(st, xfer->buffer, xfer->actual_length);
 #if 0   /* Per-record EP 0x84 logging (was PINNACLE_DEBUG_EP84=1): re-enable by
          * switching this to #if 1, adding `int log; struct timespec t0;` to
          * ep84_state again and setting them where ep84 is initialised in the
@@ -418,13 +473,55 @@ static void LIBUSB_CALL ep84_cb(struct libusb_transfer *xfer)
 #endif
     }
 
-    if (xfer->status == LIBUSB_TRANSFER_CANCELLED ||
+    if (atomic_load(&st->stopping) || xfer->status == LIBUSB_TRANSFER_CANCELLED ||
         xfer->status == LIBUSB_TRANSFER_NO_DEVICE) {
-        st->active = 0;
+        atomic_store(&st->active, 0);
         return;
     }
-    if (libusb_submit_transfer(xfer) != 0)
-        st->active = 0;
+    if (xfer->status != LIBUSB_TRANSFER_COMPLETED && xfer->status != LIBUSB_TRANSFER_TIMED_OUT) {
+        /* left to the read loop (see above) */
+        st->failed_status = xfer->status;
+        atomic_store(&st->active, 0);
+        return;
+    }
+    st->fails = 0;
+    if (libusb_submit_transfer(xfer) != 0) {
+        st->failed_status = LIBUSB_TRANSFER_ERROR;
+        atomic_store(&st->active, 0);
+    }
+}
+
+/* Read loop side of the EP 0x84 retry: resubmits a failed transfer after a pause. */
+static void ep84_retry(pinnacle_device_t *dev, struct ep84_state *st,
+                       struct libusb_transfer *xfer, struct timespec *next_try)
+{
+    if (!xfer || atomic_load(&st->active) || !st->failed_status || st->fails > EP84_MAX_FAILS)
+        return;
+    if (st->fails == EP84_MAX_FAILS) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: EP 0x84 keeps failing (status %d); no longer read, "
+                 "so deck control gets no answers\n", st->failed_status);
+        st->fails++;
+        return;
+    }
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    if (now.tv_sec < next_try->tv_sec ||
+        (now.tv_sec == next_try->tv_sec && now.tv_nsec < next_try->tv_nsec))
+        return;
+    st->fails++;
+    if (st->failed_status == LIBUSB_TRANSFER_STALL)
+        libusb_clear_halt(dev->handle, PINNACLE_EP_CMD_IN);
+    st->carry_len = 0;
+    if (libusb_submit_transfer(xfer) == 0) {
+        st->failed_status = 0;
+        atomic_store(&st->active, 1);
+    }
+    *next_try = now;
+    next_try->tv_nsec += EP84_RETRY_MS * 1000000L;
+    if (next_try->tv_nsec >= 1000000000L) {
+        next_try->tv_sec++;
+        next_try->tv_nsec -= 1000000000L;
+    }
 }
 
 pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
@@ -492,13 +589,21 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
     unsigned submitted = 0;
     for (unsigned i = 0; i < allocated; i++) {
         if (libusb_submit_transfer(slots[i].xfer) != 0) {
-            slots[i].done = 1;
-            slots[i].failed = 1;
-            slots[i].status = LIBUSB_TRANSFER_ERROR;
-        } else {
-            slots[i].submitted = 1;
-            submitted++;
+            /* Delivery is strictly in order, so a hole here would end the capture when the
+             * head reaches it: run with the slots submitted so far instead (usbfs memory
+             * running out, for one). */
+            pin_logf(PIN_LOG_WARN, "pinnacle: only %u of %u EP 0x88 transfers could be queued\n",
+                     i, allocated);
+            for (unsigned j = i; j < allocated; j++) {
+                free(slots[j].xfer->buffer);
+                libusb_free_transfer(slots[j].xfer);
+                slots[j].xfer = NULL;
+            }
+            allocated = i;
+            break;
         }
+        atomic_store(&slots[i].submitted, 1);
+        submitted++;
     }
     if (submitted == 0)
         status = PINNACLE_ERR_USB_TRANSFER;
@@ -515,9 +620,10 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
                                        ep84.buf, sizeof(ep84.buf), ep84_cb,
                                        &ep84, 0);
             if (libusb_submit_transfer(ep84_xfer) == 0)
-                ep84.active = 1;
+                atomic_store(&ep84.active, 1);
         }
     }
+    struct timespec ep84_next_try = { 0, 0 };
 
     unsigned long completions = 0;
     unsigned head = 0;
@@ -525,22 +631,33 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
 
     while (!*stop_flag && !finished) {
         struct timeval tv = { .tv_sec = 0, .tv_usec = 50000 };
-        if (libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL) != 0)
+        int erc = libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL);
+        if (erc == LIBUSB_ERROR_INTERRUPTED)
+            continue;     /* a signal reached this thread: nothing is wrong with the device */
+        if (erc != 0) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle: USB event handling failed (%s)\n",
+                     libusb_error_name(erc));
+            status = PINNACLE_ERR_USB_TRANSFER;
             break;
+        }
 
         /* Any EP 0x84 bytes from this pass already reached p1394_parse_ep84()
          * via ep84_cb above (libusb_handle_events_timeout_completed() is what
-         * runs the completion callbacks), so it's safe for the tick to poll
+         * runs the completion callbacks), so the owed write responses and
+         * queued AV/C command can go out, and the tick can poll
          * p1394_avc_poll() / check transport state now. */
+        ep84_retry(dev, &ep84, ep84_xfer, &ep84_next_try);
+        if (link)
+            p1394_async_service(link);
         if (tick)
             tick(tick_user);
 
         /* Deliver in submission order, whatever order completions arrived. */
-        while (slots[head].done) {
+        while (atomic_load_explicit(&slots[head].done, memory_order_acquire)) {
             struct rx_slot *slot = &slots[head];
             struct libusb_transfer *xfer = slot->xfer;
 
-            if (slot->failed) {
+            if (atomic_load_explicit(&slot->failed, memory_order_relaxed)) {
                 if (!*stop_flag && slot->status != LIBUSB_TRANSFER_CANCELLED) {
                     pin_logf(PIN_LOG_ERROR, "pinnacle: EP 0x88 transfer failed (status %d)\n",
                             slot->status);
@@ -591,19 +708,39 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
 #endif
             }
 
-            slot->done = 0;
-            if (finished || *stop_flag)
+            atomic_store(&slot->done, 0);
+            if (finished)
                 break;
+            if (*stop_flag) {
+                head = (head + 1) % allocated;
+                break;
+            }
             if (libusb_submit_transfer(xfer) != 0) {
-                slot->done = 1;
-                slot->failed = 1;
-                slot->status = LIBUSB_TRANSFER_ERROR;
+                pin_logf(PIN_LOG_ERROR, "pinnacle: EP 0x88 transfer could not be resubmitted\n");
+                status = PINNACLE_ERR_USB_TRANSFER;
                 finished = 1;
                 break;
             }
-            slot->submitted = 1;
+            atomic_store(&slot->submitted, 1);
             head = (head + 1) % allocated;
         }
+    }
+
+    /* A stop: what had already arrived (up to the whole queue after a consumer stall) still
+     * goes to the capture, in order. Nothing is resubmitted. */
+    for (unsigned k = 0; !finished && status == PINNACLE_OK && k < allocated; k++) {
+        struct rx_slot *slot = &slots[head];
+        if (!atomic_load_explicit(&slot->done, memory_order_acquire) ||
+            atomic_load_explicit(&slot->failed, memory_order_relaxed))
+            break;
+        int n = slot->xfer->actual_length;
+        if (n > 0) {
+            completions++;
+            if (cb(slot->xfer->buffer, (size_t)n, user) != 0)
+                finished = 1;
+        }
+        atomic_store(&slot->done, 0);
+        head = (head + 1) % allocated;
     }
 
     /* Cancel whatever libusb still owns and pump the event loop until every
@@ -611,30 +748,39 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
      * free. Only `submitted` slots are outstanding — a slot we stopped on
      * mid-delivery has already completed and must not be cancelled, or we'd
      * wait out the whole spin for a callback that is never coming. */
+    /* The EP 0x84 callback checks this before resubmitting: a record that completes
+     * between here and the cancel (cancel then finds nothing to cancel) must not start a
+     * new transfer that nobody cancels. */
+    atomic_store(&ep84.stopping, 1);
     for (unsigned i = 0; i < allocated; i++) {
-        if (slots[i].submitted)
+        if (atomic_load(&slots[i].submitted))
             libusb_cancel_transfer(slots[i].xfer);
     }
-    if (ep84_xfer && ep84.active)
-        libusb_cancel_transfer(ep84_xfer);
+    if (ep84_xfer && atomic_load(&ep84.active)) {
+        int crc = libusb_cancel_transfer(ep84_xfer);
+        if (crc != 0 && crc != LIBUSB_ERROR_NOT_FOUND)
+            pin_logf(PIN_LOG_DEBUG, "pinnacle: EP 0x84 cancel: %s\n", libusb_error_name(crc));
+    }
 
+    /* Bounded: 400 passes of at most 20 ms. */
     int pending = 0;
     for (int spin = 0; spin < 400; spin++) {
-        pending = ep84.active ? 1 : 0;
+        pending = atomic_load(&ep84.active) ? 1 : 0;
         for (unsigned i = 0; i < allocated; i++) {
-            if (slots[i].submitted)
+            if (atomic_load(&slots[i].submitted))
                 pending = 1;
         }
         if (!pending)
             break;
         struct timeval tv = { .tv_sec = 0, .tv_usec = 20000 };
-        if (libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL) != 0)
+        int erc = libusb_handle_events_timeout_completed(dev->usb_ctx, &tv, NULL);
+        if (erc != 0 && erc != LIBUSB_ERROR_INTERRUPTED)
             break;
     }
     /* recount: the loop may have ended on its last pass or on an error */
-    pending = ep84.active ? 1 : 0;
+    pending = atomic_load(&ep84.active) ? 1 : 0;
     for (unsigned i = 0; i < allocated; i++)
-        if (slots[i].submitted)
+        if (atomic_load(&slots[i].submitted))
             pending = 1;
 
     pin_logf(PIN_LOG_DEBUG, "pinnacle: read loop ended, %lu EP 0x88 completions, "

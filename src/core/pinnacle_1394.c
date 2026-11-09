@@ -131,17 +131,16 @@ static void handle_ar_packet(pinnacle_1394_t *l, uint16_t ram, const uint8_t *d,
     uint16_t src = (uint16_t)(q1 >> 16);
 
     if (ram >= RAM_AR_RSP_LO) {
-        /* a response to one of our requests */
-        l->rsp_tl = tl;
-        l->rsp_tcode = tcode;
-        l->rsp_rcode = (q1 >> 12) & 0xf;
-        l->rsp_src = src;
-        memset(l->rsp_data, 0, sizeof(l->rsp_data));
+        /* a response to one of our requests, kept under its transaction label */
+        l->rsp[tl].tcode = tcode;
+        l->rsp[tl].rcode = (q1 >> 12) & 0xf;
+        l->rsp[tl].src = src;
+        memset(l->rsp[tl].data, 0, sizeof(l->rsp[tl].data));
         if (tcode == TC_READ_QUADLET_RESP)
-            memcpy(l->rsp_data, d + 12, 4);
+            memcpy(l->rsp[tl].data, d + 12, 4);
         else if (tcode == TC_LOCK_RESP && n >= 20 && (q3 >> 16) >= 4)
-            memcpy(l->rsp_data, d + 16, 4);
-        l->rsp_seq++;
+            memcpy(l->rsp[tl].data, d + 16, 4);
+        l->rsp[tl].valid = 1;
         return;
     }
 
@@ -164,15 +163,22 @@ static void handle_ar_packet(pinnacle_1394_t *l, uint16_t ram, const uint8_t *d,
                 tcode, src, q1 & 0xffff, q2);
     }
     /* our link acked it "pending": the sender now waits for a write response */
-    if ((tcode == TC_WRITE_QUADLET || tcode == TC_WRITE_BLOCK) &&
-        ack == P1394_EVT_ACK_PENDING && l->n_owed < 64) {
-        l->owed[l->n_owed].tl = (uint8_t)tl;
-        l->owed[l->n_owed].src = src;
-        l->n_owed++;
+    if ((tcode == TC_WRITE_QUADLET || tcode == TC_WRITE_BLOCK) && ack == P1394_EVT_ACK_PENDING) {
+        size_t cap = sizeof(l->owed) / sizeof(l->owed[0]);
+        if ((size_t)l->n_owed < cap) {
+            l->owed[l->n_owed].tl = (uint8_t)tl;
+            l->owed[l->n_owed].src = src;
+            l->n_owed++;
+        } else {
+            /* The sender retries until it times out; nothing else is lost. */
+            if (l->owed_dropped++ == 0)
+                pin_logf(PIN_LOG_WARN, "p1394: %zu write responses owed; not answering further "
+                         "ones (counted in owed_dropped)\n", cap);
+        }
     }
 }
 
-void p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len)
+int p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len)
 {
     int o = 0;
     while (o + 4 <= len) {
@@ -183,36 +189,36 @@ void p1394_parse_ep84(pinnacle_1394_t *l, const uint8_t *p, int len)
             uint16_t ram = (uint16_t)(h & 0xffff);
             const uint8_t *d = p + o + 4;
             if (o + 4 + (int)n > len)
-                break;
+                return o;     /* continues in the next transfer */
             if (ram >= RAM_AR_REQ_LO && ram < RAM_AR_RSP_HI)
                 handle_ar_packet(l, ram, d, n);
             else if (ram >= RAM_AT_LO && ram < RAM_AT_HI && n >= 4 && ram == l->at_status_addr)
                 l->at_evt = (int)((get32(d) >> 16) & 0x1f);
             o += 4 + (int)n;
+        } else if (o + 8 > len) {
+            return o;         /* a two-quadlet message, continues in the next transfer */
         } else if (type == MSG_REG_READ) {
-            if (o + 8 <= len) {
-                l->reg_addr = h & 0xfffff;
-                l->reg_val = get32(p + o + 4);
-                l->reg_seq++;
-            }
+            l->reg_addr = h & 0xfffff;
+            l->reg_val = get32(p + o + 4);
+            l->reg_seq++;
             o += 8;
         } else if (type == MSG_VENDOR_READ) {
-            if (o + 8 <= len) {
-                l->vreg_val = get32(p + o + 4);
-                l->vreg_seq++;
-            }
+            l->vreg_val = get32(p + o + 4);
+            l->vreg_seq++;
             o += 8;
         } else if (type == MSG_INT_EVENT) {
 #if 0       /* was PINNACLE_DEBUG_1394=2: log every OHCI interrupt event (per-transfer rate) */
-            if (o + 8 <= len)
-                pin_logf(PIN_LOG_DEBUG, "p1394: IntEvent 0x%08x\n", get32(p + o + 4));
+            pin_logf(PIN_LOG_DEBUG, "p1394: IntEvent 0x%08x\n", get32(p + o + 4));
 #endif
             o += 8;
         } else {
+            /* Every device-to-host message without a length field (types 3, 5, 10) is two
+             * quadlets; skip an unknown one as such, so the messages after it still count. */
             pin_logf(PIN_LOG_DEBUG, "p1394: unparsed EP 0x84 message type %x\n", type);
-            break;
+            o += 8;
         }
     }
+    return o < len ? o : len;
 }
 
 int p1394_pump(pinnacle_1394_t *l, unsigned timeout_ms)
@@ -221,6 +227,8 @@ int p1394_pump(pinnacle_1394_t *l, unsigned timeout_ms)
     int n = 0;
     int rc = libusb_bulk_transfer(l->dev->handle, PINNACLE_EP_CMD_IN, buf, sizeof(buf), &n,
                                   timeout_ms);
+    if (rc == LIBUSB_ERROR_TIMEOUT && n > 0)
+        rc = 0;       /* what arrived before the timeout still counts */
     if (rc == LIBUSB_ERROR_TIMEOUT)
         return 0;
     if (rc != 0) {
@@ -248,6 +256,8 @@ int p1394_pump(pinnacle_1394_t *l, unsigned timeout_ms)
 
 int p1394_send(pinnacle_1394_t *l, const uint8_t *msg, int len)
 {
+    if (l->send_hook)
+        return l->send_hook(l->send_hook_user, msg, len) == 0 ? 0 : -1;
     int n = 0;
     int rc = libusb_bulk_transfer(l->dev->handle, PINNACLE_EP_CMD_OUT, (uint8_t *)msg, len, &n, 2000);
     if (rc != 0 || n != len) {
@@ -364,14 +374,15 @@ int p1394_read_topology(pinnacle_1394_t *l)
  *               16-byte header, Z = 2, xferStatus at base+0x0c
  *   payload:    OUTPUT_MORE-Immediate (16-byte header) + OUTPUT_LAST pointing
  *               at the payload at base+0x30, Z = 3, xferStatus at base+0x2c */
-int p1394_submit(pinnacle_1394_t *l, const uint32_t hdr[4], unsigned hdr_len,
-                 const uint8_t *payload, unsigned plen)
+/* Builds the EP 0x02 messages that send one AT packet (see above) into pkt (256 bytes).
+ * Returns their length, or -1 if the payload is too long; *status gets the RAM address of
+ * the packet's xferStatus writeback. */
+static int build_at_packet(uint8_t *pkt, const uint32_t hdr[4], unsigned hdr_len,
+                           const uint8_t *payload, unsigned plen, uint16_t *status)
 {
-    uint8_t pkt[256];
     int o = 0;
     uint32_t desc[12];
     unsigned nq;
-    uint16_t status;
 
     if (plen > 128)
         return -1;
@@ -379,13 +390,13 @@ int p1394_submit(pinnacle_1394_t *l, const uint32_t hdr[4], unsigned hdr_len,
         desc[0] = 0x120c0000u | hdr_len; desc[1] = 0; desc[2] = 0; desc[3] = 0;
         memcpy(&desc[4], hdr, 16);
         nq = 8;
-        status = AT_SLOT + 0x0c;
+        *status = AT_SLOT + 0x0c;
     } else {
         desc[0] = 0x02000000u | 16; desc[1] = 0; desc[2] = 0; desc[3] = 0;
         memcpy(&desc[4], hdr, 16);
         desc[8] = 0x100c0000u | plen; desc[9] = AT_SLOT + 0x30u; desc[10] = 0; desc[11] = 0;
         nq = 12;
-        status = AT_SLOT + 0x2c;
+        *status = AT_SLOT + 0x2c;
     }
 
     o += put_reg_write(pkt + o, OHCI_ATREQ_CLEAR, CTX_RUN);
@@ -399,6 +410,22 @@ int p1394_submit(pinnacle_1394_t *l, const uint32_t hdr[4], unsigned hdr_len,
     }
     o += put_reg_write(pkt + o, OHCI_ATREQ_CMDPTR, AT_SLOT | (payload ? 3u : 2u));
     o += put_reg_write(pkt + o, OHCI_ATREQ_SET, CTX_RUN | CTX_WAKE);
+    return o;
+}
+
+static int evt_is_busy(int evt)
+{
+    return evt >= 0x14 && evt <= 0x16;     /* ack_busy_X/A/B */
+}
+
+int p1394_submit(pinnacle_1394_t *l, const uint32_t hdr[4], unsigned hdr_len,
+                 const uint8_t *payload, unsigned plen)
+{
+    uint8_t pkt[256];
+    uint16_t status;
+    int o = build_at_packet(pkt, hdr, hdr_len, payload, plen, &status);
+    if (o < 0)
+        return -1;
 
     int evt = -1;
     for (int attempt = 0; attempt < 8; attempt++) {
@@ -411,7 +438,7 @@ int p1394_submit(pinnacle_1394_t *l, const uint32_t hdr[4], unsigned hdr_len,
             if (p1394_pump(l, 20) < 0)
                 return -1;
         evt = l->at_evt;
-        if (evt < 0x14 || evt > 0x16)          /* ack_busy_X/A/B: retry */
+        if (!evt_is_busy(evt))
             break;
         sleep_ms(10);
     }
@@ -419,38 +446,48 @@ int p1394_submit(pinnacle_1394_t *l, const uint32_t hdr[4], unsigned hdr_len,
     return evt;
 }
 
-/* First header quadlet of a request: rotating tlabel 2..63, rt = retry_1. */
+/* First header quadlet of a request: rotating tlabel 2..63, rt = retry_1. The label's
+ * response slot is cleared, so only a response that arrives from now on counts. */
 static uint32_t req_q0(pinnacle_1394_t *l, unsigned tcode)
 {
     unsigned tl = l->next_tl;
     l->next_tl = l->next_tl >= 63 ? 2 : l->next_tl + 1;
+    l->rsp[tl].valid = 0;
     return (tl << 10) | (tcode << 4);
 }
 
-static int wait_response(pinnacle_1394_t *l, int seq0, unsigned tl, uint16_t node,
-                         unsigned tcode, unsigned timeout_ms)
+/* 0 and the response's data in data[4] (wire order) once the response to the request with
+ * label tl has arrived from node with rcode complete; -1 on another rcode, a USB error or
+ * timeout. */
+static int wait_response(pinnacle_1394_t *l, unsigned tl, uint16_t node, unsigned tcode,
+                         unsigned timeout_ms, uint8_t data[4])
 {
     unsigned long long deadline = now_ms() + timeout_ms;
-    while (now_ms() < deadline) {
-        if (l->rsp_seq != seq0 && l->rsp_tl == tl && l->rsp_src == node && l->rsp_tcode == tcode)
-            return l->rsp_rcode == 0 ? 0 : -1;
+    for (;;) {
+        if (l->rsp[tl].valid && l->rsp[tl].src == node && l->rsp[tl].tcode == tcode) {
+            if (l->rsp[tl].rcode != 0)
+                return -1;
+            memcpy(data, l->rsp[tl].data, 4);
+            return 0;
+        }
+        if (now_ms() >= deadline)
+            return -1;
         if (p1394_pump(l, 20) < 0)
             return -1;
     }
-    return -1;
 }
 
 int p1394_read_quadlet(pinnacle_1394_t *l, uint16_t node, uint32_t off, uint32_t *val)
 {
     uint32_t hdr[4] = { req_q0(l, TC_READ_QUADLET), ((uint32_t)node << 16) | 0xffff, off, 0 };
     unsigned tl = (hdr[0] >> 10) & 0x3f;
-    int seq0 = l->rsp_seq;
+    uint8_t data[4];
     int evt = p1394_submit(l, hdr, 12, NULL, 0);
     if (evt != P1394_EVT_ACK_PENDING && evt != P1394_EVT_ACK_COMPLETE)
         return -1;
-    if (wait_response(l, seq0, tl, node, TC_READ_QUADLET_RESP, 300) != 0)
+    if (wait_response(l, tl, node, TC_READ_QUADLET_RESP, 300, data) != 0)
         return -1;
-    *val = get32be(l->rsp_data);
+    *val = get32be(data);
     return 0;
 }
 
@@ -464,14 +501,24 @@ int p1394_compare_swap(pinnacle_1394_t *l, uint16_t node, uint32_t off,
     uint32_t hdr[4] = { req_q0(l, TC_LOCK), ((uint32_t)node << 16) | 0xffff, off,
                         (8u << 16) | EXT_COMPARE_SWAP };
     unsigned tl = (hdr[0] >> 10) & 0x3f;
-    int seq0 = l->rsp_seq;
+    uint8_t rd[4];
     int evt = p1394_submit(l, hdr, 16, pay, 8);
     if (evt != P1394_EVT_ACK_PENDING && evt != P1394_EVT_ACK_COMPLETE)
         return -1;
-    if (wait_response(l, seq0, tl, node, TC_LOCK_RESP, 300) != 0)
+    if (wait_response(l, tl, node, TC_LOCK_RESP, 300, rd) != 0)
         return -1;
-    *old = get32be(l->rsp_data);
+    *old = get32be(rd);
     return 0;
+}
+
+/* The header of a write response (tcode 2, rt 1, rcode 0 = complete) to label tl from src.
+ * Its header is 12 bytes; sending 16 wedges the AT context. */
+static void write_resp_header(uint32_t hdr[4], uint8_t tl, uint16_t src)
+{
+    hdr[0] = ((uint32_t)tl << 10) | (1u << 8) | (TC_WRITE_RESP << 4);
+    hdr[1] = (uint32_t)src << 16;
+    hdr[2] = 0;
+    hdr[3] = 0;
 }
 
 void p1394_answer_owed(pinnacle_1394_t *l)
@@ -480,10 +527,8 @@ void p1394_answer_owed(pinnacle_1394_t *l)
         uint8_t tl = l->owed[0].tl;
         uint16_t src = l->owed[0].src;
         memmove(l->owed, l->owed + 1, sizeof(l->owed[0]) * (size_t)--l->n_owed);
-        /* write response: tcode 2, rt 1, rcode 0 (complete). Its header is
-         * 12 bytes; sending 16 wedges the AT context. */
-        uint32_t hdr[4] = { ((uint32_t)tl << 10) | (1u << 8) | (TC_WRITE_RESP << 4),
-                            (uint32_t)src << 16, 0, 0 };
+        uint32_t hdr[4];
+        write_resp_header(hdr, tl, src);
         int evt = p1394_submit(l, hdr, 12, NULL, 0);
         pin_logf(PIN_LOG_DEBUG, "p1394: write response tl=%u -> event 0x%02x\n", tl, evt);
     }
@@ -522,25 +567,55 @@ static void avc_log(const char *dir, const char *name, const uint8_t *f, unsigne
     pin_logf(PIN_LOG_DEBUG, "%s\n", line);
 }
 
+int p1394_avc_response_matches(const uint8_t *cmd, unsigned len, const uint8_t *f,
+                               unsigned flen)
+{
+    if (len < 3 || flen < 3 || f[1] != cmd[1])
+        return 0;
+    /* TRANSPORT STATE answers with the transport opcode and its mode in place of the
+     * command's own opcode and operand */
+    if (cmd[2] == 0xd0)
+        return f[2] == 0xd0 || (f[2] >= 0xc1 && f[2] <= 0xc4);
+    if (f[2] != cmd[2])
+        return 0;
+    /* The response repeats the command's operands (a status reply fills in the 0xff ones),
+     * so a late answer to an earlier command with the same opcode (PLAY forward against
+     * PLAY reverse, say) is not taken for this one. */
+    if (len >= 4 && cmd[3] != 0xff && (flen < 4 || f[3] != cmd[3]))
+        return 0;
+    return 1;
+}
+
+/* Builds the AT request that writes an AV/C command frame into node's FCP_COMMAND register. */
+static void avc_request_header(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len,
+                               uint32_t hdr[4])
+{
+    if (len == 4) {
+        hdr[0] = req_q0(l, TC_WRITE_QUADLET);
+        hdr[1] = ((uint32_t)node << 16) | 0xffff;
+        hdr[2] = P1394_CSR_FCP_COMMAND;
+        hdr[3] = get32(cmd);   /* data quadlet: bytes in wire order */
+    } else {
+        hdr[0] = req_q0(l, TC_WRITE_BLOCK);
+        hdr[1] = ((uint32_t)node << 16) | 0xffff;
+        hdr[2] = P1394_CSR_FCP_COMMAND;
+        hdr[3] = len << 16;
+    }
+}
+
 int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len,
               uint8_t *resp, unsigned resp_max, unsigned timeout_ms)
 {
+    if (len < 3 || len > 128)
+        return -1;
     avc_log("->", NULL, cmd, len);
     /* A camera waiting for our write response answers new commands with
      * ack_busy, so finish those first. */
     p1394_answer_owed(l);
     int seq0 = l->fcp_seq;
-    int evt;
-    if (len == 4) {
-        uint32_t q = get32(cmd);   /* data quadlet: bytes in wire order */
-        uint32_t hdr[4] = { req_q0(l, TC_WRITE_QUADLET), ((uint32_t)node << 16) | 0xffff,
-                            P1394_CSR_FCP_COMMAND, q };
-        evt = p1394_submit(l, hdr, 16, NULL, 0);
-    } else {
-        uint32_t hdr[4] = { req_q0(l, TC_WRITE_BLOCK), ((uint32_t)node << 16) | 0xffff,
-                            P1394_CSR_FCP_COMMAND, len << 16 };
-        evt = p1394_submit(l, hdr, 16, cmd, len);
-    }
+    uint32_t hdr[4];
+    avc_request_header(l, node, cmd, len, hdr);
+    int evt = len == 4 ? p1394_submit(l, hdr, 16, NULL, 0) : p1394_submit(l, hdr, 16, cmd, len);
     if (evt != P1394_EVT_ACK_PENDING && evt != P1394_EVT_ACK_COMPLETE) {
         pin_logf(PIN_LOG_DEBUG, "p1394: FCP command not delivered (event 0x%02x)\n", evt);
         return -1;
@@ -555,12 +630,10 @@ int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned le
             const uint8_t *f = l->fcp[seq0 % P1394_FCP_SLOTS];
             int flen = l->fcp_len[seq0 % P1394_FCP_SLOTS];
             seq0++;
-            /* match subunit + opcode; TRANSPORT STATE (0xd0) answers with
-             * the transport opcode (0xc1..0xc4) in its place */
-            if (flen < 3 || f[1] != cmd[1] ||
-                !(f[2] == cmd[2] || (cmd[2] == 0xd0 && f[2] >= 0xc1 && f[2] <= 0xc4))) {
-                pin_logf(PIN_LOG_DEBUG, "p1394: ignoring unrelated FCP response %02x %02x %02x\n",
-                            f[0], f[1], f[2]);
+            if (!p1394_avc_response_matches(cmd, len, f, flen > 0 ? (unsigned)flen : 0)) {
+                if (flen >= 3)
+                    pin_logf(PIN_LOG_DEBUG, "p1394: ignoring unrelated FCP response %02x %02x %02x\n",
+                             f[0], f[1], f[2]);
                 continue;
             }
             if (f[0] == 0x0f) {          /* INTERIM: the final response follows */
@@ -582,126 +655,194 @@ int p1394_avc(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned le
     return -1;
 }
 
-/* --- async AV/C (for use while something else owns EP 0x84) --------------
+/* --- AT packets without waiting (for use while something else owns EP 0x84) ---
  *
- * p1394_avc() above blocks inside p1394_submit()/p1394_pump(), each of which
- * does its own synchronous libusb_bulk_transfer() read of EP 0x84 -- fine
- * when nothing else is streaming, wrong once pinnacle_stream_read_loop() is
- * running its own async queue on that same endpoint (only one reader may
- * ever have URBs outstanding on an endpoint at a time).
+ * p1394_submit() blocks in p1394_pump(), a synchronous libusb read of EP 0x84:
+ * fine when nothing else is streaming, wrong once pinnacle_stream_read_loop_ex()
+ * has its own transfer outstanding on that endpoint (a second reader can take
+ * a record the loop's transfer should have had), and a blocking wait on the USB
+ * thread holds up the resubmission of the EP 0x88 queue.
  *
- * This split version only ever *writes* EP 0x02 (p1394_send(), same as
- * p1394_submit() but without its wait-for-ack-writeback loop) and reads its
- * state from whatever already fed p1394_parse_ep84() -- the stream loop's
- * own EP 0x84 completion handler, via its tick hook (pinnacle_stream.h).
- * One outstanding async command at a time per link, which is all a deck
+ * So while streaming, AT packets are only *written* (p1394_send()), and their
+ * xferStatus writeback is picked up from whatever already went through
+ * p1394_parse_ep84() -- the stream loop's own EP 0x84 completion handler. One
+ * packet is in flight at a time (the single AT descriptor slot); the write
+ * responses we owe go before a queued AV/C command, because a camera waiting
+ * for one answers new commands with ack_busy. */
+
+#define AT_ASYNC_ACK_MS   500   /* xferStatus writeback, as p1394_submit() waits */
+#define AT_ASYNC_TRIES    8     /* sends of one packet while it gets ack_busy */
+#define AVC_ASYNC_WAIT_MS 3000  /* from the ack to the final response */
+
+static int at_async_send(pinnacle_1394_t *l, int kind, const uint32_t hdr[4], unsigned hdr_len,
+                         const uint8_t *payload, unsigned plen)
+{
+    uint8_t pkt[256];
+    uint16_t status;
+    int o = build_at_packet(pkt, hdr, hdr_len, payload, plen, &status);
+    if (o < 0)
+        return -1;
+    l->at_status_addr = status;
+    l->at_evt = -1;
+    if (p1394_send(l, pkt, o) != 0) {
+        l->at_status_addr = 0;
+        return -1;
+    }
+    l->at_async = kind;
+    l->at_async_deadline_ms = now_ms() + AT_ASYNC_ACK_MS;
+    return 0;
+}
+
+static int send_owed_head(pinnacle_1394_t *l)
+{
+    uint32_t hdr[4];
+    write_resp_header(hdr, l->owed[0].tl, l->owed[0].src);
+    return at_async_send(l, P1394_AT_WRITE_RESP, hdr, 12, NULL, 0);
+}
+
+static void pop_owed_head(pinnacle_1394_t *l)
+{
+    if (l->n_owed > 0)
+        memmove(l->owed, l->owed + 1, sizeof(l->owed[0]) * (size_t)--l->n_owed);
+}
+
+static int send_avc_command(pinnacle_1394_t *l)
+{
+    uint32_t hdr[4];
+    avc_request_header(l, l->avc_node, l->avc_cmd, l->avc_cmd_len, hdr);
+    /* only responses written after the command count */
+    l->avc_fcp_seq0 = l->fcp_seq;
+    int rc = l->avc_cmd_len == 4
+                 ? at_async_send(l, P1394_AT_AVC, hdr, 16, NULL, 0)
+                 : at_async_send(l, P1394_AT_AVC, hdr, 16, l->avc_cmd, l->avc_cmd_len);
+    if (rc == 0)
+        l->avc_state = P1394_AVC_SENT;
+    return rc;
+}
+
+void p1394_async_service(pinnacle_1394_t *l)
+{
+    /* the ack of the packet in flight */
+    if (l->at_async) {
+        int evt = l->at_evt;
+        if (evt < 0 && now_ms() < l->at_async_deadline_ms)
+            return;
+        int kind = l->at_async;
+        l->at_async = 0;
+        l->at_status_addr = 0;
+        if (evt_is_busy(evt) && ++l->at_async_tries < AT_ASYNC_TRIES) {
+            /* the receiver is busy: the same packet again */
+            int rc = 0;
+            if (kind == P1394_AT_WRITE_RESP && l->n_owed > 0)
+                rc = send_owed_head(l);
+            else if (kind == P1394_AT_AVC && l->avc_pending && l->avc_state == P1394_AVC_SENT)
+                rc = send_avc_command(l);
+            if (rc == 0 && l->at_async)
+                return;
+            evt = -1;
+        }
+        l->at_async_tries = 0;
+        if (kind == P1394_AT_WRITE_RESP) {
+            if (l->n_owed > 0) {
+                pin_logf(PIN_LOG_DEBUG, "p1394: write response tl=%u -> event 0x%02x\n",
+                         l->owed[0].tl, evt);
+                pop_owed_head(l);
+            }
+        } else if (l->avc_pending && l->avc_state == P1394_AVC_SENT) {
+            if (evt == P1394_EVT_ACK_PENDING || evt == P1394_EVT_ACK_COMPLETE) {
+                l->avc_state = P1394_AVC_DELIVERED;
+                l->avc_deadline_ms = now_ms() + AVC_ASYNC_WAIT_MS;
+            } else {
+                pin_logf(PIN_LOG_DEBUG, "p1394: FCP command not delivered (event 0x%02x)\n", evt);
+                l->avc_state = P1394_AVC_FAILED;
+            }
+        }
+    }
+
+    /* the next packet: owed write responses first, then a queued command */
+    if (l->n_owed > 0) {
+        if (send_owed_head(l) != 0) {
+            pin_logf(PIN_LOG_DEBUG, "p1394: write response tl=%u not sent\n", l->owed[0].tl);
+            pop_owed_head(l);
+        }
+        return;
+    }
+    if (l->avc_pending && l->avc_state == P1394_AVC_QUEUED && send_avc_command(l) != 0)
+        l->avc_state = P1394_AVC_FAILED;
+}
+
+/* One outstanding async command at a time per link, which is all a deck
  * control caller ever needs (see engine/pin_deck.c). */
 int p1394_avc_begin(pinnacle_1394_t *l, uint16_t node, const uint8_t *cmd, unsigned len)
 {
-    if (len != 4 && (len < 1 || len > 128))
+    if (len < 3 || len > sizeof(l->avc_cmd))
         return -1;
-
-    uint8_t pkt[256];
-    int o = 0;
-    uint32_t desc[12];
-    unsigned nq;
-
-    uint32_t hdr[4];
-    if (len == 4) {
-        uint32_t q = get32(cmd);
-        hdr[0] = req_q0(l, TC_WRITE_QUADLET);
-        hdr[1] = ((uint32_t)node << 16) | 0xffff;
-        hdr[2] = P1394_CSR_FCP_COMMAND;
-        hdr[3] = q;
-        desc[0] = 0x120c0000u | 16; desc[1] = 0; desc[2] = 0; desc[3] = 0;
-        memcpy(&desc[4], hdr, 16);
-        nq = 8;
-        l->avc_status_addr = AT_SLOT + 0x0c;
-    } else {
-        hdr[0] = req_q0(l, TC_WRITE_BLOCK);
-        hdr[1] = ((uint32_t)node << 16) | 0xffff;
-        hdr[2] = P1394_CSR_FCP_COMMAND;
-        hdr[3] = len << 16;
-        desc[0] = 0x02000000u | 16; desc[1] = 0; desc[2] = 0; desc[3] = 0;
-        memcpy(&desc[4], hdr, 16);
-        unsigned padded = (len + 3) & ~3u;
-        desc[8] = 0x100c0000u | len; desc[9] = AT_SLOT + 0x30u; desc[10] = 0; desc[11] = 0;
-        nq = 12;
-        l->avc_status_addr = AT_SLOT + 0x2c;
-        (void)padded;
-    }
-
-    o += put_reg_write(pkt + o, OHCI_ATREQ_CLEAR, CTX_RUN);
-    unsigned padded = len == 4 ? 0 : ((len + 3) & ~3u);
-    put32(pkt + o, (MSG_RAM_WRITE << 28) | ((nq * 4 + padded) << 16) | AT_SLOT); o += 4;
-    for (unsigned i = 0; i < nq; i++) { put32(pkt + o, desc[i]); o += 4; }
-    if (len != 4) {
-        memset(pkt + o, 0, padded);
-        memcpy(pkt + o, cmd, len);
-        o += (int)padded;
-    }
-    o += put_reg_write(pkt + o, OHCI_ATREQ_CMDPTR, AT_SLOT | (len == 4 ? 2u : 3u));
-    o += put_reg_write(pkt + o, OHCI_ATREQ_SET, CTX_RUN | CTX_WAKE);
-
-    if (p1394_send(l, pkt, o) != 0) {
-        l->avc_status_addr = 0;
-        return -1;
-    }
-
-    avc_log("->", NULL, cmd, len);
+    memcpy(l->avc_cmd, cmd, len);
+    l->avc_cmd_len = len;
+    l->avc_node = node;
     l->avc_pending = 1;
-    l->avc_match_subunit = cmd[1];
-    l->avc_match_opcode = cmd[2];
+    l->avc_state = P1394_AVC_QUEUED;
     l->avc_fcp_seq0 = l->fcp_seq;
-    l->avc_deadline_ms = now_ms() + 3000;
-    l->at_status_addr = (uint16_t)l->avc_status_addr; /* so parse_ep84 also updates at_evt for us */
-    l->at_evt = -1;
+    l->avc_deadline_ms = now_ms() + AVC_ASYNC_WAIT_MS;
+    avc_log("->", NULL, cmd, len);
+    p1394_async_service(l);
+    if (l->avc_state == P1394_AVC_FAILED) {
+        l->avc_pending = 0;
+        return -1;
+    }
     return 0;
 }
 
 /* Call every tick (after feeding new EP 0x84 bytes to p1394_parse_ep84()).
  * Returns >0 = response length in resp (command complete, whether accepted
  * or rejected -- the caller checks resp[0] same as p1394_avc()), 0 = still
- * pending, -1 = timed out or no async command in flight. Retrying a
- * NOT_IMPLEMENTED (camera busy) is the caller's job, same rule as
- * pindeck/pin_deck's synchronous retry. */
+ * pending, -1 = not delivered, timed out or no async command in flight.
+ * Retrying a NOT_IMPLEMENTED (camera busy) is the caller's job, same rule as
+ * pin_deck's synchronous retry. */
 int p1394_avc_poll(pinnacle_1394_t *l, uint8_t *resp, unsigned resp_max)
 {
     if (!l->avc_pending)
         return -1;
 
-    p1394_answer_owed(l);
+    p1394_async_service(l);
 
-    int seq0 = l->avc_fcp_seq0;
-    if (l->fcp_seq - seq0 > P1394_FCP_SLOTS)
-        seq0 = l->fcp_seq - P1394_FCP_SLOTS;
-    while (seq0 != l->fcp_seq) {
-        const uint8_t *f = l->fcp[seq0 % P1394_FCP_SLOTS];
-        int flen = l->fcp_len[seq0 % P1394_FCP_SLOTS];
-        seq0++;
-        if (flen < 3 || f[1] != l->avc_match_subunit ||
-            !(f[2] == l->avc_match_opcode ||
-              (l->avc_match_opcode == 0xd0 && f[2] >= 0xc1 && f[2] <= 0xc4)))
-            continue;
-        l->avc_fcp_seq0 = seq0;
-        if (f[0] == 0x0f) {                 /* INTERIM: keep waiting, longer */
-            avc_log("<-", avc_ctype_name(f[0]), f, (unsigned)flen);
-            l->avc_deadline_ms = now_ms() + 10000;
-            continue;
-        }
-        unsigned n = (unsigned)flen < resp_max ? (unsigned)flen : resp_max;
-        memcpy(resp, f, n);
-        avc_log("<-", avc_ctype_name(f[0]), f, n);
+    if (l->avc_state == P1394_AVC_FAILED) {
         l->avc_pending = 0;
-        l->avc_status_addr = 0;
-        return (int)n;
+        return -1;
     }
-    l->avc_fcp_seq0 = seq0;
 
-    if (now_ms() >= l->avc_deadline_ms) {
+    /* A response can arrive before the ack's writeback has been seen. */
+    if (l->avc_state != P1394_AVC_QUEUED) {
+        int seq0 = l->avc_fcp_seq0;
+        if (l->fcp_seq - seq0 > P1394_FCP_SLOTS)
+            seq0 = l->fcp_seq - P1394_FCP_SLOTS;
+        while (seq0 != l->fcp_seq) {
+            const uint8_t *f = l->fcp[seq0 % P1394_FCP_SLOTS];
+            int flen = l->fcp_len[seq0 % P1394_FCP_SLOTS];
+            seq0++;
+            if (!p1394_avc_response_matches(l->avc_cmd, l->avc_cmd_len, f,
+                                            flen > 0 ? (unsigned)flen : 0))
+                continue;
+            l->avc_fcp_seq0 = seq0;
+            if (f[0] == 0x0f) {                 /* INTERIM: keep waiting, longer */
+                avc_log("<-", avc_ctype_name(f[0]), f, (unsigned)flen);
+                l->avc_deadline_ms = now_ms() + 10000;
+                continue;
+            }
+            unsigned n = (unsigned)flen < resp_max ? (unsigned)flen : resp_max;
+            memcpy(resp, f, n);
+            avc_log("<-", avc_ctype_name(f[0]), f, n);
+            l->avc_pending = 0;
+            return (int)n;
+        }
+        l->avc_fcp_seq0 = seq0;
+    }
+
+    /* Waiting for the AT context (write responses still going out) or for the ack
+     * counts as well: a camera that keeps us busy fails the command in the end. */
+    if (now_ms() >= l->avc_deadline_ms && l->avc_state != P1394_AVC_SENT) {
         pin_logf(PIN_LOG_DEBUG, "AV/C <- no response (timed out)\n");
         l->avc_pending = 0;
-        l->avc_status_addr = 0;
         return -1;
     }
     return 0;
@@ -710,8 +851,8 @@ int p1394_avc_poll(pinnacle_1394_t *l, uint8_t *resp, unsigned resp_max)
 int p1394_avc_cancel(pinnacle_1394_t *l)
 {
     int was_pending = l->avc_pending;
+    /* a command still in flight finishes in p1394_async_service(), which then ignores it */
     l->avc_pending = 0;
-    l->avc_status_addr = 0;
     return was_pending;
 }
 
@@ -1179,8 +1320,20 @@ static int pcr_adjust(pinnacle_1394_t *l, uint16_t node, unsigned plug, int delt
         if ((delta < 0 && p2p == 0) || (delta > 0 && p2p == 0x3f))
             return -1;
         uint32_t want = (cur & ~(0x3fu << 24)) | ((uint32_t)((int)p2p + delta) << 24);
-        if (p1394_compare_swap(l, node, off, cur, want, &old) != 0)
-            return -1;
+        if (p1394_compare_swap(l, node, off, cur, want, &old) != 0) {
+            /* No lock response: the swap may still have happened on the camera. Read the
+             * plug back, so a connection that was made is not left counted there unknown
+             * to us (and a disconnect that went through is not repeated). */
+            uint32_t now;
+            if (p1394_read_quadlet(l, node, off, &now) != 0)
+                return -1;
+            if (now == want) {
+                *pcr = want;
+                return 0;
+            }
+            cur = *pcr = now;   /* not applied (or changed meanwhile): try again from here */
+            continue;
+        }
         if (old == cur) {
             *pcr = want;
             return 0;

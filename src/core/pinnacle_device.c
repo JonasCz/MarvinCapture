@@ -266,12 +266,16 @@ static pinnacle_status_t open_fd(pinnacle_device_t *dev, int fd)
     }
     struct libusb_device_descriptor desc;
     const pinnacle_model_t *model = NULL;
-    if (libusb_get_device_descriptor(libusb_get_device(dev->handle), &desc) == 0 &&
-        desc.idVendor == PINNACLE_VID)
+    int drc = libusb_get_device_descriptor(libusb_get_device(dev->handle), &desc);
+    if (drc == 0 && desc.idVendor == PINNACLE_VID)
         model = pinnacle_model_lookup(desc.idProduct);
     if (!model || !model->supported) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d is USB device %04x:%04x, not a supported Pinnacle model\n",
-                 fd, desc.idVendor, desc.idProduct);
+        if (drc != 0)
+            pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d: reading the USB device descriptor failed (%s)\n",
+                     fd, libusb_error_name(drc));
+        else
+            pin_logf(PIN_LOG_ERROR, "pinnacle: fd:%d is USB device %04x:%04x, not a supported "
+                     "Pinnacle model\n", fd, desc.idVendor, desc.idProduct);
         libusb_close(dev->handle);
         libusb_exit(dev->usb_ctx);
         memset(dev, 0, sizeof(*dev));
@@ -382,13 +386,14 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
         return PINNACLE_ERR_BITSTREAM_READ;
     }
 
-    uint8_t *buf = malloc(PINNACLE_BITSTREAM_TOTAL_SIZE);
+    /* One byte more than the bitstream, so a longer file (not this bitstream) is refused. */
+    uint8_t *buf = malloc(PINNACLE_BITSTREAM_TOTAL_SIZE + 1);
     if (!buf) {
         fclose(f);
         return PINNACLE_ERR_BITSTREAM_READ;
     }
 
-    size_t n = fread(buf, 1, PINNACLE_BITSTREAM_TOTAL_SIZE, f);
+    size_t n = fread(buf, 1, PINNACLE_BITSTREAM_TOTAL_SIZE + 1, f);
     fclose(f);
     if (n != PINNACLE_BITSTREAM_TOTAL_SIZE) {
         pin_logf(PIN_LOG_ERROR, "pinnacle: bitstream '%s' is %zu bytes, expected %d\n",
@@ -431,35 +436,25 @@ static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *pa
  * 0x81 IN). Distinct from the SAA7113 I2C register writes on this same
  * endpoint pair (those carry a constant 0x4a "slave address" byte) -- these
  * are short firmware handshake packets seen bracketing the bitstream upload
- * in a real cold-boot trace (see docs/protocol.md). Reply
- * content isn't currently interpreted, only that the exchange completes. */
+ * in a real cold-boot trace (see docs/protocol.md). Only a reply that answers
+ * the request counts (pinnacle_cfg_xfer reads past late ones). */
 static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
                                           const uint8_t *req, int req_len)
 {
     uint8_t reply[64];
     int transferred = 0;
 
-    int rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CONFIG_OUT,
-                                   (uint8_t *)req, req_len, &transferred, BULK_TIMEOUT_MS);
-    if (rc != 0 || transferred != req_len) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle: config write failed (rc=%d, sent=%d/%d)\n",
-                rc, transferred, req_len);
-        return PINNACLE_ERR_USB_TRANSFER;
-    }
-
-    rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CONFIG_IN,
-                               reply, sizeof(reply), &transferred, BULK_TIMEOUT_MS);
-    if (rc != 0) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle: config reply read failed (rc=%d)\n", rc);
-        return PINNACLE_ERR_USB_TRANSFER;
-    }
+    pinnacle_status_t st = pinnacle_cfg_xfer(dev, req, req_len, reply, sizeof(reply), &transferred);
+    if (st != PINNACLE_OK)
+        return st;
 
     /* "80 <index> 08 00..." reads 8 bytes of the device's configuration
-     * memory; the reply echoes the request header in bytes 0..3. Index 3 is
-     * the 1394 GUID that MarvinBus64 publishes in the node's config ROM
-     * (byte-identical in the cold-boot trace). Index 0 is another 8-byte ID
-     * (fb82ad03 8d615d0e on the development unit; meaning unknown). */
-    if (req_len >= 3 && req[0] == 0x80 && req[2] == 0x08 && transferred >= 12) {
+     * memory; the reply echoes the request header in bytes 0..3 (checked by
+     * pinnacle_cfg_reply_matches). Index 3 is the 1394 GUID that MarvinBus64
+     * publishes in the node's config ROM (byte-identical in the cold-boot
+     * trace). Index 0 is another 8-byte ID (fb82ad03 8d615d0e on the
+     * development unit; meaning unknown). */
+    if (req_len >= 3 && req[0] == 0x80 && req[2] == 0x08) {
         if (req[1] == 0x03) {
             dev->guid_hi = ((uint32_t)reply[4] << 24) | ((uint32_t)reply[5] << 16) |
                            ((uint32_t)reply[6] << 8) | reply[7];
@@ -474,18 +469,19 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
 
     /* The 2-byte 05/06 exchanges bracketing the bitstream upload are status
      * reads: the device answers "<cmd> 01" when it is ready and "<cmd> 00"
-     * when it is not. We used to ignore the reply entirely and carry on, so a
-     * device that never came up looked identical to a healthy one until the
-     * command channel silently refused to answer much later. Report it. */
-    if (req_len == 2 && (req[0] == 0x05 || req[0] == 0x06) && transferred >= 2) {
-        if (reply[1] != 0x01) {
+     * when it is not. A device that never came up would otherwise look
+     * identical to a healthy one until the command channel silently refused
+     * to answer much later, so anything but "<cmd> 01" (a short reply too) is
+     * reported. */
+    if (req_len == 2 && (req[0] == 0x05 || req[0] == 0x06)) {
+        if (transferred < 2 || reply[1] != 0x01) {
             pin_logf(PIN_LOG_WARN,
                     "pinnacle: WARNING: device reports NOT READY to status read %02x "
-                    "(replied %02x %02x, expected %02x 01).\n"
+                    "(replied %d byte(s): %02x %02x, expected %02x 01).\n"
                     "pinnacle: the FPGA has not come up; this normally needs a physical "
                     "power cycle (unplug/replug USB) -- a warm reboot or a USB controller "
                     "reset does not clear it.\n",
-                    req[0], reply[0], reply[1], req[0]);
+                    req[0], transferred, reply[0], transferred >= 2 ? reply[1] : 0, req[0]);
             return PINNACLE_ERR_NOT_READY;
         }
     }

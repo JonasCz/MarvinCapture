@@ -29,8 +29,12 @@
  *      and a query while it's held reports the holder's pid and state.
  *   3. "crash": the holder is killed without ever releasing, and a query
  *      afterwards reports not-held again with no stale state left behind
- *      (POSIX: the lock file itself is gone; Windows: OpenMutexW/
+ *      (POSIX: the lock file itself is gone; Windows: OpenEventW/
  *      OpenFileMappingW simply stop finding anything, per pinnacle_lock.c).
+ *   4. threads: a lock taken on one thread is BUSY for a second acquire in
+ *      the same process (any thread) and is released from another thread,
+ *      after which it can be taken again (a session opened on one thread
+ *      and closed on another).
  *
  * The device id used throughout is made unique per test run (pid + time)
  * so a leftover lock file from a previous *aborted* test run (e.g. this
@@ -40,6 +44,7 @@
 
 #include "pinnacle_lock.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -113,13 +118,8 @@ static void test_basic_roundtrip(void)
     printf("ok: basic acquire/update/query/release round-trip\n");
 }
 
-/* Windows named mutexes are recursive for the thread that owns them, so a
- * second pinnacle_lock_acquire() of the same id from the SAME thread would
- * just succeed again -- it wouldn't exercise BUSY at all. A real "someone
- * else has it" only shows up across processes, which is also exactly the
- * scenario the plan cares about (and the same reason the "crash" half of
- * this test needs a real child process, not a thread: only a whole
- * process's exit reliably drops every kernel/file lock it held). */
+/* The "crash" half of this test needs a real child process, not a thread:
+ * only a whole process's exit reliably drops every kernel/file lock it held. */
 static void test_busy_and_crash(void)
 {
     char id[96];
@@ -248,6 +248,60 @@ static void test_busy_and_crash(void)
     printf("ok: BUSY across processes, query reports the holder, crash leaves nothing stale\n");
 }
 
+
+struct thread_ctx {
+    const char *id;
+    pinnacle_lock_t *lock;
+    pinnacle_status_t st;
+};
+
+static void *acquire_thread(void *arg)
+{
+    struct thread_ctx *c = arg;
+    c->st = pinnacle_lock_acquire(c->id, &c->lock);
+    return NULL;
+}
+
+static void *release_thread(void *arg)
+{
+    struct thread_ctx *c = arg;
+    pinnacle_lock_release(c->lock);
+    c->lock = NULL;
+    return NULL;
+}
+
+static void test_threads(void)
+{
+    char id[96];
+    make_device_id(id, sizeof(id), "threads");
+
+    /* taken on thread A, which then exits */
+    struct thread_ctx a = { id, NULL, PINNACLE_ERR_LOCK };
+    pthread_t t;
+    CHECK(pthread_create(&t, NULL, acquire_thread, &a) == 0, "start the acquiring thread");
+    pthread_join(t, NULL);
+    CHECK(a.st == PINNACLE_OK && a.lock, "acquire on thread A");
+
+    /* the same process, another thread: BUSY */
+    pinnacle_lock_t *again = NULL;
+    CHECK(pinnacle_lock_acquire(id, &again) == PINNACLE_ERR_BUSY,
+          "a second acquire in the same process must be BUSY");
+    pinnacle_lock_info_t info;
+    CHECK(pinnacle_lock_query(id, &info) == PINNACLE_OK && info.held,
+          "held after the acquiring thread has exited");
+
+    /* released on thread B */
+    CHECK(pthread_create(&t, NULL, release_thread, &a) == 0, "start the releasing thread");
+    pthread_join(t, NULL);
+    CHECK(pinnacle_lock_query(id, &info) == PINNACLE_OK && !info.held,
+          "not held after a release on another thread");
+
+    /* and free for the next session, on yet another thread */
+    CHECK(pinnacle_lock_acquire(id, &again) == PINNACLE_OK, "acquire again after the release");
+    pinnacle_lock_release(again);
+    printf("ok: acquired on one thread, BUSY in the same process, released on another\n");
+}
+
 #if defined(_WIN32)
 /* Windows child-mode entry point: acquire the given id, report CAPTURING,
  * touch the ready file, then block until the parent kills us. Invoked as
@@ -287,6 +341,7 @@ int main(int argc, char **argv)
 
     test_basic_roundtrip();
     test_busy_and_crash();
+    test_threads();
     printf("all pinnacle_lock tests passed\n");
     return 0;
 }

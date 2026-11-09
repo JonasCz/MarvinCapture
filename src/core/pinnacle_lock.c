@@ -75,8 +75,21 @@ static void sanitize_id(const char *id, char *out, size_t out_cap)
 
 #include <windows.h>
 
+/* Ownership is the existence of a named event: the owner creates it, and whoever finds it
+ * already there is told BUSY. That holds whichever thread opens or closes the session (a
+ * mutex belongs to the thread that took it: released from another thread it stays held, and
+ * the same thread could take it twice), and it cannot be left behind: the kernel closes the
+ * owner's handle when the process dies, and the event goes with its last handle. There is no
+ * "abandoned" state to accept.
+ *
+ * The event is in the Global\ namespace, so a second user logged on at the same time (fast
+ * user switching, Remote Desktop) is excluded too. Creating an event there needs no
+ * privilege; if it is refused anyway, the per-session Local\ name is used and only processes
+ * of the same logon session are excluded (logged). The status record is a pagefile-backed
+ * mapping in Local\: creating mappings in Global\ needs SeCreateGlobalPrivilege, which a
+ * normal user does not have, so another session's query sees "held" without the details. */
 struct pinnacle_lock {
-    HANDLE mutex;
+    HANDLE owner;            /* the named event */
     HANDLE mapping;
     pinnacle_lock_record_t *view;
 };
@@ -92,53 +105,89 @@ static int widen(const char *utf8, wchar_t *out, int out_cap)
     return n > 0;
 }
 
-static void build_names(const char *device_id, wchar_t *mutex_name, int mutex_cap,
-                         wchar_t *map_name, int map_cap)
+/* scope: "Global" or "Local" */
+static void build_owner_name(const char *device_id, const char *scope, wchar_t *out, int cap)
 {
     char sanitized[PINNACLE_ENUM_ID_MAX_LOCAL];
     sanitize_id(device_id, sanitized, sizeof(sanitized));
+    char utf8[160];
+    snprintf(utf8, sizeof(utf8), "%s\\PinnacleOSS-own-%s", scope, sanitized);
+    widen(utf8, out, cap);
+}
 
-    char mutex_utf8[128], map_utf8[128];
-    snprintf(mutex_utf8, sizeof(mutex_utf8), "Local\\PinnacleOSS-dev-%s", sanitized);
-    snprintf(map_utf8, sizeof(map_utf8), "Local\\PinnacleOSS-rec-%s", sanitized);
+static void build_map_name(const char *device_id, wchar_t *out, int cap)
+{
+    char sanitized[PINNACLE_ENUM_ID_MAX_LOCAL];
+    sanitize_id(device_id, sanitized, sizeof(sanitized));
+    char utf8[160];
+    snprintf(utf8, sizeof(utf8), "Local\\PinnacleOSS-rec-%s", sanitized);
+    widen(utf8, out, cap);
+}
 
-    widen(mutex_utf8, mutex_name, mutex_cap);
-    widen(map_utf8, map_name, map_cap);
+/* 1: we created the event (*out set); 0: it exists already (held); -1: error. */
+static int create_owner(const wchar_t *name, HANDLE *out, DWORD *err)
+{
+    SetLastError(0);
+    HANDLE h = CreateEventW(NULL, TRUE, FALSE, name);
+    *err = GetLastError();
+    if (h && *err != ERROR_ALREADY_EXISTS) {
+        *out = h;
+        return 1;
+    }
+    if (h) {
+        CloseHandle(h);
+        return 0;
+    }
+    if (*err != ERROR_ACCESS_DENIED)
+        return -1;
+    /* Denied: either another user's event exists (held), or this token may not create in
+     * the namespace at all (the event then cannot be found either). */
+    HANDLE o = OpenEventW(SYNCHRONIZE, FALSE, name);
+    DWORD oerr = GetLastError();
+    if (o) {
+        CloseHandle(o);
+        return 0;
+    }
+    return oerr == ERROR_ACCESS_DENIED ? 0 : -1;
 }
 
 pinnacle_status_t pinnacle_lock_acquire(const char *device_id, pinnacle_lock_t **out)
 {
-    wchar_t mutex_name[160], map_name[160];
-    build_names(device_id, mutex_name, 160, map_name, 160);
+    wchar_t global_name[160], local_name[160], map_name[160];
+    build_owner_name(device_id, "Global", global_name, 160);
+    build_owner_name(device_id, "Local", local_name, 160);
+    build_map_name(device_id, map_name, 160);
 
-    HANDLE mutex = CreateMutexW(NULL, FALSE, mutex_name);
-    if (!mutex) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle_lock: CreateMutexW failed (%lu)\n", GetLastError());
-        return PINNACLE_ERR_LOCK;
+    HANDLE owner = NULL;
+    for (int attempt = 0;; attempt++) {
+        DWORD err = 0;
+        int r = create_owner(global_name, &owner, &err);
+        if (r < 0) {
+            /* Global\ refused (a restricted token): exclude this logon session at least */
+            DWORD gerr = err;
+            r = create_owner(local_name, &owner, &err);
+            if (r >= 0 && attempt == 0)
+                pin_logf(PIN_LOG_WARN, "pinnacle_lock: the global device lock is not available "
+                         "(%lu); only this logon session is excluded\n", gerr);
+        }
+        if (r > 0)
+            break;
+        if (r < 0) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle_lock: CreateEventW failed (%lu)\n", err);
+            return PINNACLE_ERR_LOCK;
+        }
+        /* pinnacle_lock_query() holds the event open for an instant while it looks; that
+         * must not read as a device in use */
+        if (attempt >= 3)
+            return PINNACLE_ERR_BUSY;
+        Sleep(2);
     }
-
-    DWORD wait = WaitForSingleObject(mutex, 0);
-    if (wait == WAIT_TIMEOUT) {
-        CloseHandle(mutex);
-        return PINNACLE_ERR_BUSY;
-    }
-    if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle_lock: WaitForSingleObject failed (%lu)\n", GetLastError());
-        CloseHandle(mutex);
-        return PINNACLE_ERR_LOCK;
-    }
-    /* WAIT_ABANDONED: the previous owner crashed while holding the mutex.
-     * We still now own it -- nothing further to do here, which is exactly
-     * the "no stale state survives a crash" requirement: falling through
-     * to (re)initialise the record below overwrites whatever the dead
-     * owner last wrote. */
 
     HANDLE mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE,
                                         0, (DWORD)sizeof(pinnacle_lock_record_t), map_name);
     if (!mapping) {
         pin_logf(PIN_LOG_ERROR, "pinnacle_lock: CreateFileMappingW failed (%lu)\n", GetLastError());
-        ReleaseMutex(mutex);
-        CloseHandle(mutex);
+        CloseHandle(owner);
         return PINNACLE_ERR_LOCK;
     }
 
@@ -148,15 +197,12 @@ pinnacle_status_t pinnacle_lock_acquire(const char *device_id, pinnacle_lock_t *
     if (!view) {
         pin_logf(PIN_LOG_ERROR, "pinnacle_lock: MapViewOfFile failed (%lu)\n", GetLastError());
         CloseHandle(mapping);
-        ReleaseMutex(mutex);
-        CloseHandle(mutex);
+        CloseHandle(owner);
         return PINNACLE_ERR_LOCK;
     }
 
-    /* We hold the mutex, so we're the only writer right now, whether or not
-     * the mapping already existed (if it did, either we abandoned-acquired
-     * -- meaning that data is from a dead process -- or it's leftover from
-     * our own previous instance; either way it's ours to overwrite). */
+    /* We own the device, so we're the only writer; a mapping that already existed is held
+     * open only by a query reading it, and its contents are ours to overwrite. */
     view->magic = PINNACLE_LOCK_MAGIC;
     view->version = PINNACLE_LOCK_VERSION;
     view->owner_pid = (uint32_t)GetCurrentProcessId();
@@ -169,11 +215,10 @@ pinnacle_status_t pinnacle_lock_acquire(const char *device_id, pinnacle_lock_t *
     if (!lock) {
         UnmapViewOfFile(view);
         CloseHandle(mapping);
-        ReleaseMutex(mutex);
-        CloseHandle(mutex);
+        CloseHandle(owner);
         return PINNACLE_ERR_LOCK;
     }
-    lock->mutex = mutex;
+    lock->owner = owner;
     lock->mapping = mapping;
     lock->view = view;
     *out = lock;
@@ -185,7 +230,7 @@ pinnacle_status_t pinnacle_lock_update(pinnacle_lock_t *lock, pinnacle_lock_stat
 {
     if (!lock || !lock->view)
         return PINNACLE_ERR_LOCK;
-    /* We hold the mutex for the lifetime of *lock, so we're the only
+    /* We own the device for the lifetime of *lock, so we're the only
      * writer; a reader on another process may observe a torn update for at
      * most a few stores, which is fine for a status display (see
      * pinnacle_lock_query()'s doc comment on the POSIX side for the same
@@ -203,122 +248,86 @@ void pinnacle_lock_release(pinnacle_lock_t *lock)
 {
     if (!lock)
         return;
-    if (lock->view)
-        UnmapViewOfFile(lock->view);
-    if (lock->mapping)
-        CloseHandle(lock->mapping);
-    if (lock->mutex) {
-        ReleaseMutex(lock->mutex);
-        CloseHandle(lock->mutex);
+    if (lock->view) {
+        /* a query that has the mapping open right now must not report us */
+        lock->view->magic = 0;
+        if (!UnmapViewOfFile(lock->view))
+            pin_logf(PIN_LOG_WARN, "pinnacle_lock: UnmapViewOfFile failed (%lu)\n", GetLastError());
     }
-    /* Both kernel objects are now closed on our end; since we're always the
-     * only handle holder outside of a query's brief peek (which closes its
-     * own handles immediately, see below), they're destroyed right here --
-     * nothing left for a crash to leave behind, because there was nothing
-     * left even for a clean exit. */
+    if (lock->mapping && !CloseHandle(lock->mapping))
+        pin_logf(PIN_LOG_WARN, "pinnacle_lock: closing the status record failed (%lu)\n",
+                 GetLastError());
+    /* Any thread may do this: the event is not owned by a thread. */
+    if (lock->owner && !CloseHandle(lock->owner))
+        pin_logf(PIN_LOG_ERROR, "pinnacle_lock: releasing the device lock failed (%lu)\n",
+                 GetLastError());
     free(lock);
 }
 
-typedef struct {
-    HANDLE mutex;
-    int held;
-} query_probe_ctx_t;
-
-static DWORD WINAPI query_probe_thread(LPVOID arg)
+/* 1 if the process is still running. */
+static int process_alive(uint32_t pid)
 {
-    query_probe_ctx_t *ctx = (query_probe_ctx_t *)arg;
-    DWORD wait = WaitForSingleObject(ctx->mutex, 0);
-    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
-        ReleaseMutex(ctx->mutex);
-        ctx->held = 0;
-    } else {
-        ctx->held = 1; /* WAIT_TIMEOUT: some thread genuinely holds it */
-    }
-    return 0;
+    HANDLE h = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)pid);
+    if (!h)
+        return GetLastError() == ERROR_ACCESS_DENIED;   /* exists, another user's */
+    int alive = WaitForSingleObject(h, 0) == WAIT_TIMEOUT;
+    CloseHandle(h);
+    return alive;
 }
 
-/* See the big comment at its call site in pinnacle_lock_query(): this has
- * to run on a thread that has never touched mutex_name, so it's a thread of
- * its own rather than the caller's. Returns 1 if mutex_name is currently
- * held by some thread (in any process, including our own), else 0. */
-static int query_probe_mutex_held(const wchar_t *mutex_name)
+/* 1 if the owner event exists under name (opened briefly), 0 if not. */
+static int owner_exists(const wchar_t *name)
 {
-    HANDLE mutex = OpenMutexW(SYNCHRONIZE, FALSE, mutex_name);
-    if (!mutex)
-        return 0; /* the mutex itself is gone: definitely not held */
-
-    query_probe_ctx_t ctx = { mutex, 0 };
-    HANDLE thread = CreateThread(NULL, 0, query_probe_thread, &ctx, 0, NULL);
-    if (thread) {
-        WaitForSingleObject(thread, INFINITE);
-        CloseHandle(thread);
-    } else {
-        /* Couldn't even spin up a thread (should be exceedingly rare) --
-         * fail safe by reporting held, so a caller doesn't wrongly offer to
-         * open a device we couldn't actually check. */
-        ctx.held = 1;
+    HANDLE h = OpenEventW(SYNCHRONIZE, FALSE, name);
+    if (h) {
+        CloseHandle(h);
+        return 1;
     }
-
-    CloseHandle(mutex);
-    return ctx.held;
+    return GetLastError() == ERROR_ACCESS_DENIED;   /* another user's: it exists */
 }
 
 pinnacle_status_t pinnacle_lock_query(const char *device_id, pinnacle_lock_info_t *out)
 {
     memset(out, 0, sizeof(*out));
 
-    wchar_t mutex_name[160], map_name[160];
-    build_names(device_id, mutex_name, 160, map_name, 160);
+    wchar_t global_name[160], local_name[160], map_name[160];
+    build_owner_name(device_id, "Global", global_name, 160);
+    build_owner_name(device_id, "Local", local_name, 160);
+    build_map_name(device_id, map_name, 160);
 
+    if (!owner_exists(global_name) && !owner_exists(local_name))
+        return PINNACLE_OK;   /* never acquired, or the owner is gone: not held */
+
+    /* The event can exist for an instant without an owner (another query has it open), so
+     * the record decides when it can be read: a valid one names a live owner. */
     HANDLE mapping = OpenFileMappingW(FILE_MAP_READ, FALSE, map_name);
-    if (!mapping)
-        return PINNACLE_OK; /* never acquired, or the owner is fully gone: not held */
-
-    /* The mapping's existence alone doesn't prove anyone holds it (the
-     * kernel keeps it alive as long as our own handle is open, even after
-     * we're done reading it below) -- the mutex is the real ownership
-     * signal. Try to take it non-blocking: if we can (or it's abandoned),
-     * nobody owns it, so release it again immediately and report free.
-     *
-     * This probe deliberately runs on a throwaway worker thread rather than
-     * this one: Windows mutex ownership is per-THREAD, not per-process, so
-     * if *this* thread is the one that holds the lock (a process querying
-     * its own device -- pin_api.h's future PIN_DEV_OPEN_HERE case), calling
-     * WaitForSingleObject on it directly here would "succeed" via the same
-     * recursive-ownership rule that lets one thread call
-     * WaitForSingleObject on a mutex it already owns any number of times,
-     * and then our ReleaseMutex would silently eat one level of our own
-     * outer acquire's ownership -- reporting a self-held device as free
-     * while quietly weakening the real lock. A fresh thread has never
-     * acquired anything, so it blocks (WAIT_TIMEOUT) exactly when some
-     * thread -- ours included -- genuinely holds it. */
-    int held = query_probe_mutex_held(mutex_name);
-
-    if (held) {
-        pinnacle_lock_record_t *view =
-            (pinnacle_lock_record_t *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0,
-                                                     sizeof(pinnacle_lock_record_t));
-        if (view) {
-            if (view->magic == PINNACLE_LOCK_MAGIC && view->version == PINNACLE_LOCK_VERSION) {
+    if (!mapping) {
+        out->held = 1;        /* held from another logon session: no details */
+        return PINNACLE_OK;
+    }
+    pinnacle_lock_record_t *view =
+        (pinnacle_lock_record_t *)MapViewOfFile(mapping, FILE_MAP_READ, 0, 0,
+                                                 sizeof(pinnacle_lock_record_t));
+    if (view) {
+        pinnacle_lock_record_t rec = *view;
+        UnmapViewOfFile(view);
+        if (rec.magic == PINNACLE_LOCK_MAGIC && rec.version == PINNACLE_LOCK_VERSION) {
+            if (process_alive(rec.owner_pid)) {
                 out->held = 1;
-                out->owner_pid = view->owner_pid;
-                out->state = (pinnacle_lock_state_t)view->state;
-                out->guid_hi = view->guid_hi;
-                out->guid_lo = view->guid_lo;
-                out->guid_known = view->guid_known;
-            } else {
-                /* Held by something, but the record doesn't parse (a
-                 * mismatched version, most likely). Still report held so a
-                 * caller doesn't wrongly offer to open the device -- just
-                 * without state/guid detail. */
-                out->held = 1;
+                out->owner_pid = rec.owner_pid;
+                out->state = (pinnacle_lock_state_t)rec.state;
+                out->guid_hi = rec.guid_hi;
+                out->guid_lo = rec.guid_lo;
+                out->guid_known = rec.guid_known;
             }
-            UnmapViewOfFile(view);
-        } else {
+        } else if (rec.magic != 0) {
+            /* Held by something whose record does not parse (another version): still
+             * held, just without state/guid detail. */
             out->held = 1;
         }
+    } else {
+        out->held = 1;
     }
-
     CloseHandle(mapping);
     return PINNACLE_OK;
 }

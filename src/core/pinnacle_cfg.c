@@ -43,6 +43,20 @@ static void sleep_ms(unsigned ms)
     nanosleep(&ts, NULL);
 }
 
+int pinnacle_cfg_reply_matches(const uint8_t *req, int req_len, const uint8_t *reply, int n)
+{
+    if (req_len < 1 || n < 1 || reply[0] != req[0])
+        return 0;
+    /* "80 idx 08": the 20-byte reply repeats the request header before the 8 bytes */
+    if (req[0] == 0x80 && req_len >= 3)
+        return n >= 12 && reply[1] == req[1] && reply[2] == req[2];
+    return 1;
+}
+
+/* Replies that belong to an earlier request (one whose reply came after its read had timed
+ * out) are read past, so every later exchange is not one reply off. */
+#define CFG_STALE_REPLIES 4
+
 pinnacle_status_t pinnacle_cfg_xfer(pinnacle_device_t *dev, const uint8_t *req, int req_len,
                                     uint8_t *reply, int reply_cap, int *reply_len)
 {
@@ -59,16 +73,25 @@ pinnacle_status_t pinnacle_cfg_xfer(pinnacle_device_t *dev, const uint8_t *req, 
         reply = scratch;
         reply_cap = sizeof(scratch);
     }
-    rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CONFIG_IN, reply, reply_cap, &n,
-                               CFG_TIMEOUT_MS);
-    if (rc != 0) {
-        pin_logf(PIN_LOG_ERROR, "pinnacle: config reply to %02x failed (%s)\n", req[0],
-                libusb_error_name(rc));
-        return PINNACLE_ERR_USB_TRANSFER;
+    for (int i = 0; i <= CFG_STALE_REPLIES; i++) {
+        n = 0;
+        rc = libusb_bulk_transfer(dev->handle, PINNACLE_EP_CONFIG_IN, reply, reply_cap, &n,
+                                   CFG_TIMEOUT_MS);
+        if (rc != 0) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle: config reply to %02x failed (%s)\n", req[0],
+                    libusb_error_name(rc));
+            return PINNACLE_ERR_USB_TRANSFER;
+        }
+        if (pinnacle_cfg_reply_matches(req, req_len, reply, n)) {
+            if (reply_len)
+                *reply_len = n;
+            return PINNACLE_OK;
+        }
+        pin_logf(PIN_LOG_DEBUG, "pinnacle: config reply %02x (%d bytes) does not answer %02x, "
+                 "reading on\n", n > 0 ? reply[0] : 0, n, req[0]);
     }
-    if (reply_len)
-        *reply_len = n;
-    return PINNACLE_OK;
+    pin_logf(PIN_LOG_ERROR, "pinnacle: no matching config reply to %02x\n", req[0]);
+    return PINNACLE_ERR_USB_TRANSFER;
 }
 
 pinnacle_status_t pinnacle_cfg_op(pinnacle_device_t *dev, uint8_t op, uint8_t arg,
@@ -79,18 +102,33 @@ pinnacle_status_t pinnacle_cfg_op(pinnacle_device_t *dev, uint8_t op, uint8_t ar
     pinnacle_status_t st = pinnacle_cfg_xfer(dev, req, 2, reply, sizeof(reply), &n);
     if (st != PINNACLE_OK)
         return st;
-    if (result)
-        *result = n >= 2 ? reply[1] : 0;
+    if (result) {
+        if (n < 2) {
+            pin_logf(PIN_LOG_ERROR, "pinnacle: config reply to %02x %02x is %d byte(s) long\n",
+                     op, arg, n);
+            return PINNACLE_ERR_USB_TRANSFER;
+        }
+        *result = reply[1];
+    }
     return PINNACLE_OK;
 }
 
-/* The reply to a write is "01 01 08"; the vendor driver does not look at it,
- * and neither do we beyond the transfer succeeding. */
+/* The reply to a write is "01 01 08", 01 = acknowledged (as for a read); anything else is a
+ * NAK: the chip did not take the value. */
 pinnacle_status_t pinnacle_i2c_write(pinnacle_device_t *dev, uint8_t addr, uint8_t sub,
                                      uint8_t val)
 {
-    uint8_t req[5] = { 0x01, addr, 2, sub, val };
-    return pinnacle_cfg_xfer(dev, req, sizeof(req), NULL, 0, NULL);
+    uint8_t req[5] = { 0x01, addr, 2, sub, val }, reply[64];
+    int n = 0;
+    pinnacle_status_t st = pinnacle_cfg_xfer(dev, req, sizeof(req), reply, sizeof(reply), &n);
+    if (st != PINNACLE_OK)
+        return st;
+    if (n < 2 || reply[1] != 0x01) {
+        pin_logf(PIN_LOG_ERROR, "pinnacle: I2C write %02x.%02x = %02x not acknowledged "
+                 "(reply %02x %02x, %d bytes)\n", addr, sub, val, reply[0], n >= 2 ? reply[1] : 0, n);
+        return PINNACLE_ERR_USB_TRANSFER;
+    }
+    return PINNACLE_OK;
 }
 
 pinnacle_status_t pinnacle_i2c_read(pinnacle_device_t *dev, uint8_t addr, uint8_t sub,
@@ -122,7 +160,7 @@ pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path, i
         pin_logf(PIN_LOG_ERROR, "pinnacle: cannot open bitstream '%s': %s\n", path, strerror(errno));
         return PINNACLE_ERR_BITSTREAM_READ;
     }
-    uint8_t *buf = malloc(FPGA_BITSTREAM_BYTES + 1);
+    uint8_t *buf = malloc(FPGA_BITSTREAM_BYTES + 1);   /* + 1: a longer file is refused */
     size_t len = buf ? fread(buf, 1, FPGA_BITSTREAM_BYTES + 1, f) : 0;
     fclose(f);
     if (len != FPGA_BITSTREAM_BYTES) {

@@ -26,12 +26,14 @@
  *
  * The hard requirement is that nothing stale survives a crash or a reboot:
  *
- *   - Windows: a named mutex (owned by the process, released by the kernel
- *     the instant the process dies for any reason) plus a pagefile-backed
- *     named shared-memory section for the status record. Neither is ever a
- *     file; both vanish when the last handle closes, which happens at
- *     process exit even on a crash. See pinnacle_lock.c for exactly how a
- *     query tells "held" from "free" without racing the owner.
+ *   - Windows: a named event whose existence is the ownership (Global\, so
+ *     other logon sessions are excluded too; Local\ if a restricted token
+ *     may not create there), plus a pagefile-backed named shared-memory
+ *     section (Local\) for the status record. Neither belongs to a thread,
+ *     so a session may be opened on one thread and closed on another.
+ *     Neither is ever a file; both vanish when the last handle closes,
+ *     which happens at process exit even on a crash. See pinnacle_lock.c
+ *     for how a query tells "held" from "free".
  *   - Linux: a file in $XDG_RUNTIME_DIR (a per-user tmpfs cleared at logout
  *     or reboot), held with flock() -- which the kernel releases on crash --
  *     and unlinked on a clean release. A query that can take the shared
@@ -79,7 +81,8 @@ typedef struct {
  * path, or a future "replay:<file>" virtual id; sanitised internally for
  * use in OS object names / a file name). Starts in PINNACLE_LOCK_PREPARING.
  *
- * Returns PINNACLE_ERR_BUSY if another live process already holds it.
+ * Returns PINNACLE_ERR_BUSY if another live process, or this one, already
+ * holds it. The lock may be released from any thread.
  * A lock abandoned by a crashed previous owner is acquired normally (no
  * special return code -- the caller can't tell the difference, by design:
  * nothing stale is visible by the time acquire returns). *out is only
@@ -93,8 +96,8 @@ pinnacle_status_t pinnacle_lock_acquire(const char *device_id, pinnacle_lock_t *
 pinnacle_status_t pinnacle_lock_update(pinnacle_lock_t *lock, pinnacle_lock_state_t state,
                                        uint32_t guid_hi, uint32_t guid_lo);
 
-/* Releases the lock: on Windows, closes the kernel objects (freeing them if
- * we were the last handle, which we always are); on POSIX, unlinks the
+/* Releases the lock, from any thread: on Windows, closes the kernel objects
+ * (freeing them unless a query has them open for an instant); on POSIX, unlinks the
  * backing file then closes/unlocks it. Safe with NULL. *lock is invalid
  * after this call. */
 void pinnacle_lock_release(pinnacle_lock_t *lock);

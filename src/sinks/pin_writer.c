@@ -17,6 +17,7 @@
  */
 
 #include "pin_writer.h"
+#include "pin_thread_boost.h"
 #include "../core/pin_log.h"
 
 #include <stdlib.h>
@@ -131,7 +132,7 @@ pin_writer_t *pin_writer_start_ex(size_t capacity_bytes, pin_writer_consume_fn c
     w->user = user;
     pthread_mutex_init(&w->lock, NULL);
     pthread_cond_init(&w->wake, NULL);
-    if (pthread_create(&w->thread, NULL, writer_thread, w) != 0) {
+    if (pin_thread_create_normal(&w->thread, writer_thread, w) != 0) {
         free(w->buf);
         free(w);
         return NULL;
