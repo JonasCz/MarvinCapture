@@ -60,6 +60,8 @@
 #include "hdv_demux.h"
 #include "hdv_decode.h"
 #include "../core/pin_log.h"
+#include "../core/pin_fs.h"
+#include "../engine/pin_stop.h"
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -76,8 +78,8 @@
 
 #define NOPTS AV_NOPTS_VALUE
 #define SPAN_MAX_SECONDS 2.0         /* a longer span is handed to a worker in parts */
-#define PEND_LIMIT (160ull << 20)    /* bytes waiting in front of the muxer: the repair is behind */
-#define GQ_LIMIT (64ull << 20)       /* bytes waiting for the decode thread: the check is behind */
+#define PEND_LIMIT PIN_HDVMUX_PEND_LIMIT  /* bytes waiting in front of the muxer: the repair is behind */
+#define GQ_LIMIT PIN_HDVMUX_GQ_LIMIT      /* bytes waiting for the decode thread: the check is behind */
 #define MAX_HELD_SECONDS 6.0         /* decoded frames waiting for an encoder: the repair is behind */
 #define MAX_WORKERS 3
 
@@ -146,6 +148,8 @@ typedef struct {
     aframe_t *aq;              /* audio frames waiting for the muxer */
     int aq_n, aq_cap;
     int a_sr, a_ch, a_kbps;    /* the first audio frame's */
+    int pmt_audio;             /* hdv_demux_pmt_audio(): does the stream say it has audio */
+    uint64_t pend_shared;      /* pend_bytes, for get_status() */
     pin_sink_status_t st;
 
     /* ---- the decode thread: decode, decide, mux */
@@ -218,6 +222,22 @@ static void behind(hdvmux_t *m, const char *what)
     pthread_mutex_unlock(&m->lock);
     if (first)
         pin_logf(PIN_LOG_ERROR, "sink_hdvmux: %s cannot keep up with the capture\n", what);
+}
+
+/* Something the file must have is missing: the sink fails on purpose (pin_stop.h), the capture
+ * ends with an error that says what. */
+static void fail_on_purpose(hdvmux_t *m, int reason, const char *what)
+{
+    pthread_mutex_lock(&m->lock);
+    int first = m->st.last_error == PIN_OK;
+    if (first) {
+        m->st.fail_reason = reason;
+        m->st.last_error = PIN_ERR_CODEC;
+    }
+    pthread_cond_broadcast(&m->dec_wake);
+    pthread_mutex_unlock(&m->lock);
+    if (first)
+        pin_logf(PIN_LOG_ERROR, "sink_hdvmux: capture failed: %s\n", what);
 }
 
 /* ------------------------------------------------------------- workers -- */
@@ -449,6 +469,7 @@ out:
     return ok;
 }
 
+/* 0, -1 if the header could not be written, -2 if there is no MP2 encoder for the silence. */
 static int write_header(hdvmux_t *m, const hdv_seq_t *si)
 {
     AVStream *v = avformat_new_stream(m->fmt, NULL);
@@ -506,7 +527,10 @@ static int write_header(hdvmux_t *m, const hdv_seq_t *si)
         a->codecpar->frame_size = 1152;
         av_channel_layout_default(&a->codecpar->ch_layout, ch);
         a->time_base = (AVRational){ 1, sr };
-        make_silence(m, sr, ch, kbps);
+        /* Without the silence a gap in the audio cannot be filled, and everything after it would
+         * play early. We prefer to fail fast: no file is written. */
+        if (!make_silence(m, sr, ch, kbps))
+            return -2;
     }
     if (m->params.title[0])
         av_dict_set(&m->fmt->metadata, "title", m->params.title, 0);
@@ -542,8 +566,10 @@ static void mark_error(hdvmux_t *m, int64_t a, int64_t b)
         while (cap < (size_t)b)
             cap *= 2;
         uint8_t *e = realloc(m->eflag, cap);
-        if (!e)
+        if (!e) {
+            set_error(m, PIN_ERR_NOMEM);   /* the count would be wrong from here on */
             return;
+        }
         memset(e + m->eflag_cap, 0, cap - m->eflag_cap);
         m->eflag = e;
         m->eflag_cap = cap;
@@ -563,7 +589,9 @@ static void put_audio_frame(hdvmux_t *m, const uint8_t *d, int len, int sr)
 {
     AVPacket *pkt = av_packet_alloc();
     if (!pkt || av_new_packet(pkt, len) < 0) {
+        /* a frame left out would make all later audio play early */
         av_packet_free(&pkt);
+        set_error(m, PIN_ERR_NOMEM);
         return;
     }
     memcpy(pkt->data, d, (size_t)len);
@@ -696,11 +724,27 @@ static void drain(hdvmux_t *m, int final, const hdv_seq_t *si)
             double fr = (double)si->fps_num / si->fps_den;
             int64_t queued = m->frame_pos - it->out_start;
             pthread_mutex_lock(&m->lock);
-            int have_audio = m->a_sr > 0;
+            int have_audio = m->a_sr > 0, pmt_audio = m->pmt_audio;
             pthread_mutex_unlock(&m->lock);
             if (!have_audio && !final && queued < 2 * fr)
                 return;
-            if (write_header(m, si) < 0) {
+            /* 2 s of pictures and no usable audio frame, though the stream does not say it is
+             * video-only: we prefer to fail fast rather than write the tape without sound (a
+             * short capture that ends inside the 2 s keeps its pictures). */
+            if (!have_audio && !final && pmt_audio != 0) {
+                m->header_failed = 1;
+                fail_on_purpose(m, PIN_SINK_FAIL_NO_AUDIO, "the HDV stream carries no audio "
+                                "(none in the first 2 seconds)");
+                return;
+            }
+            int hrc = write_header(m, si);
+            if (hrc == -2) {
+                m->header_failed = 1;
+                fail_on_purpose(m, PIN_SINK_FAIL_AUDIO_ENCODER, "no MP2 encoder for the silence "
+                                "that fills gaps in the audio");
+                return;
+            }
+            if (hrc < 0) {
                 m->header_failed = 1;
                 set_error(m, PIN_ERR_IO);
                 pin_logf(PIN_LOG_ERROR, "sink_hdvmux: writing the file header failed\n");
@@ -760,6 +804,9 @@ static void drain(hdvmux_t *m, int final, const hdv_seq_t *si)
         if (!m->head)
             m->tail = NULL;
         m->pend_bytes -= it->bytes;
+        pthread_mutex_lock(&m->lock);
+        m->pend_shared = m->pend_bytes;
+        pthread_mutex_unlock(&m->lock);
         free_item(it);
     }
 }
@@ -773,6 +820,9 @@ static void enqueue(hdvmux_t *m, item_t *it)
         m->head = it;
     m->tail = it;
     m->pend_bytes += it->bytes;
+    pthread_mutex_lock(&m->lock);
+    m->pend_shared = m->pend_bytes;
+    pthread_mutex_unlock(&m->lock);
     if (m->pend_bytes > m->pend_limit)
         behind(m, "writing the file behind a repair");
 }
@@ -1340,7 +1390,9 @@ static pin_status_t hdvmux_write_unit(pin_sink_t *s, const uint8_t *data, size_t
     if (e != PIN_OK)
         return e;
     hdv_demux_feed(m->dmx, data, len);
+    int pmt_audio = hdv_demux_pmt_audio(m->dmx);
     pthread_mutex_lock(&m->lock);
+    m->pmt_audio = pmt_audio;
     m->st.units_written++;
     e = m->st.last_error;
     pthread_mutex_unlock(&m->lock);
@@ -1392,6 +1444,15 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
     if (m->fmt) {
         if (m->header_written && av_write_trailer(m->fmt) < 0)
             set_error(m, PIN_ERR_IO);
+        /* the size with the trailer (the MOV moov, the MKV cues) and the tail still buffered */
+        if (m->fmt->pb) {
+            avio_flush(m->fmt->pb);
+            uint64_t b = (uint64_t)avio_tell(m->fmt->pb);
+            pthread_mutex_lock(&m->lock);
+            if (b > m->st.bytes_written)
+                m->st.bytes_written = b;
+            pthread_mutex_unlock(&m->lock);
+        }
         if (m->fault_io) {
             if (pin_sink_fault_avio_close(&m->fmt->pb) < 0)
                 set_error(m, PIN_ERR_IO);
@@ -1401,7 +1462,7 @@ static pin_status_t hdvmux_close(pin_sink_t *s)
         avformat_free_context(m->fmt);
         if (!m->any_written && m->file_created) {
             pin_logf(PIN_LOG_WARN, "sink_hdvmux: no HDV pictures captured, leaving no output file\n");
-            remove(m->path);
+            pin_fs_remove(m->path);
         }
     }
     if (m->spans || m->frames_silenced)
@@ -1446,6 +1507,7 @@ static void hdvmux_get_status(pin_sink_t *s, pin_sink_status_t *out)
     hdvmux_t *m = s->priv;
     pthread_mutex_lock(&m->lock);
     *out = m->st;
+    out->bytes_queued = (uint64_t)m->gq_bytes + m->pend_shared;
     pthread_mutex_unlock(&m->lock);
 }
 
@@ -1464,6 +1526,7 @@ pin_sink_t *sink_hdvmux_create(pin_format_t format)
     m->last_cam_end = NOPTS;
     m->dur = 3600;
     m->pend_limit = PEND_LIMIT;
+    m->pmt_audio = -1;
     pthread_mutex_init(&m->lock, NULL);
     pthread_cond_init(&m->dec_wake, NULL);
     pthread_cond_init(&m->enc_wake, NULL);

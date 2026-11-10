@@ -176,6 +176,42 @@ static void test_closed_pipe(void)
     pin_stdout_set_fd(-1);
 }
 
+/* ---- a reader that stops reading: abort does not wait for it ---------- */
+
+static int pipe_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, size_t len, void *user)
+{
+    (void)kind; (void)index;
+    *(int *)user = pin_stdout_write(data, len);
+    return 0;
+}
+
+static void test_stalled_reader(void)
+{
+    int fds[2];
+    CHECK(PIPE(fds) == 0);
+    pin_stdout_set_fd(fds[1]);
+    pin_stdout_prepare();
+    int wrc = 1;
+    static uint8_t big[4 << 20];   /* far more than a pipe holds: the write blocks */
+    pin_writer_t *w = pin_writer_start_ex(sizeof(big) * 2, pipe_consume, &wrc, 0);
+    CHECK(w);
+    CHECK_EQ_I(pin_writer_push(w, PIN_UNIT_RAW, 0, big, sizeof(big)), 1);
+    nap_ms(200);                   /* the writer is inside pin_stdout_write, waiting for room */
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    pin_writer_abort(w);
+    pin_writer_stop(w);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    double took = (double)(t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
+    printf("abort with a stalled reader: the write gave up after %.2f s\n", took);
+    CHECK(took < 2.0);
+    CHECK_EQ_I(wrc, PIN_STDOUT_ERROR);
+    CLOSE(fds[0]);
+    CLOSE(fds[1]);
+    pin_stdout_set_fd(-1);
+    pin_stdout_prepare();          /* clears the cancel for the tests that follow */
+}
+
 /* ---- pin_writer: a full queue is fatal, not a drop --------------------- */
 
 typedef struct {
@@ -367,6 +403,7 @@ int main(void)
 
     test_raw_to_fd(t1);
     test_closed_pipe();
+    test_stalled_reader();
     test_writer_overflow_fatal();
     nut_case(t2, 25, 1, PIN_ASPECT_4_3);
     nut_case(t2, 30000, 1001, PIN_ASPECT_16_9);

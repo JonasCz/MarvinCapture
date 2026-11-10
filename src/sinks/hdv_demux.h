@@ -141,6 +141,9 @@ typedef struct hdv_demux hdv_demux_t;
 hdv_demux_t *hdv_demux_create(const hdv_demux_cb_t *cb, int tff);
 /* Whole 188-byte TS packets (the reassembler's units, or any run of them). */
 void hdv_demux_feed(hdv_demux_t *d, const uint8_t *ts, size_t len);
+/* Whether the stream says it has audio: 1 if the last PMT lists an MPEG audio stream, 0 if it
+ * lists none (a video-only stream), -1 if no PMT was seen yet. */
+int hdv_demux_pmt_audio(const hdv_demux_t *d);
 /* The end of the stream: the last PES, picture and GOP come out. */
 void hdv_demux_flush(hdv_demux_t *d);
 void hdv_demux_free(hdv_demux_t *d);

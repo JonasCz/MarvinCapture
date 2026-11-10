@@ -82,6 +82,18 @@ int main(void)
     CHECK(pin_stop_file_cap(PIN_FAT32_FILE_MAX) == PIN_FAT32_FILE_MAX - (64ull << 20) + 1,
           "FAT32: files grow to 4 GiB less 64 MiB");
     CHECK(pin_stop_file_cap(0) == 0, "no limit");
+    /* HDV MOV / MKV: their queues and the trailer are under the limit too */
+    CHECK(pin_stop_file_cap_queued(PIN_FAT32_FILE_MAX, 0) == pin_stop_file_cap(PIN_FAT32_FILE_MAX),
+          "no queue: the plain cap");
+    CHECK(pin_stop_file_cap_queued(PIN_FAT32_FILE_MAX, 224ull << 20) ==
+              PIN_FAT32_FILE_MAX - (64ull << 20) + 1 - (224ull << 20) - PIN_STOP_TRAILER_RESERVE,
+          "FAT32 cap less the queues and the trailer reserve");
+    CHECK(pin_stop_file_cap_queued(PIN_FAT32_FILE_MAX, 224ull << 20) + (224ull << 20) +
+              PIN_STOP_TRAILER_RESERVE < PIN_FAT32_FILE_MAX, "a full queue and a trailer still fit");
+    CHECK(pin_stop_file_cap_queued(2000000, 224ull << 20) < pin_stop_file_cap(2000000) &&
+              pin_stop_file_cap_queued(2000000, 224ull << 20) >= 1000000,
+          "a test's limit gets the same share, never more than half");
+    CHECK(pin_stop_file_cap_queued(0, 224ull << 20) == 0, "no limit, no cap");
     pin_stop_file_limit_text(PIN_FAT32_FILE_MAX, b, sizeof(b));
     CHECK(strcmp(b, "the file reached the 4 GiB size limit of the FAT32 drive") == 0, "FAT32 text");
     pin_stop_file_limit_text(2000000, b, sizeof(b));
@@ -109,6 +121,19 @@ int main(void)
           "a codec error of a sink that does not encode");
     CHECK(pin_stop_writer_failure(PIN_FMT_DV_AVI, PIN_ERR_IO, 0, b, sizeof(b)) == PIN_STOP_WRITE_ERROR,
           "plain write error");
+    /* a sink that failed on purpose: an error with its own sentence, whatever the format */
+    CHECK(pin_stop_writer_failure(PIN_FMT_DV_AVI, PIN_ERR_CODEC, PIN_SINK_FAIL_NO_AUDIO, b, sizeof(b)) ==
+              PIN_STOP_ERROR && strstr(b, "DV stream carries no audio") && strstr(b, "raw DV (.dv)"),
+          "DV without audio");
+    CHECK(pin_stop_writer_failure(PIN_FMT_HDV_MOV, PIN_ERR_CODEC, PIN_SINK_FAIL_NO_AUDIO, b, sizeof(b)) ==
+              PIN_STOP_ERROR && strstr(b, "HDV stream carries no audio") && strstr(b, ".m2t"),
+          "HDV without audio");
+    CHECK(pin_stop_writer_failure(PIN_FMT_DV_MOV, PIN_ERR_CODEC, PIN_SINK_FAIL_AUDIO_LATE, b, sizeof(b)) ==
+              PIN_STOP_ERROR && strstr(b, "second stereo pair"), "audio pair after the header");
+    CHECK(pin_stop_writer_failure(PIN_FMT_HDV_MKV, PIN_ERR_CODEC, PIN_SINK_FAIL_AUDIO_ENCODER, b, sizeof(b)) ==
+              PIN_STOP_ERROR && strstr(b, "MP2"), "no MP2 encoder");
+    CHECK(pin_stop_writer_failure(PIN_FMT_HDV_MKV, PIN_ERR_CODEC, PIN_SINK_FAIL_REENCODE_BEHIND, b, sizeof(b)) ==
+              PIN_STOP_ERROR && strstr(b, "could not keep up"), "repair behind by its name");
 
     /* UTF-8: a cut never splits a character */
     {

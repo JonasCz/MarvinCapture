@@ -61,7 +61,8 @@ pin_engine_replay_test(test_replay_dv_baseline
 # 1b: dv-avi / dv-mov via replay, checked with libavformat.
 add_executable(test_replay_dv_formats test_replay_dv_formats.c)
 target_link_libraries(test_replay_dv_formats PRIVATE marvin-core pinnacle_sinks)
-add_test(NAME test_replay_dv_formats COMMAND test_replay_dv_formats "${PIN_TRACE_PAL}")
+add_test(NAME test_replay_dv_formats COMMAND test_replay_dv_formats "${PIN_TRACE_PAL}"
+    "${PIN_TEST_DATA}/dv-pal.dv")
 pin_engine_replay_test_env(test_replay_dv_formats)
 set_tests_properties(test_replay_dv_formats PROPERTIES TIMEOUT 30)
 

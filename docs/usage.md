@@ -401,7 +401,11 @@ Not a time limit, but the same in practice: a FAT32 drive takes no file over
 limit, about every 19 minutes for DV: `NAME.EXT`, `NAME-0002.EXT`, ... (with
 `--split`, the next scene number), cut on a frame (DV) or a GOP with the PAT
 and PMT in front (HDV), each file 64 MiB short of the limit, which leaves room
-for an AVI's index or a MOV's `moov`. An analog capture stops there instead
+for an AVI's index or a MOV's `moov`. HDV MOV and MKV files are cut 304 MiB
+short of it (about 3.7 GiB): their sink holds up to 224 MiB of its own that only
+reaches the file later (64 MiB of GOPs waiting to be checked, 160 MiB waiting
+behind a repair; `PIN_HDVMUX_QUEUE_MAX` in `src/sinks/pin_sink.h`), plus 16 MiB
+for the index written at close (`pin_stop_file_cap_queued()`). An analog capture stops there instead
 (`DISK_FULL`, "the file reached the 4 GiB size limit of the FAT32 drive"; about
 3.5 min of AVI, 8 min of FFV1), with the file finished. Standard output is not
 affected. The output check says which happens before the capture starts. Use

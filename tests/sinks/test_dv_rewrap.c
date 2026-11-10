@@ -39,6 +39,7 @@
 
 #include "test_util.h"
 #include "../../src/sinks/pin_sink.h"
+#include "../../src/engine/pin_stop.h"
 #include "../../src/sinks/sinks_internal.h"
 #include "../../src/engine/dv_subcode.h"
 #include "../../src/core/dv_reassembler.h"
@@ -306,8 +307,10 @@ static int count_audio(const char *path, int64_t *vpkts, int64_t *asamples)
     return na;
 }
 
-/* R8: the first `blank` frames have no audio: the file still gets its audio, from the first
- * frame that has it, with silence for the frames before; with `blank` past the hold, none. */
+/* The first `blank` frames have no audio: the file still gets its audio, from the first frame
+ * that has it, with silence for the frames before. With `blank` past the hold the stream counts
+ * as one without audio: the sink fails fast (PIN_SINK_FAIL_NO_AUDIO) at the frame that ends the
+ * hold, and the frames held before it are in a finished file without sound. */
 static void run_late_audio(const collect_ctx_t *src, int is_pal, int blank, int expect_audio)
 {
     size_t n = src->n < 20 ? src->n : 20;
@@ -326,7 +329,29 @@ static void run_late_audio(const collect_ctx_t *src, int is_pal, int blank, int 
     params.fps_num = is_pal ? 25 : 30000;
     params.fps_den = is_pal ? 1 : 1001;
     params.kind = PIN_KIND_DV;
-    for (int f = 0; f < 2; f++) {
+    for (int f = 0; f < 2 && !expect_audio; f++) {
+        const char *path = f ? "test_dv_noaudio.mov" : "test_dv_noaudio.avi";
+        pin_sink_t *s = pin_sink_create(f ? PIN_FMT_DV_MOV : PIN_FMT_DV_AVI);
+        CHECK(s && s->open(s, path, &params) == PIN_OK);
+        size_t i = 0;
+        pin_status_t rc = PIN_OK;
+        for (; i < c.n && rc == PIN_OK; i++)
+            rc = s->write_unit(s, c.frames[i], c.lens[i]);
+        CHECK_EQ_I(rc, PIN_ERR_CODEC);
+        CHECK_EQ_I((int64_t)i, (int64_t)DV_HOLD_MAX);      /* refused at the frame that ends the hold */
+        pin_sink_status_t st;
+        s->get_status(s, &st);
+        CHECK_EQ_I(st.fail_reason, PIN_SINK_FAIL_NO_AUDIO);
+        CHECK_EQ_I(st.units_written, (int64_t)DV_HOLD_MAX - 1);
+        CHECK_EQ_I(s->write_unit(s, c.frames[i], c.lens[i]), PIN_ERR_CODEC);   /* and stays failed */
+        CHECK_EQ_I(s->close(s), PIN_ERR_CODEC);
+        int64_t vp, as;
+        CHECK_EQ_I(count_audio(path, &vp, &as), 0);
+        CHECK_EQ_I(vp, (int64_t)DV_HOLD_MAX - 1);
+        printf("  no audio in the first %d frames: %s fails fast, %lld frames kept\n", DV_HOLD_MAX,
+               path, (long long)vp);
+    }
+    for (int f = 0; f < 2 && expect_audio; f++) {
         const char *path = f ? "test_dv_late.mov" : "test_dv_late.avi";
         write_via_sink(f ? PIN_FMT_DV_MOV : PIN_FMT_DV_AVI, path, &params, &c);
         int64_t vp, as;
@@ -557,8 +582,8 @@ static void run_one(const char *trace_path, const char *tag)
 }
 
 /* N5: frames held back (no audio yet) keep their own length when a frame of the other standard
- * ends the hold. Writes DV_HOLD_MAX - 1 NTSC frames without audio, then a PAL frame, and checks
- * the sizes of the video packets in the file. */
+ * ends the hold. Writes DV_HOLD_MAX - 1 NTSC frames without audio, then a PAL frame with audio,
+ * and checks the sizes of the video packets in the file. */
 static void run_mixed_hold(const char *ntsc_trace, const char *pal_trace)
 {
     collect_ctx_t n = { 0 }, p = { 0 };
@@ -574,8 +599,7 @@ static void run_mixed_hold(const char *ntsc_trace, const char *pal_trace)
     CHECK_EQ_I((int64_t)c.n, DV_HOLD_MAX - 1);
     for (size_t i = 0; i < p.n; i++)
         if (p.lens[i] == plen) {
-            on_unit(0, p.frames[i], p.lens[i], &c);
-            blank_audio(c.frames[c.n - 1], c.lens[c.n - 1]);
+            on_unit(0, p.frames[i], p.lens[i], &c);   /* with audio: it ends the hold */
             break;
         }
     CHECK_EQ_I((int64_t)c.n, DV_HOLD_MAX);

@@ -17,6 +17,7 @@
  */
 
 #include "pinnacle_stream.h"
+#include "pin_fs.h"
 #include "pinnacle_1394.h"
 #include "pin_log.h"
 #include "pin_thread_boost.h"
@@ -541,7 +542,7 @@ pinnacle_status_t pinnacle_stream_read_loop_ex(pinnacle_device_t *dev,
     struct timespec t0, tnow;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     const char *raw_dump_path = NULL;
-    FILE *raw_dump = raw_dump_path ? fopen(raw_dump_path, "wb") : NULL;
+    FILE *raw_dump = raw_dump_path ? pin_fs_fopen(raw_dump_path, "wb") : NULL;
 #endif
 
     unsigned depth = DV_QUEUE_DEPTH;

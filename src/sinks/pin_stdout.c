@@ -18,6 +18,8 @@
 
 #include "pin_stdout.h"
 
+#include <limits.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,12 +33,19 @@
 #include <fcntl.h>
 #include <poll.h>
 #include <signal.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #endif
 
 #define WRITE_CHUNK (1u << 20)
 
 static int g_fd = -1;
+/* pin_stdout_cancel(): the write in progress gives up. There is one standard output per process,
+ * so one flag; pin_stdout_prepare() clears it for the next capture. */
+static atomic_int g_cancel;
+#if defined(_WIN32)
+static atomic_ulong g_writer_tid;   /* the thread inside WriteFile, 0 none */
+#endif
 
 int pin_path_is_stdout(const char *path)
 {
@@ -50,6 +59,7 @@ void pin_stdout_set_fd(int fd)
 
 void pin_stdout_prepare(void)
 {
+    atomic_store(&g_cancel, 0);
 #if defined(_WIN32)
     int fd = g_fd >= 0 ? g_fd : _fileno(stdout);
     if (fd >= 0)
@@ -93,6 +103,26 @@ int pin_stdout_check(char *why, size_t why_size)
     return msg ? -1 : 0;
 }
 
+void pin_stdout_cancel(void)
+{
+    atomic_store(&g_cancel, 1);
+#if defined(_WIN32)
+    /* An anonymous pipe has no overlapped I/O: the blocked WriteFile is cancelled from here. The
+     * writer may be just about to call it, so the cancel is repeated for a short while. */
+    for (int i = 0; i < 20; i++) {
+        DWORD tid = (DWORD)atomic_load(&g_writer_tid);
+        if (!tid)
+            break;
+        HANDLE t = OpenThread(THREAD_TERMINATE, FALSE, tid);
+        if (t) {
+            CancelSynchronousIo(t);
+            CloseHandle(t);
+        }
+        Sleep(5);
+    }
+#endif
+}
+
 int pin_stdout_write(const void *data, size_t n)
 {
     const uint8_t *p = data;
@@ -101,12 +131,17 @@ int pin_stdout_write(const void *data, size_t n)
     if (!h || h == INVALID_HANDLE_VALUE)
         return PIN_STDOUT_ERROR;
     while (n > 0) {
+        if (atomic_load(&g_cancel))
+            return PIN_STDOUT_ERROR;
         DWORD chunk = n > WRITE_CHUNK ? WRITE_CHUNK : (DWORD)n, done = 0;
-        if (!WriteFile(h, p, chunk, &done, NULL)) {
-            DWORD e = GetLastError();
+        atomic_store(&g_writer_tid, (unsigned long)GetCurrentThreadId());
+        BOOL ok = WriteFile(h, p, chunk, &done, NULL);
+        DWORD e = ok ? 0 : GetLastError();
+        atomic_store(&g_writer_tid, 0);
+        if (!ok) {
             if (e == ERROR_BROKEN_PIPE || e == ERROR_NO_DATA || e == ERROR_PIPE_NOT_CONNECTED)
                 return PIN_STDOUT_CLOSED;
-            return PIN_STDOUT_ERROR;
+            return PIN_STDOUT_ERROR;   /* ERROR_OPERATION_ABORTED: pin_stdout_cancel() */
         }
         if (done == 0)
             return PIN_STDOUT_ERROR;
@@ -115,8 +150,28 @@ int pin_stdout_write(const void *data, size_t n)
     }
 #else
     int fd = g_fd >= 0 ? g_fd : 1;
+    /* A pipe or socket: a write of more than the free space blocks until the reader takes it,
+     * and nothing interrupts it. So wait for room with poll() (checking for a cancel every
+     * 100 ms) and write at most PIPE_BUF, which a pipe with room takes at once. */
+    struct stat sb;
+    int pipe_like = fstat(fd, &sb) == 0 && (S_ISFIFO(sb.st_mode) || S_ISSOCK(sb.st_mode));
     while (n > 0) {
+        if (atomic_load(&g_cancel))
+            return PIN_STDOUT_ERROR;
         size_t chunk = n > WRITE_CHUNK ? WRITE_CHUNK : n;
+        if (pipe_like) {
+            struct pollfd pfd = { .fd = fd, .events = POLLOUT };
+            int pr = poll(&pfd, 1, 100);
+            if (pr < 0 && errno != EINTR)
+                return PIN_STDOUT_ERROR;
+            if (pr <= 0)
+                continue;
+            if (pfd.revents & (POLLERR | POLLHUP)) {
+                /* the reader is gone: the write says EPIPE */
+            } else if (chunk > PIPE_BUF) {
+                chunk = PIPE_BUF;
+            }
+        }
         ssize_t w = write(fd, p, chunk);
         if (w < 0) {
             if (errno == EINTR)

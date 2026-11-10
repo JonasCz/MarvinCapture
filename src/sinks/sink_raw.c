@@ -28,6 +28,7 @@
 #include "sinks_internal.h"
 #include "../engine/dv_subcode.h"
 #include "../core/pin_log.h"
+#include "../core/pin_fs.h"
 #include "pin_stdout.h"
 
 #include <stdio.h>
@@ -57,7 +58,7 @@ static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_par
         p->to_stdout = 1;
         return PIN_OK;
     }
-    p->f = fopen(path, "wb");
+    p->f = pin_fs_fopen(path, "wb");
     if (!p->f) {
         p->st.last_error = PIN_ERR_IO;
         return PIN_ERR_IO;

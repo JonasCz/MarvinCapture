@@ -23,11 +23,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef _WIN32
-#include <windows.h>
-#else
-#include <dirent.h>
-#endif
+#include "../core/pin_fs.h"
 
 /* The core never calls setlocale(), so printf's "%.1f" always uses '.' here. */
 
@@ -115,55 +111,18 @@ static int match_numbered(const char *entry, const char *name, size_t name_len, 
     return 1;
 }
 
-#ifdef _WIN32
-static wchar_t *utf8_to_wide(const char *s)
-{
-    int n = MultiByteToWideChar(CP_UTF8, 0, s, -1, NULL, 0);
-    if (n <= 0)
-        return NULL;
-    wchar_t *w = malloc((size_t)n * sizeof(wchar_t));
-    if (w)
-        MultiByteToWideChar(CP_UTF8, 0, s, -1, w, n);
-    return w;
-}
-#endif
-
 /* Calls visit(file name as UTF-8, ctx) for every entry of dir; returns 0 if the
  * directory can't be read. */
 static int scan_dir(const char *dir, void (*visit)(const char *, void *), void *ctx)
 {
-#ifdef _WIN32
-    size_t dlen = strlen(dir);
-    char *pat = malloc(dlen + 3);
-    if (!pat)
-        return 0;
-    snprintf(pat, dlen + 3, "%s%s*", dir, (dlen && is_sep(dir[dlen - 1])) ? "" : "\\");
-    wchar_t *wpat = utf8_to_wide(pat);
-    free(pat);
-    if (!wpat)
-        return 0;
-    WIN32_FIND_DATAW fd;
-    HANDLE h = FindFirstFileW(wpat, &fd);
-    free(wpat);
-    if (h == INVALID_HANDLE_VALUE)
-        return GetLastError() == ERROR_FILE_NOT_FOUND; /* an empty directory */
-    do {
-        char name[1024];
-        if (WideCharToMultiByte(CP_UTF8, 0, fd.cFileName, -1, name, sizeof(name), NULL, NULL) > 0)
-            visit(name, ctx);
-    } while (FindNextFileW(h, &fd));
-    FindClose(h);
-    return 1;
-#else
-    DIR *d = opendir(dir);
+    pin_fs_dir_t *d = pin_fs_opendir(dir);
     if (!d)
         return 0;
-    struct dirent *e;
-    while ((e = readdir(d)) != NULL)
-        visit(e->d_name, ctx);
-    closedir(d);
+    const char *name;
+    while ((name = pin_fs_readdir(d)) != NULL)
+        visit(name, ctx);
+    pin_fs_closedir(d);
     return 1;
-#endif
 }
 
 typedef struct {

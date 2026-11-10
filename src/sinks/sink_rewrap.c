@@ -67,6 +67,7 @@
 #include "pin_sink.h"
 #include "sinks_internal.h"
 #include "../engine/dv_subcode.h"
+#include "../engine/pin_stop.h"
 #include "../core/pin_log.h"
 
 #include <libavformat/avformat.h>
@@ -104,6 +105,7 @@ typedef struct {
     uint8_t *hold[DV_HOLD_MAX]; /* frames held back until one has audio */
     size_t hold_len[DV_HOLD_MAX]; /* each held frame's own length (NTSC and PAL differ) */
     int nhold;
+    int audio_late;           /* an audio pair appeared after the header: the capture fails */
     int fault_io;             /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
 
     pin_sink_status_t st;
@@ -261,15 +263,14 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
         if (tr->ast)
             continue;
         if (p->header_written) {
-            /* A stream can only be added before avformat_write_header();
-             * this would be a frame where audio is seen for the first time
-             * after some earlier frame already forced the header out with
-             * no audio declared (e.g. frame 0 had none). Rather than crash
-             * muxing into an undeclared stream, that pair is dropped for
-             * the rest of this file -- logged once. */
-            pin_logf(PIN_LOG_WARN, "sink_rewrap: audio pair %d appeared after the header was "
-                                    "already written (no audio on earlier frames); dropping "
-                                    "it for the rest of this file\n", pair + 1);
+            /* A stream can only be added before avformat_write_header(): a pair seen for the
+             * first time after the header (the second stereo pair of 32 kHz audio dubbed onto
+             * part of a tape) cannot go into this file. dv_write_unit() fails the capture
+             * rather than drop that audio without a word. */
+            if (!p->audio_late)
+                pin_logf(PIN_LOG_ERROR, "sink_rewrap: capture failed: audio pair %d appeared after "
+                                        "the file header was written\n", pair + 1);
+            p->audio_late = 1;
             continue;
         }
         AVStream *src = in->streams[audio_idx[pair]];
@@ -526,17 +527,28 @@ static pin_status_t dv_flush_hold(rewrap_priv_t *p)
     return rc;
 }
 
+/* The sink ends the capture on purpose (pin_stop.h, PIN_SINK_FAIL_*). */
+static pin_status_t fail(rewrap_priv_t *p, pin_status_t err, int reason)
+{
+    if (p->st.last_error == PIN_OK)
+        p->st.last_error = err;
+    if (err == PIN_ERR_CODEC && !p->st.fail_reason)
+        p->st.fail_reason = reason;
+    return p->st.last_error;
+}
+
 static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
 {
     rewrap_priv_t *p = s->priv;
+    if (p->st.fail_reason)
+        return p->st.last_error;
     if (!is_valid_dv_unit_len(len)) {
         p->st.units_damaged++;
         pin_logf(PIN_LOG_WARN, "sink_rewrap: dropping a %zu-byte DV unit (not 10/12 sequences)\n", len);
         return PIN_OK;
     }
 
-    /* The audio streams must be known before the header: hold frames until one has audio
-     * (or DV_HOLD_MAX did not), then the held frames go out with silent audio. */
+    /* The audio streams must be known before the header: hold frames until one has audio. */
     int held = p->nhold;
     p->vpts += held; /* the held frames' span, for the audio timeline */
     pin_status_t arc = rewrap_dv_extract_audio(p, data, len);
@@ -552,9 +564,17 @@ static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len
             p->hold[p->nhold++] = copy;
             return arc;
         }
-        pin_logf(PIN_LOG_WARN, "sink_rewrap: no audio in the first %d DV frames; the file has none\n",
-                 DV_HOLD_MAX);
+        /* DV always records audio, so DV_HOLD_MAX frames in a row without any is a stream this
+         * sink cannot turn into a proper file. We prefer to fail fast: the capture ends with a
+         * clear error instead of writing a whole tape without sound. The frames held so far go
+         * into the file (video only), which is finished at close; this one is refused. */
+        pin_logf(PIN_LOG_ERROR, "sink_rewrap: capture failed: the DV stream carries no audio (none "
+                                "in the first %d frames)\n", DV_HOLD_MAX);
+        pin_status_t rc = dv_flush_hold(p);
+        return fail(p, rc != PIN_OK ? rc : PIN_ERR_CODEC, PIN_SINK_FAIL_NO_AUDIO);
     }
+    if (p->audio_late)
+        return fail(p, PIN_ERR_CODEC, PIN_SINK_FAIL_AUDIO_LATE);   /* fail fast, as above */
     pin_status_t rc = dv_flush_hold(p);
     if (rc != PIN_OK)
         return rc;

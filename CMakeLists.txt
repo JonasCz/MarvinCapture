@@ -60,9 +60,16 @@ find_package(Threads REQUIRED)
 # it's linked into the shared marvin-core library. ---
 file(GLOB PINNACLE_CORE_SRCS CONFIGURE_DEPENDS ${CMAKE_SOURCE_DIR}/src/core/*.c)
 
+# --- pinnacle_fs: file access on UTF-8 paths (src/core/pin_fs.c). A library of its own because
+# the hardware-free engine modules (pinnacle_engine_pure) use it too and do not link pinnacle_core. ---
+list(REMOVE_ITEM PINNACLE_CORE_SRCS ${CMAKE_SOURCE_DIR}/src/core/pin_fs.c)
+add_library(pinnacle_fs STATIC src/core/pin_fs.c)
+target_include_directories(pinnacle_fs PUBLIC ${CMAKE_SOURCE_DIR}/src/core)
+target_compile_features(pinnacle_fs PUBLIC c_std_11)
+
 add_library(pinnacle_core STATIC ${PINNACLE_CORE_SRCS})
 target_include_directories(pinnacle_core PUBLIC ${CMAKE_SOURCE_DIR}/src/core)
-target_link_libraries(pinnacle_core PUBLIC PkgConfig::LIBUSB Threads::Threads)
+target_link_libraries(pinnacle_core PUBLIC pinnacle_fs PkgConfig::LIBUSB Threads::Threads)
 if(APPLE OR ANDROID)
     # The sources include <libusb-1.0/libusb.h>; libusb-1.0.pc only adds
     # .../include/libusb-1.0, which on Linux and MSYS2 sits under a default
@@ -239,6 +246,10 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/api/pin_api.c)
 
     add_executable(MarvinCaptureCLI src/cli/marvin_capture_cli.c)
     target_link_libraries(MarvinCaptureCLI PRIVATE marvin-core)
+    if(WIN32)
+        # CommandLineToArgvW: the arguments as UTF-8, whatever the ANSI code page
+        target_link_libraries(MarvinCaptureCLI PRIVATE shell32)
+    endif()
     if(ANDROID)
         # 16 KB pages (Android 15+ devices may use them; Google Play requires it): the NDK
         # links this way by default since r28, kept explicit so an older NDK cannot quietly

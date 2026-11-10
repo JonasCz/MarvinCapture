@@ -54,6 +54,10 @@ int pin_stdout_check(char *why, size_t why_size);
  * PIN_STDOUT_CLOSED or PIN_STDOUT_ERROR. */
 int pin_stdout_write(const void *data, size_t n);
 
+/* Makes a pin_stdout_write() that waits for a stalled reader give up (PIN_STDOUT_ERROR), and every
+ * later one until the next pin_stdout_prepare(). From any thread (pin_writer_abort()). */
+void pin_stdout_cancel(void);
+
 #ifdef __cplusplus
 }
 #endif

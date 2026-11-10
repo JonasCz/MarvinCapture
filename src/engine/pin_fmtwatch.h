@@ -34,8 +34,9 @@
  * pin_fmtwatch_pending()'s index while one is pending). A candidate that goes
  * PIN_FMTWATCH_*_STALE units without a unit that counts is dropped. The first unit's
  * format is provisional the same way: until need units agree with it, a candidate that
- * wins is reported at the first unit (the first file has got nothing yet if the caller
- * holds from pin_fmtwatch_hold_from()).
+ * wins is reported at the first unit if no other unit agreed with the first (the first file has
+ * got nothing yet if the caller holds from pin_fmtwatch_hold_from()), else at its own first
+ * unit, so the old format's units stay in the old format's file.
  */
 
 #ifndef PIN_FMTWATCH_H

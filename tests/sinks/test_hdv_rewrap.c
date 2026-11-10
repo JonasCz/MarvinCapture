@@ -86,7 +86,19 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path, in
     printf("pushed %d unit(s), %zu bytes of TS\n", units, total);
     CHECK(units > 0);
 
+    /* the size the sink reports at close is the file's, trailer (MOV moov, MKV cues) included */
+    pin_sink_status_t fst;
+    memset(&fst, 0, sizeof(fst));
+    s->final_status = &fst;
     CHECK(s->close(s) == PIN_OK);
+    {
+        FILE *f = fopen(out_path, "rb");
+        CHECK(f);
+        fseek(f, 0, SEEK_END);
+        long fsize = ftell(f);
+        fclose(f);
+        CHECK_EQ_I((int64_t)fst.bytes_written, (int64_t)fsize);
+    }
 
     AVFormatContext *fc = NULL;
     CHECK(avformat_open_input(&fc, out_path, NULL, NULL) >= 0);
@@ -142,9 +154,119 @@ static void run(const char *cap_path, pin_format_t fmt, const char *out_path, in
     CHECK(vframes > 0);
 }
 
+#include "../../src/engine/pin_stop.h"
+#include <time.h>
+
+static int ts_payload(const uint8_t *pkt)
+{
+    int off = 4;
+    if (pkt[3] & 0x20)
+        off += 1 + pkt[4];
+    return off < TS_PACKET ? off : -1;
+}
+
+/* A stream without its audio packets. video_only: its PMT says so too (the audio entry's stream
+ * type changed to private data, which the demuxer ignores). The sink fails fast unless the
+ * stream is video-only by its PMT. cap_path must hold more than 2 s. */
+static void run_no_audio(const char *cap_path, int video_only)
+{
+    FILE *in = fopen(cap_path, "rb");
+    CHECK(in);
+    fseek(in, 0, SEEK_END);
+    long size = ftell(in);
+    fseek(in, 0, SEEK_SET);
+    uint8_t *ts = malloc((size_t)size);
+    CHECK(ts && fread(ts, 1, (size_t)size, in) == (size_t)size);
+    fclose(in);
+    size_t n = (size_t)size / TS_PACKET, kept = 0;
+    int apid = -1, pmt_pid = -1;
+    for (size_t i = 0; i < n; i++) {
+        const uint8_t *p = ts + i * TS_PACKET;
+        int pid = ((p[1] & 0x1F) << 8) | p[2], off = ts_payload(p);
+        if ((p[1] & 0x40) && off > 0 && off + 4 <= TS_PACKET && p[off] == 0 && p[off + 1] == 0 &&
+            p[off + 2] == 1 && p[off + 3] >= 0xC0 && p[off + 3] <= 0xDF)
+            apid = pid;
+        if (pid == 0 && off > 0 && pmt_pid < 0)
+            pmt_pid = ((p[off + 1 + 10] & 0x1F) << 8) | p[off + 1 + 11];
+    }
+    CHECK(apid > 0 && pmt_pid > 0);
+    for (size_t i = 0; i < n; i++) {
+        uint8_t *p = ts + i * TS_PACKET;
+        int pid = ((p[1] & 0x1F) << 8) | p[2];
+        if (pid == apid)
+            continue;
+        if (video_only && pid == pmt_pid) {
+            int off = ts_payload(p) + 1;   /* past the pointer field */
+            const uint8_t *sec = p + off;
+            int slen = ((sec[1] & 0x0F) << 8) | sec[2], pil = ((sec[10] & 0x0F) << 8) | sec[11];
+            for (int e = off + 12 + pil; e + 5 <= off + 3 + slen - 4 && e + 5 <= TS_PACKET;) {
+                if (p[e] == 0x03 || p[e] == 0x04)
+                    p[e] = 0x06;
+                e += 5 + (((p[e + 3] & 0x0F) << 8) | p[e + 4]);
+            }
+        }
+        memmove(ts + kept * TS_PACKET, p, TS_PACKET);
+        kept++;
+    }
+
+    pin_sink_params_t params;
+    memset(&params, 0, sizeof(params));
+    params.kind = PIN_KIND_HDV;
+    params.width = 1440;
+    params.height = 1080;
+    params.fps_num = 25;
+    params.fps_den = 1;
+    params.interlaced = params.top_field_first = 1;
+    params.aspect = PIN_ASPECT_16_9;
+    params.colour_matrix = PIN_MATRIX_BT709;
+    const char *out = video_only ? "test_hdv_videoonly.mkv" : "test_hdv_noaudio.mkv";
+    remove(out);
+    pin_sink_t *s = pin_sink_create(PIN_FMT_HDV_MKV);
+    CHECK(s && s->open(s, out, &params) == PIN_OK);
+    pin_status_t rc = PIN_OK;
+    for (size_t i = 0; i < kept && rc == PIN_OK; i += CHUNK_PACKETS) {
+        size_t k = kept - i < CHUNK_PACKETS ? kept - i : CHUNK_PACKETS;
+        rc = s->write_unit(s, ts + i * TS_PACKET, k * TS_PACKET);
+    }
+    /* the decision is made by the sink's decode thread once 2 s of pictures are in */
+    pin_sink_status_t st;
+    for (int waited = 0; waited < 10000; waited += 20) {
+        s->get_status(s, &st);
+        if (st.last_error != PIN_OK || video_only)
+            break;
+        struct timespec ts20 = { 0, 20 * 1000000L };
+        nanosleep(&ts20, NULL);
+    }
+    if (video_only) {
+        CHECK_EQ_I(rc, PIN_OK);
+        CHECK_EQ_I(s->close(s), PIN_OK);
+        AVFormatContext *fc = NULL;
+        CHECK(avformat_open_input(&fc, out, NULL, NULL) >= 0);
+        CHECK(avformat_find_stream_info(fc, NULL) >= 0);
+        int na = 0, nv = 0;
+        for (unsigned i = 0; i < fc->nb_streams; i++) {
+            na += fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_AUDIO;
+            nv += fc->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO;
+        }
+        avformat_close_input(&fc);
+        CHECK(nv == 1 && na == 0);
+        printf("OK: a stream that is video-only by its PMT is written without audio\n");
+    } else {
+        CHECK_EQ_I(st.last_error, PIN_ERR_CODEC);
+        CHECK_EQ_I(st.fail_reason, PIN_SINK_FAIL_NO_AUDIO);
+        CHECK_EQ_I(s->close(s), PIN_ERR_CODEC);
+        FILE *f = fopen(out, "rb");
+        CHECK(f == NULL);   /* nothing was written: no file is left */
+        if (f)
+            fclose(f);
+        printf("OK: a stream whose audio is missing fails fast\n");
+    }
+    free(ts);
+}
+
 int main(int argc, char **argv)
 {
-    CHECK(argc == 2 || argc == 3);
+    CHECK(argc >= 2 && argc <= 4);
 
     /* the HDV SAR comes from the raster: 1440x1080 16:9 is anamorphic, 1280x720 square */
     int sn, sd;
@@ -162,5 +284,9 @@ int main(int argc, char **argv)
     /* 720p59.94: progressive, square samples */
     if (argc == 3 && pin_test_have_fixture(argv[2]))
         run(argv[2], PIN_FMT_HDV_MKV, "test_hdv_720p.mkv", 1280, 720, 60000, 1001, 0);
+    if (argc == 4 && pin_test_have_fixture(argv[3])) {
+        run_no_audio(argv[3], 0);
+        run_no_audio(argv[3], 1);
+    }
     return 0;
 }

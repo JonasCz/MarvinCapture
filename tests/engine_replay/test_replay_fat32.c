@@ -27,7 +27,8 @@
  *   - DV AVI: each with its index (libavformat reads every frame, the header counts them all)
  *     and its audio;
  *   - HDV (.m2t): each starting with the PAT and PMT, then a GOP, so it decodes from its start;
- *     every byte written is in a file.
+ *     every byte written is in a file;
+ *   - HDV MKV: each under the limit with its cues, though the sink queues GOPs of its own.
  * And pin_check_output() says so before the capture.
  *
  * Usage: test_replay_fat32 <dv-pal.dv> <hdv.ts>
@@ -69,7 +70,7 @@ static void nth_file(const char *base, const char *ext, int k, char *out, size_t
 /* Captures 30 frames of the replay file to base (stopped, or the file's end); returns the
  * snapshot. */
 static void capture(const char *trace, const char *base, pin_format_t dv_fmt,
-                    pin_status_snapshot_t *snap)
+                    pin_format_t hdv_fmt, pin_status_snapshot_t *snap)
 {
     pin_test_setenv("PIN_TEST_FAT32_LIMIT", "2000000");
     pin_test_setenv("PIN_TEST_WRITE_FAIL_AFTER", "2000000");
@@ -79,7 +80,7 @@ static void capture(const char *trace, const char *base, pin_format_t dv_fmt,
     pin_capture_opts_defaults(&opts);
     strncpy(opts.path, base, sizeof(opts.path) - 1);
     opts.format_dv = dv_fmt;
-    opts.format_hdv = PIN_FMT_HDV_TS;
+    opts.format_hdv = hdv_fmt;
     CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
     pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 3000, snap);
     CHECK(snap->state == PIN_STATE_CAPTURING);
@@ -160,7 +161,7 @@ static void test_check_output(const char *trace)
 static void test_dv_raw(const char *trace)
 {
     pin_status_snapshot_t snap;
-    capture(trace, "fat32_raw", PIN_FMT_DV_RAW, &snap);
+    capture(trace, "fat32_raw", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, &snap);
     long src_n;
     unsigned char *src = read_file(trace, &src_n);
     CHECK(src && src_n % PAL_FRAME == 0);
@@ -197,7 +198,7 @@ static void test_dv_raw(const char *trace)
 static void test_dv_avi(const char *trace)
 {
     pin_status_snapshot_t snap;
-    capture(trace, "fat32_avi", PIN_FMT_DV_AVI, &snap);
+    capture(trace, "fat32_avi", PIN_FMT_DV_AVI, PIN_FMT_HDV_TS, &snap);
     long total = 0;
     int files = 0;
     for (int k = 1;; k++) {
@@ -225,7 +226,7 @@ static void test_dv_avi(const char *trace)
 static void test_hdv(const char *trace)
 {
     pin_status_snapshot_t snap;
-    capture(trace, "fat32_hdv", PIN_FMT_DV_RAW, &snap);
+    capture(trace, "fat32_hdv", PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, &snap);
     long total = 0, pictures = 0;
     int files = 0;
     for (int k = 1;; k++) {
@@ -254,6 +255,34 @@ static void test_hdv(const char *trace)
     CHECK(pictures == captured);
 }
 
+/* HDV MKV holds GOPs in its own queues before they reach the file, and adds its cues at close:
+ * the cut leaves room for both, so no file passes the limit (or fails to be written). */
+static void test_hdv_mkv(const char *trace)
+{
+    pin_status_snapshot_t snap;
+    capture(trace, "fat32_hdvmkv", PIN_FMT_DV_RAW, PIN_FMT_HDV_MKV, &snap);
+    long pictures = 0;
+    int files = 0;
+    for (int k = 1;; k++) {
+        char path[64];
+        /* hdv-mkv always splits into scenes, so its files are numbered from the first on */
+        snprintf(path, sizeof(path), "fat32_hdvmkv-%04d.mkv", k);
+        long n;
+        unsigned char *buf = read_file(path, &n);
+        if (!buf)
+            break;
+        free(buf);
+        files++;
+        CHECK(n > 0 && n <= LIMIT);
+        long p = lavf_frames(path, NULL, NULL);
+        printf("  %s: %ld bytes, %ld picture(s)\n", path, n, p);
+        CHECK(p > 0);
+        pictures += p;
+    }
+    CHECK(files >= 2);
+    CHECK(pictures > 0);
+}
+
 int main(int argc, char **argv)
 {
     CHECK(argc == 3);
@@ -263,6 +292,7 @@ int main(int argc, char **argv)
     test_dv_raw(argv[1]);
     test_dv_avi(argv[1]);
     test_hdv(argv[2]);
+    test_hdv_mkv(argv[2]);
     printf("OK\n");
     return 0;
 }

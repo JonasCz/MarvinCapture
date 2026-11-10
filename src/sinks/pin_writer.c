@@ -19,6 +19,7 @@
 #include "pin_writer.h"
 #include "pin_thread_boost.h"
 #include "../core/pin_log.h"
+#include "pin_stdout.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -203,6 +204,9 @@ void pin_writer_abort(pin_writer_t *w)
     w->aborted = 1;
     pthread_cond_signal(&w->wake);
     pthread_mutex_unlock(&w->lock);
+    /* The unit being written may be blocked on a reader that has stopped reading (the only
+     * writer that is aborted is a pipe's; there is one standard output): let it give up too. */
+    pin_stdout_cancel();
 }
 
 int pin_writer_stop(pin_writer_t *w)

@@ -17,29 +17,160 @@
  */
 
 #include "pin_naming.h"
+#include "../core/pin_fs.h"
 #include <ctype.h>
 #include <errno.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
-#include <sys/stat.h>
-
-/* dirent.h is provided by MSYS2/mingw-w64 (our Windows toolchain) as well
- * as every POSIX system; on Windows its wide variants (_wopendir) are used. A pure-MSVC
- * build (not used by this project) would need FindFirstFileW instead. */
-#include <dirent.h>
-#if defined(_WIN32)
-#include <windows.h>
-#endif
 
 static int is_sep(char c)
 {
     return c == '/' || c == '\\';
 }
 
-/* ASCII-only folding: bytes of UTF-8 sequences are left alone in any locale. A name that
- * differs from an existing one only in the case of a non-ASCII letter therefore compares
- * unequal, and so do the NFC and NFD spellings of one name (APFS keeps both apart on disk,
- * case-insensitive HFS+ and NTFS do not): a collision on those names is not seen. */
+/* ---- Name comparison ---------------------------------------------------------------------
+ * A name is compared as a key: its code points, simple-case-folded, with the precomposed Latin
+ * letters (U+00C0..U+017F) decomposed into base letter + combining mark. Case-insensitive
+ * file systems (NTFS, APFS, HFS+, exFAT) treat "ÉCRAN" and "écran" as one name, and APFS and
+ * HFS+ also treat the NFC and NFD spellings of "Café" as one; NTFS keeps those two apart, so
+ * there a match only costs an "overwrite?" question that was not needed. Bytes that are not
+ * valid UTF-8 compare as themselves. */
+
+#define KEY_MAX 1100   /* code points of a key: a name of up to 1024 bytes, decomposed */
+
+/* Decompositions of U+00C0..U+017F: base letter and mark, "  " for none. Marks: ` grave,
+ * ' acute, ^ circumflex, ~ tilde, - macron, u breve, . dot above, : diaeresis, o ring above,
+ * " double acute, v caron, , cedilla, ; ogonek. */
+static const char decomp_tab[] =
+    /* C0 */ "A`A'A^A~A:Ao  C,E`E'E^E:I`I'I^I:"
+    /* D0 */ "  N~O`O'O^O~O:    U`U'U^U:Y'    "
+    /* E0 */ "a`a'a^a~a:ao  c,e`e'e^e:i`i'i^i:"
+    /* F0 */ "  n~o`o'o^o~o:    u`u'u^u:y'  y:"
+    /* 100 */ "A-a-AuauA;a;C'c'C^c^C.c.CvcvDvdv"
+    /* 110 */ "    E-e-EueuE.e.E;e;EvevG^g^Gugu"
+    /* 120 */ "G.g.G,g,H^h^    I~i~I-i-IuiuI;i;"
+    /* 130 */ "I.      J^j^K,k,  L'l'L,l,Lvlv  "
+    /* 140 */ "      N'n'N,n,Nvnv      O-o-Ouou"
+    /* 150 */ "O\"o\"    R'r'R,r,RvrvS's'S^s^S,s,"
+    /* 160 */ "SvsvT,t,Tvtv    U~u~U-u-UuuuUouo"
+    /* 170 */ "U\"u\"U;u;W^w^Y^y^Y:Z'z'Z.z.Zvzv  ";
+
+static uint32_t mark_cp(char m)
+{
+    switch (m) {
+    case '`': return 0x300;
+    case '\'': return 0x301;
+    case '^': return 0x302;
+    case '~': return 0x303;
+    case '-': return 0x304;
+    case 'u': return 0x306;
+    case '.': return 0x307;
+    case ':': return 0x308;
+    case 'o': return 0x30A;
+    case '"': return 0x30B;
+    case 'v': return 0x30C;
+    case ',': return 0x327;
+    case ';': return 0x328;
+    }
+    return 0;
+}
+
+/* Simple case folding of the scripts a file name is likely to use. */
+static uint32_t fold_cp(uint32_t c)
+{
+    if (c >= 'A' && c <= 'Z')
+        return c + 32;
+    if (c < 0x80)
+        return c;
+    if (c >= 0xC0 && c <= 0xDE && c != 0xD7)
+        return c + 32;
+    if (c == 0x178)
+        return 0xFF;
+    if (((c >= 0x100 && c <= 0x137) || (c >= 0x14A && c <= 0x177)) && !(c & 1))
+        return c + 1;
+    if (((c >= 0x139 && c <= 0x148) || (c >= 0x179 && c <= 0x17E)) && (c & 1))
+        return c + 1;
+    if (c >= 0x391 && c <= 0x3A9 && c != 0x3A2)
+        return c + 32;                 /* Greek capitals */
+    if (c == 0x386)
+        return 0x3AC;                  /* Greek capitals with tonos */
+    if (c >= 0x388 && c <= 0x38A)
+        return c + 37;
+    if (c == 0x38C)
+        return 0x3CC;
+    if (c == 0x38E || c == 0x38F)
+        return c + 63;
+    if (c == 0x3C2)
+        return 0x3C3;                  /* final sigma */
+    if (c >= 0x410 && c <= 0x42F)
+        return c + 32;                 /* Cyrillic capitals */
+    if (c >= 0x400 && c <= 0x40F)
+        return c + 80;                 /* Cyrillic capitals with marks */
+    return c;
+}
+
+/* Decodes one UTF-8 sequence at *s (advancing it); an invalid byte comes back as 0xDC00 + the
+ * byte, which no valid sequence decodes to. */
+static uint32_t next_cp(const unsigned char **s)
+{
+    const unsigned char *p = *s;
+    unsigned char c = *p;
+    uint32_t cp;
+    unsigned extra;
+    if (c < 0x80) {
+        *s = p + 1;
+        return c;
+    }
+    if (c >= 0xC2 && c <= 0xDF) { cp = c & 0x1F; extra = 1; }
+    else if (c >= 0xE0 && c <= 0xEF) { cp = c & 0x0F; extra = 2; }
+    else if (c >= 0xF0 && c <= 0xF4) { cp = c & 0x07; extra = 3; }
+    else { *s = p + 1; return 0xDC00 + c; }
+    for (unsigned i = 1; i <= extra; i++) {
+        if ((p[i] & 0xC0) != 0x80) {
+            *s = p + 1;
+            return 0xDC00 + c;
+        }
+        cp = (cp << 6) | (p[i] & 0x3F);
+    }
+    if ((extra == 2 && cp < 0x800) || (extra == 3 && (cp < 0x10000 || cp > 0x10FFFF)) ||
+        (cp >= 0xD800 && cp <= 0xDFFF)) {
+        *s = p + 1;
+        return 0xDC00 + c;
+    }
+    *s = p + 1 + extra;
+    return cp;
+}
+
+/* The comparison key of s (see above). Returns its length; a longer name is cut at cap, which
+ * no name we write comes near. */
+static size_t name_key(const char *s, uint32_t *out, size_t cap)
+{
+    const unsigned char *p = (const unsigned char *)s;
+    size_t n = 0;
+    while (*p && n + 2 <= cap) {
+        uint32_t c = next_cp(&p);
+        if (c >= 0xC0 && c <= 0x17F && decomp_tab[2 * (c - 0xC0)] != ' ') {
+            out[n++] = fold_cp((unsigned char)decomp_tab[2 * (c - 0xC0)]);
+            out[n++] = mark_cp(decomp_tab[2 * (c - 0xC0) + 1]);
+        } else {
+            out[n++] = fold_cp(c);
+        }
+    }
+    return n;
+}
+
+int pin_naming_same_name(const char *a, const char *b)
+{
+    if (!a || !b)
+        return 0;
+    uint32_t ka[KEY_MAX], kb[KEY_MAX];
+    size_t na = name_key(a, ka, KEY_MAX), nb = name_key(b, kb, KEY_MAX);
+    return na == nb && memcmp(ka, kb, na * sizeof(*ka)) == 0;
+}
+
+/* ASCII-only folding, for the extension test of pin_naming_strip_extension() (the extensions
+ * are ASCII). */
 static int fold(unsigned char c)
 {
     return (c >= 'A' && c <= 'Z') ? c + 32 : c;
@@ -64,14 +195,6 @@ static int ends_with_iext(const char *name, const char *ext)
     if (name[nlen - elen - 1] != '.')
         return 0;
     return str_iequal(name + nlen - elen, ext);
-}
-
-static int starts_with(const char *name, const char *prefix)
-{
-    for (; *prefix; name++, prefix++)
-        if (!*name || fold((unsigned char)*name) != fold((unsigned char)*prefix))
-            return 0;
-    return 1;
 }
 
 #define PIN_NAME_MAX_BYTES 200 /* 255 minus "-pass-99-0001.ext" and some slack */
@@ -160,7 +283,7 @@ int pin_naming_folder_exists(const char *path, char *reason, size_t reason_size)
 {
     if (!path)
         return 0;
-    char dir[1024];
+    char dir[4096];
     const char *sep = NULL;
     for (const char *p = path; *p; p++)
         if (is_sep(*p))
@@ -173,8 +296,7 @@ int pin_naming_folder_exists(const char *path, char *reason, size_t reason_size)
         return 1; /* too long to look at; opening the file reports it */
     memcpy(dir, path, n);
     dir[n] = 0;
-    struct stat st;
-    if (stat(dir, &st) == 0 && (st.st_mode & S_IFDIR))
+    if (pin_fs_is_dir(dir))
         return 1;
     if (reason && reason_size)
         snprintf(reason, reason_size, "The folder %.300s does not exist", dir);
@@ -274,54 +396,32 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
     const char *base_name;
     split_dir_and_base(base_no_ext, dir, sizeof(dir), &base_name);
 
-#if defined(_WIN32)
-    /* The paths are UTF-8; opendir() would read them as the ANSI code page and fail in a folder
-     * whose name has a non-ASCII letter. */
-    wchar_t wdir[4096];
-    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, dir, -1, wdir, 4096) <= 0)
-        return -1;
-    _WDIR *d = _wopendir(wdir);
-#else
-    DIR *d = opendir(dir);
-#endif
+    pin_fs_dir_t *d = pin_fs_opendir(dir);
     if (!d) {
         /* A folder that is not there holds no file to collide with; any other failure
          * (permissions, I/O) means we cannot tell. */
         return (errno == ENOENT || errno == ENOTDIR) ? 0 : -1;
     }
 
-    char prefix_dash[512];
-    snprintf(prefix_dash, sizeof(prefix_dash), "%s-", base_name);
+    /* The keys of "base.ext", "base-" and ".ext" (see name_key()) */
+    uint32_t kname[KEY_MAX], kexact[KEY_MAX], kprefix[KEY_MAX], kext[KEY_MAX];
+    char tmp[1100];
+    snprintf(tmp, sizeof(tmp), "%s.%s", base_name, ext);
+    size_t nexact = name_key(tmp, kexact, KEY_MAX);
+    snprintf(tmp, sizeof(tmp), "%s-", base_name);
+    size_t nprefix = name_key(tmp, kprefix, KEY_MAX);
+    snprintf(tmp, sizeof(tmp), ".%s", ext);
+    size_t next = name_key(tmp, kext, KEY_MAX);
 
     int found = 0;
-    for (;;) {
-#if defined(_WIN32)
-        struct _wdirent *ent = _wreaddir(d);
-        char name_buf[1024];
-        if (!ent)
-            break;
-        if (WideCharToMultiByte(CP_UTF8, 0, ent->d_name, -1, name_buf, sizeof(name_buf), NULL, NULL) <= 0)
-            continue;   /* longer than any name we would have written */
-        const char *name = name_buf;
-#else
-        struct dirent *ent = readdir(d);
-        if (!ent)
-            break;
-        const char *name = ent->d_name;
-#endif
-        int match = 0;
-
-        /* Exact "base.ext"? */
-        {
-            char candidate[600];
-            snprintf(candidate, sizeof(candidate), "%s.%s", base_name, ext);
-            if (str_iequal(name, candidate))
-                match = 1;
-        }
-        /* "base-...ext" (covers -NNNN, -pass-N, -pass-N-NNNN)? */
-        if (!match && starts_with(name, prefix_dash) && ends_with_iext(name, ext))
-            match = 1;
-
+    const char *name;
+    while ((name = pin_fs_readdir(d)) != NULL) {
+        size_t n = name_key(name, kname, KEY_MAX);
+        /* "base.ext", or "base-...ext" (covers -NNNN, -pass-N, -pass-N-NNNN) */
+        int match = (n == nexact && memcmp(kname, kexact, n * sizeof(*kname)) == 0) ||
+                    (n >= nprefix && n >= next &&
+                     memcmp(kname, kprefix, nprefix * sizeof(*kname)) == 0 &&
+                     memcmp(kname + n - next, kext, next * sizeof(*kname)) == 0);
         if (match) {
             found = 1;
             if (first_match && first_match_size > 0) {
@@ -332,11 +432,7 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
             break;
         }
     }
-#if defined(_WIN32)
-    _wclosedir(d);
-#else
-    closedir(d);
-#endif
+    pin_fs_closedir(d);
     return found;
 }
 

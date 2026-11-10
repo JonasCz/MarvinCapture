@@ -19,6 +19,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #include "avi_writer.h"
+#include "pin_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -415,7 +416,7 @@ avi_writer_t *avi_open_titled(const char *path, unsigned width, unsigned height,
     avi_writer_t *w = calloc(1, sizeof(*w));
     if (!w)
         return NULL;
-    w->f = fopen(path, "wb");
+    w->f = pin_fs_fopen(path, "wb");
     if (!w->f) {
         free(w);
         return NULL;

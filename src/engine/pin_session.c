@@ -37,6 +37,7 @@
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_cfg.h"
 #include "../core/pin_log.h"
+#include "../core/pin_fs.h"
 #include "../sinks/sinks_internal.h"
 #include "../sinks/pin_stdout.h"
 #include "../sinks/pin_hwenc.h"
@@ -406,14 +407,7 @@ static int lib_dir(char *out, size_t cap)
 /* Size of a file, or -1 if it cannot be opened. */
 static long long file_size(const char *path)
 {
-#if defined(_WIN32)
-    wchar_t wpath[PIN_PATH_MAX];
-    if (!MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, PIN_PATH_MAX))
-        return -1;
-    FILE *f = _wfopen(wpath, L"rb");
-#else
-    FILE *f = fopen(path, "rb");
-#endif
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f)
         return -1;
     long long n = -1;
@@ -548,7 +542,7 @@ static void set_init_error(pin_session_t *s, pinnacle_status_t pst, const char *
  * enough between MinGW and POSIX to not be worth it here. */
 static int path_is_existing_file(const char *path)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f)
         return 0;
     fclose(f);
@@ -2116,7 +2110,7 @@ static uint64_t file_bytes_due(pin_session_t *s)
         pin_sink_status_t sst;
         memset(&sst, 0, sizeof(sst));
         s->sink->get_status(s->sink, &sst);
-        n = sst.bytes_written;
+        n = sst.bytes_written + sst.bytes_queued;
     }
     if (s->writer) {
         pin_writer_stats_t wst;
@@ -2124,6 +2118,15 @@ static uint64_t file_bytes_due(pin_session_t *s)
         n += wst.backlog_bytes;
     }
     return n + s->hold.bytes + s->split.pend_bytes;
+}
+
+/* How big a file of format fmt may grow on a drive whose files cannot pass limit (FAT32). HDV MOV
+ * / MKV hold up to PIN_HDVMUX_QUEUE_MAX of their own that only reach the file later, at the
+ * latest when it is closed, and write their index then: their margin covers all of it. */
+static uint64_t file_cap_for(uint64_t limit, pin_format_t fmt)
+{
+    int queued = fmt == PIN_FMT_HDV_MOV || fmt == PIN_FMT_HDV_MKV;
+    return pin_stop_file_cap_queued(limit, queued ? PIN_HDVMUX_QUEUE_MAX : 0);
 }
 
 /* The new file of a size cut begins here (pin_holdback_cut()): the open file is full for its
@@ -2167,7 +2170,7 @@ static void capture_unit(pin_session_t *s, const uint8_t *data, size_t len, pin_
     int size_cut = s->file_limit && (flags & PIN_HOLD_CUT_OK) && kind == s->file_kind &&
                    (s->split.file_units > 0 || s->hold.count > 0) && fmt_res == PIN_FMTWATCH_SAME &&
                    !pin_fmtwatch_pending(&s->fmtw, NULL) &&
-                   file_bytes_due(s) + ahead > pin_stop_file_cap(s->file_limit);
+                   file_bytes_due(s) + ahead > file_cap_for(s->file_limit, s->active_format);
 
     if (!hdv_gate_now(s, data, len))
         hold_push(s, data, len, idx, flags);
@@ -2787,7 +2790,7 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
          * it (capture_unit()), so for them this is only the backstop, half way into the margin
          * (a stream that offers no place to cut); analog has no cut and stops at the cap. The
          * file is finished in the margin left. */
-        uint64_t cap = pin_stop_file_cap(s->file_limit);
+        uint64_t cap = file_cap_for(s->file_limit, s->active_format);
         if (s->file_kind != PIN_KIND_ANALOG)
             cap += (s->file_limit - cap) / 2;
         if (file_bytes_due(s) > cap) {
@@ -2838,7 +2841,9 @@ static int capture_guard(pin_session_t *s, uint16_t deck_node)
         memset(&sst, 0, sizeof(sst));
         if (s->sink->get_status)
             s->sink->get_status(s->sink, &sst);
-        why = pin_stop_writer_failure(s->active_format, sst.last_error, sst.reencode_behind,
+        why = pin_stop_writer_failure(s->active_format, sst.last_error,
+                                      sst.reencode_behind ? PIN_SINK_FAIL_REENCODE_BEHIND
+                                                          : sst.fail_reason,
                                       detail, sizeof(detail));
     } else {
         return 0;
@@ -4127,7 +4132,7 @@ static int replay_looks_like_ts(const uint8_t *head, size_t n)
 static int replay_run(pin_session_t *s)
 {
     const char *path = s->device_id + 7; /* "replay:<file>" */
-    FILE *f = fopen(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f) {
         worker_error(s, PIN_ERR_NOT_FOUND, "replay file not found");
         return -1;
@@ -4690,17 +4695,27 @@ pin_status_t pin_session_deck(pin_session_t *s, pin_deck_cmd_t cmd)
 static int fat32_and_free(const char *path, uint64_t *free_bytes, int *fat32)
 {
 #if defined(_WIN32)
-    wchar_t wpath[MAX_PATH];
-    MultiByteToWideChar(CP_UTF8, 0, path, -1, wpath, MAX_PATH);
-    wchar_t root[MAX_PATH];
-    wcsncpy(root, wpath, MAX_PATH - 1);
-    /* take the drive root: "C:\..." -> "C:\\" */
-    if (wcslen(root) >= 2 && root[1] == L':') { root[3] = 0; root[2] = L'\\'; }
+    /* The volume the path is on (a drive, a share, or a folder a volume is mounted on), from
+     * the same long-path-safe wide path the sinks open. */
+    *free_bytes = 0;
+    *fat32 = 0;
+    wchar_t *wpath = pin_fs_wpath(path);
+    if (!wpath)
+        return -1;
+    size_t cap = wcslen(wpath) + 2;
+    wchar_t *root = malloc(cap * sizeof(wchar_t));
+    int got_root = root && GetVolumePathNameW(wpath, root, (DWORD)cap);
+    free(wpath);
+    if (!got_root) {
+        free(root);
+        return -1;
+    }
     ULARGE_INTEGER avail;
     int ok = GetDiskFreeSpaceExW(root, &avail, NULL, NULL) != 0;
     *free_bytes = ok ? avail.QuadPart : 0;
     wchar_t fsname[64] = { 0 };
     GetVolumeInformationW(root, NULL, 0, NULL, NULL, NULL, fsname, 64);
+    free(root);
     *fat32 = wcsstr(fsname, L"FAT32") != NULL || wcscmp(fsname, L"FAT") == 0;
     return ok ? 0 : -1;
 #else
@@ -4850,7 +4865,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
                  "An earlier capture may be overwritten");
     else if (out->fat32)   /* DV / HDV go on in a new file at the limit, analog stops there */
         pin_stop_file_limit_note(file_limit, kind == PIN_KIND_ANALOG,
-                                 bytes_per_s > 0 ? pin_stop_file_cap(file_limit) / bytes_per_s / 60.0 : 0,
+                                 bytes_per_s > 0 ? file_cap_for(file_limit, want) / bytes_per_s / 60.0 : 0,
                                  out->message, sizeof(out->message));
     return PIN_OK;
 }
@@ -4963,11 +4978,15 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
     out->clip_frames_error = s->clip_frames_error;
     out->clip_frames_dropped = s->clip_frames_dropped + s->clip_write_dropped;
     {
-        /* HDV MOV / MKV count their frames with error themselves: the closed files', the open one's */
+        /* HDV MOV / MKV count their frames with error themselves, and DV to H.264 / HEVC the
+         * frames that did not decode (as repeats): the closed files', the open one's */
         pin_sink_status_t fst;
         memset(&fst, 0, sizeof(fst));
-        if (s->sink && s->sink->get_status && s->file_kind == PIN_KIND_HDV &&
-            (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV))
+        if (s->sink && s->sink->get_status &&
+            ((s->file_kind == PIN_KIND_HDV &&
+              (s->active_format == PIN_FMT_HDV_MOV || s->active_format == PIN_FMT_HDV_MKV)) ||
+             (s->file_kind == PIN_KIND_DV &&
+              (s->active_format == PIN_FMT_DV_H264_MKV || s->active_format == PIN_FMT_DV_HEVC_MKV))))
             s->sink->get_status(s->sink, &fst);
         out->frames_error += s->sinkf_error + fst.frames_error;
         out->frames_dropped += s->sinkf_repeated + fst.frames_repeated;

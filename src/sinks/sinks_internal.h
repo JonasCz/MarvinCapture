@@ -65,6 +65,93 @@ int pin_sink_fault_avio_open(struct AVIOContext **pb, const char *path, uint64_t
 int pin_sink_fault_avio_close(struct AVIOContext **pb);
 pin_sink_t *sink_hwenc_create(pin_format_t format);  /* ANALOG_ / DV_ H264_MKV, HEVC_MKV */
 
+/* Tests only (pin_sink_fault.c): PIN_TEST_WRITE_STALL=<bytes>:<ms> makes a file opened through
+ * pin_sink_fault_avio_open() (the seam turns that on by itself) stop for <ms> once, at the first
+ * write past <bytes>, as a drive that spins up or a share that stalls would.
+ * PIN_TEST_STALL_TIMEOUT_MS=<ms> replaces the encoder sinks' watchdog (STALL_TIMEOUT_S) and
+ * close()'s patience with a thread stuck in a write (PIN_SINK_CLOSE_STALL_S) by <ms>. */
+long pin_sink_fault_stall_timeout_ms(long dflt_ms);
+
+/* The encoder sinks (FFV1, H.264 / HEVC) write the file from their own threads. This tells a
+ * drive that stalls (a thread is inside a file write) from an encoder that hangs (none is), and
+ * lets close() give up on threads stuck in a write to a share that is gone instead of waiting for
+ * the OS forever. */
+#define PIN_SINK_CLOSE_STALL_S 60
+typedef struct {
+    pthread_mutex_t m;
+    pthread_cond_t c;
+    int in_write;        /* threads inside a file write */
+    uint64_t writes;     /* file writes finished */
+    int done;            /* threads that ended */
+} pin_sink_watch_t;
+
+static inline void pin_sink_watch_init(pin_sink_watch_t *w)
+{
+    pthread_mutex_init(&w->m, NULL);
+    pin_cond_init_timed(&w->c);
+    w->in_write = 0;
+    w->writes = 0;
+    w->done = 0;
+}
+
+static inline void pin_sink_watch_destroy(pin_sink_watch_t *w)
+{
+    pthread_mutex_destroy(&w->m);
+    pthread_cond_destroy(&w->c);
+}
+
+static inline void pin_sink_watch_write(pin_sink_watch_t *w, int begin)
+{
+    pthread_mutex_lock(&w->m);
+    if (begin) {
+        w->in_write++;
+    } else {
+        w->in_write--;
+        w->writes++;
+    }
+    pthread_cond_broadcast(&w->c);
+    pthread_mutex_unlock(&w->m);
+}
+
+/* 1 while a thread is inside a file write: a full queue is the drive's doing, not the encoder's */
+static inline int pin_sink_watch_writing(pin_sink_watch_t *w)
+{
+    pthread_mutex_lock(&w->m);
+    int n = w->in_write;
+    pthread_mutex_unlock(&w->m);
+    return n > 0;
+}
+
+/* A thread's last act. */
+static inline void pin_sink_watch_thread_done(pin_sink_watch_t *w)
+{
+    pthread_mutex_lock(&w->m);
+    w->done++;
+    pthread_cond_broadcast(&w->c);
+    pthread_mutex_unlock(&w->m);
+}
+
+/* Waits until `threads` threads have called pin_sink_watch_thread_done(), as long as something
+ * moves (a thread ends or a write finishes) at least every stall_ms. 0: they ended (join them);
+ * -1: stuck that long, most likely in a write that never returns (a share that is gone). */
+static inline int pin_sink_watch_wait_done(pin_sink_watch_t *w, int threads, long stall_ms)
+{
+    pthread_mutex_lock(&w->m);
+    for (;;) {
+        if (w->done >= threads) {
+            pthread_mutex_unlock(&w->m);
+            return 0;
+        }
+        uint64_t writes = w->writes;
+        int done = w->done;
+        if (pin_cond_timedwait_ms(&w->c, &w->m, stall_ms) == ETIMEDOUT && w->writes == writes &&
+            w->done == done && w->done < threads) {
+            pthread_mutex_unlock(&w->m);
+            return -1;
+        }
+    }
+}
+
 /* Shared by the sinks and the engine: PAL/NTSC DV sample aspect ratios per the
  * FFmpeg dv profile tables (documented at their point of use), and HDV's from its
  * raster. height is used for HDV (SD takes 576 / 480 lines from is_pal). */

@@ -463,8 +463,54 @@ static void print_log_events(int debug)
     }
 }
 
+#if defined(_WIN32)
+#include <shellapi.h>
+/* The C runtime hands main() the arguments in the ANSI code page (cp1252 or similar unless the
+ * "UTF-8 for worldwide language support" switch is on), so "--capture C:\Café\clip" would
+ * reach the core as "CafÃ©" or with '?' for letters outside it. Every path in the core is
+ * UTF-8: rebuild argv from the UTF-16 command line. The strings live until the process ends. */
+static char **utf8_argv(int *argc)
+{
+    int n = 0;
+    wchar_t **wargv = CommandLineToArgvW(GetCommandLineW(), &n);
+    if (!wargv)
+        return NULL;
+    char **out = calloc((size_t)n + 1, sizeof(char *));
+    for (int i = 0; out && i < n; i++) {
+        int len = WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, NULL, 0, NULL, NULL);
+        out[i] = len > 0 ? malloc((size_t)len) : NULL;
+        if (!out[i] || WideCharToMultiByte(CP_UTF8, 0, wargv[i], -1, out[i], len, NULL, NULL) <= 0) {
+            out = NULL;   /* out of memory at startup: keep the runtime's arguments */
+            break;
+        }
+    }
+    LocalFree(wargv);
+    if (out)
+        *argc = n;
+    return out;
+}
+
+static UINT g_console_cp;
+static void restore_console_cp(void)
+{
+    SetConsoleOutputCP(g_console_cp);
+}
+#endif
+
 int main(int argc, char **argv)
 {
+#if defined(_WIN32)
+    {
+        char **u = utf8_argv(&argc);
+        if (u)
+            argv = u;
+        /* the core's texts and file names are UTF-8 too; the console is shared with the shell
+         * that started us, so its code page is put back on the way out */
+        g_console_cp = GetConsoleOutputCP();
+        if (g_console_cp && SetConsoleOutputCP(CP_UTF8))
+            atexit(restore_console_cp);
+    }
+#endif
     /* Hidden: the help text alone, unwrapped and without the device list; the build copies it into
      * docs/cli.md (scripts/sync-cli-help.sh). */
     if (argc == 2 && strcmp(argv[1], "--help-text") == 0) {

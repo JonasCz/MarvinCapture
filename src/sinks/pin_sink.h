@@ -68,10 +68,16 @@ typedef struct {
     uint64_t units_written;
     uint64_t units_damaged;      /* e.g. a DV/HDV unit that didn't pass the sequence-count check */
     uint64_t audio_padded_samples; /* silence inserted to keep audio in sync with video */
+    uint64_t bytes_queued;       /* sink_hdvmux: bytes taken but not in the file yet (GOPs waiting
+                                    to be checked, pictures waiting behind a repair); at most
+                                    PIN_HDVMUX_QUEUE_MAX */
     int encoder_behind;          /* sink_ffv1, sink_hwenc: the encode thread's queue is backing up */
     int pipe_closed;             /* stdout sinks: the reading program is gone (not a disk error) */
     int reencode_behind;         /* sink_hdvmux: checking or repairing GOPs cannot keep up; the
                                     sink failed with PIN_ERR_CODEC and the capture ends */
+    int fail_reason;             /* a PIN_SINK_FAIL_* (pin_stop.h): the sink failed on purpose, with
+                                    last_error PIN_ERR_CODEC, because something the file must have
+                                    is missing (no audio, ...); 0 otherwise */
     /* sink_hdvmux (HDV MOV / MKV), what the file got: frames written; of them, frames "with
      * error" (re-encoded, or played with audio replaced by silence); and frames that repeat a
      * neighbour because their picture was lost (they are "with error" too). Other sinks: 0. */
@@ -80,6 +86,14 @@ typedef struct {
     uint64_t frames_repeated;
     pin_status_t last_error;
 } pin_sink_status_t;
+
+/* sink_hdvmux's queues: GOPs waiting for its decode thread, and what waits in front of the muxer
+ * behind a repair. More than that and the sink fails (reencode_behind). Together the most a
+ * HDV MOV / MKV file can still grow by after the session last looked at its size, before its
+ * trailer (pin_stop_file_cap_queued()). */
+#define PIN_HDVMUX_GQ_LIMIT (64ull << 20)
+#define PIN_HDVMUX_PEND_LIMIT (160ull << 20)
+#define PIN_HDVMUX_QUEUE_MAX (PIN_HDVMUX_GQ_LIMIT + PIN_HDVMUX_PEND_LIMIT)
 
 typedef struct pin_sink pin_sink_t;
 

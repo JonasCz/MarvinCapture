@@ -80,7 +80,8 @@
 #define FFV1_SLICES 16
 #define FLAC_LEVEL 8             /* highest within the FLAC subset (LPC order <= 12) */
 #define AUDIO_RING_SECONDS 4
-#define STALL_TIMEOUT_S 10       /* a full queue or ring this long: the encoder or muxer is taken as hung */
+#define STALL_TIMEOUT_S 10       /* a full queue or ring this long, with no file write going on: the
+                                    encoder is taken as hung (a slow drive is waited for) */
 
 typedef struct {
     AVFormatContext *fmt;
@@ -115,6 +116,10 @@ typedef struct {
 
     pin_sink_status_t st;
     pthread_mutex_t st_lock;
+
+    pin_sink_watch_t watch;    /* file writes in progress, threads ended (sinks_internal.h) */
+    long stall_ms;             /* STALL_TIMEOUT_S, or a test's */
+    int warned_slow_drive;
 } ffv1_priv_t;
 
 static int cpu_count(void)
@@ -172,7 +177,9 @@ static void encode_one(ffv1_priv_t *p, AVFrame *frame)
         pkt->stream_index = p->vst->index;
         size_t pkt_size = (size_t)pkt->size;
         pthread_mutex_lock(&p->mux_lock);
+        pin_sink_watch_write(&p->watch, 1);
         rc = av_interleaved_write_frame(p->fmt, pkt);
+        pin_sink_watch_write(&p->watch, 0);
         pthread_mutex_unlock(&p->mux_lock);
         av_packet_free(&pkt);
         if (rc < 0) {
@@ -212,6 +219,7 @@ static void *encoder_thread_fn(void *arg)
      * buffered packets (FFV1 with g=1 has none, but this stays correct if
      * that ever changes). */
     encode_one(p, NULL);
+    pin_sink_watch_thread_done(&p->watch);
     return NULL;
 }
 
@@ -244,7 +252,9 @@ static void encode_audio(ffv1_priv_t *p, AVFrame *frame)
         pkt->stream_index = p->ast->index;
         size_t pkt_size = (size_t)pkt->size;
         pthread_mutex_lock(&p->mux_lock);
+        pin_sink_watch_write(&p->watch, 1);
         rc = av_interleaved_write_frame(p->fmt, pkt);
+        pin_sink_watch_write(&p->watch, 0);
         pthread_mutex_unlock(&p->mux_lock);
         av_packet_free(&pkt);
         if (rc < 0) {
@@ -316,12 +326,31 @@ static void *audio_thread_fn(void *arg)
     }
     pthread_mutex_unlock(&p->alock);
     encode_audio(p, NULL);   /* drain; the last packet carries the final STREAMINFO */
+    pin_sink_watch_thread_done(&p->watch);
     return NULL;
+}
+
+/* A full queue or ring has not moved for stall_ms. While a thread is inside a file write the
+ * drive is slow (spin-up, a USB reset, a network share, a virus scanner), not the encoder: the
+ * wait goes on, and the writer ring in front of this sink takes the backlog (when that overflows
+ * the capture ends as DISK_SLOW). Only an encoder that takes nothing while nothing is being
+ * written is taken as hung. Returns 1 to keep waiting. */
+static int stall_is_drive(ffv1_priv_t *p)
+{
+    if (!pin_sink_watch_writing(&p->watch))
+        return 0;
+    if (!p->warned_slow_drive) {
+        pin_logf(PIN_LOG_WARN, "sink_ffv1: the output drive has not finished a write for %ld ms; "
+                               "waiting for it\n", p->stall_ms);
+        p->warned_slow_drive = 1;
+    }
+    return 1;
 }
 
 static pin_status_t ffv1_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
 {
     ffv1_priv_t *p = s->priv;
+    p->stall_ms = pin_sink_fault_stall_timeout_ms(STALL_TIMEOUT_S * 1000L);
     if (params->kind != PIN_KIND_ANALOG)
         return PIN_ERR_ARG;
 
@@ -530,11 +559,11 @@ static pin_status_t ffv1_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
         p->st.encoder_behind = 1;
         pthread_mutex_unlock(&p->st_lock);
         while (p->qcount == QUEUE_DEPTH) {
-            if (pin_cond_timedwait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
-                p->qcount == QUEUE_DEPTH) {
+            if (pin_cond_timedwait_ms(&p->qspace, &p->qlock, p->stall_ms) == ETIMEDOUT &&
+                p->qcount == QUEUE_DEPTH && !stall_is_drive(p)) {
                 pthread_mutex_unlock(&p->qlock);
-                pin_logf(PIN_LOG_ERROR, "sink_ffv1: the encoder took no picture for %d s\n",
-                         STALL_TIMEOUT_S);
+                pin_logf(PIN_LOG_ERROR, "sink_ffv1: the encoder took no picture for %ld ms\n",
+                         p->stall_ms);
                 set_error(p, PIN_ERR_CODEC);
                 av_frame_free(&f);
                 return PIN_ERR_CODEC;
@@ -568,11 +597,11 @@ static pin_status_t ffv1_write_audio(pin_sink_t *s, const int16_t *pcm, size_t f
             p->st.encoder_behind = 1;
             pthread_mutex_unlock(&p->st_lock);
             while (p->acount == p->aring_frames) {
-                if (pin_cond_timedwait(&p->aspace, &p->alock, STALL_TIMEOUT_S) == ETIMEDOUT &&
-                    p->acount == p->aring_frames) {
+                if (pin_cond_timedwait_ms(&p->aspace, &p->alock, p->stall_ms) == ETIMEDOUT &&
+                    p->acount == p->aring_frames && !stall_is_drive(p)) {
                     pthread_mutex_unlock(&p->alock);
-                    pin_logf(PIN_LOG_ERROR, "sink_ffv1: the audio encoder took no samples for %d s\n",
-                             STALL_TIMEOUT_S);
+                    pin_logf(PIN_LOG_ERROR, "sink_ffv1: the audio encoder took no samples for %ld ms\n",
+                             p->stall_ms);
                     set_error(p, PIN_ERR_CODEC);
                     return PIN_ERR_CODEC;
                 }
@@ -604,15 +633,39 @@ static pin_status_t ffv1_close(pin_sink_t *s)
         p->closing = 1;
         pthread_cond_signal(&p->qwake);
         pthread_mutex_unlock(&p->qlock);
-        pthread_join(p->enc_thread, NULL);
     }
     if (p->aud_started) {
         pthread_mutex_lock(&p->alock);
         p->aclosing = 1;
         pthread_cond_signal(&p->awake);
         pthread_mutex_unlock(&p->alock);
-        pthread_join(p->aud_thread, NULL);
     }
+    /* Threads stuck in a write that does not come back (a share that is gone, a pulled drive)
+     * would hold the session in STOPPING until the OS gives up: after PIN_SINK_CLOSE_STALL_S
+     * without any progress the file is given up as failed. The threads keep this sink's state,
+     * so it is left allocated for them. */
+    long close_ms = pin_sink_fault_stall_timeout_ms(PIN_SINK_CLOSE_STALL_S * 1000L);
+    if (pin_sink_watch_wait_done(&p->watch, p->enc_started + p->aud_started,
+                                 close_ms) != 0) {
+        pin_logf(PIN_LOG_ERROR, "sink_ffv1: writing the file has not moved for %ld ms; giving it up\n",
+                 close_ms);
+        if (p->enc_started)
+            pthread_detach(p->enc_thread);
+        if (p->aud_started)
+            pthread_detach(p->aud_thread);
+        pthread_mutex_lock(&p->st_lock);
+        if (p->st.last_error == PIN_OK)
+            p->st.last_error = PIN_ERR_IO;
+        if (s->final_status)
+            *s->final_status = p->st;
+        pthread_mutex_unlock(&p->st_lock);
+        free(s);
+        return PIN_ERR_IO;
+    }
+    if (p->enc_started)
+        pthread_join(p->enc_thread, NULL);
+    if (p->aud_started)
+        pthread_join(p->aud_thread, NULL);
     if (p->fmt) {
         if (p->header_written && av_write_trailer(p->fmt) < 0)
             rc = PIN_ERR_IO;
@@ -641,6 +694,7 @@ static pin_status_t ffv1_close(pin_sink_t *s)
     pthread_mutex_destroy(&p->alock);
     pthread_cond_destroy(&p->awake);
     pthread_cond_destroy(&p->aspace);
+    pin_sink_watch_destroy(&p->watch);
     free(p);
     free(s);
     return rc;
@@ -680,6 +734,8 @@ pin_sink_t *sink_ffv1_create(void)
     pthread_mutex_init(&p->alock, NULL);
     pthread_cond_init(&p->awake, NULL);
     pin_cond_init_timed(&p->aspace);
+    pin_sink_watch_init(&p->watch);
+    p->stall_ms = STALL_TIMEOUT_S * 1000L;
     s->priv = p;
     s->open = ffv1_open;
     s->write_video = ffv1_write_video;

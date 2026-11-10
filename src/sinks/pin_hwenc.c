@@ -204,15 +204,24 @@ static AVCodecContext *open_attempts(pin_hwenc_codec_t c, const pin_hwenc_config
 
 /* ---- the probe ------------------------------------------------------------------- */
 
+/* g_mtx guards the results and is only ever held for a moment, so pin_hwenc_known_available()
+ * (asked from GUI threads) never waits for a probe; g_probe_mtx lets one probe run at a time,
+ * which can take seconds (a hardware encoder that is slow to open or to refuse). */
 static pthread_mutex_t g_mtx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_mutex_t g_probe_mtx = PTHREAD_MUTEX_INITIALIZER;
 static int g_probed;
 static int g_ok[PIN_HWENC_CODEC_COUNT];
 static int g_attempt[PIN_HWENC_CODEC_COUNT];
 static char g_probed_override[64];      /* PIN_HWENC_ENCODER at the time of the probe */
 
+typedef struct {
+    int ok[PIN_HWENC_CODEC_COUNT];
+    int attempt[PIN_HWENC_CODEC_COUNT];
+} probe_result_t;
+
 static void *probe_thread(void *arg)
 {
-    (void)arg;
+    probe_result_t *r = arg;
     /* Some attempts are expected to fail (a pixel format, a profile, the hardware MFT);
      * FFmpeg says so at error level, which is no news here. */
     pin_sink_av_log_quiet(1);
@@ -224,8 +233,8 @@ static void *probe_thread(void *arg)
         };
         int which = -1;
         AVCodecContext *e = open_attempts((pin_hwenc_codec_t)c, &cfg, -1, &which);
-        g_ok[c] = e != NULL;
-        g_attempt[c] = which;
+        r->ok[c] = e != NULL;
+        r->attempt[c] = which;
         avcodec_free_context(&e);
     }
     pin_sink_av_log_quiet(0);
@@ -235,31 +244,41 @@ static void *probe_thread(void *arg)
 int pin_hwenc_probe(void)
 {
     pin_sink_av_log_install();
-    pthread_mutex_lock(&g_mtx);
+    pthread_mutex_lock(&g_probe_mtx);
     const char *ov = override_name();
-    if (!g_probed || strcmp(ov ? ov : "", g_probed_override) != 0) {
-        snprintf(g_probed_override, sizeof(g_probed_override), "%s", ov ? ov : "");
-        memset(g_ok, 0, sizeof(g_ok));
+    pthread_mutex_lock(&g_mtx);
+    int stale = !g_probed || strcmp(ov ? ov : "", g_probed_override) != 0;
+    pthread_mutex_unlock(&g_mtx);
+    if (stale) {
+        probe_result_t r;
+        memset(&r, 0, sizeof(r));
         if (pin_hwenc_encoder_name(PIN_HWENC_H264) || pin_hwenc_encoder_name(PIN_HWENC_HEVC)) {
             /* On a thread of its own, never the caller's: Media Foundation initialises COM
              * as multithreaded on the thread that opens it, which fails on a GUI thread
              * that is a single-threaded apartment. */
             pthread_t t;
-            if (pthread_create(&t, NULL, probe_thread, NULL) == 0)
+            if (pthread_create(&t, NULL, probe_thread, &r) == 0)
                 pthread_join(t, NULL);
             else
-                probe_thread(NULL);
+                probe_thread(&r);
         }
+        pthread_mutex_lock(&g_mtx);
+        snprintf(g_probed_override, sizeof(g_probed_override), "%s", ov ? ov : "");
+        memcpy(g_ok, r.ok, sizeof(g_ok));
+        memcpy(g_attempt, r.attempt, sizeof(g_attempt));
         g_probed = 1;
+        pthread_mutex_unlock(&g_mtx);
         pin_logf(PIN_LOG_DEBUG, "hwenc: H.264 encoder %s, HEVC encoder %s\n",
-                 g_ok[PIN_HWENC_H264] ? "available" : "not available",
-                 g_ok[PIN_HWENC_HEVC] ? "available" : "not available");
+                 r.ok[PIN_HWENC_H264] ? "available" : "not available",
+                 r.ok[PIN_HWENC_HEVC] ? "available" : "not available");
     }
     int mask = 0;
+    pthread_mutex_lock(&g_mtx);
     for (int c = 0; c < PIN_HWENC_CODEC_COUNT; c++)
         if (g_ok[c])
             mask |= 1 << c;
     pthread_mutex_unlock(&g_mtx);
+    pthread_mutex_unlock(&g_probe_mtx);
     return mask;
 }
 

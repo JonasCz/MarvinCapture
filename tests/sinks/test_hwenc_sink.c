@@ -535,15 +535,17 @@ static void dv(const char *src, const frames_t *fr, pin_format_t fmt, int deint,
     CHECK(s->open(s, path, &prm) == PIN_OK);
     for (size_t i = 0; i < fr->n; i++)
         CHECK(s->write_unit(s, fr->frames[i], fr->lens[i]) == PIN_OK);
+    /* after close: frames that do not decode are counted on the encoder thread, as repeats */
     pin_sink_status_t st;
-    s->get_status(s, &st);
+    memset(&st, 0, sizeof(st));
+    s->final_status = &st;
     CHECK(s->close(s) == PIN_OK);
 
     readback_t r;
     readback(path, &r);
-    int64_t good = (int64_t)fr->n - (int64_t)st.units_damaged;
+    int64_t good = (int64_t)fr->n - (int64_t)st.units_damaged - (int64_t)st.frames_repeated;
     double fps = (double)prm.fps_num / prm.fps_den;
-    CHECK(good > 0 && st.units_damaged <= fr->n / 10);
+    CHECK(good > 0 && st.units_damaged + st.frames_repeated <= fr->n / 10);
     check_file(&r, good, deint ? 2 : 1, fps, fmt);
     CHECK(r.width == 720 && r.height == prm.height);
     int sn, sd;

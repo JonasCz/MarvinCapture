@@ -17,6 +17,7 @@
  */
 
 #include "pinnacle_cfg.h"
+#include "pin_fs.h"
 #include "pinnacle_analog.h"
 #include "pin_log.h"
 
@@ -155,7 +156,7 @@ pinnacle_status_t pinnacle_cfg_chip_reset(pinnacle_device_t *dev, uint8_t addr)
 
 pinnacle_status_t pinnacle_fpga_load(pinnacle_device_t *dev, const char *path, int fast)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f) {
         pin_logf(PIN_LOG_ERROR, "pinnacle: cannot open bitstream '%s': %s\n", path, strerror(errno));
         return PINNACLE_ERR_BITSTREAM_READ;

@@ -54,13 +54,13 @@
 
 #include "pin_sink.h"
 #include "../core/pin_log.h"
+#include "../core/pin_fs.h"
 
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <unistd.h>
@@ -97,8 +97,7 @@ static pin_status_t lazy_open(pin_sink_t *s, const char *path, const pin_sink_pa
             sep = c;
     if (sep && sep > dir && sep[-1] != ':') {
         *sep = 0;
-        struct stat st;
-        if (stat(dir, &st) != 0 || !(st.st_mode & S_IFDIR))
+        if (!pin_fs_is_dir(dir))
             return PIN_ERR_IO;
     }
     memcpy(p->path, path, strlen(path) + 1);
@@ -178,13 +177,12 @@ static pin_status_t lazy_ensure_open(lazy_priv_t *p)
         lazy_renumber(p);
     /* A name that existed before may be an old file the open did not touch (read-only, or
      * refused): only a file that appears during a failed open is ours to remove. */
-    struct stat sb;
-    int existed = stat(p->path, &sb) == 0;
+    int existed = pin_fs_exists(p->path);
     pin_status_t st = p->inner->open(p->inner, p->path, &p->params);
     if (st != PIN_OK) {
         p->open_error = st;
         /* the open can fail after it created the file (header, encoder or thread start) */
-        p->created_by_open = !existed && stat(p->path, &sb) == 0;
+        p->created_by_open = !existed && pin_fs_exists(p->path);
         return st;
     }
     p->opened = 1;
@@ -253,7 +251,7 @@ static pin_status_t lazy_close(pin_sink_t *s)
     if (!p->opened)
         rc = PIN_OK;        /* nothing on disk, the inner sink was only freed */
     if ((p->opened && p->units == 0) || p->created_by_open)
-        remove(p->path);    /* no video reached it (or its open failed half-way): an empty container */
+        pin_fs_remove(p->path);    /* no video reached it (or its open failed half-way): an empty container */
     if (rc == PIN_OK && p->open_error != PIN_OK)
         rc = p->open_error;
     if (p->next_free)

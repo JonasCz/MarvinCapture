@@ -49,7 +49,8 @@ add_test(NAME test_avi_odml COMMAND test_avi_odml)
 
 add_executable(test_hdv_rewrap test_hdv_rewrap.c)
 target_link_libraries(test_hdv_rewrap PRIVATE pinnacle_sinks)
-add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts" "${PIN_TEST_DATA}/hdv-720p.ts")
+add_test(NAME test_hdv_rewrap COMMAND test_hdv_rewrap "${PIN_TEST_DATA}/hdv.ts" "${PIN_TEST_DATA}/hdv-720p.ts"
+    "${PIN_TEST_DATA}/hdv-repair-closed.ts")
 set_tests_properties(test_hdv_rewrap PROPERTIES FIXTURES_REQUIRED pin_test_data)
 
 # HDV to MOV / MKV with repair of damaged GOPs, on streams damaged like tape dropouts
@@ -103,3 +104,9 @@ add_test(NAME test_hdv_audio COMMAND test_hdv_audio)
 add_executable(test_hdv_demux_audio test_hdv_demux_audio.c)
 target_link_libraries(test_hdv_demux_audio PRIVATE pinnacle_sinks)
 add_test(NAME test_hdv_demux_audio COMMAND test_hdv_demux_audio)
+
+# The FFV1 sink on a drive that stalls: waited for, and close() bounded (PIN_TEST_WRITE_STALL)
+add_executable(test_encoder_stall test_encoder_stall.c)
+target_link_libraries(test_encoder_stall PRIVATE pinnacle_sinks)
+add_test(NAME test_encoder_stall COMMAND test_encoder_stall)
+set_tests_properties(test_encoder_stall PROPERTIES TIMEOUT 60)

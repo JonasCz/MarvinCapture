@@ -224,6 +224,7 @@ struct hdv_demux {
     int tff_param;        /* the engine's field order, -1 none */
     int failed;
     int pmt_pid, vpid, apid;
+    int pmt_audio;        /* -1 no PMT seen yet, 0 the last PMT lists no audio, 1 it lists audio */
     int cc[8192];         /* last continuity counter per PID (-1 none); only vpid/apid used */
     buf_t vpes, apes;
     int vpes_on, apes_on;
@@ -599,6 +600,7 @@ static void parse_psi(hdv_demux_t *m, const uint8_t *pkt, int pid)
                 apid = epid;
             i += 5 + eil;
         }
+        m->pmt_audio = apid > 0;
         if (vpid > 0 && vpid != m->vpid) {
             m->vpid = vpid;
             m->vpes_on = 0;
@@ -699,6 +701,7 @@ hdv_demux_t *hdv_demux_create(const hdv_demux_cb_t *cb, int tff)
     m->cb = *cb;
     m->tff_param = tff;
     m->pmt_pid = m->vpid = m->apid = -1;
+    m->pmt_audio = -1;
     for (int i = 0; i < 8192; i++)
         m->cc[i] = -1;
     m->apes_loss_at = -1;
@@ -712,6 +715,11 @@ void hdv_demux_feed(hdv_demux_t *m, const uint8_t *ts, size_t len)
 {
     for (size_t i = 0; i + TSP <= len; i += TSP)
         ts_packet(m, ts + i);
+}
+
+int hdv_demux_pmt_audio(const hdv_demux_t *m)
+{
+    return m ? m->pmt_audio : -1;
 }
 
 void hdv_demux_flush(hdv_demux_t *m)

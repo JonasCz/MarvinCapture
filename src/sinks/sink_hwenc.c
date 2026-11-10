@@ -85,6 +85,7 @@
 #include "hwenc_convert.h"
 #include "../core/pin_log.h"
 #include "../engine/dv_subcode.h"
+#include "../engine/pin_stop.h"
 
 #include <libavformat/avformat.h>
 #include <libavcodec/avcodec.h>
@@ -108,7 +109,8 @@
 #define QUEUE_DEPTH 8
 #define AUDIO_RING_SECONDS 4
 #define FLAC_LEVEL 8             /* as sink_ffv1.c: the highest within the FLAC subset */
-#define STALL_TIMEOUT_S 10       /* no progress for this long: the encoder is taken as hung */
+#define STALL_TIMEOUT_S 10       /* no progress for this long, with no file write going on: the
+                                    encoder is taken as hung (a slow drive is waited for) */
 #define MAX_PENDING 1024         /* packets waiting for the header */
 
 typedef struct hwenc_priv hwenc_priv_t;
@@ -166,7 +168,7 @@ struct hwenc_priv {
 
     track_t trk[2];
     int ntracks;
-    int warned_late_pair;
+    int audio_late;         /* a DV audio pair appeared after the header: the capture fails */
 
     /* bounded queue -> encoder thread */
     item_t queue[QUEUE_DEPTH];
@@ -198,6 +200,10 @@ struct hwenc_priv {
 
     pin_sink_status_t st;
     pthread_mutex_t st_lock;
+
+    pin_sink_watch_t watch; /* file writes in progress, threads ended (sinks_internal.h) */
+    long stall_ms;          /* STALL_TIMEOUT_S, or a test's */
+    int warned_slow_drive;
 };
 
 static int is_hevc_format(pin_format_t f)
@@ -226,11 +232,37 @@ static pin_status_t get_error(hwenc_priv_t *p)
     return e;
 }
 
+/* A unit refused in the write call that got it (writer thread). The lazy sink tells a refused
+ * unit by this counter growing during the call, so the encoder thread never touches it. */
 static void count_damaged(hwenc_priv_t *p)
 {
     pthread_mutex_lock(&p->st_lock);
     p->st.units_damaged++;
     pthread_mutex_unlock(&p->st_lock);
+}
+
+/* A picture the encoder thread could not use (a DV frame that does not decode): the file has a
+ * hole there, which plays as the frame before repeated. Counted like sink_hdvmux's repeats, as
+ * frames lost; the session's own DV error count does not see these (dv_error.c reads the blocks'
+ * error flags, not whether the frame decodes). */
+static void count_lost_picture(hwenc_priv_t *p)
+{
+    pthread_mutex_lock(&p->st_lock);
+    p->st.frames_repeated++;
+    pthread_mutex_unlock(&p->st_lock);
+}
+
+/* Something the file must have is missing: the sink fails on purpose (pin_stop.h). */
+static pin_status_t fail_on_purpose(hwenc_priv_t *p, int reason)
+{
+    pthread_mutex_lock(&p->st_lock);
+    if (p->st.last_error == PIN_OK) {
+        p->st.last_error = PIN_ERR_CODEC;
+        p->st.fail_reason = reason;
+    }
+    pin_status_t e = p->st.last_error;
+    pthread_mutex_unlock(&p->st_lock);
+    return e;
 }
 
 static void set_behind(hwenc_priv_t *p)
@@ -313,7 +345,9 @@ static void write_now_locked(hwenc_priv_t *p, AVPacket *pkt, AVRational tb)
     av_packet_rescale_ts(pkt, tb, st->time_base);
     size_t size = (size_t)pkt->size;
     int is_video = st == p->vst;
+    pin_sink_watch_write(&p->watch, 1);
     int rc = av_interleaved_write_frame(p->fmt, pkt);
+    pin_sink_watch_write(&p->watch, 0);
     if (rc < 0) {
         pin_logf(PIN_LOG_ERROR, "sink_hwenc: mux write failed (%d)\n", rc);
         set_error(p, PIN_ERR_IO);
@@ -333,7 +367,9 @@ static void try_header_locked(hwenc_priv_t *p)
     /* no pb: open() failed before the file was created, and close() is tidying up */
     if (p->header_written || p->header_failed || !p->declared || !p->vparams_ready || !p->fmt->pb)
         return;
+    pin_sink_watch_write(&p->watch, 1);
     int rc = avformat_write_header(p->fmt, NULL);
+    pin_sink_watch_write(&p->watch, 0);
     if (rc < 0) {
         pin_logf(PIN_LOG_ERROR, "sink_hwenc: avformat_write_header failed (%d)\n", rc);
         p->header_failed = 1;
@@ -597,7 +633,7 @@ static int process_picture(hwenc_priv_t *p, AVFrame *src, int64_t pts)
                      src->width, src->height, p->venc->width, p->venc->height);
             p->warned_size = 1;
         }
-        count_damaged(p);
+        count_lost_picture(p);
         return 0;
     }
     src->pts = pts;
@@ -645,7 +681,7 @@ static int decode_dv(hwenc_priv_t *p, const item_t *it)
             /* the frame stays out; its neighbours keep their timestamps, so audio stays in step */
             pin_logf(PIN_LOG_DEBUG, "sink_hwenc: DV frame %lld did not decode (%d)\n",
                      (long long)it->pts, rc);
-            count_damaged(p);
+            count_lost_picture(p);
             rc = 0;
         }
     }
@@ -709,6 +745,7 @@ static void *encoder_thread_fn(void *arg)
     if (!ok) {
         avcodec_free_context(&p->venc);
         avcodec_free_context(&p->dvdec);
+        pin_sink_watch_thread_done(&p->watch);
         return NULL;
     }
 
@@ -755,7 +792,25 @@ static void *encoder_thread_fn(void *arg)
     avcodec_free_context(&p->dvdec);
     /* freed here, not in close(): Media Foundation's COM belongs to this thread */
     avcodec_free_context(&p->venc);
+    pin_sink_watch_thread_done(&p->watch);
     return NULL;
+}
+
+/* A full queue or ring has not moved for stall_ms. While a thread is inside a file write the
+ * drive is slow (spin-up, a USB reset, a network share, a virus scanner), not the encoder: the
+ * wait goes on, and the writer ring in front of this sink takes the backlog (when that overflows
+ * the capture ends as DISK_SLOW). Only an encoder that takes nothing while nothing is being
+ * written is taken as hung. Returns 1 to keep waiting. */
+static int stall_is_drive(hwenc_priv_t *p)
+{
+    if (!pin_sink_watch_writing(&p->watch))
+        return 0;
+    if (!p->warned_slow_drive) {
+        pin_logf(PIN_LOG_WARN, "sink_hwenc: the output drive has not finished a write for %ld ms; "
+                               "waiting for it\n", p->stall_ms);
+        p->warned_slow_drive = 1;
+    }
+    return 1;
 }
 
 /* Hands one picture to the encoder thread (taking over it); waits while the queue is full. */
@@ -765,11 +820,11 @@ static pin_status_t queue_push(hwenc_priv_t *p, item_t *it)
     if (p->qcount == QUEUE_DEPTH) {
         set_behind(p);
         while (p->qcount == QUEUE_DEPTH) {
-            if (pin_cond_timedwait(&p->qspace, &p->qlock, STALL_TIMEOUT_S) == ETIMEDOUT &&
-                p->qcount == QUEUE_DEPTH) {
+            if (pin_cond_timedwait_ms(&p->qspace, &p->qlock, p->stall_ms) == ETIMEDOUT &&
+                p->qcount == QUEUE_DEPTH && !stall_is_drive(p)) {
                 pthread_mutex_unlock(&p->qlock);
-                pin_logf(PIN_LOG_ERROR, "sink_hwenc: the encoder took no picture for %d s\n",
-                         STALL_TIMEOUT_S);
+                pin_logf(PIN_LOG_ERROR, "sink_hwenc: the encoder took no picture for %ld ms\n",
+                         p->stall_ms);
                 set_error(p, PIN_ERR_CODEC);
                 item_free(it);
                 return PIN_ERR_CODEC;
@@ -866,6 +921,7 @@ static void *audio_thread_fn(void *arg)
     }
     pthread_mutex_unlock(&t->lock);
     encode_audio(t, NULL);   /* the last packet carries the final STREAMINFO */
+    pin_sink_watch_thread_done(&t->p->watch);
     return NULL;
 }
 
@@ -878,11 +934,11 @@ static pin_status_t ring_push(track_t *t, const int16_t *pcm, size_t frames)
         if (t->count == t->ring_frames) {
             set_behind(t->p);
             while (t->count == t->ring_frames) {
-                if (pin_cond_timedwait(&t->space, &t->lock, STALL_TIMEOUT_S) == ETIMEDOUT &&
-                    t->count == t->ring_frames) {
+                if (pin_cond_timedwait_ms(&t->space, &t->lock, t->p->stall_ms) == ETIMEDOUT &&
+                    t->count == t->ring_frames && !stall_is_drive(t->p)) {
                     pthread_mutex_unlock(&t->lock);
-                    pin_logf(PIN_LOG_ERROR, "sink_hwenc: the audio encoder took nothing for %d s\n",
-                             STALL_TIMEOUT_S);
+                    pin_logf(PIN_LOG_ERROR, "sink_hwenc: the audio encoder took nothing for %ld ms\n",
+                             t->p->stall_ms);
                     set_error(t->p, PIN_ERR_CODEC);
                     return PIN_ERR_CODEC;
                 }
@@ -1073,10 +1129,12 @@ static void dv_demux_audio(const uint8_t *data, size_t len, dv_audio_t *out)
 /* One DV frame's audio onto the tracks, fitted to the video timeline (frame p->vpts). */
 static pin_status_t dv_feed_audio(hwenc_priv_t *p, const dv_audio_t *a)
 {
-    if (a->pairs > p->ntracks && !p->warned_late_pair) {
-        pin_logf(PIN_LOG_WARN, "sink_hwenc: DV audio pair %d appeared after the file's header; "
-                               "it is left out of this file\n", p->ntracks + 1);
-        p->warned_late_pair = 1;
+    if (a->pairs > p->ntracks && !p->audio_late) {
+        /* a track cannot be added after the header: dv_process() fails the capture rather than
+         * leave that audio out without a word */
+        pin_logf(PIN_LOG_ERROR, "sink_hwenc: capture failed: DV audio pair %d appeared after the "
+                                "file's header\n", p->ntracks + 1);
+        p->audio_late = 1;
     }
     for (int k = 0; k < p->ntracks; k++) {
         track_t *t = &p->trk[k];
@@ -1110,6 +1168,8 @@ static pin_status_t dv_process(hwenc_priv_t *p, uint8_t *dif, size_t len)
     dv_demux_audio(dif, len, &a);
     pin_status_t rc = dv_feed_audio(p, &a);
     dv_audio_free(&a);
+    if (rc == PIN_OK && p->audio_late)
+        rc = fail_on_purpose(p, PIN_SINK_FAIL_AUDIO_LATE);   /* we prefer to fail fast */
     if (rc != PIN_OK) {
         free(dif);
         return rc;
@@ -1153,6 +1213,7 @@ static pin_status_t dv_declare(hwenc_priv_t *p, const dv_audio_t *a)
 static pin_status_t hwenc_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
 {
     hwenc_priv_t *p = s->priv;
+    p->stall_ms = pin_sink_fault_stall_timeout_ms(STALL_TIMEOUT_S * 1000L);
     if (params->kind != (p->dv ? PIN_KIND_DV : PIN_KIND_ANALOG))
         return PIN_ERR_ARG;
     if (params->width <= 0 || params->height <= 0 || (params->width & 3) || (params->height & 3) ||
@@ -1308,11 +1369,21 @@ static pin_status_t hwenc_write_unit(pin_sink_t *s, const uint8_t *data, size_t 
     dv_audio_t a;
     dv_demux_audio(copy, len, &a);
     pin_status_t rc = PIN_OK;
-    if (a.pairs > 0 || p->nhold == DV_HOLD_MAX) {
-        if (a.pairs == 0)
-            pin_logf(PIN_LOG_WARN, "sink_hwenc: no audio in the first %d DV frames; the file has none\n",
-                     DV_HOLD_MAX);
+    if (a.pairs > 0) {
         rc = dv_declare(p, &a);
+    } else if (p->nhold == DV_HOLD_MAX) {
+        /* DV always records audio: DV_HOLD_MAX frames without any is a stream this sink cannot
+         * make a proper file of. We prefer to fail fast: the capture ends with a clear error
+         * instead of encoding a whole tape without sound. The frames held before this one go
+         * into the file (video only), which is finished at close; this one is refused. */
+        pin_logf(PIN_LOG_ERROR, "sink_hwenc: capture failed: the DV stream carries no audio (none "
+                                "in the first %d frames)\n", DV_HOLD_MAX);
+        free(p->hold[--p->nhold]);
+        p->hold[p->nhold] = NULL;
+        rc = dv_declare(p, NULL);
+        pin_status_t frc = fail_on_purpose(p, PIN_SINK_FAIL_NO_AUDIO);
+        if (rc == PIN_OK)
+            rc = frc;
     }
     dv_audio_free(&a);
     return rc;
@@ -1330,12 +1401,13 @@ static pin_status_t hwenc_close(pin_sink_t *s)
         free(p->hold[i]);
     p->nhold = 0;
 
+    int threads = 0;
     if (p->enc_started) {
         pthread_mutex_lock(&p->qlock);
         p->closing = 1;
         pthread_cond_signal(&p->qwake);
         pthread_mutex_unlock(&p->qlock);
-        pthread_join(p->enc_thread, NULL);
+        threads++;
     }
     for (int i = 0; i < 2; i++) {
         track_t *t = &p->trk[i];
@@ -1345,8 +1417,36 @@ static pin_status_t hwenc_close(pin_sink_t *s)
         t->closing = 1;
         pthread_cond_signal(&t->wake);
         pthread_mutex_unlock(&t->lock);
-        pthread_join(t->thread, NULL);
+        threads++;
     }
+    /* Threads stuck in a write that does not come back (a share that is gone, a pulled drive)
+     * would hold the session in STOPPING until the OS gives up: after PIN_SINK_CLOSE_STALL_S
+     * without any progress the file is given up as failed. The threads keep this sink's state,
+     * so it is left allocated for them. */
+    long close_ms = pin_sink_fault_stall_timeout_ms(PIN_SINK_CLOSE_STALL_S * 1000L);
+    if (pin_sink_watch_wait_done(&p->watch, threads,
+                                 close_ms) != 0) {
+        pin_logf(PIN_LOG_ERROR, "sink_hwenc: writing the file has not moved for %ld ms; giving it up\n",
+                 close_ms);
+        if (p->enc_started)
+            pthread_detach(p->enc_thread);
+        for (int i = 0; i < 2; i++)
+            if (p->trk[i].started)
+                pthread_detach(p->trk[i].thread);
+        pthread_mutex_lock(&p->st_lock);
+        if (p->st.last_error == PIN_OK)
+            p->st.last_error = PIN_ERR_IO;
+        if (s->final_status)
+            *s->final_status = p->st;
+        pthread_mutex_unlock(&p->st_lock);
+        free(s);
+        return PIN_ERR_IO;
+    }
+    if (p->enc_started)
+        pthread_join(p->enc_thread, NULL);
+    for (int i = 0; i < 2; i++)
+        if (p->trk[i].started)
+            pthread_join(p->trk[i].thread, NULL);
     if (p->fmt) {
         pthread_mutex_lock(&p->mux_lock);
         if (p->fmt->pb && p->enc_state > 0) {
@@ -1393,6 +1493,7 @@ static pin_status_t hwenc_close(pin_sink_t *s)
     pthread_cond_destroy(&p->qspace);
     pthread_cond_destroy(&p->enc_cond);
     pthread_mutex_destroy(&p->st_lock);
+    pin_sink_watch_destroy(&p->watch);
     free(p);
     free(s);
     return rc;
@@ -1428,6 +1529,8 @@ pin_sink_t *sink_hwenc_create(pin_format_t format)
     pin_cond_init_timed(&p->qspace);
     pthread_cond_init(&p->enc_cond, NULL);
     pthread_mutex_init(&p->st_lock, NULL);
+    pin_sink_watch_init(&p->watch);
+    p->stall_ms = STALL_TIMEOUT_S * 1000L;
     for (int i = 0; i < 2; i++) {
         pthread_mutex_init(&p->trk[i].lock, NULL);
         pthread_cond_init(&p->trk[i].wake, NULL);

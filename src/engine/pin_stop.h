@@ -48,6 +48,17 @@ uint64_t pin_stop_disk_reserve(uint64_t margin, uint64_t writer_backlog);
  * units on their way while a cut waits for a place a file may start. 0 for no limit. */
 uint64_t pin_stop_file_cap(uint64_t limit);
 
+/* What a container may still add at close beyond the file's data (a MOV moov, MKV cues). */
+#define PIN_STOP_TRAILER_RESERVE (16ull << 20)
+
+/* pin_stop_file_cap() for a sink that holds up to queue_max bytes of its own before they reach
+ * the file (HDV MOV / MKV: its decode queue and the pictures waiting behind a repair) and adds an
+ * index at close: the cap is lower by queue_max and PIN_STOP_TRAILER_RESERVE as well, so a file
+ * cut at the cap still fits under the limit when the sink empties its queues into it while it
+ * is closed. A limit other than FAT32's (a test's) gets the same share of it; the margin is never
+ * more than half the limit. */
+uint64_t pin_stop_file_cap_queued(uint64_t limit, uint64_t queue_max);
+
 /* "the file reached the 4 GiB size limit of the FAT32 drive" (a limit other than FAT32's own,
  * from a test, in MB): the detail of a capture that had to stop there (analog; DV and HDV go on
  * in a new file). */
@@ -77,12 +88,24 @@ void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *d
 void pin_stop_message_no_video(pin_stop_reason_t reason, const char *path, const char *detail,
                                char *out, size_t cap);
 
+/* Why a sink ended the capture on purpose (pin_sink_status_t.fail_reason): something the file
+ * must have is missing or cannot be written correctly, so the capture fails rather than leave a
+ * file that looks fine but is not. */
+enum {
+    PIN_SINK_FAIL_NONE = 0,
+    PIN_SINK_FAIL_REENCODE_BEHIND = 1,  /* HDV MOV / MKV: checking or repairing cannot keep up */
+    PIN_SINK_FAIL_NO_AUDIO,             /* the DV / HDV stream carries no audio */
+    PIN_SINK_FAIL_AUDIO_LATE,           /* an audio track began after the file's header was out */
+    PIN_SINK_FAIL_AUDIO_ENCODER,        /* HDV: no MP2 encoder for the silence that fills a gap */
+};
+
 /* The reason and wording for a capture whose writer failed (the file's sink reported
- * last_error). A codec error of a sink that encodes (H.264 / HEVC, FFV1), or of the HDV
- * repair that cannot keep up or fails, is PIN_STOP_ERROR with its own sentence in detail;
- * anything else is PIN_STOP_WRITE_ERROR with an empty detail. */
+ * last_error and, if it failed on purpose, sink_fail, a PIN_SINK_FAIL_*). A sink_fail, or a
+ * codec error of a sink that encodes (H.264 / HEVC, FFV1) or of the HDV repair, is
+ * PIN_STOP_ERROR with its own sentence in detail; anything else is PIN_STOP_WRITE_ERROR with
+ * an empty detail. */
 pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_error,
-                                          int reencode_behind, char *detail, size_t cap);
+                                          int sink_fail, char *detail, size_t cap);
 
 /* Cuts a string that ends in the middle of a UTF-8 character (snprintf() cut it at a byte
  * count) back to the last whole character. */

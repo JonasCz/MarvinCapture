@@ -82,11 +82,53 @@ static void check_with_libavformat(const char *path, const char *expect_title)
     printf("OK: %s (%lld video frame(s), title \"%s\")\n", path, (long long)vframes, expect_title);
 }
 
+/* A DV stream without audio (every audio DIF block blanked) into DV AVI: the capture fails fast
+ * with an error that says so, instead of writing a file without sound. */
+static void capture_without_audio(const char *dv_path)
+{
+    FILE *in = fopen(dv_path, "rb");
+    FILE *out = fopen("dv_noaudio_src.dv", "wb");
+    CHECK(in && out);
+    uint8_t blk[80];
+    while (fread(blk, 1, sizeof(blk), in) == sizeof(blk)) {
+        if ((blk[0] & 0xE0) == 0x60)
+            memset(blk + 3, 0xFF, 77);   /* no AAUX packs: the demuxer finds no audio */
+        fwrite(blk, 1, sizeof(blk), out);
+    }
+    fclose(in);
+    fclose(out);
+
+    pin_session_t *s = pin_test_open_replay("dv_noaudio_src.dv");
+    pin_test_prepare_dv(s);
+    pin_capture_opts_t opts;
+    pin_capture_opts_defaults(&opts);
+    strncpy(opts.path, "dv_fmt_test_noaudio", sizeof(opts.path) - 1);
+    opts.format_dv = PIN_FMT_DV_AVI;
+    CHECK(pin_capture_start(s, &opts, 1) == PIN_OK);
+    pin_status_snapshot_t snap;
+    pin_test_wait_state(s, PIN_STATE_CAPTURING, PIN_STATE_ERROR, 3000, &snap);
+    pin_test_sleep_ms(300);
+    pin_test_wait_state(s, PIN_STATE_READY, -1, 5000, &snap);
+    CHECK(snap.state == PIN_STATE_READY);
+    memset(&snap, 0, sizeof(snap));
+    snap.size = sizeof(snap);
+    CHECK(pin_get_capture_end_status(s, &snap) == PIN_OK);
+    printf("no audio: stop reason %d: %s\n", (int)snap.stop_reason, snap.stop_text);
+    CHECK_EQ_I(snap.stop_reason, PIN_STOP_ERROR);
+    CHECK(pin_stop_reason_abnormal(snap.stop_reason));
+    CHECK(strstr(snap.stop_text, "carries no audio") != NULL);
+    pin_close(s);
+}
+
 int main(int argc, char **argv)
 {
-    CHECK(argc == 2);
+    CHECK(argc == 2 || argc == 3);
     const char *trace_path = argv[1];
     pin_test_require_fixture(trace_path);
+    if (argc == 3) {
+        pin_test_require_fixture(argv[2]);
+        capture_without_audio(argv[2]);
+    }
 
     capture_one(trace_path, PIN_FMT_DV_AVI, "dv_fmt_test_avi", "marvin-core replay AVI test");
     check_with_libavformat("dv_fmt_test_avi.avi", "marvin-core replay AVI test");

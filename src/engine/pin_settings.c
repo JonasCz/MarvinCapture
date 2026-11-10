@@ -17,6 +17,7 @@
  */
 
 #include "pin_settings.h"
+#include "../core/pin_fs.h"
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -123,52 +124,6 @@ static char *trim(char *s)
     return s;
 }
 
-#ifdef _WIN32
-static wchar_t *utf8_to_wide(const char *utf8)
-{
-    int n = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
-    if (n <= 0)
-        return NULL;
-    wchar_t *w = malloc((size_t)n * sizeof(wchar_t));
-    if (!w)
-        return NULL;
-    MultiByteToWideChar(CP_UTF8, 0, utf8, -1, w, n);
-    return w;
-}
-#endif
-
-static FILE *fopen_utf8(const char *path, const char *mode)
-{
-#ifdef _WIN32
-    wchar_t *wpath = utf8_to_wide(path);
-    wchar_t *wmode = utf8_to_wide(mode);
-    FILE *f = NULL;
-    if (wpath && wmode)
-        f = _wfopen(wpath, wmode);
-    free(wpath);
-    free(wmode);
-    return f;
-#else
-    return fopen(path, mode);
-#endif
-}
-
-static int rename_replace_utf8(const char *from, const char *to)
-{
-#ifdef _WIN32
-    wchar_t *wfrom = utf8_to_wide(from);
-    wchar_t *wto = utf8_to_wide(to);
-    int ok = 0;
-    if (wfrom && wto)
-        ok = MoveFileExW(wfrom, wto, MOVEFILE_REPLACE_EXISTING) != 0;
-    free(wfrom);
-    free(wto);
-    return ok ? 0 : -1;
-#else
-    return rename(from, to) == 0 ? 0 : -1;
-#endif
-}
-
 /* Reads one line of any length into *buf (grown as needed). Returns its length, or -1 at EOF.
  * A line past MAX_LINE is consumed and dropped whole (*dropped = 1) so that its tail is never
  * parsed as an entry of its own. */
@@ -228,7 +183,7 @@ int pin_settings_load(pin_settings_t *s, const char *path)
 {
     free_entries(s);
 
-    FILE *f = fopen_utf8(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f) {
         /* Only a missing file means "empty settings". Any other failure (EACCES, a Windows
          * sharing violation) must not look like an empty file: the caller would save it back
@@ -337,7 +292,7 @@ int pin_settings_save(const pin_settings_t *s, const char *path)
     if (n < 0 || (size_t)n >= sizeof(tmp_path))
         return -1;
 
-    FILE *f = fopen_utf8(tmp_path, "wb");
+    FILE *f = pin_fs_fopen(tmp_path, "wb");
     if (!f)
         return -1;
 
@@ -371,11 +326,11 @@ int pin_settings_save(const pin_settings_t *s, const char *path)
     if (fclose(f) != 0)
         ok = 0;
     if (!ok) {
-        remove(tmp_path);
+        pin_fs_remove(tmp_path);
         return -1;
     }
-    if (rename_replace_utf8(tmp_path, path) != 0) {
-        remove(tmp_path);
+    if (pin_fs_rename(tmp_path, path) != 0) {
+        pin_fs_remove(tmp_path);
         return -1;
     }
     sync_parent_dir(path);
@@ -480,24 +435,12 @@ int pin_settings_device_key(const char *serial, const char *id, const char *key,
     return 0;
 }
 
-#ifdef _WIN32
-static int ensure_dir(const char *utf8_path)
-{
-    wchar_t *w = utf8_to_wide(utf8_path);
-    if (!w)
-        return -1;
-    int ok = CreateDirectoryW(w, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
-    free(w);
-    return ok ? 0 : -1;
-}
-#else
 static int ensure_dir(const char *path)
 {
-    if (mkdir(path, 0700) == 0)
+    if (pin_fs_mkdir(path, 0700) == 0)
         return 0;
     return (errno == EEXIST) ? 0 : -1;
 }
-#endif
 
 /* Creates every missing component of path (on Windows with either separator: a directory
  * from pin_set_app_dirs() may be several levels below one that exists). */
@@ -547,9 +490,11 @@ int pin_settings_default_path(char *out, size_t out_size)
         return (n < 0 || (size_t)n >= out_size) ? -1 : 0;
     }
 #ifdef _WIN32
-    const char *appdata = getenv("APPDATA");
+    /* _wgetenv: getenv() would give the ANSI code page's spelling of a non-ASCII user name */
+    const wchar_t *wappdata = _wgetenv(L"APPDATA");
+    char appdata[2048];
     char buf[2048];
-    if (appdata) {
+    if (wappdata && WideCharToMultiByte(CP_UTF8, 0, wappdata, -1, appdata, sizeof(appdata), NULL, NULL) > 0) {
         snprintf(buf, sizeof(buf), "%s\\PinnacleOSS", appdata);
     } else {
         PWSTR wpath = NULL;

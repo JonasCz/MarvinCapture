@@ -280,6 +280,27 @@ static void test_first_unit(void)
     for (int g = 0; g < PIN_FMTWATCH_HDV_GOPS && a < 0; g++)
         a = feed_gop(&w, i1080, &idx, &start);
     CHECK(a >= 0 && start == 0 && w.cur.height == 1080, "HDV: the real GOPs win, back-dated to the first picture");
+
+    /* the capture began on the last frames of recording A (PAL, 2 frames), then B (NTSC): A's
+     * frames are real, so B's file starts at B's first frame, not at unit 0 */
+    pin_fmtwatch_init(&w);
+    idx = 0;
+    CHECK(pin_fmtwatch_feed(&w, &pal, idx++, NULL, NULL) == PIN_FMTWATCH_FIRST, "first of A");
+    feed(&w, pal, 1, &idx, &start);
+    long first_b = idx;
+    at = feed(&w, ntsc, 10, &idx, &start);
+    CHECK(at >= 0 && start == first_b, "two agreeing first units: the cut is at B's start");
+
+    /* HDV: two GOPs of A, then B */
+    pin_fmtwatch_init(&w);
+    idx = 0;
+    CHECK(pin_fmtwatch_feed(&w, &odd, idx++, NULL, NULL) == PIN_FMTWATCH_FIRST, "HDV first of A");
+    feed_gop(&w, odd, &idx, &start);
+    long first_gop_b = idx;
+    a = -1;
+    for (int g = 0; g < PIN_FMTWATCH_HDV_GOPS && a < 0; g++)
+        a = feed_gop(&w, i1080, &idx, &start);
+    CHECK(a >= 0 && start == first_gop_b, "HDV: two GOPs of A keep their own file");
 }
 
 int main(void)

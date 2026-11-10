@@ -49,7 +49,8 @@ add_library(pinnacle_engine_pure STATIC
 target_include_directories(pinnacle_engine_pure PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_features(pinnacle_engine_pure PUBLIC c_std_11)
 find_package(Threads REQUIRED)
-target_link_libraries(pinnacle_engine_pure PUBLIC Threads::Threads)
+# pinnacle_fs: file access on UTF-8 paths (src/core/pin_fs.h), defined by the top-level file
+target_link_libraries(pinnacle_engine_pure PUBLIC pinnacle_fs Threads::Threads)
 
 if(WIN32)
     target_link_libraries(pinnacle_engine_pure PUBLIC shell32 ole32)
@@ -77,6 +78,7 @@ if(PIN_BUILD_TESTS)
     pinnacle_engine_test(test_pin_holdback)
     pinnacle_engine_test(test_pin_fmtwatch)
     pinnacle_engine_test(test_pin_naming)
+    pinnacle_engine_test(test_pin_fs)
     pinnacle_engine_test(test_pin_settings)
     pinnacle_engine_test(test_pin_script)
     pinnacle_engine_test(test_pin_script_eval)

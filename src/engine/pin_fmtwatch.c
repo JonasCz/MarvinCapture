@@ -175,8 +175,12 @@ pin_fmtwatch_result_t pin_fmtwatch_feed(pin_fmtwatch_t *w, const pin_stream_fmt_
         return PIN_FMTWATCH_SAME;
     if (old)
         *old = w->cur;
+    /* A provisional first format that only one unit said was most likely a glitch: the new
+     * format takes over from the very first unit. Two or more first units that agree are real
+     * (the capture began on the last frames or GOPs of the previous recording): they keep their
+     * own format, and the cut is where the new one began. */
     if (start)
-        *start = w->provisional ? w->first_start : w->cand_start;
+        *start = w->provisional && w->first_count < 2 ? w->first_start : w->cand_start;
     w->cur = w->cand;
     w->pending = 0;
     w->provisional = 0;

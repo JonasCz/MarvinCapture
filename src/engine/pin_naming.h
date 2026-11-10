@@ -89,6 +89,12 @@ int pin_naming_folder_exists(const char *path, char *reason, size_t reason_size)
 int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_match,
                          size_t first_match_size);
 
+/* 1 if two UTF-8 file names are the same name for pin_naming_collides(): equal after simple
+ * case folding (ASCII, Latin-1, Latin Extended-A, Greek, Cyrillic) and with the precomposed
+ * Latin letters decomposed, so "ÉCRAN" matches "écran" and the NFC and NFD spellings of
+ * "Café" match each other (case-insensitive NTFS, APFS and HFS+ treat them as one file). */
+int pin_naming_same_name(const char *a, const char *b);
+
 /* Free space below which the GUI asks "Only X GB free. Continue?" before a
  * capture starts (25 GiB). */
 #define PIN_LOW_SPACE_BYTES (25ull << 30)

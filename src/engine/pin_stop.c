@@ -31,6 +31,19 @@ uint64_t pin_stop_file_cap(uint64_t limit)
     return limit - limit / 64;
 }
 
+uint64_t pin_stop_file_cap_queued(uint64_t limit, uint64_t queue_max)
+{
+    if (!limit)
+        return 0;
+    uint64_t extra = queue_max ? queue_max + PIN_STOP_TRAILER_RESERVE : 0;
+    if (limit != PIN_FAT32_FILE_MAX)
+        extra = (uint64_t)((double)extra * (double)limit / (double)PIN_FAT32_FILE_MAX);
+    uint64_t margin = limit / 64 + extra;
+    if (margin > limit / 2)
+        margin = limit / 2;
+    return limit - margin;
+}
+
 /* "4 GiB", or a test's limit in MB */
 static void limit_size(uint64_t limit, char *out, size_t cap)
 {
@@ -153,17 +166,34 @@ void pin_stop_message(pin_stop_reason_t reason, double captured_s, const char *d
 }
 
 pin_stop_reason_t pin_stop_writer_failure(pin_format_t fmt, pin_status_t last_error,
-                                          int reencode_behind, char *detail, size_t cap)
+                                          int sink_fail, char *detail, size_t cap)
 {
     if (!detail || !cap)
         return PIN_STOP_WRITE_ERROR;
     detail[0] = 0;
+    int hdv = fmt == PIN_FMT_HDV_MOV || fmt == PIN_FMT_HDV_MKV;
+    const char *raw = hdv ? "the raw transport stream (.m2t)" : "raw DV (.dv)";
+    switch (sink_fail) {
+    case PIN_SINK_FAIL_NO_AUDIO:
+        snprintf(detail, cap, "the %s stream carries no audio; capture to %s to keep the video "
+                 "without sound", hdv ? "HDV" : "DV", raw);
+        return PIN_STOP_ERROR;
+    case PIN_SINK_FAIL_AUDIO_LATE:
+        snprintf(detail, cap, "a second audio track (the second stereo pair of 32 kHz DV audio) "
+                 "began after the file was started and cannot be added to it; capture to %s to "
+                 "keep it", raw);
+        return PIN_STOP_ERROR;
+    case PIN_SINK_FAIL_AUDIO_ENCODER:
+        snprintf(detail, cap, "this build has no MP2 audio encoder to fill gaps in the HDV audio; "
+                 "capture to %s instead", raw);
+        return PIN_STOP_ERROR;
+    }
     if (last_error == PIN_ERR_CODEC) {
         if (pin_fmt_is_hwenc(fmt) || fmt == PIN_FMT_ANALOG_FFV1_MKV) {
             snprintf(detail, cap, "the video encoder failed");
             return PIN_STOP_ERROR;
         }
-        if (reencode_behind) {
+        if (sink_fail == PIN_SINK_FAIL_REENCODE_BEHIND) {
             snprintf(detail, cap, "checking and repairing the HDV stream could not keep "
                      "up with the capture (too slow a computer, or too much damage); capture to the "
                      "raw transport stream (.m2t) instead");

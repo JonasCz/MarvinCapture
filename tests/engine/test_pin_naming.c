@@ -17,6 +17,7 @@
  */
 
 #include "pin_naming.h"
+#include "pin_fs.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -243,6 +244,87 @@ static void test_folder_exists(void)
     remove(file);
 }
 
+/* Non-ASCII case and the NFC / NFD spellings of one name are the same file name. */
+static void test_same_name(void)
+{
+    CHECK(pin_naming_same_name("\xc3\x89\x43RAN", "\xc3\xa9\x63ran"), "ÉCRAN = écran");
+    CHECK(pin_naming_same_name("Caf\xc3\xa9", "Cafe\xcc\x81"), "Café NFC = NFD");
+    CHECK(pin_naming_same_name("CAF\xc3\x89", "cafe\xcc\x81"), "CAFÉ NFC = café NFD");
+    CHECK(!pin_naming_same_name("Cafe", "Caf\xc3\xa9"), "Cafe is not Café");
+    CHECK(pin_naming_same_name("\xc5\xbd" "aba", "\xc5\xbe" "aba"), "Žaba = žaba (Latin Extended-A)");
+    CHECK(pin_naming_same_name("\xc5\x81\xc3\xb3\x64\xc5\xba", "\xc5\x82o\xcc\x81" "dz\xcc\x81"),
+          "Łódź = łódź in NFD");
+    CHECK(pin_naming_same_name("\xce\x91\xce\x98\xce\x97\xce\x9d\xce\x91", "\xce\xb1\xce\xb8\xce\xb7\xce\xbd\xce\xb1"),
+          "Greek capitals");
+    CHECK(pin_naming_same_name("\xd0\x9c\xd0\x9e\xd0\xa1\xd0\x9a\xd0\x92\xd0\x90", "\xd0\xbc\xd0\xbe\xd1\x81\xd0\xba\xd0\xb2\xd0\xb0"),
+          "Cyrillic capitals");
+    CHECK(pin_naming_same_name("\xc3\x9f", "\xc3\x9f") && !pin_naming_same_name("\xc3\x9f", "ss"),
+          "ß compares as itself");
+    CHECK(pin_naming_same_name("a\xff" "b", "A\xff" "B") && !pin_naming_same_name("a\xff", "a\xfe"),
+          "invalid UTF-8 bytes compare as themselves");
+    CHECK(!pin_naming_same_name("clip", "clip2") && !pin_naming_same_name("clip", NULL), "different names");
+}
+
+/* The listing finds the names whatever their case and normalisation. */
+static void test_collides_unicode(void)
+{
+    const char *dir = "pin_naming_test_dir";
+    MKDIR(dir);
+    const char *files[] = { "\xc3\x89\x43RAN-0002.dv", "Cafe\xcc\x81.dv", "\xd0\x9b\xd0\x95\xd0\xa2\xd0\x9e-pass-2.DV" };
+    const char *bases[] = { "\xc3\xa9\x63ran", "caf\xc3\xa9", "\xd0\xbb\xd0\xb5\xd1\x82\xd0\xbe" };
+    char path[600], base[600], first[600];
+    for (int i = 0; i < 3; i++) {
+        snprintf(path, sizeof(path), "%s/%s", dir, files[i]);
+        FILE *f = pin_fs_fopen(path, "wb");
+        CHECK(f != NULL, "create the non-ASCII marker file");
+        if (f)
+            fclose(f);
+        snprintf(base, sizeof(base), "%s/%s", dir, bases[i]);
+        CHECK(pin_naming_collides(base, "dv", first, sizeof(first)) == 1,
+              "non-ASCII case / NFD spelling collides");
+        pin_fs_remove(path);
+        CHECK(pin_naming_collides(base, "dv", NULL, 0) == 0, "no collision once removed");
+    }
+    /* "Cafe" is a different name from "Café" */
+    snprintf(path, sizeof(path), "%s/Cafe.dv", dir);
+    FILE *f = pin_fs_fopen(path, "wb");
+    if (f)
+        fclose(f);
+    snprintf(base, sizeof(base), "%s/Caf\xc3\xa9", dir);
+    CHECK(pin_naming_collides(base, "dv", NULL, 0) == 0, "Cafe.dv does not collide with Café");
+    pin_fs_remove(path);
+}
+
+/* A non-ASCII folder whose full path is longer than Windows' MAX_PATH (260). */
+static void test_long_unicode_folder(void)
+{
+    char dir[900];
+    snprintf(dir, sizeof(dir), "pin_naming_test_dir");
+    MKDIR(dir);
+    for (int level = 0; level < 3; level++) {
+        size_t n = strlen(dir);
+        snprintf(dir + n, sizeof(dir) - n, "/Caf\xc3\xa9-%d-", level);
+        n = strlen(dir);
+        for (int i = 0; i < 90; i++)
+            dir[n++] = 'x';
+        dir[n] = 0;
+        pin_fs_mkdir(dir, 0755);   /* may be there from an earlier run */
+    }
+    CHECK(strlen(dir) > 260, "the folder path is longer than MAX_PATH");
+    char path[1000], base[1000];
+    snprintf(path, sizeof(path), "%s/\xc3\xa9t\xc3\xa9.dv", dir);
+    CHECK(pin_naming_folder_exists(path, NULL, 0) == 1, "the long non-ASCII folder exists");
+    snprintf(base, sizeof(base), "%s/\xc3\xa9t\xc3\xa9", dir);
+    CHECK(pin_naming_collides(base, "dv", NULL, 0) == 0, "nothing there yet");
+    FILE *f = pin_fs_fopen(path, "wb");
+    CHECK(f != NULL, "create a file in the long folder");
+    if (f)
+        fclose(f);
+    snprintf(base, sizeof(base), "%s/\xc3\x89T\xc3\x89", dir);
+    CHECK(pin_naming_collides(base, "dv", NULL, 0) == 1, "found in the long folder, other case");
+    pin_fs_remove(path);
+}
+
 static void test_low_space(void)
 {
     CHECK(pin_output_space_low(0) == 0, "unknown free space is not low");
@@ -257,6 +339,9 @@ int main(void)
     test_strip_extension();
     test_build();
     test_collides();
+    test_same_name();
+    test_collides_unicode();
+    test_long_unicode_folder();
     test_validate();
     test_validate_name();
     test_collides_unknown();

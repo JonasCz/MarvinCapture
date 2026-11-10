@@ -23,6 +23,7 @@
  * a status and shows nothing. */
 
 #include "pin_update.h"
+#include "../core/pin_fs.h"
 
 #include "../core/pin_log.h"
 
@@ -66,7 +67,7 @@ static void body_append(body_t *b, const void *p, size_t n)
 
 static int fetch_file(const char *path, body_t *b)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f)
         return -1;
     char buf[4096];

@@ -17,6 +17,7 @@
  */
 
 #include "pinnacle_device.h"
+#include "pin_fs.h"
 #include "pin_log.h"
 #include "pinnacle_cfg.h"
 #include "pinnacle_enum.h"
@@ -380,7 +381,7 @@ void pinnacle_close(pinnacle_device_t *dev)
 
 static pinnacle_status_t upload_bitstream(pinnacle_device_t *dev, const char *path)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     if (!f) {
         pin_logf(PIN_LOG_ERROR, "pinnacle: cannot open bitstream '%s': %s\n", path, strerror(errno));
         return PINNACLE_ERR_BITSTREAM_READ;
@@ -642,7 +643,7 @@ pinnacle_status_t pinnacle_ensure_fx2(pinnacle_device_t *dev, const char *any_fi
     uint8_t *img = malloc(PINNACLE_FX2_MAX_IMAGE + 1);
     if (!img)
         return PINNACLE_ERR_NO_FX2_FIRMWARE;
-    FILE *f = fopen(path, "rb");
+    FILE *f = pin_fs_fopen(path, "rb");
     size_t n = f ? fread(img, 1, PINNACLE_FX2_MAX_IMAGE + 1, f) : 0;
     if (f)
         fclose(f);

@@ -28,6 +28,7 @@
 #define _FILE_OFFSET_BITS 64
 
 #include "sinks_internal.h"
+#include "../core/pin_fs.h"
 
 #include <libavformat/avio.h>
 #include <libavutil/error.h>
@@ -37,12 +38,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/types.h>
+#include <time.h>
+#if defined(_WIN32)
+#include <windows.h>
+#endif
+
+/* PIN_TEST_WRITE_STALL=<bytes>:<ms> (sinks_internal.h); 0 when unset */
+static void stall_seam(uint64_t *after, long *ms)
+{
+    const char *v = getenv("PIN_TEST_WRITE_STALL");
+    char *end = NULL;
+    *after = v && v[0] ? (uint64_t)strtoull(v, &end, 10) : 0;
+    *ms = end && *end == ':' ? strtol(end + 1, NULL, 10) : 0;
+}
 
 uint64_t pin_sink_fault_budget(void)
 {
     const char *v = getenv("PIN_TEST_WRITE_FAIL_AFTER");
     unsigned long long n = v && v[0] ? strtoull(v, NULL, 10) : 0;
-    return n ? (uint64_t)n : UINT64_MAX;
+    if (n)
+        return (uint64_t)n;
+    uint64_t after;
+    long ms;
+    stall_seam(&after, &ms);
+    return ms > 0 ? UINT64_MAX - 1 : UINT64_MAX;   /* the stall needs the seam's own output */
+}
+
+long pin_sink_fault_stall_timeout_ms(long dflt_ms)
+{
+    const char *v = getenv("PIN_TEST_STALL_TIMEOUT_MS");
+    long ms = v && v[0] ? strtol(v, NULL, 10) : 0;
+    return ms > 0 ? ms : dflt_ms;
 }
 
 size_t pin_sink_fault_fwrite(const void *data, size_t len, FILE *f, uint64_t *left)
@@ -61,11 +87,31 @@ size_t pin_sink_fault_fwrite(const void *data, size_t len, FILE *f, uint64_t *le
 typedef struct {
     FILE *f;
     uint64_t left;
+    uint64_t written;
+    uint64_t stall_after;   /* PIN_TEST_WRITE_STALL */
+    long stall_ms;
 } fault_file_t;
+
+static void sleep_ms(long ms)
+{
+#if defined(_WIN32)
+    Sleep((DWORD)ms);
+#else
+    struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (ms % 1000) * 1000000L };
+    while (nanosleep(&ts, &ts) != 0 && errno == EINTR)
+        ;
+#endif
+}
 
 static int fault_write(void *opaque, const uint8_t *buf, int size)
 {
     fault_file_t *ff = opaque;
+    ff->written += (uint64_t)size;
+    if (ff->stall_ms > 0 && ff->written > ff->stall_after) {
+        long ms = ff->stall_ms;
+        ff->stall_ms = 0;
+        sleep_ms(ms);
+    }
     size_t done = pin_sink_fault_fwrite(buf, (size_t)size, ff->f, &ff->left);
     return done == (size_t)size ? size : AVERROR(ENOSPC);
 }
@@ -92,7 +138,7 @@ int pin_sink_fault_avio_open(AVIOContext **pb, const char *path, uint64_t budget
     fault_file_t *ff = calloc(1, sizeof(*ff));
     uint8_t *buf = av_malloc(32768);
     if (ff)
-        ff->f = fopen(path, "wb");
+        ff->f = pin_fs_fopen(path, "wb");
     if (!ff || !ff->f || !buf) {
         if (ff && ff->f)
             fclose(ff->f);
@@ -101,6 +147,7 @@ int pin_sink_fault_avio_open(AVIOContext **pb, const char *path, uint64_t budget
         return AVERROR(EIO);
     }
     ff->left = budget;
+    stall_seam(&ff->stall_after, &ff->stall_ms);
     *pb = avio_alloc_context(buf, 32768, 1, ff, NULL, fault_write, fault_seek);
     if (!*pb) {
         fclose(ff->f);

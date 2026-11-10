@@ -25,6 +25,7 @@
 #include "test_util.h"
 #include "../../src/sinks/pin_sink.h"
 #include "../../src/engine/dv_subcode.h"
+#include "../../src/core/pin_fs.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -361,6 +362,48 @@ int main(void)
     }
     printf("OK: numbered output skips taken names\n");
 #endif
+
+    /* a non-ASCII folder whose path is longer than Windows' MAX_PATH: raw DV (stdio), analog
+     * AVI (avi_writer) and FFV1 MKV (FFmpeg's avio) all create, write and finish their file */
+    {
+        char dir[900] = "lazy_\xc3\xa9t\xc3\xa9";
+        pin_fs_mkdir(dir, 0755);
+        for (int level = 0; level < 3; level++) {
+            size_t n = strlen(dir);
+            n += (size_t)snprintf(dir + n, sizeof(dir) - n, "/Caf\xc3\xa9-\xe2\x82\xac-%d-", level);
+            for (int i = 0; i < 80; i++)
+                dir[n++] = 'z';
+            dir[n] = 0;
+            pin_fs_mkdir(dir, 0755);
+        }
+        CHECK(strlen(dir) > 260 && pin_fs_is_dir(dir));
+        char path[1000];
+        uint8_t *yuyv = calloc(1, 720 * 576 * 2);
+        CHECK(yuyv);
+        struct { pin_format_t fmt; pin_kind_t kind; const char *name; } cases[] = {
+            { PIN_FMT_DV_RAW, PIN_KIND_DV, "\xc3\x89t\xc3\xa9 1.dv" },
+            { PIN_FMT_ANALOG_AVI, PIN_KIND_ANALOG, "\xc3\x89t\xc3\xa9 2.avi" },
+            { PIN_FMT_ANALOG_FFV1_MKV, PIN_KIND_ANALOG, "\xc3\x89t\xc3\xa9 3.mkv" },
+        };
+        for (int i = 0; i < 3; i++) {
+            snprintf(path, sizeof(path), "%s/%s", dir, cases[i].name);
+            pin_fs_remove(path);
+            pin_sink_params_t p = params(cases[i].kind, 720, 576, 25, 1, PIN_ASPECT_4_3);
+            pin_sink_t *s = pin_sink_lazy(pin_sink_create(cases[i].fmt));
+            CHECK(s && s->open(s, path, &p) == PIN_OK);
+            if (cases[i].kind == PIN_KIND_DV) {
+                CHECK_EQ_I(s->write_unit(s, fr, frame), PIN_OK);
+            } else {
+                for (int k = 0; k < 3; k++)
+                    CHECK_EQ_I(s->write_video(s, yuyv, 720 * 576 * 2), PIN_OK);
+            }
+            CHECK_EQ_I(s->close(s), PIN_OK);
+            CHECK(pin_fs_size(path) > 0);
+            CHECK_EQ_I(pin_fs_remove(path), 0);
+        }
+        free(yuyv);
+    }
+    printf("OK: long non-ASCII output folder\n");
     free(fr);
     return 0;
 }
