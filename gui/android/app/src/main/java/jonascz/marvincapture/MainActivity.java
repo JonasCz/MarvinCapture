@@ -86,6 +86,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private CaptureService svc;
     private boolean visible;
     private String replayPath;
+    private int pendingInput = -1;          // a launcher shortcut's input, applied once the service state is known
+    private boolean libraryRequested;       // a launcher shortcut asked for the library
     private boolean permissionPending, permissionDenied, askedNotifications, startAfterPermission;
 
     private MainLayout root;
@@ -228,8 +230,11 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             svc = ((CaptureService.LocalBinder) b).service();
             svc.setListener(MainActivity.this, visible);
             svc.setMonitorWanted(visible && !Settings.muted());
+            // the service can be alive from before (a capture running): the shortcuts were waiting for this
+            applyPendingInput();
             onSessionChanged();
             if (visible) findDevice();
+            runLibraryRequest();
         }
 
         @Override
@@ -240,9 +245,17 @@ public final class MainActivity extends Activity implements CaptureService.Liste
      *  Not while a capture runs (the selector is locked then too). */
     private void applyInputExtra(Intent i) {
         if (i == null || !i.hasExtra("input")) return;
-        int in = Settings.clamp(i.getIntExtra("input", Settings.input()), 0, 2);
+        pendingInput = Settings.clamp(i.getIntExtra("input", Settings.input()), 0, 2);
         i.removeExtra("input");   // once: a recreated intent must not undo a later choice
-        if (svc != null && svc.status().isCapturing()) return;
+        applyPendingInput();
+    }
+
+    /** Waits for the service (it may already run a capture the activity does not know of yet). */
+    private void applyPendingInput() {
+        if (pendingInput < 0 || svc == null) return;
+        int in = pendingInput;
+        pendingInput = -1;
+        if (svc.captureActive()) return;
         inputPicked(in);
         if (options != null) options.setInput(in);
     }
@@ -251,7 +264,29 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     private void applyLibraryExtra(Intent i) {
         if (i == null || !i.getBooleanExtra("library", false)) return;
         i.removeExtra("library");
+        libraryRequested = true;
+        runLibraryRequest();
+    }
+
+    /** Not while a capture runs (the button is disabled then too): the library can delete files. */
+    private void runLibraryRequest() {
+        if (!libraryRequested || svc == null) return;   // else once the service is bound
+        libraryRequested = false;
+        if (svc.captureActive()) return;
         root.post(this::openLibrary);
+    }
+
+    /** Why a file of the library must stay as it is (null = free): the capture writes to it, or the
+     *  service state is not known yet. */
+    private String libraryFileLocked(File f) {
+        if (svc == null) return "Still connecting to the capture service. Try again in a moment.";
+        if (!svc.captureActive()) return null;
+        Status st = svc.status();
+        String cur = st.text(Core.SS_CURRENT_FILE);
+        // the file being written is not known before the first frame (or while the session closes): all are held
+        if (cur.isEmpty() || !svc.hasSession() || new File(cur).getAbsoluteFile().equals(f.getAbsoluteFile()))
+            return f.getName() + " is being captured. It can be deleted when the capture has ended.";
+        return null;
     }
 
     private String replayExtra(Intent i) {
@@ -323,7 +358,10 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         root.setBackgroundColor(Ui.PANEL);
         frame = new FrameLayout(this);
         frame.addView(root, new FrameLayout.LayoutParams(-1, -1));
-        library = new LibraryView(this, this::closeLibrary);
+        library = new LibraryView(this, new LibraryView.Host() {
+            @Override public void closeLibrary() { MainActivity.this.closeLibrary(); }
+            @Override public String fileLocked(File f) { return libraryFileLocked(f); }
+        });
         frame.addView(library, new FrameLayout.LayoutParams(-1, -1));
         frame.setOnApplyWindowInsetsListener((v, insets) -> {
             Insets in = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
@@ -384,6 +422,8 @@ public final class MainActivity extends Activity implements CaptureService.Liste
             if (svc != null && svc.hasSession() && svc.status().state() == Core.STATE_ERROR) {
                 svc.closeSession("");
                 root.postDelayed(this::findDevice, 300);
+            } else if (svc != null && !svc.hasSession() && !svc.isOpening() && !svc.isClosing()) {
+                findDevice();   // the dead session was closed by the service: open the device afresh
             }
         });
         preview.addView(card);
@@ -866,6 +906,7 @@ public final class MainActivity extends Activity implements CaptureService.Liste
     /** Port of planCapture: the core checks the output, the app asks what it reports, then starts. */
     private void planCapture() {
         if (svc == null || !svc.hasSession()) return;
+        if (!storageAvailable()) return;
         File dir = CaptureService.outputDir();
         if (!dir.isDirectory() && !dir.mkdirs()) {
             showInfo("Can't capture to this location", "Could not create " + dir, true);
@@ -919,8 +960,17 @@ public final class MainActivity extends Activity implements CaptureService.Liste
         ask(c[0], c[1], c[2], () -> confirmThen(list, i + 1, then));
     }
 
+    /** Fail fast: the chosen SD card / USB drive is gone, so no capture (it would silently go to the phone). */
+    private boolean storageAvailable() {
+        if (Storage.chosen() != null) return true;
+        showInfo("Storage not available", "The storage place chosen for captures is not available (SD card or USB "
+                + "drive removed?). Insert it again or choose another place under Save to in the options.", true);
+        return false;
+    }
+
     private void startCapture(CaptureService.Plan p, boolean overwrite) {
         if (svc == null || !svc.hasSession()) return;
+        if (!storageAvailable()) return;   // it may have gone while a question was open
         int st = svc.startCapture(p, overwrite);
         if (st != Core.OK) {
             showInfo("Start capture", Core.strerror(st), st != Core.ERR_STATE);

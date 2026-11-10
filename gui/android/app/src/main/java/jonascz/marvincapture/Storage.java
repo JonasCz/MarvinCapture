@@ -35,7 +35,8 @@ import java.util.List;
  * same shared place as on the phone, when Android lets it create files there (tested with a real
  * file); if not, to the app's own folder on that volume ({@code Android/data/<app>/files/Movies}),
  * which always works but is removed with the app. The choice is the setting {@code gui.storage}
- * (the volume's id); a volume that is gone falls back to the phone's storage. Main thread.
+ * (the volume's id); a volume that is gone shows the phone's storage in the options and the library,
+ * but a capture is refused then ({@link #chosen()}): it must not end up somewhere else unnoticed. Main thread.
  */
 final class Storage {
     private Storage() {}
@@ -116,13 +117,29 @@ final class Storage {
         return all.get(0);
     }
 
-    /** Can this app create a file there? Tried for real: only a file proves it (scoped storage). */
+    /** The chosen volume, or null if it is not mounted (an SD card or USB drive that was removed). */
+    static Volume chosen() {
+        String id = Settings.get("gui.storage", "primary");
+        for (Volume v : volumes()) if (v.id.equals(id)) return v;
+        return null;
+    }
+
+    /** The extensions real captures use (the formats of the core): MediaProvider may accept some and
+     *  refuse others in the same folder, so each is tried. */
+    private static final String[] CAPTURE_EXTENSIONS = { ".dv", ".m2t", ".avi", ".mov", ".mkv", ".nut" };
+
+    /** Can this app create the files of a capture there? Tried for real: only a file proves it (scoped storage). */
     private static boolean canCreateIn(File dir) {
         try {
             if (!dir.isDirectory() && !dir.mkdirs()) return false;
-            File t = new File(dir, ".write-test.mkv");
-            if (!t.createNewFile() && !t.exists()) return false;
-            t.delete();
+            for (String ext : CAPTURE_EXTENSIONS) {
+                File t = new File(dir, ".write-test" + ext);
+                try {
+                    if (!t.createNewFile() && !t.exists()) return false;
+                } finally {
+                    t.delete();
+                }
+            }
             return true;
         } catch (IOException | SecurityException e) {
             Log.i(MarvinApp.TAG, "no shared folder on " + dir + ": " + e.getMessage());

@@ -103,6 +103,16 @@ public final class CaptureService extends Service {
     private int opening;           // opens queued on the core thread
     private int closing;           // closes queued on the core thread
     private int finalizing;        // closes of a session that was capturing (pin_close finalises)
+    private volatile boolean destroyed;   // onDestroy ran: a late open result must close what it opened
+    // A close asked for while a capture runs: the capture is stopped first and the session stays open
+    // (polled by the tick) until the core reported its end, so the end event and the alert are not lost
+    // with the session. 0 = none waiting, else the uptime (ms) after which the close happens anyway.
+    private long closeDeadline;
+    private String closeText = "";
+    private int errorTicks;            // ticks the session has been in the error state
+    private int closeSettle;           // ticks the capture has been over while a close waits
+    private static final long CLOSE_WAIT_MS = 60000;   // finalising a long capture can take this long
+    private boolean endReported = true;   // the last capture's end was shown (event or status)
     private long detachedAt;       // the open USB device was unplugged (uptime ms), 0 = no
     private UsbDevice device;      // the open USB device; null for the replay device
     private UsbDeviceConnection connection;
@@ -183,13 +193,19 @@ public final class CaptureService extends Service {
 
     @Override
     public void onDestroy() {
+        destroyed = true;
         handler.removeCallbacksAndMessages(null);
         unregisterReceiver(detachReceiver);
-        closeSession("");
+        flushFinishedNow();
+        // No waiting for the capture's end here (the main thread cannot poll): the close finalises it.
+        doCloseSession("");
         coreThread.shutdown();
-        // The close finalises the files; the process may be killed right after this returns.
+        // The close of a capture finalises the files and the process may be killed right after this
+        // returns, so wait for that. Anything else (an idle session, a pending open) finishes on the
+        // core thread by itself and must not block the main thread.
         try {
-            if (!coreThread.awaitTermination(8, TimeUnit.SECONDS)) Log.w(TAG, "core thread still closing at onDestroy");
+            if (finalizing > 0 && !coreThread.awaitTermination(8, TimeUnit.SECONDS))
+                Log.w(TAG, "core thread still closing at onDestroy");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
@@ -282,7 +298,19 @@ public final class CaptureService extends Service {
             long t0 = SystemClock.uptimeMillis();
             long s = Core.open(id, st);
             Log.i(TAG, "pin_open: " + Core.strerror(st[0]) + " after " + (SystemClock.uptimeMillis() - t0) + " ms");
+            if (destroyed) {   // the service went away while the device was opening: nobody will close it
+                if (s != 0) Core.close(s);
+                if (c != null) c.close();
+                return;
+            }
             handler.post(() -> {
+                if (destroyed) {   // destroyed between the check above and this message
+                    new Thread(() -> {
+                        if (s != 0) Core.close(s);
+                        if (c != null) c.close();
+                    }, "Core late close").start();
+                    return;
+                }
                 opening--;
                 if (s == 0) {
                     if (c != null) c.close();
@@ -323,8 +351,34 @@ public final class CaptureService extends Service {
         scheduleTick(0);
     }
 
-    /** Closes the session (finalising a running capture) on the core thread; text = the card's. */
+    /** Closes the session; text = the card's. A running capture is stopped first and the session closed
+     *  once the core reported the capture's end (or after a minute), so its end is not lost. */
     void closeSession(String text) {
+        if (session == 0) {
+            cardText = text;
+            if (listener != null) listener.onSessionChanged();
+            return;
+        }
+        status.read(session);
+        if (status.isCapturing()) {
+            if (closeDeadline == 0) {
+                Core.captureStop(session);
+                closeDeadline = SystemClock.uptimeMillis() + CLOSE_WAIT_MS;
+                closeSettle = 0;
+            }
+            closeText = text;
+            scheduleTick(0);
+            if (listener != null) listener.onSessionChanged();
+            return;
+        }
+        doCloseSession(text);
+    }
+
+    /** Closes the session now (finalising a running capture) on the core thread. */
+    private void doCloseSession(String text) {
+        closeDeadline = 0;
+        closeSettle = 0;
+        closeText = "";
         cardText = text;
         if (session == 0) {
             if (listener != null) listener.onSessionChanged();
@@ -345,6 +399,7 @@ public final class CaptureService extends Service {
         Core.previewDetach(MarvinApp.renderer);
         Core.audioSetKeepAlive(MarvinApp.monitor, false);
         keepAlive = false;
+        java.util.Arrays.fill(status.i, 0);   // no stale ST_IS_CAPTURING etc. for the next session
         status.i[Core.ST_STATE] = Core.STATE_CLOSED;
         closing++;
         if (wasCapturing) finalizing++;
@@ -354,6 +409,7 @@ public final class CaptureService extends Service {
             handler.post(() -> {
                 closing--;
                 if (wasCapturing) finalizing--;
+                if (destroyed) return;
                 if (!isBusy()) leaveForeground();
                 scheduleTick(0);
             });
@@ -450,6 +506,7 @@ public final class CaptureService extends Service {
         if (st == Core.OK) {
             startRequestedAt = SystemClock.uptimeMillis() / 1000.0;
             captureStartWall = System.currentTimeMillis();
+            endReported = false;
             pendingFinished = null;
             unseenTitle = unseenText = null;
             getSystemService(NotificationManager.class).cancel(NOTIF_RESULT);
@@ -483,6 +540,12 @@ public final class CaptureService extends Service {
         return (session != 0 && (status.isCapturing() || startPending())) || finalizing > 0;
     }
 
+    /** A capture runs or is being finalised, or one is just starting: the files must not be touched
+     *  and the input must not change. */
+    boolean captureActive() {
+        return isBusy();
+    }
+
     // ---- tick -------------------------------------------------------------------------------------
 
     private final Runnable tickRunnable = this::tick;
@@ -500,10 +563,28 @@ public final class CaptureService extends Service {
             while (session != 0 && (kind = Core.pollEvent(session, evA, evText)) >= 0) {
                 handleEvent(kind, evA[0], evText[0] != null ? evText[0] : "");
             }
-            if (detachedAt != 0 && (!status.isCapturing() || SystemClock.uptimeMillis() - detachedAt > 15000)) {
-                // an abnormal end the user has not seen stays the card's text: the hint would hide why
+            reportEndFromStatus();
+            if (closeDeadline != 0) {
+                // a close waits for the capture's end: one more tick after the status shows it, so an
+                // event pushed just after the status change is polled too
+                if (status.isCapturing()) closeSettle = 0;
+                if (closeSettle++ >= 1 || SystemClock.uptimeMillis() > closeDeadline) doCloseSession(closeText);
+            } else if (detachedAt != 0 && (!status.isCapturing() || SystemClock.uptimeMillis() - detachedAt > 15000)) {
+                // an abnormal end the user has not seen stays the card's text: the hint would hide why.
+                // Still finalising after 15 s: closeSession stops the capture and waits for its end.
                 closeSession(unseenText != null ? unseenText + "\n\n" + Core.noDevicesHint() : Core.noDevicesHint());
             }
+        }
+        boolean dead = session != 0 && closeDeadline == 0 && detachedAt == 0 && status.state() == Core.STATE_ERROR
+                && !status.isCapturing();
+        if (!dead) errorTicks = 0;
+        if (dead && errorTicks++ >= 1) {   // the second tick: the end event of the failed capture was polled first
+            // a dead session (the stream failed) would hold the device until the user taps the card: close
+            // it now; the next device event (or a tap on the card) opens it afresh
+            String why = status.text(Core.SS_ERROR);
+            closeSession((why.isEmpty() ? "Device error" : why) + "\n\nTap to try again.");
+        }
+        if (session != 0) {
             int sk = status.i[Core.ST_STREAM_KIND];
             if (status.input() == Core.INPUT_DV && sk != lastStreamKind && (sk == Core.KIND_DV || sk == Core.KIND_HDV)) {
                 lastStreamKind = sk;
@@ -529,9 +610,21 @@ public final class CaptureService extends Service {
         }
     }
 
+    /** The abnormal end of a capture whose event was missed (the status keeps the reason and the
+     *  sentence until the next capture starts). The event's text is the full one; this is the 256-byte
+     *  status version. */
+    private void reportEndFromStatus() {
+        if (endReported || startRequestedAt >= 0 || status.isCapturing()) return;
+        if (status.i[Core.ST_STOP_ABNORMAL] == 0 || status.text(Core.SS_STOP_TEXT).isEmpty()) return;
+        endReported = true;
+        pendingFinished = null;
+        reportProblem("Capture stopped", status.text(Core.SS_STOP_TEXT));
+    }
+
     private void handleEvent(int kind, int a, String text) {
         switch (kind) {
             case Core.EVT_CAPTURE_ENDED:
+                endReported = true;
                 if (Core.stopReasonAbnormal(a)) {
                     pendingFinished = null;
                     reportProblem("Capture stopped", text);
@@ -560,10 +653,15 @@ public final class CaptureService extends Service {
 
     private void flushPendingFinished() {
         if (pendingFinished == null) return;
-        if (pendingAge++ >= 1) {
-            notifyResult(CH_RESULT, "Capture finished", pendingFinished);
-            pendingFinished = null;
-        }
+        if (pendingAge++ >= 1) flushFinishedNow();
+    }
+
+    /** Posts the "Capture finished" notification now: the service may be stopped right after (unbound,
+     *  nothing left to do), which would drop it. */
+    private void flushFinishedNow() {
+        if (pendingFinished == null) return;
+        notifyResult(CH_RESULT, "Capture finished", pendingFinished);
+        pendingFinished = null;
     }
 
     private void updateWakeLock(boolean on) {
@@ -649,6 +747,7 @@ public final class CaptureService extends Service {
     }
 
     private void leaveForeground() {
+        flushFinishedNow();
         foregroundDenied = false;
         if (foreground) {
             stopForeground(STOP_FOREGROUND_REMOVE);

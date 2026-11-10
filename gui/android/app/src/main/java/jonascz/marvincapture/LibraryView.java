@@ -37,6 +37,7 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.MediaController;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.widget.VideoView;
 
 import java.io.File;
@@ -60,6 +61,8 @@ import java.util.concurrent.Executors;
 final class LibraryView extends FrameLayout {
     interface Host {
         void closeLibrary();
+        /** Null if the file may be changed, else why not (the capture is writing to it). */
+        String fileLocked(File f);
     }
 
     private final Host host;
@@ -246,9 +249,19 @@ final class LibraryView extends FrameLayout {
     }
 
     private void confirmDelete(File f) {
+        String locked = host.fileLocked(f);
+        if (locked != null) {
+            Toast.makeText(getContext(), locked, Toast.LENGTH_LONG).show();
+            return;
+        }
         new AlertDialog.Builder(getContext()).setTitle("Delete this capture?")
                 .setMessage(f.getName() + "\n" + Core.formatBytes(f.length()) + "\n\nThe file is removed from the storage.")
                 .setPositiveButton("Delete", (d, w) -> {
+                    String nowLocked = host.fileLocked(f);   // a capture may have started while the dialog was up
+                    if (nowLocked != null) {
+                        Toast.makeText(getContext(), nowLocked, Toast.LENGTH_LONG).show();
+                        return;
+                    }
                     if (!f.delete()) {
                         new AlertDialog.Builder(getContext()).setMessage("Could not delete " + f.getName())
                                 .setPositiveButton("OK", null).show();
