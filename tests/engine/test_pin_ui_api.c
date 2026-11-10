@@ -468,6 +468,29 @@ static void test_format_help(void)
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, NULL, 0);   /* no crash */
 }
 
+static void test_text_lengths(void)
+{
+    char why[200], path[PIN_PATH_MAX + 8], title[PIN_TEXT_MAX + 8];
+    memset(path, 'a', sizeof(path));
+    memset(title, 'b', sizeof(title));
+    path[PIN_PATH_MAX - 1] = 0;
+    title[PIN_TEXT_MAX - 1] = 0;
+    CHECK(pin_check_text_lengths(path, title, why, sizeof(why)) == 1, "longest fitting path and title");
+    path[PIN_PATH_MAX] = 0;
+    path[PIN_PATH_MAX - 1] = 'a';
+    why[0] = 0;
+    CHECK(pin_check_text_lengths(path, "x", why, sizeof(why)) == 0 && strstr(why, "output path"),
+          "path of 1024 bytes refused with a reason");
+    path[10] = 0;
+    title[PIN_TEXT_MAX] = 0;
+    title[PIN_TEXT_MAX - 1] = 'b';
+    why[0] = 0;
+    CHECK(pin_check_text_lengths(path, title, why, sizeof(why)) == 0 && strstr(why, "file name"),
+          "title of 256 bytes refused");
+    CHECK(pin_check_text_lengths(path, NULL, NULL, 0) == 1, "no title, no reason buffer");
+    CHECK(pin_check_text_lengths(NULL, NULL, why, sizeof(why)) == 1, "NULL path is not a length problem");
+}
+
 int main(void)
 {
     test_state_and_short();
@@ -476,6 +499,7 @@ int main(void)
     test_deck_name();
     test_devices();
     test_format_help();
+    test_text_lengths();
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

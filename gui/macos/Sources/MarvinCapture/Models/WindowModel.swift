@@ -54,6 +54,8 @@ struct CapturePlan {
     var opts: pin_capture_opts_t
     var confirmations: [CaptureConfirmation]
     var overwrite: Bool
+    /// The input the plan was made for: the Input menu stays usable while a confirmation sheet is open.
+    var inputIndex: Int
 }
 
 enum DeckCommand {
@@ -132,6 +134,16 @@ final class WindowModel {
     /// The end text of a capture that failed while the close flow was finalising it (a file not
     /// written completely): the close flow stays open and shows it.
     @ObservationIgnored var quitEndError: String?
+    /// The abnormal end of the latest capture was already shown (or notified); cleared when a capture starts.
+    @ObservationIgnored private var captureEndReported = true
+
+    /// A capture is running, starting or being finalised according to a fresh read of the core, not the
+    /// last tick (a minimised window lags up to a second): what quitting must stop and wait for.
+    var captureActiveForClose: Bool {
+        if isCapturing || captureStartPending { return true }
+        if let s = session, let st = Pin.status(s) { return Pin.stateIsCapturing(st.state) }
+        return false
+    }
 
     // MARK: devices
 
@@ -165,6 +177,13 @@ final class WindowModel {
     private(set) var isCapturing = false {
         didSet {
             guard isCapturing != oldValue else { return }
+            if isCapturing {
+                captureEndReported = false
+            } else if sessionState == PIN_STATE_ERROR {
+                // The ERROR state came by event while the capture still counted as running, which skipped
+                // the release of the dead session: do it now that the capture is over.
+                DispatchQueue.main.async { [weak self] in MainActor.assumeIsolated { self?.onDevicesChanged(sessionFailed: true) } }
+            }
             refreshDevices()   // the open device's badge reads "Capturing"
             // The format settings apply at capture start: locked while capturing, like the other options.
             for o in allFormatOptions { o.isEditable = !isCapturing }
@@ -843,6 +862,7 @@ final class WindowModel {
     func closeSession() {
         guard let s = session else { return }
         openedDeviceID = nil
+        reportUndrainedEnd(s)
         audio.stop()
         audio.detach()      // never call into a closed session
         preview.detach()
@@ -853,6 +873,17 @@ final class WindowModel {
         statusShortText = "No device open"
         isCapturing = false
         previewHasVideo = false
+    }
+
+    /// Handles what the session still holds before it is closed: events are drained only while a session
+    /// exists, so an abnormal end that arrived since the last tick would be lost with it. If its
+    /// CAPTURE_ENDED was never seen, the status still has the reason and text (the core keeps them until
+    /// the next capture starts).
+    private func reportUndrainedEnd(_ s: Pin.Session) {
+        while let e = Pin.pollEvent(s) { handleEvent(e) }
+        guard !isClosing, !captureEndReported, let st = Pin.status(s),
+              Pin.stopReasonAbnormal(st.stop_reason) else { return }
+        afterEvent(Pin.Event(kind: PIN_EVT_CAPTURE_ENDED, a: Int(st.stop_reason.rawValue), text: cString(st.stop_text)))
     }
 
     // MARK: device watch
@@ -971,6 +1002,10 @@ final class WindowModel {
             showInfo("Invalid file name", nameError, .error)
             return nil
         }
+        if let lengthError = Pin.checkTextLengths(path: path, title: isDvInput ? dvName : analogName) {
+            showInfo("Invalid file name", lengthError, .error)
+            return nil
+        }
         // "Automatic rewind & capture" = rewind to the start of the tape, play, record.
         let opts = buildCaptureOpts(startDeck: playFirst, rewindFirst: playFirst)
         guard let s = session else {
@@ -1012,7 +1047,7 @@ final class WindowModel {
                 message: "\(firstPath)\n\nalready exists. Do you want to overwrite it?",
                 primaryButton: "Overwrite"))
         }
-        return CapturePlan(opts: opts, confirmations: confirmations, overwrite: check.collision != 0)
+        return CapturePlan(opts: opts, confirmations: confirmations, overwrite: check.collision != 0, inputIndex: inputIndex)
     }
 
     /// The volume a path is (or would be) on, for "Only 1.2 GB free on ...".
@@ -1027,7 +1062,7 @@ final class WindowModel {
         guard let s = session else { return PIN_ERR_STATE }
         let st = Pin.captureStart(s, o, overwrite: overwrite)
         if st == PIN_OK {
-            captureStarted(o)
+            captureStarted()
         }
         report(st, "Start capture")
         return st
@@ -1043,11 +1078,9 @@ final class WindowModel {
         return true
     }
 
-    private func captureStarted(_ o: pin_capture_opts_t) {
+    private func captureStarted() {
         startRequestedAt = ProcessInfo.processInfo.systemUptime
-        captureWithDeck = o.start_deck != 0
-        activeIdleStopS = Double(Swift.max(0, o.idle_stop_minutes)) * 60
-        activeDurationS = Double(Swift.max(0, o.max_duration_minutes)) * 60
+        captureEndReported = false
         if infoSeverity == .error { infoOpen = false }   // a stale error must not colour the dock of a running capture
         Notifier.shared.requestAuthorizationIfNeeded()
     }
@@ -1315,6 +1348,7 @@ final class WindowModel {
                 onExitRequested?(Int32(clamping: e.a))   // --exit-when-done: leave with the script's exit code
             }
         case PIN_EVT_CAPTURE_ENDED:
+            captureEndReported = true
             let abnormal = Pin.stopReasonAbnormal(pin_stop_reason_t(rawValue: UInt32(clamping: e.a)))
             if abnormal {
                 // A dialog with how much was captured. A normal end only goes to the status bar. Not
@@ -1477,7 +1511,7 @@ final class WindowModel {
         for k in kindTabs {
             let p = k.settingsPrefix
             let f = loadInt("gui.format_\(p)", -1)
-            if f >= 0 { k.applyFormat(pin_format_t(rawValue: UInt32(f))) }
+            if f >= 0 { k.applyFormat(pin_format_t(rawValue: UInt32(clamping: f))) }
             k.splitIntoScenes = loadInt("gui.split_\(p)", 0) != 0
             k.passes = Swift.max(1, loadInt("gui.passes_\(p)", 1))
             k.idleStopMinutes = Swift.max(0, loadInt("gui.idle_\(p)", 5))

@@ -950,9 +950,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         var st = Native.CaptureStart(Session, in o, overwrite);
         if (st == PinStatus.Ok)
         {
-            _captureWithDeck = o.StartDeck != 0;
-            _activeIdleStopS = Math.Max(0, o.IdleStopMinutes) * 60.0;
-            _activeDurationS = Math.Max(0, o.MaxDurationMinutes) * 60.0;
             if (InfoSeverity == 3)
             {
                 InfoOpen = false; // a stale error must not colour the taskbar of a running capture
@@ -1008,10 +1005,16 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private long _meterLastTick;
     private const double MeterDecayDbPerSecond = 30;
 
+    // The tooltip text takes the peak over everything read since the previous status tick: the
+    // meter timer's reads would otherwise take the peaks away from the single read of the tick.
+    private double _textPeakL = double.NegativeInfinity, _textPeakR = double.NegativeInfinity;
+
     private void FeedMeter(in PinStatusSnapshot st)
     {
         _meterAccL = Math.Max(_meterAccL, st.AudioPeakDb0);
         _meterAccR = Math.Max(_meterAccR, st.AudioPeakDb1);
+        _textPeakL = Math.Max(_textPeakL, st.AudioPeakDb0);
+        _textPeakR = Math.Max(_textPeakR, st.AudioPeakDb1);
     }
 
     /// <summary>Meter timer (~30 Hz): fresh status read, peak with a short decay.</summary>
@@ -1055,7 +1058,10 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             ApplyStatus(in st);
         }
 
-        while (Native.PollEvent(Session, out var evt))
+        // A handler can end the session (the window closes, a device is dropped): stop draining
+        // then, the next tick has a session again or none.
+        var polled = Session;
+        while (ReferenceEquals(Session, polled) && polled is { IsInvalid: false } && Native.PollEvent(polled, out var evt))
         {
             HandleEvent(in evt);
         }
@@ -1113,7 +1119,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         SizeText = Native.FormatSizes(in st);
 
         FeedMeter(in st);
-        AudioPeakText = $"Audio peak left {FormatDb(st.AudioPeakDb0)}, right {FormatDb(st.AudioPeakDb1)}";
+        AudioPeakText = $"Audio peak left {FormatDb((float)_textPeakL)}, right {FormatDb((float)_textPeakR)}";
+        _textPeakL = _textPeakR = double.NegativeInfinity;
 
         TapePercent = st.TapePercent;
         bool is60Hz = st.Is60Hz != 0; // the format settings' data rate line

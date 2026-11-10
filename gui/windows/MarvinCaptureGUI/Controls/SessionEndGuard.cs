@@ -8,30 +8,39 @@ namespace PinnacleCapture.Controls;
 /// Logoff, shutdown and restart. While a capture runs (or its files are being finalised) the
 /// window blocks the session end like an editor with unsaved work: a shutdown block reason is
 /// registered and WM_QUERYENDSESSION is answered FALSE, so Windows shows "this app is preventing
-/// shutdown". If the session ends anyway (WM_ENDSESSION with wParam TRUE: nothing blocked it, or
-/// the user chose "Shut down anyway"), the release callback runs on the UI thread before the
-/// message returns, because Windows ends the process right after. The window is subclassed
+/// shutdown". The capture is asked to stop as soon as the query arrives (non-blocking), so its
+/// files are finalised while Windows waits and little is left to do if the session ends anyway.
+/// If the session ends (WM_ENDSESSION with wParam TRUE: nothing blocked it, or the user chose
+/// "Shut down anyway"), the release callback runs on the UI thread before the message returns,
+/// because Windows ends the process right after; the process cannot out-wait the OS there. The window is subclassed
 /// (comctl32 SetWindowSubclass; WinUI 3 has no WndProc hook).
 /// </summary>
 public sealed class SessionEndGuard : IDisposable
 {
     private const nuint SubclassId = 0x454E44; // "END"
-    private const string BlockReason = "A capture is in progress. Stop it before shutting down.";
+    private const string BlockReason = "A capture is being stopped and its files finished. Windows continues when they are saved.";
 
     private readonly nint _hwnd;
     private readonly Func<bool> _isBusy;
     private readonly Action _release;
+    private readonly Action _stopCapture;
+    private readonly Action _saveState;
     private readonly Win32.SubclassProc _proc;
     private readonly nint _procPtr;
     private bool _blocking;
+    private bool _stopRequested;
     private bool _disposed;
 
     /// <param name="isBusy">A capture is running or its files are being finalised.</param>
     /// <param name="release">Stops any capture, finalises the files and releases the device (blocks until done).</param>
-    public SessionEndGuard(nint hwnd, Func<bool> isBusy, Action release)
+    /// <param name="stopCapture">Asks a running capture to stop; must not block.</param>
+    /// <param name="saveState">Saves what a normal close saves (window geometry), quickly.</param>
+    public SessionEndGuard(nint hwnd, Func<bool> isBusy, Action stopCapture, Action saveState, Action release)
     {
         _hwnd = hwnd;
         _isBusy = isBusy;
+        _stopCapture = stopCapture;
+        _saveState = saveState;
         _release = release;
         _proc = WndProc;
         _procPtr = Marshal.GetFunctionPointerForDelegate(_proc);
@@ -52,7 +61,17 @@ public sealed class SessionEndGuard : IDisposable
         }
         else
         {
+            _stopRequested = false;
             Win32.ShutdownBlockReasonDestroy(_hwnd);
+        }
+    }
+
+    private void RequestStopOnce()
+    {
+        if (!_stopRequested)
+        {
+            _stopRequested = true;
+            _stopCapture();
         }
     }
 
@@ -76,11 +95,26 @@ public sealed class SessionEndGuard : IDisposable
                 if (_isBusy())
                 {
                     SetBusy(true);
+                    RequestStopOnce();
                     return 0; // FALSE: do not end the session yet
                 }
             }
             else if (msg == Win32.WM_ENDSESSION && wParam != 0)
             {
+                // the geometry first (a normal close saves it), then the stop request so the core starts
+                // finishing the files, and the blocking release last
+                try
+                {
+                    _saveState();
+                }
+                catch (Exception)
+                {
+                    // the release below matters more
+                }
+                if (_isBusy())
+                {
+                    RequestStopOnce();
+                }
                 _release();
                 return 0;
             }

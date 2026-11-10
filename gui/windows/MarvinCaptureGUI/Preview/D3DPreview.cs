@@ -547,7 +547,10 @@ public sealed class D3DPreview : IDisposable
     {
         _running = false;
         _wake.Set();
-        _renderThread?.Join(500);
+        // Every wait in the render loop is bounded and checks _running, so this returns within a
+        // fraction of a second. It must not time out: the loop's reference on the session handle is
+        // what delays pin_close, and a late pin_close would keep the device locked after Dispose.
+        _renderThread?.Join();
         if (_timer != 0)
         {
             Win32.CloseHandle(_timer);

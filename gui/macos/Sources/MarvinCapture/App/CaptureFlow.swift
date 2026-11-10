@@ -59,7 +59,12 @@ enum CaptureFlow {
                 defaultIndex: overwrite ? 1 : 0)
             if choice != 0 { return }
         }
-        // The user may have stopped / changed things while a sheet was open; the core re-checks.
+        // The user may have stopped / changed things while a sheet was open; the core re-checks. The plan
+        // (path, collision, free space) belongs to one input, and the Input menu works behind a sheet.
+        guard model.inputIndex == plan.inputIndex else {
+            model.showInfo("Capture not started", "The input was changed while asking. Start the capture again.", .warning)
+            return
+        }
         model.startCapture(plan.opts, overwrite: plan.overwrite)
     }
 }

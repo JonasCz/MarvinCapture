@@ -851,6 +851,27 @@ int pin_validate_output_name(const char *name, char *reason, size_t cap)
     return pin_naming_validate_name(name, reason, cap);
 }
 
+int pin_check_text_lengths(const char *path, const char *title, char *reason, size_t cap)
+{
+    const char *what = NULL;
+    size_t have = 0, max = 0;
+    if (path && strlen(path) >= PIN_PATH_MAX) {
+        what = "The output path";
+        have = strlen(path);
+        max = PIN_PATH_MAX - 1;
+    } else if (title && strlen(title) >= PIN_TEXT_MAX) {
+        what = "The file name";
+        have = strlen(title);
+        max = PIN_TEXT_MAX - 1;
+    }
+    if (!what)
+        return 1;
+    if (reason && cap)
+        snprintf(reason, cap, "%s is too long (%zu bytes; at most %zu). Choose a shorter folder or name.",
+                 what, have, max);
+    return 0;
+}
+
 uint32_t pin_next_file_number(const char *path)
 {
     char ext_buf[PIN_FMT_COUNT][sizeof(((pin_format_info_t *)0)->extension)];

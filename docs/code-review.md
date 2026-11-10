@@ -74,13 +74,6 @@ items are marked "Second pass" under those items.
   - `fill_frames()` can add up to 0x7fff stand-ins in one burst, pushed at memcpy speed. After about 640 PAL frames (about 26 s of gap) the next push overflows, and `capture_guard()` ends the capture as DISK_SLOW although the disk is fine; everything after the gap is lost.
   - Fix: pace fillers, cap the fill per call, or let fillers wait for the writer.
 
-### 18.2 Files not finalised, or errors not reported
-
-- **N22. Windows forced shutdown: `pin_close` runs in `WM_ENDSESSION` without a time bound** (`SessionEndGuard.WndProc`). Medium-low. Testing required.
-  - A slow drive with a full 256 / 512 MiB ring, or an encoder tail, can take longer than the shutdown kill timeout; the process is then killed mid-flush. Window geometry is also not saved on logoff (`SaveWindowGeometry` only in `Closing` / `Closed`).
-- **N23. Windows: the final `pin_close` can run late on the preview render thread** (`D3DPreview.Dispose` joins for 500 ms; the render loop holds a `DangerousAddRef` on the session handle). Low. Testing required.
-  - If the join times out, the real `pin_close` runs later on the render thread, and the process may exit first. On a device replug the old session and its device lock are released up to 100 ms late, so the reopen can fail as busy.
-
 ### 18.3 Wrong numbers on screen
 
 - **N38. DV audio error detection reads 16-bit words in 12-bit mode** (`dv_error.c` `dv_error_analyze()`). Low. Testing required.
@@ -121,12 +114,6 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 
 ### 19.2 Files not finalised, errors not reported, sessions stuck
 
-- **O2. Windows quits silently when a script-driven capture's finalise failed** (`MainWindow.xaml.cs` 856-859: `_quitEndError` is not set while `_scriptRunning`). Low. Fix required. macOS stays open and shows the alert.
-- **D7. The macOS GUI has no SIGINT / SIGTERM / SIGHUP handler** (only SIGPIPE, `ConsoleOutput.swift:31`). Medium-low. Fix required. Started from Terminal with script arguments, Ctrl+C or `kill` ends the process with no `pin_close`: AVI and MOV outputs stay unfinalised. The CLI got Ctrl+C handling in 4d97c72; the GUI process did not.
-- **D6. macOS `CloseFlow` trusts the lagging `model.isCapturing`** (`CloseFlow.swift` 41, 53; `captureStartPending` is ignored; a minimised window lags up to 1 s). Low-medium. Testing required. Cmd-Q right after a start returns `.terminateNow` without confirmation and `pin_close` runs on the main thread (freeze during an HDV remux). Files should still be finalised.
-- **D8. macOS: the CAPTURE_ENDED alert exists only as an event** (`afterEvent` 1310, `closeSession` 843). Low. Testing required. Events are drained only while a session exists; the status `stop_reason` is unused, so a device-list-triggered close can drop an undrained abnormal end.
-- **C1. Windows: Done event closes the window inside the event drain loop** (`MainViewModel.Tick` 1058-1061, `VM_EngineEvent` 831-841). Low. Testing required. If `Closed` is raised synchronously `Session` is null in the next `PollEvent`; events queued behind Done are lost and the exit code may change.
-- **C4 / D3. A session ERROR delivered by event while `IsCapturing` is still true skips the dead-session close** (`MainViewModel.HandleEvent` 1265, `VM_PropertyChanged` 809-815; macOS `WindowModel` 1282-1286, guard 891, flag 1208). Low. Testing required / Fix required. The dead session stays open until a device-list change.
 - **E7. Android output volume.** Low. Testing required (Android 11-15). The write test now creates every capture extension (`.dv`, `.m2t`, `.avi`, `.mov`, `.mkv`, `.nut`) and a capture is refused when the chosen SD card or USB drive is gone; what is left to test on devices is whether MediaProvider accepts all of them in `Movies/MarvinCapture` and that a file left by a previous install (not writable by the new one) is handled.
 - **T4. `pin_cond.h` timed wait on winpthreads.** Testing required (Windows). The wait now resumes until the monotonic clock says the time is up (Windows uses a wall-clock deadline per slice, no `pthread_condattr_setclock`), so an early ETIMEDOUT cannot fire the FFV1 / hwenc watchdog. Run `test_pin_cond` in an MSYS2 build.
 - **U1 / U2. Owed AV/C write responses while capturing.** Testing required (a camera that answers with FCP writes acked pending). They are now sent from `p1394_async_service()` on every read-loop tick without blocking or reading EP 0x84, before a queued AV/C command; the command's ack is checked (ack_busy resent, others fail the command); a full owed table is logged and counted (`owed_dropped`).
@@ -136,13 +123,9 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 ### 19.3 Wrong numbers on screen
 
 - **V4. HDV continuity in the demux aliases at 16 lost packets.** Low. Testing required. The CC test misses a loss of exactly 16k packets of a PID (`hdv_demux.c` `ts_packet()`, `dv_reassembler.c` `ts_handle_packet()`, `hdv_error.c` the same way). The session's own count sees such a hole from the DBC (the picture it fell into is a frame with error), so raw HDV is covered; into HDV MOV / MKV the file counts its frames itself, and the reassembler's DBC hole is not passed to its demux: the demux sits behind the writer ring in the sink, so that needs a side channel in the unit stream. Left to judge on hardware how often a hole of a multiple of 16 packets of one PID happens.
-- **C3 / D2. Windows and macOS cut a path longer than 1023 bytes silently** (`Utf8Fixed.Set`, `setCString`), so the capture and the overwrite prompt use a different path than the one shown. Android rejects it with `ERR_ARG`.
-- **C5. Windows: `AudioPeakText` comes from one status read** (`ApplyStatus` 1108 vs `UpdateMeters` 1011-1036); not present on macOS. Low. Fix required.
-- **D9. macOS: a corrupt per-device format setting traps at startup** (`WindowModel.loadSettings()` 1473, `pin_format_t(rawValue: UInt32(f))`; 1461 uses `UInt32(clamping:)`). Low. Fix required.
-
 ### 19.5 Checked and refuted in this pass
 
-- **D4 (macOS: failed finalise at "Stop and quit" is lost): refuted.** `capture_report_end()` (2371-2404) drains the closer first and turns a failed close into `PIN_STOP_WRITE_ERROR` (2402-2403), which is abnormal; the CAPTURE_ENDED event carries it. macOS sets `quitEndError` (WindowModel 1312-1320) and stays open; Windows does the same (`MainWindow.xaml.cs` 855-859), apart from O2. D5 (banner overwritten after a failed finalise) follows from the same path: the abnormal CAPTURE_ENDED raises the alert, so only the live banner is short-lived.
+- **D4 (macOS: failed finalise at "Stop and quit" is lost): refuted.** `capture_report_end()` (2371-2404) drains the closer first and turns a failed close into `PIN_STOP_WRITE_ERROR` (2402-2403), which is abnormal; the CAPTURE_ENDED event carries it. macOS sets `quitEndError` (WindowModel 1312-1320) and stays open; Windows does the same (`MainWindow.xaml.cs`). D5 (banner overwritten after a failed finalise) follows from the same path: the abnormal CAPTURE_ENDED raises the alert, so only the live banner is short-lived.
 - Android: a failed finalise of the last file is not lost (WRITE_ERROR, shown by `reportProblem`).
 
 ### 19.6 Checked, nothing found (third pass)
@@ -157,5 +140,4 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 
 ### 19.7 Suggested order for fixes and tests
 
-2. **Fix required, silent loss or missing report:** D7, O2.
 4. **Hardware or OS first:** Z1 (Windows, test in a `Café` folder), T4, U1 / U2, V4.

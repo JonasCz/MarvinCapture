@@ -259,6 +259,14 @@ enum Pin {
         return String(cString: buf)
     }
 
+    /// The core's check that path and title fit the fixed option fields (they cut silently): nil if they fit,
+    /// else the reason to show. Call with the strings, not with a filled capture options struct.
+    static func checkTextLengths(path: String, title: String) -> String? {
+        var buf = [CChar](repeating: 0, count: 256)
+        if pin_check_text_lengths(path, title, &buf, buf.count) != 0 { return nil }
+        return String(cString: buf)
+    }
+
     static func checkOutput(_ s: Session, _ o: pin_capture_opts_t) -> (status: pin_status_t, check: pin_output_check_t) {
         var check = pin_output_check_t()
         check.size = UInt32(MemoryLayout<pin_output_check_t>.size)

@@ -29,6 +29,9 @@ final class CloseFlow {
     /// The capture is finalised and the user agreed: the next terminate request goes through without asking
     /// again (the model's `isCapturing` can lag a tick behind the state the close flow saw).
     private var approved = false
+    /// Quit asked by a signal (Ctrl+C, kill): stop and finalise without asking, and leave even if the
+    /// finalise failed (the error goes to the console), because nobody is there to answer a sheet.
+    private var quitWithoutAsking = false
 
     init(model: WindowModel) {
         self.model = model
@@ -38,7 +41,7 @@ final class CloseFlow {
     /// NSWindowDelegate.windowShouldClose.
     func windowShouldClose() -> Bool {
         if model.isFinalizingForClose { return false }   // already stopping; the app quits itself
-        if !model.isCapturing { return true }
+        if !model.captureActiveForClose { return true }
         confirmAndFinalize(viaTerminate: false)
         return false
     }
@@ -50,9 +53,27 @@ final class CloseFlow {
             replyPending = true
             return .terminateLater
         }
-        if !model.isCapturing { return .terminateNow }
+        if !model.captureActiveForClose { return .terminateNow }
+        if quitWithoutAsking {
+            replyPending = true
+            beginFinalizing()
+            return .terminateLater
+        }
         confirmAndFinalize(viaTerminate: true)
         return .terminateLater
+    }
+
+    /// SIGINT / SIGTERM / SIGHUP: the same stop-and-finalise quit as ⌘Q, without the question, so the
+    /// files of a running capture are finished when the app is stopped from a terminal.
+    func quitFromSignal() {
+        quitWithoutAsking = true
+        NSApp.terminate(nil)
+    }
+
+    private func beginFinalizing() {
+        model.isFinalizingForClose = true
+        model.stopCapture()
+        // afterTick calls finish() once the core reports READY.
     }
 
     private func confirmAndFinalize(viaTerminate: Bool) {
@@ -66,13 +87,11 @@ final class CloseFlow {
                 message: "A capture is running. Stopping finishes the current file safely before the window closes.",
                 buttons: [.init(title: "Stop and quit"), .init(title: "Keep capturing")])
             guard r == 0 else { cancelled(); return }
-            if !model.isCapturing {   // it ended while the sheet was open
+            if !model.captureActiveForClose {   // it ended while the sheet was open
                 finish()
                 return
             }
-            model.isFinalizingForClose = true
-            model.stopCapture()
-            // afterTick calls finish() once the core reports READY.
+            beginFinalizing()
         }
     }
 
@@ -85,9 +104,14 @@ final class CloseFlow {
 
     private func afterTick() {
         guard model.isFinalizingForClose else { return }
+        // A start the core has accepted but not yet reported as capturing shows READY for a moment.
+        if model.captureStartPending { return }
         switch model.sessionState {
         case PIN_STATE_READY, PIN_STATE_ERROR, PIN_STATE_CLOSED:
-            if let text = model.quitEndError {
+            if quitWithoutAsking {
+                if let text = model.quitEndError { ConsoleOutput.write("Capture stopped: \(text)") }
+                finish()
+            } else if let text = model.quitEndError {
                 // the capture ended with an error: stay open and say so instead of quitting
                 model.quitEndError = nil
                 model.isFinalizingForClose = false

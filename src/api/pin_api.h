@@ -1216,6 +1216,14 @@ PIN_API uint32_t pin_next_file_number(const char *path);
  * combined path and cannot tell the two parts apart. Show the reason as "Invalid file name". */
 PIN_API int pin_validate_output_name(const char *name, char *reason, size_t cap);
 
+/* Checks that the combined output path and the title fit pin_capture_opts_t.path
+ * (PIN_PATH_MAX) and .title (PIN_TEXT_MAX) in UTF-8 bytes. The fixed fields would cut
+ * a longer text silently, and the capture would then write somewhere other than the path
+ * shown. Call it with the strings BEFORE they are copied into the options (a copy has
+ * already lost the end). title may be NULL. Returns 1 if both fit, else 0 with the
+ * reason in reason (may be NULL); show it as "Invalid file name". */
+PIN_API int pin_check_text_lengths(const char *path, const char *title, char *reason, size_t cap);
+
 /* Deck state as shown in the status bar: "Stopped", "Playing", "Paused", "Fast forward",
  * "Rewinding", "Camera recording", "No tape", else "—" (an em dash). Static, never NULL. */
 PIN_API const char *pin_deck_state_name(pin_deck_state_t s);

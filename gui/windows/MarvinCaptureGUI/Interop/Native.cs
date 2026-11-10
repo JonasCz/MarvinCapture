@@ -554,6 +554,17 @@ public static unsafe partial class Native
         return pin_validate_output_name(name, buf, (nuint)cap) != 0 ? null : Utf8Fixed.Get(buf, cap);
     }
 
+    [LibraryImport(Lib, StringMarshalling = StringMarshalling.Utf8)]
+    private static partial int pin_check_text_lengths(string path, string? title, byte* reason, nuint cap);
+
+    /// <summary>The core's check that the path and title fit the fixed option fields (they cut silently); null if they fit, else the reason to show. Call with the strings, not with a filled PinCaptureOpts.</summary>
+    public static string? CheckTextLengths(string path, string? title)
+    {
+        const int cap = 256;
+        byte* buf = stackalloc byte[cap];
+        return pin_check_text_lengths(path, title, buf, (nuint)cap) != 0 ? null : Utf8Fixed.Get(buf, cap);
+    }
+
     [LibraryImport(Lib)]
     private static partial nint pin_deck_state_name(PinDeckState s);
     public static string DeckStateName(PinDeckState s) => PtrToUtf8(pin_deck_state_name(s));

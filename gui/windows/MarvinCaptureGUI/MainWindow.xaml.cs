@@ -72,7 +72,7 @@ public sealed partial class MainWindow : Window
 
         _hwnd = WinRT.Interop.WindowNative.GetWindowHandle(this);
         _taskbar = new TaskbarButton(_hwnd);
-        _sessionEnd = new SessionEndGuard(_hwnd, () => VM.IsCapturing, ReleaseSession);
+        _sessionEnd = new SessionEndGuard(_hwnd, () => VM.IsCapturing, VM.StopCapture, SaveWindowGeometry, ReleaseSession);
         ConsoleOutput.RegisterCtrlHandler(DispatcherQueue, ReleaseSession);
         // Raised inside the window procedure: handle on the next dispatcher turn.
         _taskbar.StartClicked += () => DispatcherQueue.TryEnqueue(() => _ = TaskbarStartAsync());
@@ -819,6 +819,12 @@ public sealed partial class MainWindow : Window
                 break;
             case nameof(MainViewModel.IsCapturing):
                 _dvView.IsEditable = _hdvView.IsEditable = VM.IsIdle;
+                if (!VM.IsCapturing && VM.SessionState == PinState.Error)
+                {
+                    // The ERROR state came by event while the capture still counted as running, which
+                    // skipped the release of the dead session: do it now that the capture is over.
+                    DispatcherQueue.TryEnqueue(() => OnDevicesChanged(sessionFailed: true));
+                }
                 break;
             case nameof(MainViewModel.SelectedKindTabIndex):
                 SyncKindSelector(); // the detected stream switched DV <-> HDV
@@ -836,7 +842,9 @@ public sealed partial class MainWindow : Window
                 // --exit-when-done: leave with the script's exit code (docs/cli.md)
                 Environment.ExitCode = e.A;
                 _allowClose = true;
-                Close();
+                // not inside the event drain: closing releases the session, and the events queued
+                // behind this one are still to be handled by the same tick
+                DispatcherQueue.TryEnqueue(() => Close());
                 return;
             }
         }
@@ -854,7 +862,7 @@ public sealed partial class MainWindow : Window
             _ = ShowDialogAsync("Capture stopped", e.Text, null, "OK");
         }
         else if (e.Kind == PinEventKind.CaptureEnded && Native.StopReasonAbnormal((PinStopReason)e.A) &&
-                 _finalizingForClose && !_closing && !_scriptRunning)
+                 _finalizingForClose && !_closing)
         {
             _quitEndError = e.Text; // shown instead of quitting (OnStatusTick)
         }
@@ -945,6 +953,14 @@ public sealed partial class MainWindow : Window
         if (nameError != null)
         {
             VM.ShowInfo("Invalid file name", nameError, 3);
+            return;
+        }
+
+        // the option fields are fixed-size and would cut a longer path or title silently
+        var lengthError = Native.CheckTextLengths(path, VM.IsDvInput ? VM.DvName : VM.AnalogName);
+        if (lengthError != null)
+        {
+            VM.ShowInfo("Invalid file name", lengthError, 3);
             return;
         }
 

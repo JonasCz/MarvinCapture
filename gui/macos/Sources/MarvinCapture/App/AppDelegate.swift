@@ -28,6 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dockTile: DockTile?
     /// Set by --exit-when-done: the exit code the process leaves with.
     private var exitCode: Int32?
+    private var signalSources: [DispatchSourceSignal] = []
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // One window per process: no tab bar, and no "Show Tab Bar" / "Merge All Windows" menu items.
@@ -75,6 +76,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["MARVIN_MENU_DUMP"] == "1" { scheduleMenuDump() }
         if let w = wc.window { snapshotHook = SnapshotHook.installIfRequested(window: w) }
         model?.start()
+        installSignalHandlers()
+    }
+
+    /// Ctrl+C / kill from a terminal quit like ⌘Q, but without asking: a running capture is stopped and its
+    /// files finalised first (the default action would end the process with unfinished AVI / MOV files).
+    private func installSignalHandlers() {
+        for sig in [SIGINT, SIGTERM, SIGHUP] {
+            signal(sig, SIG_IGN)   // the dispatch source takes over; the default action must not run
+            let src = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+            src.setEventHandler { [weak self] in
+                MainActor.assumeIsolated {
+                    if let flow = self?.closeFlow { flow.quitFromSignal() } else { NSApp.terminate(nil) }
+                }
+            }
+            src.resume()
+            signalSources.append(src)
+        }
     }
 
     /// MARVIN_MENU_DUMP=1: print once the session is READY (the enable rules need it), at the latest after 8 s.
