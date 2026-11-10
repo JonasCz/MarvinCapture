@@ -120,7 +120,7 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
   - `MainActivity.applyLibraryExtra()` 251-255, reached from `onCreate` 139 and `onNewIntent` 174 through the launcher shortcut, has no `isCapturing()` guard (`applyInputExtra` 245 has one; only `libraryBtn` is disabled, 697). `Storage.captures()` lists the file being written. `LibraryView.confirmDelete` 248-259 runs `f.delete()`: the core keeps writing to an unlinked file and the whole capture is lost.
   - Fix: ignore the extra while capturing, and have the library skip the file named in `SS_CURRENT_FILE`.
 - **Z1. Windows: UTF-8 and long output paths, not built or run on Windows.** Testing required (Windows, MSYS2).
-  - All file access in the core now goes through `src/core/pin_fs.c` (UTF-16 calls, `\\?\` / `\\?\UNC\` prefix for full paths of 240 or more characters), the CLI takes its arguments from `GetCommandLineW()`, and the collision check lists with `FindFirstFileExW` and folds non-ASCII case. Tested on macOS only. Build with MSYS2, run `test_pin_fs`, `test_pin_naming`, `test_lazy_sink`, and capture (GUI and CLI) into a `Café` folder and to a path over 260 characters, with the "UTF-8 for worldwide language support" switch on and off and with `LongPathsEnabled` off.
+  - All file access in the core now goes through `src/core/pin_fs.c` (UTF-16 calls, `\\?\` / `\\?\UNC\` prefix for full paths of 240 or more characters), the CLI takes its arguments from `GetCommandLineW()`, and the collision check lists with `FindFirstFileExW` and folds non-ASCII case. Tested on macOS only. Build with MSYS2, run `test_pin_fs`, `test_pin_naming`, `test_lazy_sink`, and capture (GUI and CLI) into a `Café` folder and to a path over 260 characters, with the "UTF-8 for worldwide language support" switch on and off and with `LongPathsEnabled` off. Also new and untested on Windows: read-only opens share `FILE_SHARE_DELETE` (`pin_fs_fopen`, so the settings rename over a file being read works), and `pin_exe_dir()` / `lib_dir()` use a growing wide buffer (run from a folder over 260 characters). Run `test_pin_settings` (concurrent updates) there too.
 
 ### 19.2 Files not finalised, errors not reported, sessions stuck
 
@@ -147,13 +147,6 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 - **C3 / D2. Windows and macOS cut a path longer than 1023 bytes silently** (`Utf8Fixed.Set`, `setCString`), so the capture and the overwrite prompt use a different path than the one shown. Android rejects it with `ERR_ARG`.
 - **C5. Windows: `AudioPeakText` comes from one status read** (`ApplyStatus` 1108 vs `UpdateMeters` 1011-1036); not present on macOS. Low. Fix required.
 - **D9. macOS: a corrupt per-device format setting traps at startup** (`WindowModel.loadSettings()` 1473, `pin_format_t(rawValue: UInt32(f))`; 1461 uses `UInt32(clamping:)`). Low. Fix required.
-
-### 19.4 Settings, options and smaller items
-
-- **B7, B9. Settings.** Low. B7 Testing required: load, modify, save without a lock in `pin_settings_set`, `update_remember` (four rounds) and `pin_est_store_ffv1`, so a concurrent save loses a key; on Windows the reader opens without `FILE_SHARE_DELETE`, so `MoveFileExW` can fail, and callers ignore the result. B9 Fix required: `pin_settings_get()` (`pin_api.c` 1357, 1368) hides a load failure behind `PIN_OK` and an empty value, truncates silently, and a section name of 64 characters or more falls back to General.
-- **B8. INI round trip** (`pin_settings.c` 359-366). Low. Fix required. A value containing a newline injects a key or section; keys starting with `;`, `#` or `[` are dropped on reload; `get_int` truncates a long to int and accepts `12abc`; `get_double` accepts `nan` and `inf`.
-- **B10. Ctrl+C can reach the USB thread** (`marvin_capture_cli.c` 129-135: `signal()` without `pthread_sigmask`). Low. Testing required (macOS). The signal interrupts `libusb_handle_events`; the read loops now carry on after LIBUSB_ERROR_INTERRUPTED, so only the CLI side is left to check.
-- **B3, B11, B12.** Cosmetic or speculative. B3: the CLI prints the error reason twice for exit 4 (576-587). B11: debug log lines beyond about 5000 per second are dropped without a marker (`PIN_EVQ_CAP` 256). B12: a failed serial probe stays failed for that plug-in, so per-device settings can be stored under two keys (`probe_guid()` 240-254).
 
 ### 19.5 Checked and refuted in this pass
 

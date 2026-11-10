@@ -23,6 +23,8 @@
  * attempted -- a save rewrites the file from the in-memory key/value
  * pairs, sections in first-seen order.
  *
+ * Keys and values cannot hold line breaks; see the setters.
+ *
  * Saving is atomic: write to a temp file next to it ("<path>.tmp.<pid>.<n>"), fsync it,
  * then rename it over the real file, so a crash or power loss mid-save never leaves a
  * half-written settings file. On Windows the rename is MoveFileExW with
@@ -81,12 +83,49 @@ double pin_settings_get_double(const pin_settings_t *s, const char *section, con
 int pin_settings_get_bool(const pin_settings_t *s, const char *section, const char *key,
                            int default_value);
 
-void pin_settings_set_string(pin_settings_t *s, const char *section, const char *key,
-                              const char *value);
-void pin_settings_set_int(pin_settings_t *s, const char *section, const char *key, int value);
-void pin_settings_set_double(pin_settings_t *s, const char *section, const char *key,
-                              double value);
-void pin_settings_set_bool(pin_settings_t *s, const char *section, const char *key, int value);
+/* The setters return 0, or -1 (and change nothing) if the file format cannot hold the entry:
+ * a line break in a value, key or section, an empty key or one starting with ';' '#' or '['
+ * or containing '=', edge whitespace in a key, a nan / inf
+ * double, or no memory. */
+int pin_settings_set_string(pin_settings_t *s, const char *section, const char *key,
+                             const char *value);
+int pin_settings_set_int(pin_settings_t *s, const char *section, const char *key, int value);
+int pin_settings_set_double(pin_settings_t *s, const char *section, const char *key, double value);
+int pin_settings_set_bool(pin_settings_t *s, const char *section, const char *key, int value);
+
+/* 1 if section / key can be stored (the rules above). */
+int pin_settings_key_valid(const char *section, const char *key);
+
+/* ---- whole-file operations, serialised by a process-wide lock ----------------------------
+ * pin_settings_load() and pin_settings_save() lock too, but a load-modify-save done with them
+ * can still interleave with another one and lose its key: use pin_settings_update(). */
+
+#define PIN_SETTINGS_SECTION_MAX 64   /* a section name must be shorter than this */
+
+enum {
+    PIN_SETTINGS_TRUNCATED = 1,   /* pin_settings_read(): the value was cut to fit */
+    PIN_SETTINGS_IO = -1,         /* the file could not be read or written */
+    PIN_SETTINGS_BAD_KEY = -2     /* the key / value cannot be stored (or the section is too long) */
+};
+
+typedef struct {
+    const char *key;     /* "section.key", or just "key" for section "General" */
+    const char *value;
+} pin_settings_kv_t;
+
+/* Sets all n entries in one load and one atomic save, under the lock. Nothing is written if the
+ * load fails or any entry is invalid. Returns 0, PIN_SETTINGS_IO or PIN_SETTINGS_BAD_KEY. */
+int pin_settings_update(const char *path, const pin_settings_kv_t *kv, size_t n);
+
+/* Renames section `from` to `to` in the file if `from` has entries and `to` has none (one load,
+ * one atomic save). Returns 0 (also when there was nothing to do), PIN_SETTINGS_IO or
+ * PIN_SETTINGS_BAD_KEY. */
+int pin_settings_migrate_section(const char *path, const char *from, const char *to);
+
+/* Reads "section.key" from path into out (UTF-8, "" if not set; a missing file is not an
+ * error). Returns 0, PIN_SETTINGS_TRUNCATED (out holds the value cut at a character boundary),
+ * PIN_SETTINGS_IO (the file exists but cannot be read; out is "") or PIN_SETTINGS_BAD_KEY. */
+int pin_settings_read(const char *path, const char *key, char *out, size_t cap);
 
 /* Builds the per-device settings key "dev_<ID>.<key>" (section "dev_<ID>"), so
  * every unit keeps its own independent settings in the shared INI. <ID> is the

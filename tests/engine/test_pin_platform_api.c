@@ -229,6 +229,45 @@ static void test_app_dirs(void)
     char v[64] = "";
     CHECK(pin_settings_get("test.app_dirs", v, sizeof(v)) == PIN_OK && strcmp(v, "yes") == 0, "read back");
 
+    /* a value the file cannot hold, and a section name of 64+ characters, are errors */
+    CHECK(pin_settings_set("test.nl", "a\nb=c") == PIN_ERR_ARG, "newline in a value refused");
+    CHECK(pin_settings_set("test.;k", "x") == PIN_ERR_ARG, "key starting with ; refused");
+    char longsec[100];
+    memset(longsec, 's', 64);
+    strcpy(longsec + 64, ".k");
+    CHECK(pin_settings_set(longsec, "x") == PIN_ERR_ARG, "64-char section refused on set");
+    CHECK(pin_settings_get(longsec, v, sizeof(v)) == PIN_ERR_ARG, "64-char section refused on get");
+    /* a value longer than the buffer: cut on a character boundary and reported */
+    CHECK(pin_settings_set("test.utf", "ab\xc3\xa9\xc3\xa9") == PIN_OK, "utf-8 value");
+    char small[5] = "";
+    CHECK(pin_settings_get("test.utf", small, sizeof(small)) == PIN_ERR_ARG && strcmp(small, "ab\xc3\xa9") == 0,
+          "truncation is reported and ends on a character");
+    /* a settings file that exists but cannot be read is an error, not an empty value */
+#if !defined(_WIN32)
+    if (geteuid() != 0) {
+        chmod(ini, 0);
+        v[0] = 'x';
+        v[1] = 0;
+        CHECK(pin_settings_get("test.app_dirs", v, sizeof(v)) == PIN_ERR_IO && v[0] == 0,
+              "unreadable settings: IO error, empty out");
+        CHECK(pin_settings_set("test.app_dirs", "no") == PIN_ERR_IO, "unreadable settings: set refused");
+        chmod(ini, 0600);
+        CHECK(pin_settings_get("test.app_dirs", v, sizeof(v)) == PIN_OK && strcmp(v, "yes") == 0,
+              "readable again");
+    }
+#endif
+    /* the per-device key follows a serial that becomes known later */
+    {
+        char k1[128], k2[128];
+        CHECK(pin_device_settings_key("", "usb:7-1", "gui.name", k1, sizeof(k1)) == PIN_OK, "key by id");
+        CHECK(pin_settings_set(k1, "mine") == PIN_OK, "device setting by id");
+        CHECK(pin_device_settings_key("0123456789ABCDEF", "usb:7-1", "gui.name", k2, sizeof(k2)) == PIN_OK,
+              "key by serial");
+        CHECK(pin_settings_get(k2, v, sizeof(v)) == PIN_OK && strcmp(v, "mine") == 0,
+              "the setting moved to the serial's key");
+        CHECK(pin_settings_get(k1, v, sizeof(v)) == PIN_OK && v[0] == 0, "the id's key is empty now");
+    }
+
 #if !defined(_WIN32)
     /* lock files in runtime_dir */
     pinnacle_lock_t *lk = NULL;

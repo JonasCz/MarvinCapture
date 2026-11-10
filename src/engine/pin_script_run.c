@@ -35,6 +35,7 @@
  *    capture that ended abnormally and a session in ERROR.
  */
 
+#include "../core/pin_thread_boost.h"
 #include "pin_script.h"
 #include "pin_script_eval.h"
 #include "pin_session.h"
@@ -629,7 +630,7 @@ pin_status_t pin_session_script_run(pin_session_t *s, const struct pin_script *s
     pin_script_track_init(&r->track);
 
     pthread_t t;
-    if (pthread_create(&t, NULL, script_main, r) != 0) {
+    if (pin_thread_create_masked(&t, script_main, r) != 0) {
         pin_script_destroy(copy);
         free(r);
         pin_session_lock(s);

@@ -33,6 +33,12 @@ extern "C" {
 /* 0 and out filled, or -1 (cannot tell, or it does not fit in cap). */
 int pin_exe_dir(char *out, size_t cap);
 
+#ifdef _WIN32
+/* Windows: the directory of the module (an HMODULE, NULL for the executable) as UTF-8, with a
+ * buffer that grows, so a path past MAX_PATH works. 0 or -1 as pin_exe_dir(). */
+int pin_module_dir(void *module, char *out, size_t cap);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

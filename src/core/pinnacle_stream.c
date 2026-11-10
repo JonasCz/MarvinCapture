@@ -109,7 +109,7 @@ static int dv_drain_start(struct dv_drain *d, pthread_t *tid, pinnacle_device_t 
     d->dev = dev;
     d->stop = 0;
     d->bytes = 0;
-    return pthread_create(tid, NULL, dv_drain_thread, d) == 0;
+    return pin_thread_create_masked(tid, dv_drain_thread, d) == 0;
 }
 
 static void dv_drain_join(struct dv_drain *d, pthread_t tid, int started)

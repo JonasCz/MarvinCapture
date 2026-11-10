@@ -17,6 +17,7 @@
  */
 
 #include "pin_closer.h"
+#include "pin_stop.h"
 #include "pin_thread_boost.h"
 #include "../core/pin_log.h"
 
@@ -84,6 +85,15 @@ static pin_status_t close_job(const job_t *j, int64_t *bytes, int64_t *units, ui
     frames->frames = (int64_t)fst.frames_out - j->frames.frames;
     frames->error = (int64_t)fst.frames_error - j->frames.error;
     frames->repeated = (int64_t)fst.frames_repeated - j->frames.repeated;
+    /* A sink that ended the capture on purpose because something the file must have is missing
+     * (no audio, ...) still finishes the frames it took: that file is complete, and the stop
+     * text already says why the capture ended. We prefer to fail fast, so this is no write
+     * error. */
+    int reason = fst.fail_reason ? fst.fail_reason : sst.fail_reason;
+    if ((reason == PIN_SINK_FAIL_NO_AUDIO || reason == PIN_SINK_FAIL_AUDIO_LATE ||
+         reason == PIN_SINK_FAIL_AUDIO_ENCODER) &&
+        (st == PIN_OK || st == PIN_ERR_CODEC))
+        return PIN_OK;
     return st == PIN_OK && wfail ? PIN_ERR_IO : st;
 }
 

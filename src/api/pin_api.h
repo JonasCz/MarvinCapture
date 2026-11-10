@@ -1074,7 +1074,11 @@ PIN_API int pin_monitor_available(pin_session_t *s);
 
 /* A small INI in the platform's config directory, shared by all front-ends.
  * Keys are "section.key". The file is re-read on every get and written
- * atomically on every set, so concurrent windows don't lose updates. */
+ * atomically on every set (under a process-wide lock), so concurrent threads don't lose
+ * updates. A key the file cannot hold (a line break in the value, a key starting with ';' '#'
+ * or '[', a section name of 64 or more characters) is PIN_ERR_ARG on set and on get.
+ * get: PIN_ERR_IO if the file exists but cannot be read (out is ""); PIN_ERR_ARG with out
+ * filled up to a character boundary if cap is too small for the value. */
 PIN_API pin_status_t pin_settings_get(const char *key, char *out, size_t cap);
 PIN_API pin_status_t pin_settings_set(const char *key, const char *value);
 

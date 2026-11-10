@@ -117,6 +117,8 @@ static void capture_without_audio(const char *dv_path)
     CHECK_EQ_I(snap.stop_reason, PIN_STOP_ERROR);
     CHECK(pin_stop_reason_abnormal(snap.stop_reason));
     CHECK(strstr(snap.stop_text, "carries no audio") != NULL);
+    /* the kept frames are a finished file: no "written completely" sentence */
+    CHECK(strstr(snap.stop_text, "could not be written") == NULL);
     pin_close(s);
 }
 

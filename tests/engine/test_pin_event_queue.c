@@ -61,19 +61,23 @@ static void test_drops_log_keeps_order(void)
     pin_event_t e;
     memset(&e, 0, sizeof(e));
     e.size = sizeof(e);
-    int got = 0, expect = 0, in_order = 1, saw_log = 0;
+    int got = 0, expect = 0, in_order = 1, saw_log = 0, saw_marker = 0;
     while (pin_session_poll_event(NULL, &e)) {
-        got++;
         if (e.kind == PIN_EVT_LOG) {
-            saw_log = 1;
+            if (strcmp(e.text, "1 log lines dropped") == 0)
+                saw_marker = 1;   /* one marker for the dropped line, not a queued event */
+            else
+                saw_log = 1;
             continue;
         }
+        got++;
         if (e.a != expect)
             in_order = 0;
         expect++;
     }
     CHECK(got == PIN_EVQ_CAP, "queue holds exactly its capacity");
     CHECK(!saw_log, "the log event was the one dropped");
+    CHECK(saw_marker, "the dropped line is announced once");
     CHECK(in_order, "the other events keep their order");
     CHECK(expect == n, "no other event was lost");
 }
@@ -96,6 +100,28 @@ static void test_drops_oldest_without_log(void)
     }
     CHECK(got == PIN_EVQ_CAP, "queue holds exactly its capacity");
     CHECK(in_order, "oldest dropped, the rest in order");
+}
+
+/* Log lines pushed out of a full queue are announced by one marker with their number. */
+static void test_dropped_log_lines_are_announced(void)
+{
+    drain();
+    for (int i = 0; i < PIN_EVQ_CAP + 5; i++)
+        pin_session_push_event(NULL, PIN_EVT_LOG, 1, "line");
+    pin_event_t e;
+    memset(&e, 0, sizeof(e));
+    e.size = sizeof(e);
+    int markers = 0, lines = 0;
+    while (pin_session_poll_event(NULL, &e)) {
+        if (strcmp(e.text, "5 log lines dropped") == 0)
+            markers++;
+        else
+            lines++;
+    }
+    CHECK(markers == 1, "one marker with the count");
+    CHECK(lines == PIN_EVQ_CAP, "the queue still holds its capacity of lines");
+    pin_session_push_event(NULL, PIN_EVT_LOG, 1, "line");
+    CHECK(pin_session_poll_event(NULL, &e) && strcmp(e.text, "line") == 0, "no second marker");
 }
 
 /* A caller built against a shorter pin_event_t gets those fields and nothing behind them. */
@@ -121,6 +147,7 @@ int main(void)
     test_short_caller_struct();
     test_drops_log_keeps_order();
     test_drops_oldest_without_log();
+    test_dropped_log_lines_are_announced();
     if (g_failures) {
         printf("%d failure(s)\n", g_failures);
         return 1;

@@ -95,16 +95,27 @@ int pin_update_due(int64_t now)
 
 /* Remembers a successful check: the result first, the time last (a check counts only once its
  * result is kept). */
-static void update_remember(const pin_update_info_t *info, int64_t now)
+static int update_remember(const pin_update_info_t *info, int64_t now)
 {
     char v[32];
     snprintf(v, sizeof(v), "%lld", (long long)now);
-    pin_settings_set(UPDATE_KEY_LATEST, info->latest);
-    pin_settings_set(UPDATE_KEY_URL, info->download_url);
     char notes[UPDATE_NOTES_LINE];
     pin_update_notes_encode(info->notes, notes, sizeof(notes));
-    pin_settings_set(UPDATE_KEY_NOTES, notes);
-    pin_settings_set(UPDATE_KEY_LAST, v);
+    char path[PIN_PATH_MAX];
+    if (pin_settings_default_path(path, sizeof(path)) != 0)
+        return -1;
+    /* one load and one save, so a concurrent settings write cannot fall between the keys */
+    const pin_settings_kv_t kv[] = {
+        { UPDATE_KEY_LATEST, info->latest },
+        { UPDATE_KEY_URL, info->download_url },
+        { UPDATE_KEY_NOTES, notes },
+        { UPDATE_KEY_LAST, v },
+    };
+    int rc = pin_settings_update(path, kv, sizeof(kv) / sizeof(kv[0]));
+    if (rc != 0)
+        pin_logf(PIN_LOG_WARN, "settings: could not remember the update check (%s)\n",
+                 rc == PIN_SETTINGS_BAD_KEY ? "a value cannot be stored" : "the file cannot be written");
+    return rc;
 }
 
 pin_status_t pin_update_check_json(const char *json, size_t len, int64_t now, pin_update_info_t *info)
@@ -201,7 +212,7 @@ pin_status_t pin_set_app_dirs(const char *config_dir, const char *runtime_dir, c
 typedef struct {
     char id[PINNACLE_ENUM_ID_MAX];
     uint8_t usb_address;
-    int probed;             /* tried, whether or not it answered */
+    int probed;             /* the device was opened and asked, whether or not it answered */
     uint32_t guid_hi, guid_lo;
     int guid_known;
 } guid_cache_entry_t;
@@ -239,13 +250,15 @@ static guid_cache_entry_t *guid_cache_slot(const pinnacle_enum_entry_t *e)
  * serial. */
 static void probe_guid(guid_cache_entry_t *c)
 {
-    c->probed = 1;
+    /* probed stays 0 until the device was really asked: a lock held by another window or a
+     * failed open is not "no serial", and is tried again at the next enumeration */
     pinnacle_lock_t *lock = NULL;
     if (pinnacle_lock_acquire(c->id, &lock) != PINNACLE_OK)
         return;
     pinnacle_device_t dev;
     memset(&dev, 0, sizeof(dev));
     if (pinnacle_open_by_id(&dev, c->id) == PINNACLE_OK) {
+        c->probed = 1;
         if (pinnacle_read_guid(&dev, &c->guid_hi, &c->guid_lo) == PINNACLE_OK)
             c->guid_known = 1;
         pinnacle_close(&dev);
@@ -1357,26 +1370,49 @@ pin_status_t pin_settings_get(const char *key, char *out, size_t cap)
 {
     if (!key || !out || cap == 0)
         return PIN_ERR_ARG;
+    out[0] = 0;
     char path[PIN_PATH_MAX];
     if (pin_settings_default_path(path, sizeof(path)) != 0)
         return PIN_ERR_IO;
-    pin_settings_t st;
-    pin_settings_init(&st);
-    pin_settings_load(&st, path); /* missing file: st stays empty, not an error */
-
-    char section[PIN_NAME_MAX] = "General";
-    const char *dot = strchr(key, '.');
-    const char *k = key;
-    if (dot) {
-        size_t n = (size_t)(dot - key);
-        if (n < sizeof(section)) { memcpy(section, key, n); section[n] = 0; }
-        k = dot + 1;
+    switch (pin_settings_read(path, key, out, cap)) {
+    case 0: return PIN_OK;
+    case PIN_SETTINGS_TRUNCATED: return PIN_ERR_ARG;   /* out holds the value cut at a character */
+    case PIN_SETTINGS_IO: return PIN_ERR_IO;
+    default: return PIN_ERR_ARG;                       /* a section name of 64+ characters */
     }
-    const char *v = pin_settings_get_string(&st, section, k, "");
-    strncpy(out, v, cap - 1);
-    out[cap - 1] = 0;
-    pin_settings_free(&st);
-    return PIN_OK;
+}
+
+/* The settings of a unit kept under its USB port path (id) before its serial was known move to
+ * the serial's key the first time both are given, so the key of a unit does not change under
+ * it when the serial becomes known (a probe that failed at first, or the open session
+ * publishing it). Once per pair and process; a failed move is tried again next time. */
+static void device_settings_migrate(const char *serial, const char *id)
+{
+    enum { N = 8 };
+    static struct { char serial[PIN_NAME_MAX], id[PIN_NAME_MAX]; } done[N];
+    static unsigned next;
+    static pthread_mutex_t mtx = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_lock(&mtx);
+    for (int i = 0; i < N; i++) {
+        if (strcmp(done[i].serial, serial) == 0 && strcmp(done[i].id, id) == 0) {
+            pthread_mutex_unlock(&mtx);
+            return;
+        }
+    }
+    char from[160], to[160], path[PIN_PATH_MAX];
+    if (pin_settings_device_key("", id, NULL, from, sizeof(from)) == 0 &&
+        pin_settings_device_key(serial, id, NULL, to, sizeof(to)) == 0 &&
+        pin_settings_default_path(path, sizeof(path)) == 0) {
+        /* both end in the '.' that splits a key: the section names are without it */
+        from[strlen(from) - 1] = 0;
+        to[strlen(to) - 1] = 0;
+        if (pin_settings_migrate_section(path, from, to) == 0) {
+            snprintf(done[next % N].serial, PIN_NAME_MAX, "%s", serial);
+            snprintf(done[next % N].id, PIN_NAME_MAX, "%s", id);
+            next++;
+        }
+    }
+    pthread_mutex_unlock(&mtx);
 }
 
 pin_status_t pin_device_settings_key(const char *serial, const char *id, const char *key,
@@ -1384,6 +1420,8 @@ pin_status_t pin_device_settings_key(const char *serial, const char *id, const c
 {
     if (!out || cap == 0)
         return PIN_ERR_ARG;
+    if (serial && *serial && id && *id)
+        device_settings_migrate(serial, id);
     return pin_settings_device_key(serial, id, key, out, cap) == 0 ? PIN_OK : PIN_ERR_ARG;
 }
 
@@ -1394,25 +1432,12 @@ pin_status_t pin_settings_set(const char *key, const char *value)
     char path[PIN_PATH_MAX];
     if (pin_settings_default_path(path, sizeof(path)) != 0)
         return PIN_ERR_IO;
-    pin_settings_t st;
-    pin_settings_init(&st);
-    if (pin_settings_load(&st, path) != 0) {   /* saving now would wipe the real file */
-        pin_settings_free(&st);
-        return PIN_ERR_IO;
+    const pin_settings_kv_t kv = { key, value };
+    switch (pin_settings_update(path, &kv, 1)) {
+    case 0: return PIN_OK;
+    case PIN_SETTINGS_BAD_KEY: return PIN_ERR_ARG;
+    default: return PIN_ERR_IO;
     }
-
-    char section[PIN_NAME_MAX] = "General";
-    const char *dot = strchr(key, '.');
-    const char *k = key;
-    if (dot) {
-        size_t n = (size_t)(dot - key);
-        if (n < sizeof(section)) { memcpy(section, key, n); section[n] = 0; }
-        k = dot + 1;
-    }
-    pin_settings_set_string(&st, section, k, value);
-    int rc = pin_settings_save(&st, path);
-    pin_settings_free(&st);
-    return rc == 0 ? PIN_OK : PIN_ERR_IO;
 }
 
 /* ========================================================================

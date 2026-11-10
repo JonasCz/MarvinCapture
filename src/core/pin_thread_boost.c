@@ -20,6 +20,9 @@
 
 #include <string.h>
 #include <stdlib.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 
 #if defined(_WIN32)
 #include <windows.h>
@@ -194,7 +197,7 @@ static void *normal_start_main(void *p)
 }
 #endif
 
-int pin_thread_create_normal(pthread_t *t, void *(*fn)(void *), void *arg)
+static int create_normal(pthread_t *t, void *(*fn)(void *), void *arg)
 {
     const pin_thread_boost_t *b = t_boost;
 #if defined(__APPLE__)
@@ -238,6 +241,46 @@ int pin_thread_create_normal(pthread_t *t, void *(*fn)(void *), void *arg)
     (void)b;
 #endif
     return pthread_create(t, NULL, fn, arg);
+}
+
+int pin_thread_create_masked(pthread_t *t, void *(*fn)(void *), void *arg)
+{
+#ifdef _WIN32
+    return pthread_create(t, NULL, fn, arg);
+#else
+    /* The new thread inherits the creator's signal mask. A Ctrl+C or kill is meant for the main
+     * thread; on any other thread it would interrupt a USB transfer or a file write. */
+    sigset_t block, old;
+    sigemptyset(&block);
+    sigaddset(&block, SIGINT);
+    sigaddset(&block, SIGTERM);
+    sigaddset(&block, SIGHUP);
+    sigaddset(&block, SIGQUIT);
+    int masked = pthread_sigmask(SIG_BLOCK, &block, &old) == 0;
+    int rc = pthread_create(t, NULL, fn, arg);
+    if (masked)
+        pthread_sigmask(SIG_SETMASK, &old, NULL);
+    return rc;
+#endif
+}
+
+int pin_thread_create_normal(pthread_t *t, void *(*fn)(void *), void *arg)
+{
+#ifdef _WIN32
+    return create_normal(t, fn, arg);
+#else
+    sigset_t block, old;
+    sigemptyset(&block);
+    sigaddset(&block, SIGINT);
+    sigaddset(&block, SIGTERM);
+    sigaddset(&block, SIGHUP);
+    sigaddset(&block, SIGQUIT);
+    int masked = pthread_sigmask(SIG_BLOCK, &block, &old) == 0;
+    int rc = create_normal(t, fn, arg);
+    if (masked)
+        pthread_sigmask(SIG_SETMASK, &old, NULL);
+    return rc;
+#endif
 }
 
 const char *pin_thread_boost_desc(const pin_thread_boost_t *b)

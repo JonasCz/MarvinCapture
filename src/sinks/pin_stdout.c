@@ -150,47 +150,51 @@ int pin_stdout_write(const void *data, size_t n)
     }
 #else
     int fd = g_fd >= 0 ? g_fd : 1;
-    /* A pipe or socket: a write of more than the free space blocks until the reader takes it,
-     * and nothing interrupts it. So wait for room with poll() (checking for a cancel every
-     * 100 ms) and write at most PIPE_BUF, which a pipe with room takes at once. */
+    /* A pipe or socket: a blocking write of more than the free space waits until the reader has
+     * taken it all, and nothing interrupts it. So the descriptor is made non-blocking for the
+     * call: write() then takes as much as fits (a partial write), and when nothing fits poll()
+     * waits for room, checking for a cancel every 100 ms. The chunk is not limited to PIPE_BUF
+     * (512 bytes on macOS), which would cost tens of thousands of system calls a second. */
     struct stat sb;
     int pipe_like = fstat(fd, &sb) == 0 && (S_ISFIFO(sb.st_mode) || S_ISSOCK(sb.st_mode));
+    int old_flags = -1;
+    if (pipe_like) {
+        int fl = fcntl(fd, F_GETFL);
+        if (fl >= 0 && !(fl & O_NONBLOCK) && fcntl(fd, F_SETFL, fl | O_NONBLOCK) == 0)
+            old_flags = fl;   /* restore it on the way out */
+    }
+    int result = PIN_STDOUT_OK;
     while (n > 0) {
-        if (atomic_load(&g_cancel))
-            return PIN_STDOUT_ERROR;
-        size_t chunk = n > WRITE_CHUNK ? WRITE_CHUNK : n;
-        if (pipe_like) {
-            struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-            int pr = poll(&pfd, 1, 100);
-            if (pr < 0 && errno != EINTR)
-                return PIN_STDOUT_ERROR;
-            if (pr <= 0)
-                continue;
-            if (pfd.revents & (POLLERR | POLLHUP)) {
-                /* the reader is gone: the write says EPIPE */
-            } else if (chunk > PIPE_BUF) {
-                chunk = PIPE_BUF;
-            }
+        if (atomic_load(&g_cancel)) {
+            result = PIN_STDOUT_ERROR;
+            break;
         }
+        size_t chunk = n > WRITE_CHUNK ? WRITE_CHUNK : n;
         ssize_t w = write(fd, p, chunk);
         if (w < 0) {
             if (errno == EINTR)
                 continue;
             if (errno == EAGAIN || errno == EWOULDBLOCK) {
-                /* A non-blocking pipe inherited from the parent that is full: wait until the
-                 * reader has drained some. The timeout only bounds each wait; the loop goes
-                 * on until the data is written or the pipe fails. */
+                /* full: wait until the reader has drained some. The timeout only bounds each
+                 * wait so a cancel is seen; the loop goes on until the data is written or the
+                 * pipe fails. */
                 struct pollfd pfd = { .fd = fd, .events = POLLOUT };
-                int pr = poll(&pfd, 1, 1000);
-                if (pr < 0 && errno != EINTR)
-                    return PIN_STDOUT_ERROR;
+                int pr = poll(&pfd, 1, 100);
+                if (pr < 0 && errno != EINTR) {
+                    result = PIN_STDOUT_ERROR;
+                    break;
+                }
                 continue;
             }
-            return errno == EPIPE ? PIN_STDOUT_CLOSED : PIN_STDOUT_ERROR;
+            result = errno == EPIPE ? PIN_STDOUT_CLOSED : PIN_STDOUT_ERROR;
+            break;
         }
         p += w;
         n -= (size_t)w;
     }
+    if (old_flags >= 0)
+        fcntl(fd, F_SETFL, old_flags);
+    return result;
 #endif
     return PIN_STDOUT_OK;
 }

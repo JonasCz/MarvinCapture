@@ -18,6 +18,7 @@
 
 /* The platform's H.264 / HEVC encoder, its settings and the probe; see pin_hwenc.h. */
 
+#include "../core/pin_thread_boost.h"
 #include "pin_hwenc.h"
 #include "pin_sink.h"
 #include "../engine/pin_estimate.h"
@@ -257,7 +258,7 @@ int pin_hwenc_probe(void)
              * as multithreaded on the thread that opens it, which fails on a GUI thread
              * that is a single-threaded apartment. */
             pthread_t t;
-            if (pthread_create(&t, NULL, probe_thread, &r) == 0)
+            if (pin_thread_create_masked(&t, probe_thread, &r) == 0)
                 pthread_join(t, NULL);
             else
                 probe_thread(&r);

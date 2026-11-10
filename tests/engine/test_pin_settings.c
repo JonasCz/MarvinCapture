@@ -18,6 +18,8 @@
 
 #include "pin_settings.h"
 #include <stdio.h>
+#include <math.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -264,6 +266,167 @@ static void test_device_key(void)
           "section ends at the first dot");
 }
 
+static void test_unrepresentable_entries(void)
+{
+    pin_settings_t s;
+    pin_settings_init(&s);
+    CHECK(pin_settings_set_string(&s, "A", "k", "line1\nline2") != 0, "newline in a value refused");
+    CHECK(pin_settings_set_string(&s, "A", "k", "line1\rline2") != 0, "CR in a value refused");
+    CHECK(pin_settings_set_string(&s, "A\n[B]", "k", "v") != 0, "newline in a section refused");
+    CHECK(pin_settings_set_string(&s, "A", "k\nx", "v") != 0, "newline in a key refused");
+    CHECK(pin_settings_set_string(&s, "A", ";k", "v") != 0, "key starting with ; refused");
+    CHECK(pin_settings_set_string(&s, "A", "#k", "v") != 0, "key starting with # refused");
+    CHECK(pin_settings_set_string(&s, "A", "[k", "v") != 0, "key starting with [ refused");
+    CHECK(pin_settings_set_string(&s, "A", "", "v") != 0, "empty key refused");
+    CHECK(pin_settings_set_string(&s, "A", "a=b", "v") != 0, "= in a key refused");
+    CHECK(pin_settings_set_double(&s, "A", "d", NAN) != 0, "nan refused");
+    CHECK(pin_settings_set_double(&s, "A", "d", INFINITY) != 0, "inf refused");
+    CHECK(s.count == 0, "nothing was stored");
+    CHECK(pin_settings_set_string(&s, "A", "k", "a = b ; c # d") == 0, "= ; # inside a value are fine");
+
+    const char *path = "pin_settings_test_unrep.ini";
+    CHECK(pin_settings_save(&s, path) == 0, "save");
+    pin_settings_free(&s);
+    pin_settings_init(&s);
+    CHECK(pin_settings_load(&s, path) == 0, "load");
+    CHECK(s.count == 1 && strcmp(pin_settings_get_string(&s, "A", "k", ""), "a = b ; c # d") == 0,
+          "one entry, round-tripped");
+    pin_settings_free(&s);
+    remove(path);
+}
+
+static void test_strict_numbers(void)
+{
+    const char *path = "pin_settings_test_num.ini";
+    FILE *f = fopen(path, "wb");
+    CHECK(f != NULL, "create");
+    if (!f)
+        return;
+    fputs("[N]\na=12abc\nb=99999999999\nc=-5\nd= 7 \ne=1e400\nf=nan\ng=inf\nh=2.5x\ni=2.5\n"
+          "j=\nk=-2147483648\nl=2147483648\n", f);
+    fclose(f);
+    pin_settings_t s;
+    pin_settings_init(&s);
+    CHECK(pin_settings_load(&s, path) == 0, "load");
+    CHECK(pin_settings_get_int(&s, "N", "a", 42) == 42, "12abc falls back");
+    CHECK(pin_settings_get_int(&s, "N", "b", 42) == 42, "overflow falls back");
+    CHECK(pin_settings_get_int(&s, "N", "c", 42) == -5, "negative ok");
+    CHECK(pin_settings_get_int(&s, "N", "d", 42) == 7, "edge whitespace trimmed on load");
+    CHECK(pin_settings_get_int(&s, "N", "j", 42) == 42, "empty falls back");
+    CHECK(pin_settings_get_int(&s, "N", "k", 42) == -2147483647 - 1, "INT_MIN ok");
+    CHECK(pin_settings_get_int(&s, "N", "l", 42) == 42, "INT_MAX + 1 falls back");
+    CHECK(pin_settings_get_double(&s, "N", "e", 3.0) == 3.0, "overflowing double falls back");
+    CHECK(pin_settings_get_double(&s, "N", "f", 3.0) == 3.0, "nan falls back");
+    CHECK(pin_settings_get_double(&s, "N", "g", 3.0) == 3.0, "inf falls back");
+    CHECK(pin_settings_get_double(&s, "N", "h", 3.0) == 3.0, "2.5x falls back");
+    CHECK(pin_settings_get_double(&s, "N", "i", 3.0) == 2.5, "2.5 ok");
+    pin_settings_free(&s);
+    remove(path);
+}
+
+#define UPD_THREADS 4
+#define UPD_KEYS 25
+static const char *g_upd_path = "pin_settings_test_upd.ini";
+
+static void *upd_thread(void *arg)
+{
+    long t = (long)arg;
+    for (int i = 0; i < UPD_KEYS; i++) {
+        char key[32], val[16];
+        snprintf(key, sizeof(key), "T.k%ld_%d", t, i);
+        snprintf(val, sizeof(val), "%d", i);
+        pin_settings_kv_t kv = { key, val };
+        if (pin_settings_update(g_upd_path, &kv, 1) != 0)
+            g_failures++;
+    }
+    return NULL;
+}
+
+static void test_concurrent_updates_keep_every_key(void)
+{
+    remove(g_upd_path);
+    pthread_t th[UPD_THREADS];
+    for (long t = 0; t < UPD_THREADS; t++)
+        pthread_create(&th[t], NULL, upd_thread, (void *)t);
+    for (int t = 0; t < UPD_THREADS; t++)
+        pthread_join(th[t], NULL);
+    pin_settings_t s;
+    pin_settings_init(&s);
+    CHECK(pin_settings_load(&s, g_upd_path) == 0, "load");
+    CHECK(s.count == UPD_THREADS * UPD_KEYS, "no update lost to a concurrent save");
+    pin_settings_free(&s);
+    remove(g_upd_path);
+}
+
+static void test_update_and_read(void)
+{
+    const char *path = "pin_settings_test_rw.ini";
+    remove(path);
+    const pin_settings_kv_t ok[] = { { "a.x", "1" }, { "a.y", "2" }, { "top", "t" } };
+    CHECK(pin_settings_update(path, ok, 3) == 0, "update three keys");
+    char out[16];
+    CHECK(pin_settings_read(path, "a.y", out, sizeof(out)) == 0 && strcmp(out, "2") == 0, "read");
+    CHECK(pin_settings_read(path, "top", out, sizeof(out)) == 0 && strcmp(out, "t") == 0,
+          "no dot: section General");
+    CHECK(pin_settings_read(path, "a.none", out, sizeof(out)) == 0 && out[0] == 0, "missing key is empty");
+
+    /* one bad entry: nothing is written */
+    const pin_settings_kv_t bad[] = { { "a.x", "changed" }, { "a.z", "bad\nvalue" } };
+    CHECK(pin_settings_update(path, bad, 2) == PIN_SETTINGS_BAD_KEY, "bad entry refused");
+    CHECK(pin_settings_read(path, "a.x", out, sizeof(out)) == 0 && strcmp(out, "1") == 0,
+          "the good entry was not written either");
+
+    /* a section of 64 characters is an error, 63 is fine */
+    char key[128];
+    memset(key, 's', 64);
+    strcpy(key + 64, ".k");
+    CHECK(pin_settings_read(path, key, out, sizeof(out)) == PIN_SETTINGS_BAD_KEY, "64-char section on read");
+    const pin_settings_kv_t longsec = { key, "v" };
+    CHECK(pin_settings_update(path, &longsec, 1) == PIN_SETTINGS_BAD_KEY, "64-char section on update");
+    memset(key, 's', 63);
+    strcpy(key + 63, ".k");
+    CHECK(pin_settings_read(path, key, out, sizeof(out)) == 0, "63-char section ok");
+
+    /* truncation ends on a character boundary and says so */
+    const pin_settings_kv_t u = { "a.u", "ab\xc3\xa9\xc3\xa9" };
+    CHECK(pin_settings_update(path, &u, 1) == 0, "utf-8 value");
+    char small[5];
+    CHECK(pin_settings_read(path, "a.u", small, sizeof(small)) == PIN_SETTINGS_TRUNCATED &&
+              strcmp(small, "ab\xc3\xa9") == 0,
+          "cut on a character boundary");
+    char one[1];
+    CHECK(pin_settings_read(path, "a.u", one, sizeof(one)) == PIN_SETTINGS_TRUNCATED && one[0] == 0,
+          "cap 1");
+    CHECK(pin_settings_read(path, "a.u", out, sizeof(out)) == 0 && strlen(out) == 6, "fits");
+
+    /* a path that cannot be read is an IO error, and update does not overwrite it */
+    CHECK(pin_settings_read(".", "a.x", out, sizeof(out)) == PIN_SETTINGS_IO && out[0] == 0,
+          "unreadable: IO error");
+    CHECK(pin_settings_update(".", ok, 1) == PIN_SETTINGS_IO, "unreadable: update refused");
+    remove(path);
+}
+
+static void test_migrate_section(void)
+{
+    const char *path = "pin_settings_test_mig.ini";
+    remove(path);
+    const pin_settings_kv_t kv[] = { { "dev_old.a", "1" }, { "dev_old.b", "2" }, { "other.c", "3" } };
+    CHECK(pin_settings_update(path, kv, 3) == 0, "setup");
+    CHECK(pin_settings_migrate_section(path, "dev_old", "dev_new") == 0, "migrate");
+    char out[8];
+    CHECK(pin_settings_read(path, "dev_new.b", out, sizeof(out)) == 0 && strcmp(out, "2") == 0, "moved");
+    CHECK(pin_settings_read(path, "dev_old.a", out, sizeof(out)) == 0 && out[0] == 0, "old is gone");
+    CHECK(pin_settings_read(path, "other.c", out, sizeof(out)) == 0 && strcmp(out, "3") == 0, "others stay");
+    /* a target that has entries is never overwritten */
+    const pin_settings_kv_t again[] = { { "dev_old.a", "9" }, { "dev_new.b", "keep" } };
+    CHECK(pin_settings_update(path, again, 2) == 0, "setup again");
+    CHECK(pin_settings_migrate_section(path, "dev_old", "dev_new") == 0, "no-op");
+    CHECK(pin_settings_read(path, "dev_new.b", out, sizeof(out)) == 0 && strcmp(out, "keep") == 0 &&
+              pin_settings_read(path, "dev_old.a", out, sizeof(out)) == 0 && strcmp(out, "9") == 0,
+          "both sections untouched");
+    remove(path);
+}
+
 int main(void)
 {
     test_device_key();
@@ -275,6 +438,11 @@ int main(void)
     test_load_failure_is_not_empty();
     test_save_leaves_no_temp_file();
     test_default_path();
+    test_unrepresentable_entries();
+    test_strict_numbers();
+    test_concurrent_updates_keep_every_key();
+    test_update_and_read();
+    test_migrate_section();
 
     if (g_failures == 0) {
         printf("test_pin_settings: all tests passed\n");

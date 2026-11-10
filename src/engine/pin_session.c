@@ -34,6 +34,7 @@
 #include "pin_naming.h"
 #include "pin_settings.h"
 #include "pin_exe_dir.h"
+#include "../core/pin_thread_boost.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_cfg.h"
 #include "../core/pin_log.h"
@@ -107,10 +108,11 @@ void pin_session_unlock(pin_session_t *s) { pthread_mutex_unlock(&s->mtx); }
  * routes here through pin_api.c's sink whether or not a session is open. */
 static pin_event_t g_evq[PIN_EVQ_CAP];
 static unsigned g_evq_head, g_evq_count;
+static unsigned g_evq_log_dropped;   /* log lines pushed out of the full queue, not yet announced */
 static pthread_mutex_t g_evq_mtx = PTHREAD_MUTEX_INITIALIZER;
 
 static void evq_push(pin_event_t *q, unsigned *head, unsigned *count, pthread_mutex_t *mtx,
-                     pin_event_kind_t kind, int32_t a, const char *text)
+                     unsigned *log_dropped, pin_event_kind_t kind, int32_t a, const char *text)
 {
     pthread_mutex_lock(mtx);
     if (*count == PIN_EVQ_CAP) {
@@ -120,6 +122,8 @@ static void evq_push(pin_event_t *q, unsigned *head, unsigned *count, pthread_mu
             unsigned idx = (*head + i) % PIN_EVQ_CAP;
             if (q[idx].kind == PIN_EVT_LOG) { victim = idx; break; }
         }
+        if (log_dropped && q[victim].kind == PIN_EVT_LOG)
+            (*log_dropped)++;
         /* Close the gap: everything older than the victim moves up one
          * slot, keeping its order, and the freed head slot is dropped. */
         for (unsigned i = victim; i != *head; ) {
@@ -145,7 +149,7 @@ static void evq_push(pin_event_t *q, unsigned *head, unsigned *count, pthread_mu
 }
 
 static int evq_poll(pin_event_t *q, unsigned *head, unsigned *count, pthread_mutex_t *mtx,
-                    pin_event_t *out)
+                    unsigned *log_dropped, pin_event_t *out)
 {
     /* a caller built against an older, shorter pin_event_t gets those fields only (0: no size set) */
     size_t n = out->size;
@@ -154,6 +158,20 @@ static int evq_poll(pin_event_t *q, unsigned *head, unsigned *count, pthread_mut
     if (n < sizeof(uint32_t))
         return 0;
     pthread_mutex_lock(mtx);
+    if (log_dropped && *log_dropped) {
+        /* one marker for the lines that did not fit, so a reader of the log knows it has gaps */
+        pin_event_t m;
+        memset(&m, 0, sizeof(m));
+        m.size = sizeof(m);
+        m.kind = PIN_EVT_LOG;
+        m.a = (int32_t)PIN_LOG_WARN;
+        snprintf(m.text, sizeof(m.text), "%u log lines dropped", *log_dropped);
+        *log_dropped = 0;
+        memcpy(out, &m, n);
+        out->size = (uint32_t)n;
+        pthread_mutex_unlock(mtx);
+        return 1;
+    }
     if (*count == 0) {
         pthread_mutex_unlock(mtx);
         return 0;
@@ -169,16 +187,16 @@ static int evq_poll(pin_event_t *q, unsigned *head, unsigned *count, pthread_mut
 void pin_session_push_event(pin_session_t *s, pin_event_kind_t kind, int32_t a, const char *text)
 {
     if (!s)
-        evq_push(g_evq, &g_evq_head, &g_evq_count, &g_evq_mtx, kind, a, text);
+        evq_push(g_evq, &g_evq_head, &g_evq_count, &g_evq_mtx, &g_evq_log_dropped, kind, a, text);
     else
-        evq_push(s->evq, &s->evq_head, &s->evq_count, &s->evq_mtx, kind, a, text);
+        evq_push(s->evq, &s->evq_head, &s->evq_count, &s->evq_mtx, NULL, kind, a, text);
 }
 
 int pin_session_poll_event(pin_session_t *s, pin_event_t *out)
 {
     if (!s)
-        return evq_poll(g_evq, &g_evq_head, &g_evq_count, &g_evq_mtx, out);
-    return evq_poll(s->evq, &s->evq_head, &s->evq_count, &s->evq_mtx, out);
+        return evq_poll(g_evq, &g_evq_head, &g_evq_count, &g_evq_mtx, &g_evq_log_dropped, out);
+    return evq_poll(s->evq, &s->evq_head, &s->evq_count, &s->evq_mtx, NULL, out);
 }
 
 /* How long a bring-up took last time, per input kind (DV, analog): the
@@ -374,15 +392,7 @@ static int lib_dir(char *out, size_t cap)
                                 GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
                             (LPCWSTR)(void *)&lib_dir, &mod))
         return -1;
-    wchar_t wpath[MAX_PATH];
-    DWORD n = GetModuleFileNameW(mod, wpath, MAX_PATH);
-    if (n == 0 || n == MAX_PATH)
-        return -1;
-    char path[MAX_PATH * 4];
-    int len = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)n, path, (int)sizeof(path) - 1, NULL, NULL);
-    if (len <= 0)
-        return -1;
-    path[len] = 0;
+    return pin_module_dir(mod, out, cap);
 #else
     Dl_info info;
     if (!dladdr((void *)&lib_dir, &info) || !info.dli_fname)
@@ -390,18 +400,13 @@ static int lib_dir(char *out, size_t cap)
     char path[4096];
     if (!realpath(info.dli_fname, path))
         return -1;
-#endif
     char *slash = strrchr(path, '/');
-#if defined(_WIN32)
-    char *bs = strrchr(path, '\\');
-    if (bs && (!slash || bs > slash))
-        slash = bs;
-#endif
     if (!slash || (size_t)(slash - path) + 1 > cap)
         return -1;
     memcpy(out, path, (size_t)(slash - path));
     out[slash - path] = 0;
     return 0;
+#endif
 }
 
 /* Size of a file, or -1 if it cannot be opened. */
@@ -738,8 +743,10 @@ static void rate_flush(pin_session_t *s)
     if (bph <= 0)
         return;
     char path[PIN_PATH_MAX];
-    if (pin_settings_default_path(path, sizeof(path)) != 0 || pin_est_store_ffv1(path, bph) != 0)
+    if (pin_settings_default_path(path, sizeof(path)) != 0 || pin_est_store_ffv1(path, bph) != 0) {
+        pin_logf(PIN_LOG_WARN, "session: could not save the learned FFV1 rate to the settings\n");
         return;
+    }
     pin_session_lock(s);
     s->ffv1_learned_bph = bph;
     s->ffv1_learned_loaded = 1;
@@ -4497,7 +4504,7 @@ pin_status_t pin_session_open(const char *device_id, pin_session_t **out)
     }
 
     s->state = PIN_STATE_CLOSED;
-    if (pthread_create(&s->worker_thread, NULL, worker_main, s) != 0) {
+    if (pin_thread_create_masked(&s->worker_thread, worker_main, s) != 0) {
         pinnacle_lock_release(s->lock);
         session_free_parts(s);
         return PIN_ERR_INTERNAL;

@@ -20,6 +20,9 @@
 #include "../core/pin_fs.h"
 #include <ctype.h>
 #include <errno.h>
+#include <limits.h>
+#include <math.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,26 +90,64 @@ static pin_settings_entry_t *find_entry(const pin_settings_t *s, const char *sec
     return NULL;
 }
 
-static void set_entry(pin_settings_t *s, const char *section, const char *key, const char *value)
+/* Process-wide: a load-modify-save of the file must not interleave with another one, or the
+ * later save writes back the older copy and loses the other's key. */
+static pthread_mutex_t g_file_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static int has_line_break(const char *s)
 {
+    return strpbrk(s, "\r\n") != NULL;
+}
+
+/* What the file format can hold and read back unchanged: a line break would start a new line (a
+ * value could inject a key or section), a key starting with ';' '#' or '[' reads back as a
+ * comment or header, a '=' in a key ends it early, and trim() drops a key's edge whitespace. */
+int pin_settings_key_valid(const char *section, const char *key)
+{
+    if (!section || !key || !*key)
+        return 0;
+    if (has_line_break(section) || has_line_break(key) || strchr(key, '='))
+        return 0;
+    if (*key == ';' || *key == '#' || *key == '[')
+        return 0;
+    if (isspace((unsigned char)key[0]) || isspace((unsigned char)key[strlen(key) - 1]))
+        return 0;
+    return 1;
+}
+
+static int set_entry(pin_settings_t *s, const char *section, const char *key, const char *value)
+{
+    if (!value || has_line_break(value) || !pin_settings_key_valid(section, key))
+        return -1;
     pin_settings_entry_t *e = find_entry(s, section, key);
     if (e) {
+        char *nv = pin_strdup(value);
+        if (!nv)
+            return -1;
         free(e->value);
-        e->value = pin_strdup(value);
-        return;
+        e->value = nv;
+        return 0;
     }
     if (s->count == s->capacity) {
         size_t new_cap = s->capacity ? s->capacity * 2 : 16;
         pin_settings_entry_t *ne = realloc(s->entries, new_cap * sizeof(*ne));
         if (!ne)
-            return;
+            return -1;
         s->entries = ne;
         s->capacity = new_cap;
     }
-    s->entries[s->count].section = pin_strdup(section);
-    s->entries[s->count].key = pin_strdup(key);
-    s->entries[s->count].value = pin_strdup(value);
+    char *sec = pin_strdup(section), *k = pin_strdup(key), *v = pin_strdup(value);
+    if (!sec || !k || !v) {
+        free(sec);
+        free(k);
+        free(v);
+        return -1;
+    }
+    s->entries[s->count].section = sec;
+    s->entries[s->count].key = k;
+    s->entries[s->count].value = v;
     s->count++;
+    return 0;
 }
 
 /* Trims leading/trailing ASCII whitespace in place, returns the trimmed
@@ -179,7 +220,7 @@ static char *header_end(char *l)
     return l[len - 1] == ']' ? l + len - 1 : NULL;
 }
 
-int pin_settings_load(pin_settings_t *s, const char *path)
+static int load_unlocked(pin_settings_t *s, const char *path)
 {
     free_entries(s);
 
@@ -220,7 +261,7 @@ int pin_settings_load(pin_settings_t *s, const char *path)
         *eq = '\0';
         char *key = trim(l);
         char *value = trim(eq + 1);
-        set_entry(s, section, key, value);
+        (void)set_entry(s, section, key, value);   /* a line it cannot hold is skipped */
     }
     free(line);
     int err = ferror(f);
@@ -230,6 +271,14 @@ int pin_settings_load(pin_settings_t *s, const char *path)
         return -1;
     }
     return 0;
+}
+
+int pin_settings_load(pin_settings_t *s, const char *path)
+{
+    pthread_mutex_lock(&g_file_lock);
+    int rc = load_unlocked(s, path);
+    pthread_mutex_unlock(&g_file_lock);
+    return rc;
 }
 
 /* Flushes the file's data to disk before it replaces the real one: without it a power loss
@@ -278,7 +327,7 @@ static unsigned next_tmp_serial(void)
 #endif
 }
 
-int pin_settings_save(const pin_settings_t *s, const char *path)
+static int save_unlocked(const pin_settings_t *s, const char *path)
 {
     /* A name of its own per process and call: the CLI and a GUI (or two threads) saving at the
      * same time must not write into one temp file. */
@@ -337,6 +386,14 @@ int pin_settings_save(const pin_settings_t *s, const char *path)
     return 0;
 }
 
+int pin_settings_save(const pin_settings_t *s, const char *path)
+{
+    pthread_mutex_lock(&g_file_lock);
+    int rc = save_unlocked(s, path);
+    pthread_mutex_unlock(&g_file_lock);
+    return rc;
+}
+
 const char *pin_settings_get_string(const pin_settings_t *s, const char *section, const char *key,
                                      const char *default_value)
 {
@@ -351,8 +408,10 @@ int pin_settings_get_int(const pin_settings_t *s, const char *section, const cha
     if (!e)
         return default_value;
     char *end;
+    errno = 0;
     long v = strtol(e->value, &end, 10);
-    if (end == e->value)
+    /* "12abc" and a number that does not fit an int are not a setting: use the default */
+    if (end == e->value || *end != '\0' || errno == ERANGE || v < INT_MIN || v > INT_MAX)
         return default_value;
     return (int)v;
 }
@@ -364,8 +423,9 @@ double pin_settings_get_double(const pin_settings_t *s, const char *section, con
     if (!e)
         return default_value;
     char *end;
+    errno = 0;
     double v = strtod(e->value, &end);
-    if (end == e->value)
+    if (end == e->value || *end != '\0' || errno == ERANGE || !isfinite(v))
         return default_value;
     return v;
 }
@@ -385,29 +445,147 @@ int pin_settings_get_bool(const pin_settings_t *s, const char *section, const ch
     return default_value;
 }
 
-void pin_settings_set_string(pin_settings_t *s, const char *section, const char *key,
-                              const char *value)
+int pin_settings_set_string(pin_settings_t *s, const char *section, const char *key,
+                             const char *value)
 {
-    set_entry(s, section, key, value);
+    return set_entry(s, section, key, value);
 }
 
-void pin_settings_set_int(pin_settings_t *s, const char *section, const char *key, int value)
+int pin_settings_set_int(pin_settings_t *s, const char *section, const char *key, int value)
 {
     char buf[32];
     snprintf(buf, sizeof(buf), "%d", value);
-    set_entry(s, section, key, buf);
+    return set_entry(s, section, key, buf);
 }
 
-void pin_settings_set_double(pin_settings_t *s, const char *section, const char *key, double value)
+int pin_settings_set_double(pin_settings_t *s, const char *section, const char *key, double value)
 {
+    if (!isfinite(value))
+        return -1;   /* "nan" / "inf" would not be read back */
     char buf[64];
     snprintf(buf, sizeof(buf), "%.17g", value);
-    set_entry(s, section, key, buf);
+    return set_entry(s, section, key, buf);
 }
 
-void pin_settings_set_bool(pin_settings_t *s, const char *section, const char *key, int value)
+int pin_settings_set_bool(pin_settings_t *s, const char *section, const char *key, int value)
 {
-    set_entry(s, section, key, value ? "true" : "false");
+    return set_entry(s, section, key, value ? "true" : "false");
+}
+
+/* "section.key" -> section and key. No dot: section "General". */
+static int split_key(const char *full, char *section, size_t cap, const char **key)
+{
+    const char *dot = strchr(full, '.');
+    if (!dot) {
+        snprintf(section, cap, "General");
+        *key = full;
+        return 0;
+    }
+    size_t n = (size_t)(dot - full);
+    if (n >= cap)
+        return -1;
+    memcpy(section, full, n);
+    section[n] = '\0';
+    *key = dot + 1;
+    return 0;
+}
+
+int pin_settings_update(const char *path, const pin_settings_kv_t *kv, size_t n)
+{
+    if (!path || (n && !kv))
+        return PIN_SETTINGS_BAD_KEY;
+    pthread_mutex_lock(&g_file_lock);
+    pin_settings_t st;
+    pin_settings_init(&st);
+    int rc = load_unlocked(&st, path);
+    if (rc != 0) {   /* saving now would wipe the real file */
+        rc = PIN_SETTINGS_IO;
+    } else {
+        for (size_t i = 0; i < n && rc == 0; i++) {
+            char section[PIN_SETTINGS_SECTION_MAX];
+            const char *k;
+            if (!kv[i].key || !kv[i].value || split_key(kv[i].key, section, sizeof(section), &k) != 0 ||
+                set_entry(&st, section, k, kv[i].value) != 0)
+                rc = PIN_SETTINGS_BAD_KEY;
+        }
+        if (rc == 0 && save_unlocked(&st, path) != 0)
+            rc = PIN_SETTINGS_IO;
+    }
+    pin_settings_free(&st);
+    pthread_mutex_unlock(&g_file_lock);
+    return rc;
+}
+
+int pin_settings_migrate_section(const char *path, const char *from, const char *to)
+{
+    if (!path || !from || !to || strcmp(from, to) == 0)
+        return PIN_SETTINGS_BAD_KEY;
+    pthread_mutex_lock(&g_file_lock);
+    pin_settings_t st;
+    pin_settings_init(&st);
+    int rc = load_unlocked(&st, path);
+    if (rc != 0) {
+        rc = PIN_SETTINGS_IO;
+    } else {
+        int have_from = 0, have_to = 0;
+        for (size_t i = 0; i < st.count; i++) {
+            have_from |= strcmp(st.entries[i].section, from) == 0;
+            have_to |= strcmp(st.entries[i].section, to) == 0;
+        }
+        if (have_from && !have_to) {
+            /* rename in place: the entries keep their order, the file is written once */
+            for (size_t i = 0; i < st.count && rc == 0; i++) {
+                if (strcmp(st.entries[i].section, from) != 0)
+                    continue;
+                char *ns = pin_strdup(to);
+                if (!ns) {
+                    rc = PIN_SETTINGS_IO;
+                    break;
+                }
+                free(st.entries[i].section);
+                st.entries[i].section = ns;
+            }
+            if (rc == 0 && save_unlocked(&st, path) != 0)
+                rc = PIN_SETTINGS_IO;
+        }
+    }
+    pin_settings_free(&st);
+    pthread_mutex_unlock(&g_file_lock);
+    return rc;
+}
+
+int pin_settings_read(const char *path, const char *key, char *out, size_t cap)
+{
+    if (!path || !key || !out || cap == 0)
+        return PIN_SETTINGS_BAD_KEY;
+    char section[PIN_SETTINGS_SECTION_MAX];
+    const char *k;
+    if (split_key(key, section, sizeof(section), &k) != 0)
+        return PIN_SETTINGS_BAD_KEY;
+    pin_settings_t st;
+    pin_settings_init(&st);
+    pthread_mutex_lock(&g_file_lock);
+    int lrc = load_unlocked(&st, path);   /* a missing file is empty settings, not an error */
+    pthread_mutex_unlock(&g_file_lock);
+    if (lrc != 0) {
+        pin_settings_free(&st);
+        out[0] = '\0';
+        return PIN_SETTINGS_IO;
+    }
+    const char *v = pin_settings_get_string(&st, section, k, "");
+    size_t len = strlen(v);
+    int rc = 0;
+    if (len >= cap) {
+        /* cut on a character boundary, so the caller never gets half a UTF-8 sequence */
+        len = cap - 1;
+        while (len > 0 && ((unsigned char)v[len] & 0xC0) == 0x80)
+            len--;
+        rc = PIN_SETTINGS_TRUNCATED;
+    }
+    memcpy(out, v, len);
+    out[len] = '\0';
+    pin_settings_free(&st);
+    return rc;
 }
 
 int pin_settings_device_key(const char *serial, const char *id, const char *key, char *out,

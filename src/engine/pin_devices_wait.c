@@ -45,6 +45,7 @@
  * pin_devices_wait(with a long/infinite timeout).
  */
 
+#include "../core/pin_thread_boost.h"
 #include "pin_session.h"
 #include "../core/pinnacle_enum.h"
 #include "../core/pinnacle_lock.h"
@@ -272,7 +273,7 @@ static void ensure_watcher_started(void)
 {
     if (g_watcher_started)
         return;
-    if (pthread_create(&g_watcher_thread, NULL, watcher_main, NULL) == 0) {
+    if (pin_thread_create_masked(&g_watcher_thread, watcher_main, NULL) == 0) {
         pthread_detach(g_watcher_thread);
         g_watcher_started = 1;
     }

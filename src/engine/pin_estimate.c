@@ -19,6 +19,7 @@
 #include "pin_estimate.h"
 #include "pin_settings.h"
 #include "pin_stop.h"
+#include <stdio.h>
 #include <string.h>
 
 double pin_est_default_rate(pin_est_kind_t kind, int width, int height, int is_60hz,
@@ -96,16 +97,10 @@ int pin_est_store_ffv1(const char *settings_path, double bytes_per_hour)
 {
     if (!settings_path || bytes_per_hour < FFV1_MIN_BPH || bytes_per_hour > FFV1_MAX_BPH)
         return -1;
-    pin_settings_t st;
-    pin_settings_init(&st);
-    if (pin_settings_load(&st, settings_path) != 0) {   /* saving now would wipe the real file */
-        pin_settings_free(&st);
-        return -1;
-    }
-    pin_settings_set_double(&st, FFV1_SECTION, FFV1_KEY, bytes_per_hour);
-    int rc = pin_settings_save(&st, settings_path);
-    pin_settings_free(&st);
-    return rc == 0 ? 0 : -1;
+    char value[64];
+    snprintf(value, sizeof(value), "%.17g", bytes_per_hour);
+    const pin_settings_kv_t kv = { FFV1_SECTION "." FFV1_KEY, value };
+    return pin_settings_update(settings_path, &kv, 1) == 0 ? 0 : -1;
 }
 
 void pin_rate_reset(pin_rate_window_t *w)

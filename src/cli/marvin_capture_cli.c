@@ -581,6 +581,7 @@ int main(int argc, char **argv)
     }
 
     char last_error[PIN_PATH_MAX] = "";
+    char ended_text[PIN_PATH_MAX] = "";   /* the capture's end as printed: DONE repeats it as the reason */
     int exit_code = 2;
     int done = 0, cancelled = 0;
     double next_status = 0;
@@ -621,6 +622,7 @@ int main(int argc, char **argv)
                 break;
             case PIN_EVT_CAPTURE_ENDED:
                 say("%s", ev.text);
+                snprintf(ended_text, sizeof(ended_text), "%s", ev.text);
                 print_capture_summary(s);
                 break;
             case PIN_EVT_NO_VIDEO:   /* the same sentence was just printed as the capture's end */
@@ -628,7 +630,8 @@ int main(int argc, char **argv)
                 break;
             case PIN_EVT_DONE:
                 exit_code = ev.a;
-                if (ev.a != 0 && ev.text[0] && strcmp(ev.text, last_error) != 0)
+                if (ev.a != 0 && ev.text[0] && strcmp(ev.text, last_error) != 0 &&
+                    strcmp(ev.text, ended_text) != 0)
                     say(ev.a == 130 ? "%s" : "error: %s", ev.text);
                 done = 1;
                 break;

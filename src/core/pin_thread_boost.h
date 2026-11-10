@@ -73,6 +73,11 @@ const char *pin_thread_boost_latency_desc(const pin_thread_boost_t *b);
  * Windows threads always start at normal priority. Same return value as pthread_create. */
 int pin_thread_create_normal(pthread_t *t, void *(*fn)(void *), void *arg);
 
+/* pthread_create(t, NULL, fn, arg) for a thread that must not take the process's termination
+ * signals (SIGINT, SIGTERM, SIGHUP, SIGQUIT are blocked in it), so only the main thread handles
+ * them. pin_thread_create_normal() does the same. No-op difference on Windows. */
+int pin_thread_create_masked(pthread_t *t, void *(*fn)(void *), void *arg);
+
 /* Process-wide keep-busy mode for the Linux read loops (pin_api.h's pin_set_cpu_keep_busy(),
  * same values): AUTO keeps a core busy only when /dev/cpu_dma_latency cannot be held (always
  * on Android, where apps cannot open it), ON always, OFF never. Takes effect at the next

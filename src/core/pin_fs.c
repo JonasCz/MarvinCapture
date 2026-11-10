@@ -26,6 +26,8 @@
 #include <string.h>
 
 #if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
 #include <windows.h>
 #else
 #include <dirent.h>
@@ -309,7 +311,34 @@ FILE *pin_fs_fopen(const char *path, const char *mode)
     wchar_t *w = pin_fs_wpath(path);
     if (!w)
         return NULL;
-    FILE *f = _wfopen(w, wmode);
+    FILE *f = NULL;
+    if (mode[0] == 'r' && !strchr(mode, '+')) {
+        /* _wfopen shares for read and write but not for delete, so another process (or thread)
+         * replacing the file by rename (the settings save) would fail while it is read. */
+        HANDLE h = CreateFileW(w, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE) {
+            set_errno_from_win32();
+        } else {
+            int fd = _open_osfhandle((intptr_t)h, _O_RDONLY | (strchr(mode, 'b') ? _O_BINARY : _O_TEXT));
+            if (fd < 0) {
+                CloseHandle(h);
+                errno = EIO;
+            } else {
+                f = _wfdopen(fd, wmode);
+                if (!f) {
+                    int e2 = errno;
+                    _close(fd);
+                    errno = e2;
+                }
+            }
+        }
+        int e = errno;
+        free(w);
+        errno = e;
+        return f;
+    }
+    f = _wfopen(w, wmode);
     int e = errno;
     free(w);
     errno = e;

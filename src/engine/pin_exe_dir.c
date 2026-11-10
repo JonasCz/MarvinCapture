@@ -33,30 +33,63 @@
 #include <unistd.h>
 #endif
 
-int pin_exe_dir(char *out, size_t cap)
-{
 #if defined(_WIN32)
-    wchar_t wpath[MAX_PATH];
-    DWORD n = GetModuleFileNameW(NULL, wpath, MAX_PATH);
-    if (n == 0 || n == MAX_PATH)
+int pin_module_dir(void *module, char *out, size_t cap)
+{
+    /* GetModuleFileNameW cuts the name to the buffer without saying so: grow until it fits */
+    DWORD size = 512;
+    wchar_t *wpath = NULL;
+    DWORD n = 0;
+    for (;;) {
+        wchar_t *nw = realloc(wpath, (size_t)size * sizeof(wchar_t));
+        if (!nw) {
+            free(wpath);
+            return -1;
+        }
+        wpath = nw;
+        n = GetModuleFileNameW((HMODULE)module, wpath, size);
+        if (n == 0) {
+            free(wpath);
+            return -1;
+        }
+        if (n < size)
+            break;
+        if (size >= 65536) {    /* far past any path Windows can have */
+            free(wpath);
+            return -1;
+        }
+        size *= 2;
+    }
+    int len = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)n, NULL, 0, NULL, NULL);
+    char *path = len > 0 ? malloc((size_t)len + 1) : NULL;
+    if (path)
+        len = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)n, path, len, NULL, NULL);
+    free(wpath);
+    if (!path || len <= 0) {
+        free(path);
         return -1;
-    char path[MAX_PATH * 4];
-    int len = WideCharToMultiByte(CP_UTF8, 0, wpath, (int)n, path, (int)sizeof(path), NULL, NULL);
-    if (len <= 0)
-        return -1;
+    }
     path[len] = 0;
     char *slash = strrchr(path, '\\');
     char *slash2 = strrchr(path, '/');
     if (slash2 && (!slash || slash2 > slash))
         slash = slash2;
-    if (!slash)
-        return -1;
-    size_t n2 = (size_t)(slash - path);
-    if (n2 + 1 > cap)
-        return -1;
-    memcpy(out, path, n2);
-    out[n2] = 0;
-    return 0;
+    int rc = -1;
+    if (slash && (size_t)(slash - path) + 1 <= cap) {
+        size_t n2 = (size_t)(slash - path);
+        memcpy(out, path, n2);
+        out[n2] = 0;
+        rc = 0;
+    }
+    free(path);
+    return rc;
+}
+#endif
+
+int pin_exe_dir(char *out, size_t cap)
+{
+#if defined(_WIN32)
+    return pin_module_dir(NULL, out, cap);
 #else
     char path[4096];
 #if defined(__APPLE__)
