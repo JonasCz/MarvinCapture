@@ -33,6 +33,21 @@ static void expected_id(unsigned b, unsigned *sct, unsigned *dbn)
     }
 }
 
+/* IEC 61834 / SMPTE 314M audio error code: 0x8000 per 16-bit sample, 0x800 per 12-bit sample.
+ * 12-bit samples are packed two per 3 bytes (MSBs of both, then the two low nibbles), so an
+ * error-coded pair reads 80 80 00. A block counts only when every sample carries the code:
+ * a block of one constant non-zero value (DC offset, a clipped passage) is real audio. */
+static int audio_block_is_error(const uint8_t *blk, int bits)
+{
+    const uint8_t *d = blk + 8;
+    int e16 = bits != 12, e12 = bits != 16;
+    for (int i = 0; i < 72 && (e16 || e12); i++) {
+        if (e16 && d[i] != ((i & 1) ? 0x00 : 0x80)) e16 = 0;
+        if (e12 && d[i] != ((i % 3 == 2) ? 0x00 : 0x80)) e12 = 0;
+    }
+    return e16 || e12;
+}
+
 int dv_error_analyze(const uint8_t *frame, size_t len, dv_frame_errors_t *out)
 {
     memset(out, 0, sizeof(*out));
@@ -41,6 +56,12 @@ int dv_error_analyze(const uint8_t *frame, size_t len, dv_frame_errors_t *out)
     unsigned nseq = (unsigned)(len / DV_SEQ_SIZE);
     if (nseq != DV_SEQ_COUNT_NTSC && nseq != DV_SEQ_COUNT_PAL)
         return -1;
+
+    /* the quantisation from the AAUX source pack; without one either error code counts */
+    int abits = 0;
+    dv_frame_info_t info;
+    if (dv_subcode_parse_frame(frame, len, &info) == 0 && info.audio.valid)
+        abits = info.audio.bits;
 
     unsigned sta14 = 0, zero_first = 0, nonzero_first = 0;
     for (unsigned si = 0; si < nseq; si++) {
@@ -62,14 +83,12 @@ int dv_error_analyze(const uint8_t *frame, size_t len, dv_frame_errors_t *out)
                 if (sta == 14) sta14++;
             } else if (esct == 3) {
                 out->audio_blocks++;
-                unsigned w0 = ((unsigned)blk[8] << 8) | blk[9];
-                int uniform = 1;
-                for (int i = 1; i < 36 && uniform; i++)
-                    if ((((unsigned)blk[8 + 2 * i] << 8) | blk[9 + 2 * i]) != w0)
-                        uniform = 0;
-                if (uniform && w0 != 0) out->audio_err++;
+                if (audio_block_is_error(blk, abits)) out->audio_err++;
                 if (si < nseq / 2) {
-                    if (uniform && w0 == 0) zero_first++;
+                    int zero = 1;
+                    for (int i = 8; i < 80 && zero; i++)
+                        if (blk[i]) zero = 0;
+                    if (zero) zero_first++;
                     else nonzero_first++;
                 }
             }

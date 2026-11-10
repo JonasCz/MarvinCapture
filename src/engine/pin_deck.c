@@ -49,8 +49,10 @@ pin_deck_state_t pin_deck_state_from_avc(uint8_t op, uint8_t mode)
 {
     if (op == 0xc3) {
         switch (mode) {
-        case 0x75: case 0x6d: return PIN_DECK_PLAYING;
-        case 0x7d: case 0x65: return PIN_DECK_PAUSED;
+        /* AV/C Tape Recorder/Player PLAY operands: 75 FORWARD, 65 REVERSE,
+         * 7D FORWARD PAUSE, 6D REVERSE PAUSE (libavc1394 avc1394_vcr.h names them the same) */
+        case 0x75: case 0x65: return PIN_DECK_PLAYING;
+        case 0x7d: case 0x6d: return PIN_DECK_PAUSED;
         default: return PIN_DECK_PLAYING;
         }
     }
@@ -137,11 +139,13 @@ int pin_deck_parse_timecode(const uint8_t *resp, int rl, pin_deck_timecode_t *ou
     /* frame/second/minute/hour, each one BCD byte, LSB-first in the reply
      * (see pindeck.c's "%02x:%02x:%02x:%02x", resp[7],resp[6],resp[5],resp[4]) */
     uint8_t f = resp[4], s = resp[5], m = resp[6], h = resp[7];
-    /* 0xff / non-BCD = "no time code" (blank tape, or not readable while winding) */
+    /* 0xff / non-BCD = "no time code" (blank tape, or not readable while winding). The frame
+     * byte is laid out as in SMPTE 12M and the DV TC pack (IEC 61834): bits 5-4 tens, bit 6
+     * the drop-frame flag, bit 7 the colour-frame flag, so neither flag makes it invalid. */
     if (((f & 0xf) > 9) || ((s & 0xf) > 9) || ((m & 0xf) > 9) || ((h & 0xf) > 9) ||
-        ((f >> 4) & 0x7) > 5 || ((s >> 4) & 0x7) > 5 || ((m >> 4) & 0x7) > 5 || ((h >> 4) & 0xf) > 2)
+        ((f >> 4) & 0x3) > 2 || ((s >> 4) & 0x7) > 5 || ((m >> 4) & 0x7) > 5 || ((h >> 4) & 0xf) > 2)
         return -1;
-    out->drop_frame = (f & 0x80) != 0;
+    out->drop_frame = (f & 0x40) != 0;
     out->frame  = ((f >> 4) & 0x3) * 10 + (f & 0xf);
     out->second = ((s >> 4) & 0x7) * 10 + (s & 0xf);
     out->minute = ((m >> 4) & 0x7) * 10 + (m & 0xf);

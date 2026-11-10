@@ -28,7 +28,13 @@ Traps (all learned the hard way):
   `ep88-*.bin` dumps `make_ep88` wraps around them) are clean and are asserted to be.
 - HDV: one unit = one picture (video PES start to the next). A continuity gap on
   the first packet of a unit is charged to that unit (the loss is between two
-  pictures). PES_packet_length is 0 for HDV video; only checked if non-zero.
+  pictures), and it also damages the reference picture before it (it may have lost
+  its tail). A decode-time (DTS) gap of more than one frame next to a video loss means a
+  whole picture vanished (its PES start lost, its rest joined the unit before); it may
+  have been the I, so all references count as damaged until the next intact I. Only
+  video-PID damage (CC gap, TEI, bad sync byte on a video packet, PES errors, lost data)
+  propagates; a CC gap, TEI or bad sync on audio / PSI makes only that unit an error
+  frame. PES_packet_length is 0 for HDV video; only checked if non-zero.
   Continuity tracking must restart after a stream break (`hdv_err_reset`, >1 s
   without data) or every rewind/pause shows a false loss.
 - Counted only while a file can get the unit (`counting()`: a file is open, or no capture is

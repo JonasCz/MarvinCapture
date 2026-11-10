@@ -23,25 +23,30 @@
  * units (continuity counters, reference-picture damage).
  *
  * Direct damage of a unit:
- *  - transport_error_indicator set on any packet,
- *  - lost sync byte,
- *  - continuity_counter gap on any PID that carries payload (a duplicate packet
- *    is legal and ignored; adaptation-field discontinuity_indicator is NOT an
- *    error, it marks a recording boundary), a gap on the very first packet of a
- *    unit counts against that unit (the loss is between the two pictures),
+ *  - transport_error_indicator set on a video packet,
+ *  - lost sync byte on a video packet,
+ *  - continuity_counter gap on the video PID (a duplicate packet is legal and
+ *    ignored; adaptation-field discontinuity_indicator is NOT an error, it marks
+ *    a recording boundary), a gap on the very first video packet of a unit
+ *    counts against that unit (the loss is between the two pictures),
  *  - the video PES does not start with 00 00 01 E0..EF, no picture header in the
  *    unit, or a non-zero PES_packet_length that the payload does not match.
  *  - data lost in transit in front of or inside the unit, as the caller knows from
  *    the transport (hdv_err_state_t.lost_data): the continuity counters miss a
  *    loss of a multiple of 16 packets of a PID, the 1394 block count does not.
- * Only video-PID damage propagates through the GOP; an audio-only gap marks the
- * unit "with error" but leaves the references alone.
+ * Only video-PID damage propagates through the GOP; a continuity gap, TEI or bad
+ * sync byte on another PID (audio, PSI) marks the unit "with error" but leaves the
+ * references alone.
  *
  * Propagation (coded order): an I picture is self-contained, a P depends on the
  * previous reference (I or P), a B on both neighbouring references (the last
  * two seen). So a damaged I/P taints later P pictures until the next I and the
  * B pictures that use it. A closed GOP header stops a B after the new I from
- * depending on the previous GOP's last reference.
+ * depending on the previous GOP's last reference. A gap on a unit's first video
+ * packet also damages the reference before it, which may have lost its tail; a
+ * decode-time gap of more than a frame next to a loss means
+ * a whole picture went with it, possibly the I, so all references count as damaged
+ * until the next intact I.
  */
 
 #ifndef HDV_ERROR_H
@@ -62,6 +67,11 @@ typedef struct {
     int lost_data;          /* set by the caller: data was lost in transit (the 1394 DBC) before
                                the next unit ended, so that unit is damaged; cleared by
                                hdv_error_analyze() */
+    int last_ref;           /* the previous unit was a reference picture (I/P) */
+    int last_loss;          /* the previous unit lost video data */
+    int last_dts_valid;
+    int64_t last_dts;       /* the previous unit's decode time */
+    int64_t dts_step;       /* one frame's decode time step (90 kHz), 0 = not known yet */
 } hdv_err_state_t;
 
 typedef struct {

@@ -1875,7 +1875,12 @@ static void open_sink_for_scene(pin_session_t *s)
                : kind == PIN_KIND_ANALOG ? PIN_WRITER_ANALOG_CAPACITY : 0;
     if (s->test_writer_queue)
         cap = (size_t)s->test_writer_queue;
-    s->writer = pin_writer_start_ex(cap, writer_consume, s->sink, PIN_WRITER_OVERFLOW_FATAL);
+    /* analog: the stand-ins for lost frames go in as repeats of the frame before, which take no
+     * room in the queue, so a long gap filled at once cannot overflow it */
+    s->writer = pin_writer_start_ex(cap, writer_consume, s->sink,
+                                    PIN_WRITER_OVERFLOW_FATAL |
+                                        (kind == PIN_KIND_ANALOG ? PIN_WRITER_REPEATS : 0));
+    s->writer_gen++;
     if (!s->writer) {
         /* no memory for the queue (or no thread): without a writer every unit would be
          * skipped and the capture would "run" without a file */
@@ -3568,10 +3573,22 @@ static int analog_video_cb(const pinnacle_video_frame_t *f, void *user)
     if (s->capture_start_s > 0)
         s->elapsed_s = pin_session_now() - s->capture_start_s;
 
-    pin_previewer_push_analog(s->preview, f->yuyv, f->width, f->height, !s->is_60hz);
+    /* a stand-in that repeats the frame before shows nothing new */
+    if (!f->same_as_previous)
+        pin_previewer_push_analog(s->preview, f->yuyv, f->width, f->height, !s->is_60hz);
 
-    if (s->writer && !pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
-                                      (size_t)f->width * f->height * 2)) {
+    /* A stand-in equal to the frame this writer took just before goes in as a repeat of it. */
+    int repeat = f->same_as_previous && s->writer && s->repeat_gen == s->writer_gen &&
+                 s->repeat_index + 1 == f->index;
+    int queued = 0;
+    if (s->writer) {
+        queued = repeat ? pin_writer_push_repeat(s->writer, f->index, 1)
+                        : pin_writer_push(s->writer, PIN_UNIT_VIDEO, f->index, f->yuyv,
+                                          (size_t)f->width * f->height * 2);
+        s->repeat_gen = queued ? s->writer_gen : 0;
+        s->repeat_index = f->index;
+    }
+    if (s->writer && !queued) {
         /* not in the file: dropped by the queue, and only that (a repeated frame too) */
         if (counting(s)) {
             s->write_dropped++;
@@ -3730,10 +3747,11 @@ static int analog_audio_cb(const pinnacle_audio_block_t *b, void *user)
      * version of this code used to do before being factored out. */
     if (b->samples && !b->silence)
         feed_audio_locked(s, (const int16_t *)b->pcm, b->samples);
-    if (b->silence) {
+    if (b->silence || b->padded) {
         /* A lost audio packet is not a frame: the video side already counts the frames it had to
          * stand in for as errors, and a second error per outage frame would push the share of
-         * frames with errors past 100 %. It is counted as the audio block it is. */
+         * frames with errors past 100 %. It is counted as the audio block it is; so is one that
+         * arrived short and was padded with silence. */
         if (counting(s))
             s->err_audio_blocks++;
     }

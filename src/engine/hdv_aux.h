@@ -29,19 +29,9 @@
  *     bits ('11111') padding out to 32 bits.
  *   - TS adaptation-field discontinuity_indicator (ISO/IEC 13818-1 2.4.3.4).
  *
- * The third thing, HDV recording date/time, is not solidly specified here:
- * HDV (Sony/Canon, informed by IEC 61834-11) carries it in a private TS
- * stream that community tools (MediaInfoLib's HDV support, dvrescue) know
- * how to read, conventionally on PID 0x811. This session's web research
- * turned up only secondhand, unverifiable summaries of that layout (a
- * forum post whose actual page could not be fetched to confirm byte
- * offsets), not the tool source or spec text itself, so no fixed-offset
- * layout is hardcoded here. Instead, per the HDV spec's use of DV-style
- * packs (the same PC0 + 4-byte-data packs dv_subcode.c reads: 0x62 = date,
- * 0x63 = time, 0x13 = timecode), hdv_aux_scan_datetime() scans the aux
- * PID's payload bytes for those pack signatures using the same BCD
- * decoding as dv_subcode.c. This is explicitly best-effort: verify PID and
- * offsets against a real HDV capture on the rig before relying on it.
+ * HDV recording date/time is not read: HDV (Sony/Canon, informed by IEC
+ * 61834-11) carries it in a private TS stream, conventionally on PID 0x811,
+ * whose pack framing could not be confirmed without a camera's recording.
  */
 
 #ifndef HDV_AUX_H
@@ -68,28 +58,6 @@ typedef struct {
     int broken_link;
     int found; /* a GOP header was located and decoded */
 } hdv_gop_time_t;
-
-typedef struct {
-    int day, month, year;
-    int valid;
-} hdv_aux_date_t;
-
-typedef struct {
-    int hour, minute, second;
-    int valid;
-} hdv_aux_time_t;
-
-typedef struct {
-    int hour, minute, second, frame;
-    int drop_frame;
-    int valid;
-} hdv_aux_timecode_t;
-
-typedef struct {
-    hdv_aux_date_t rec_date;
-    hdv_aux_time_t rec_time;
-    hdv_aux_timecode_t timecode;
-} hdv_aux_info_t; /* every field best-effort, see file header comment */
 
 typedef struct {
     int pat_found;
@@ -184,12 +152,6 @@ int hdv_gop_time_nonzero(const hdv_gop_time_t *g);
 /* Offset of the first MPEG-2 sequence header (00 00 01 B3) in an elementary stream
  * chunk, or (size_t)-1 if there is none. A decoder fed from before it only complains. */
 size_t hdv_find_sequence_header(const uint8_t *es, size_t len);
-
-/* Best-effort scan of aux_pid's payload bytes for DV-style date/time/TC
- * packs, see file header comment. out is zeroed then filled with whatever
- * was found; fields whose pack was never seen stay .valid = 0. */
-void hdv_aux_scan_datetime(const uint8_t *ts_packets, size_t n_packets, int aux_pid,
-                            hdv_aux_info_t *out);
 
 #ifdef __cplusplus
 }

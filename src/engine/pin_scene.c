@@ -81,6 +81,7 @@ static void state_from_record(pin_scene_state_t *s, const pin_scene_record_t *r)
         s->time_minute = r->time_minute;
         s->time_second = r->time_second;
     }
+    s->date_index = r->frame_index;
     if (r->ts_valid) {
         s->ts_valid = 1;
         s->ts = r->ts;
@@ -102,17 +103,18 @@ static void state_advance(pin_scene_state_t *state, const pin_scene_record_t *r)
         state->tc_drop_frame = r->tc_drop_frame;
         state->tc_index = r->frame_index;
     }
-    if (r->date_valid) {
+    /* date and time only as a pair: a time without its date (a frame just after midnight that
+     * lost its date pack) would pair the new time with the old day */
+    if (r->date_valid && r->time_valid) {
         state->date_valid = 1;
         state->date_day = r->date_day;
         state->date_month = r->date_month;
         state->date_year = r->date_year;
-    }
-    if (r->time_valid) {
         state->time_valid = 1;
         state->time_hour = r->time_hour;
         state->time_minute = r->time_minute;
         state->time_second = r->time_second;
+        state->date_index = r->frame_index;
     }
     if (r->ts_valid) {
         state->ts_valid = 1;
@@ -172,10 +174,12 @@ static double datetime_seconds(const pin_scene_state_t *s)
 
 typedef enum { CONT_NEUTRAL, CONT_YES, CONT_BREAK } cont_t;
 
+/* rec_start_breaks = 0 when r is compared with the run a REC START flag already opened: a
+ * camera that holds the flag over several frames marks one start, at its first frame. */
 static cont_t classify(const pin_scene_state_t *base, const pin_scene_record_t *r,
-                        const pin_scene_config_t *cfg)
+                        const pin_scene_config_t *cfg, int rec_start_breaks)
 {
-    if (r->rec_start_valid && r->rec_start)
+    if (rec_start_breaks && r->rec_start_valid && r->rec_start)
         return CONT_BREAK;
 
     cont_t tc_result = CONT_NEUTRAL;
@@ -205,7 +209,11 @@ static cont_t classify(const pin_scene_state_t *base, const pin_scene_record_t *
     if (base->date_valid && base->time_valid && r->date_valid && r->time_valid) {
         pin_scene_state_t rs;
         state_from_record(&rs, r);
+        /* against the time the frames fed since the base's date took: a stretch of frames
+         * without a usable date pack moves the clock on by them */
         double gap = datetime_seconds(&rs) - datetime_seconds(base);
+        if (cfg->fps > 0 && r->frame_index > base->date_index)
+            gap -= (r->frame_index - base->date_index) / cfg->fps;
         if (fabs(gap) > cfg->date_gap_seconds)
             date_result = CONT_BREAK;
         else
@@ -242,7 +250,7 @@ int pin_scene_feed(pin_scene_detector_t *d, const pin_scene_record_t *r, long *c
     }
 
     if (!d->pending_active) {
-        cont_t c = classify(&d->baseline, r, &d->cfg);
+        cont_t c = classify(&d->baseline, r, &d->cfg, 1);
         if (c != CONT_BREAK) {
             state_advance(&d->baseline, r);
             return 0;
@@ -265,11 +273,11 @@ int pin_scene_feed(pin_scene_detector_t *d, const pin_scene_record_t *r, long *c
     }
 
     /* A pending run is open: does this frame continue it? */
-    cont_t continues_candidate = classify(&d->pending_candidate, r, &d->cfg);
+    cont_t continues_candidate = classify(&d->pending_candidate, r, &d->cfg, 0);
     if (continues_candidate == CONT_BREAK) {
         /* Doesn't continue the candidate. Does it go back to the old
          * baseline instead (the anomaly was a transient glitch)? */
-        cont_t continues_old = classify(&d->pending_saved_baseline, r, &d->cfg);
+        cont_t continues_old = classify(&d->pending_saved_baseline, r, &d->cfg, 1);
         if (continues_old != CONT_BREAK) {
             d->baseline = d->pending_saved_baseline;
             state_advance(&d->baseline, r);

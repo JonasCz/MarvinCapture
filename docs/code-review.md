@@ -13,30 +13,18 @@ functions. The others come from reading the code alone. Each item is marked:
 
 Severity is high, medium or low, judged by how much data can go missing and how quietly.
 
-
-### 17.4 Wrong numbers on screen
-
-- **R25. TEI or a bad sync byte on any PID taints the following pictures.** Low. Testing required.
-  - `own = tei || sync_lost || ...` counts a TEI or bad sync byte on any PID, so one on an audio or PSI packet taints the following P and B pictures. The skill file says an audio-only gap does not spread; that holds for CC gaps only. Probably never set on FireWire HDV. Testing required.
-- **R27. Encoder sinks: a writer-ring drop shifts A/V.** Low. Testing required.
-  - In the encoder sinks a writer-ring drop also shifts A/V. Video frames and audio blocks are dropped independently, and the sinks ignore the unit index, so each dropped video frame moves later video one frame early against audio (and the reverse for audio). Same burst-before-DISK_SLOW window.
-- **R31. Thread status read without a lock.** Low. Testing required.
-  - `hand_over_file()`, `file_bytes_due()`, `capture_guard()` and `pin_session_get_status()` read `sink->get_status` while the writer thread updates it. Values can be stale or torn; no crash path was found.
-  - Relevant to the TSan item in 13.
-
-### 17.5 Stop conditions and scene cuts
-
-- **R33. REC START held over several frames pushes the scene cut late.** Low. Testing required.
-  - In `pin_scene.c` `classify()`, every flagged frame restarts the debounce. The cut lands on the last flagged frame, and the first frames of the new scene go into the old file (2).
-
 ### 17.6 Smaller items
 
-- **OHCI `xferStatus` is not checked** (`iso_header_ok()`). Low. Testing required.
-  - Packets that completed with an error event are accepted as data. Count them on real dumps (normal is `0x8411`).
-- **EP 0x84 failure retry** (`ep84_retry()`). Low. Testing required.
-  - A failed EP 0x84 transfer is now resubmitted from the read loop every 100 ms (after `libusb_clear_halt` on a stall), up to 20 failures in a row. Not seen on hardware: check that a stall clears and deck control keeps working.
-- **Device locks (Windows).** Low. Testing required.
-  - The lock is now a named event in `Global\` (falls back to `Local\` if refused), thread-independent, with the status record in a `Local\` mapping. Not built or run on Windows here: build with MSYS2 and run `test_lock` (cross-thread case), and check that a second logged-on user gets BUSY.
+- **OHCI `xferStatus` is not checked** (`dv_reassembler.c` `ring_feed()`). Low. Testing required (real EP 0x88 dumps).
+  - A packet's payload is used as it streams in, before the trailer with its `xferStatus` arrives, so a packet that completed with an error event is taken as data. Test: on DV and HDV dumps from both devices (including one with dropouts), count the trailers whose status is not `0x8411`. If there are any, hold each packet's payload until its trailer (and count a refused one as a DBC hole); if there are none, delete this item.
+- **N11 (rest). Analog: a long gap still has to be written** (`pin_writer_push_repeat()`, `sink_avi` / `sink_ffv1` / `sink_hwenc`). Low. Testing required (slow drives).
+  - The stand-ins no longer take room in the writer queue, but the sink writes each one, and the frames behind them wait: a gap of N seconds needs about N x 21 MB/s / (drive or encoder rate) to drain, and more than the queue's ~25 s of it still ends the capture as DISK_SLOW. Test: on a USB 2 stick or SD card, unplug the S-Video cable for 30 s during an uncompressed AVI and an FFV1 capture (the audio runs on only if the device keeps sending it; otherwise there is no fill) and check that it goes on.
+- **AV/C TIME CODE drop-frame bit** (`pin_deck_parse_timecode()`). Low. Testing required (an NTSC drop-frame tape).
+  - Read from bit 6 of the frame byte, as SMPTE 12M and the DV TC pack (IEC 61834) have it (bit 7 is the colour-frame flag); the docs have no AV/C byte layout. Test: play an NTSC drop-frame tape and check that the TIME CODE reply's frame byte has bit 6 set and the display shows `;`.
+- **EP 0x84 failure retry** (`ep84_retry()`). Low. Testing required (device).
+  - A failed EP 0x84 transfer is resubmitted from the read loop every 100 ms (after `libusb_clear_halt` on a stall), up to 20 failures in a row. Test: stall EP 0x84 during a DV capture (unplug the camera's FireWire cable for a moment) and check that the stall clears and PLAY / STOP / TIME CODE keep working.
+- **Device locks (Windows).** Low. Testing required (Windows, MSYS2).
+  - The lock is a named event in `Global\` (falls back to `Local\` if refused), thread-independent, with the status record in a `Local\` mapping. Test: build with MSYS2, run `test_lock` (cross-thread case), and check that a second logged-on user opening the device gets BUSY.
 
 ### 17.7 Checked, nothing found
 
@@ -62,39 +50,9 @@ high, medium or low. "Reproduced" means a scratch harness that feeds synthetic d
 static functions showed it. The rest comes from reading the code. Additions to section 17
 items are marked "Second pass" under those items.
 
-### 18.1 Frames lost, mangled or put in the wrong file
-
-- **N8. Analog: video fill follows the frame counter, audio fill follows device time** (`pinnacle_analog.c` `video_gap_to_fill()` and `on_audio()`, from ebedc07). Medium. Testing required (reproduced in a harness).
-  - If the device clock jumps while the 16-bit video counter runs on (what the device does across a signal drop is unknown, section 8), video fills nothing and audio fills the whole time gap. Harness: a +120 s clock jump gives 20 frames against 3020 audio blocks; audio is 120 s ahead of video for the rest of the file. If the audio packet happens to be polled before the video frame, the same event is judged a restart and nothing is filled, so the result depends on poll order.
-  - Smaller: the `agrees` window uses a nominal 10 MHz while the device runs at about 10.001 MHz, so a real loss of about 13,800 frames or more is judged a restart; after a host stall up to about 5 frames can be processed before audio is polled, and a real loss of 250+ frames can then be judged a restart.
-  - Fix direction: decide the video fill from device time as well and use the counter as a check, so both streams fill the same span.
-- **N9. Analog: short audio packets are not corrected** (`on_audio()`: `samples = (n - 12) / 4`). Low-medium. Testing required (does the device ever send one?).
-  - A packet with fewer than 1920 samples is written as is; the deficit rounds to no fill (1000 of 1920: 920 samples missing, no error) or to a whole extra block (900 of 1920: 780 samples too many). Each event shifts audio against video by up to about 20 ms, breaking the "exactly 1920 samples per frame" promise in [analog.md](analog.md). Fix: zero-pad any short packet to a full frame and count it.
-- **N11. Analog gap fill can overflow the fatal writer ring** (`analog_video_cb()` -> `pin_writer_push()`, ring `PIN_WRITER_ANALOG_CAPACITY` 512 MiB with `PIN_WRITER_OVERFLOW_FATAL`). Medium. Testing required.
-  - `fill_frames()` can add up to 0x7fff stand-ins in one burst, pushed at memcpy speed. After about 640 PAL frames (about 26 s of gap) the next push overflows, and `capture_guard()` ends the capture as DISK_SLOW although the disk is fine; everything after the gap is lost.
-  - Fix: pace fillers, cap the fill per call, or let fillers wait for the writer.
-
-### 18.3 Wrong numbers on screen
-
-- **N38. DV audio error detection reads 16-bit words in 12-bit mode** (`dv_error.c` `dv_error_analyze()`). Low. Testing required.
-  - The 12-bit error fill 0x800 (bytes `80 80 00`) is not uniform in 16-bit words, so `audio_err` stays 0 on 32 kHz / 12-bit tapes. A block of 36 identical non-zero words (silence with a DC offset, all 0xFFFF) counts as an error on every frame of the passage.
-- **N39. HDV damage can leave a damaged reference marked clean** (`hdv_error.c` propagation). Low-medium. Testing required.
-  - An I picture that loses its tail charges the CC gap to the next unit, an open-GOP leading B, which updates no reference state, so the following P and the rest of the GOP read clean. An I picture that loses its PES start never becomes a unit, so one error frame is counted instead of about 15.
-- **N41. AV/C PLAY operands 0x65 and 0x6d look swapped** (`pin_deck_state_from_avc()`). Low (status text and script conditions only). Fix required once a camera confirms: reverse play shows Paused, reverse pause shows Playing.
-
-### 18.4 Options, names and stop conditions
-
-- **N46. Scene detector: a date break outvotes a continuous timecode** (`pin_scene.c` `classify()`, `state_advance()`). Low. Testing required.
-  - A frame just after midnight with the new time but no date pack leaves {old date, 00:00:00} as the baseline; the next intact frame is 86400 s away and a spurious split is confirmed.
-
-### 18.5 Smaller items
-
-- **`pin_deck_parse_timecode()`** reads drop frame from bit 7 of the frame byte; a camera using the DV convention (bit 6) shows non-drop. Testing required.
-- **`hdv_aux_scan_datetime()`** matches 0x62 / 0x63 / 0x13 at any byte offset. It has no caller today; it needs pack framing before it is used for splits.
-
 ### 18.6 Checked, nothing found (second pass)
 
-- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop; except N8, N9 and N11), 6f94979, b712741 (`SessionEndGuard`; except N22).
+- Fixes 4a49606 (loss counting order, first and last frame at input switch, close and unplug), 5f66c1e and 5e2317f (close and trailer errors in all sinks), b43f2f6 (held DV frames flushed in `dv_close()`, the provisional file replaced under its own name), ebedc07 (counter wrap, thresholds, black and repeat fill, padding at stop), 6f94979, b712741 (`SessionEndGuard`; except N22).
 - Reassembler chunking: 200 random lossy PAL and NTSC streams give identical output fed whole or in 1-byte to 5000-byte pieces. URB buffer reuse, ring order, teardown and URB status handling; `ts_buf` bounds; HDV source-packet alignment.
 - Analog: field weave and line offsets across transfers, the delivery ring (the producer waits, nothing dropped), drain at stop, 64-bit device time, the resampler (32 and 44.1 kHz within one sample over 32 M samples).
 - Writer ring, `pin_stdout` (short writes, EINTR, EPIPE, SIGPIPE), avi_writer layout, hdv_demux PTS unwrap and PES / PSI bounds, hdvmux PASS timestamps and thread shutdown.
@@ -118,11 +76,11 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 - **T4. `pin_cond.h` timed wait on winpthreads.** Testing required (Windows). The wait now resumes until the monotonic clock says the time is up (Windows uses a wall-clock deadline per slice, no `pthread_condattr_setclock`), so an early ETIMEDOUT cannot fire the FFV1 / hwenc watchdog. Run `test_pin_cond` in an MSYS2 build.
 - **U1 / U2. Owed AV/C write responses while capturing.** Testing required (a camera that answers with FCP writes acked pending). They are now sent from `p1394_async_service()` on every read-loop tick without blocking or reading EP 0x84, before a queued AV/C command; the command's ack is checked (ack_busy resent, others fail the command); a full owed table is logged and counted (`owed_dropped`).
 - **T2 / U4, config replies: left to check on hardware.** Low. A failed receive start now stops the stream and disconnects; the disconnect is tried even when the receive stop failed; a lost compare-swap response is followed by a read of the oPCR to learn whether the swap happened. Config replies must echo the request (late ones are read past), short 05/06 / `cfg_op` replies are errors, and an I2C write that is not acknowledged (`01 01 08`) now fails: check that analog bring-up sees no NAKs on the 500-USB and 510-USB.
-- **Analog open question** (low, Testing required): a truncated analog video frame ending on an exact 512-byte multiple (`on_video` `wire % 512`).
 
 ### 19.3 Wrong numbers on screen
 
-- **V4. HDV continuity in the demux aliases at 16 lost packets.** Low. Testing required. The CC test misses a loss of exactly 16k packets of a PID (`hdv_demux.c` `ts_packet()`, `dv_reassembler.c` `ts_handle_packet()`, `hdv_error.c` the same way). The session's own count sees such a hole from the DBC (the picture it fell into is a frame with error), so raw HDV is covered; into HDV MOV / MKV the file counts its frames itself, and the reassembler's DBC hole is not passed to its demux: the demux sits behind the writer ring in the sink, so that needs a side channel in the unit stream. Left to judge on hardware how often a hole of a multiple of 16 packets of one PID happens.
+- **V4. HDV continuity in the demux aliases at 16 lost packets.** Low. Testing required (real HDV dumps). The CC test misses a loss of exactly 16k packets of a PID (`hdv_demux.c` `ts_packet()`, `dv_reassembler.c` `ts_handle_packet()`, `hdv_error.c` the same way). The session's own count sees such a hole from the DBC (the picture it fell into is a frame with error), so raw HDV is covered; into HDV MOV / MKV the file counts its frames itself and passes the damaged picture through unrepaired, because the reassembler's DBC hole does not reach the sink's demux (it sits behind the writer queue; it would need a loss marker unit carried through the hold-back FIFO, the writer and `sink_hdvmux`). Test: in HDV dumps with dropouts from both devices, count the DBC holes after which no PID shows a CC gap. If there are any, add that marker; if there are none, delete this item.
+
 ### 19.5 Checked and refuted in this pass
 
 - **D4 (macOS: failed finalise at "Stop and quit" is lost): refuted.** `capture_report_end()` (2371-2404) drains the closer first and turns a failed close into `PIN_STOP_WRITE_ERROR` (2402-2403), which is abnormal; the CAPTURE_ENDED event carries it. macOS sets `quitEndError` (WindowModel 1312-1320) and stays open; Windows does the same (`MainWindow.xaml.cs`). D5 (banner overwritten after a failed finalise) follows from the same path: the abnormal CAPTURE_ENDED raises the alert, so only the live banner is short-lived.
@@ -131,13 +89,16 @@ A third reading of the code (November 2026), by section: USB and device, 1394 an
 ### 19.6 Checked, nothing found (third pass)
 
 - USB: in-order delivery and head indexing with a partial queue, slot accounting, bitstream chunk sizes (78422), FX2 block casts, POSIX lock inode recheck, `pinnacle_enum_build_id`, thread boost order.
-- 1394 / analog: config ROM layout and CRC lengths, packet and batch bounds, AT descriptors, tlabel rotation, FCP ring, analog deliver ring, weave offsets, `fill_frames` loop, drain after the last seq, gain re-application.
+- 1394 / analog: config ROM layout and CRC lengths, packet and batch bounds, AT descriptors, tlabel rotation, FCP ring, analog deliver ring, weave offsets, the stand-in fill, drain after the last seq, gain re-application.
 - Reassembly: `frame_buf` reuse (all consumers copy), NTSC / PAL sizing and the 16-sequence bound, `frames_between` modular fit, `dif_feed` arithmetic, `ts_feed` alignment, `es_feed` cut and PTS assignment, 33-bit PTS unwrap, hdv_decode flush order, hdv_aux bounds.
-- Engine: hold-back push / grow / pop and the OOM path, split counters, closer accounting, `pin_freeprobe` buffers, `dv_error.c` against the skill, `hdv_error.c` apart from N39, audio helpers (monitor only), `capture_unit` size-cut arithmetic, `reset_frame_counters()`, event queue gap closing, `pin_session_close` ordering, `status_copy_out`, monitor ring.
+- Engine: hold-back push / grow / pop and the OOM path, split counters, closer accounting, `pin_freeprobe` buffers, `dv_error.c` against the skill, `hdv_error.c`, audio helpers (monitor only), `capture_unit` size-cut arithmetic, `reset_frame_counters()`, event queue gap closing, `pin_session_close` ordering, `status_copy_out`, monitor ring.
 - Sinks: writer ring wrap and scratch copy, `byte_tail` after consume, avi_writer patch offsets, idx1 / ix offsets, segment rollover, padding, NUT trailer error, `sink_lazy` ownership, `pin_naming` build and validate, hdvmux PASS DTS / PTS after `gop_drop_lead`, `span_close` slots, `frames_held` accounting, shutdown order, hwenc trailer order, audio ring math, `hwenc_convert` strides (widths up to 2048), ffv1 close order.
 - API / CLI: all status-format buffer widths and 64-bit counters, `pin_format_opts` sizes, event queue wrap, `PIN_EVT_DONE` ordering.
 - GUIs: Windows struct and enum mirrors against `pin_api.h` field by field; macOS has no mirror (it imports the header); Android index tables (ST_, SL_, SD_, SS_, OPT_), 64-bit counters, UTF-8 conversion, local references, fd ownership (Java keeps the connection until `pin_close` returns), synchronous audio / preview detach before close.
 
 ### 19.7 Suggested order for fixes and tests
 
-4. **Hardware or OS first:** Z1 (Windows, test in a `Café` folder), T4, U1 / U2, V4.
+1. **Windows build (MSYS2):** Z1 (UTF-8 and long paths, a `Café` folder), T4 (`test_pin_cond`), device locks (`test_lock`, a second user).
+2. **Device and camera:** U1 / U2 (owed AV/C write responses), T2 / U4 (config replies, I2C NAKs on the 500-USB and 510-USB), EP 0x84 failure retry, the TIME CODE drop-frame bit (an NTSC drop-frame tape), N11 (a 30 s analog dropout onto a slow drive).
+3. **Real EP 0x88 dumps:** OHCI `xferStatus`, V4 (DBC holes no CC check sees).
+4. **Android 11-15 devices:** E7.

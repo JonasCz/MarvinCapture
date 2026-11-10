@@ -88,6 +88,34 @@ static void test_synthetic(unsigned nseq)
     CHECK(e.frame_error && e.audio_err == 1, "0x8000 audio error fill");
     free(f);
 
+    /* a constant non-zero block (DC offset, 0xFFFF) is real audio */
+    f = make_frame(nseq);
+    memset(blk(f, 1, 6) + 8, 0xFF, 72);
+    dv_error_analyze(f, len, &e);
+    CHECK(!e.frame_error && e.audio_err == 0, "constant 0xFFFF audio is not an error");
+    free(f);
+
+    /* 12-bit mode (AAUX source pack QU = 1, 32 kHz): error code 0x800 = bytes 80 80 00 */
+    f = make_frame(nseq);
+    {
+        uint8_t *a = blk(f, 0, 6);
+        a[3] = 0x50; a[4] = 0; a[5] = 0; a[6] = 0; a[7] = (2 << 3) | 1;
+        uint8_t *x = blk(f, 1, 22);
+        for (int i = 0; i < 72; i++) x[8 + i] = (i % 3 == 2) ? 0x00 : 0x80;
+    }
+    dv_error_analyze(f, len, &e);
+    CHECK(e.frame_error && e.audio_err == 1, "12-bit 0x800 error code");
+    /* the 16-bit code is not an error code in 12-bit mode */
+    for (int i = 0; i < 72; i++) blk(f, 1, 22)[8 + i] = (i & 1) ? 0x00 : 0x80;
+    dv_error_analyze(f, len, &e);
+    CHECK(!e.frame_error && e.audio_err == 0, "16-bit code ignored in 12-bit mode");
+    /* in 16-bit mode the 12-bit code is not one either */
+    blk(f, 0, 6)[7] = 0; /* QU 0, 48 kHz */
+    for (int i = 0; i < 72; i++) blk(f, 1, 22)[8 + i] = (i % 3 == 2) ? 0x00 : 0x80;
+    dv_error_analyze(f, len, &e);
+    CHECK(!e.frame_error && e.audio_err == 0, "12-bit code ignored in 16-bit mode");
+    free(f);
+
     /* a lost (zero-padded) sequence */
     f = make_frame(nseq);
     memset(f + 4 * DV_SEQ_SIZE, 0, DV_SEQ_SIZE);

@@ -192,6 +192,9 @@ struct pin_session {
     pin_capture_opts_t capture_opts;
     pinnacle_analog_t analog;
     pin_writer_t *writer;
+    unsigned writer_gen;            /* counts writers started; never 0 once one is */
+    unsigned repeat_gen;            /* analog: the writer that took frame repeat_index (0 none) */
+    uint32_t repeat_index;
     pin_sink_t *sink;             /* the writer's consumer writes to this one (its user pointer) */
     pin_closer_t *closer;         /* finishes the files handed over (pin_closer.h) */
     pin_format_t active_format;

@@ -109,6 +109,7 @@ typedef struct {
     int fault_io;             /* fmt->pb is pin_sink_fault_avio_open()'s (PIN_TEST_WRITE_FAIL_AFTER) */
 
     pin_sink_status_t st;
+    pin_sink_status_pub_t pub;   /* st as of the last call, for other threads */
 } rewrap_priv_t;
 
 /* pin_sink_set_temp_dir(): "" = next to the output file. No sink writes a temp file at present
@@ -412,7 +413,7 @@ static pin_status_t rewrap_dv_extract_audio(rewrap_priv_t *p, const uint8_t *dat
     return result;
 }
 
-static pin_status_t dv_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+static pin_status_t dv_open_call(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
 {
     rewrap_priv_t *p = s->priv;
     p->params = *params;
@@ -537,7 +538,7 @@ static pin_status_t fail(rewrap_priv_t *p, pin_status_t err, int reason)
     return p->st.last_error;
 }
 
-static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
+static pin_status_t dv_write_unit_call(pin_sink_t *s, const uint8_t *data, size_t len)
 {
     rewrap_priv_t *p = s->priv;
     if (p->st.fail_reason)
@@ -613,15 +614,32 @@ static pin_status_t dv_close(pin_sink_t *s)
         rc = p->st.last_error;
     for (int i = 0; i < p->nhold; i++)
         free(p->hold[i]);
+    pin_sink_status_pub_destroy(&p->pub);
     free(p);
     free(s);
     return rc;
 }
 
+static pin_status_t dv_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+{
+    pin_status_t r = dv_open_call(s, path, params);
+    rewrap_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
+static pin_status_t dv_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
+{
+    pin_status_t r = dv_write_unit_call(s, data, len);
+    rewrap_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
 static void rewrap_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     rewrap_priv_t *p = s->priv;
-    *out = p->st;
+    pin_sink_status_read(&p->pub, out);
 }
 
 pin_sink_t *sink_rewrap_create(pin_format_t format)
@@ -634,6 +652,7 @@ pin_sink_t *sink_rewrap_create(pin_format_t format)
         return NULL;
     }
     p->format = format;
+    pin_sink_status_pub_init(&p->pub);
     s->priv = p;
     s->get_status = rewrap_get_status;
 
@@ -643,6 +662,7 @@ pin_sink_t *sink_rewrap_create(pin_format_t format)
         s->close = dv_close;
         s->supports_title = 1;
     } else {
+        pin_sink_status_pub_destroy(&p->pub);
         free(p);
         free(s);
         return NULL;

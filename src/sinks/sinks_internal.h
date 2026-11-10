@@ -28,6 +28,7 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 /* DV frames a sink holds back while looking for one with audio (the streams are fixed by the header). */
@@ -71,6 +72,39 @@ pin_sink_t *sink_hwenc_create(pin_format_t format);  /* ANALOG_ / DV_ H264_MKV, 
  * PIN_TEST_STALL_TIMEOUT_MS=<ms> replaces the encoder sinks' watchdog (STALL_TIMEOUT_S) and
  * close()'s patience with a thread stuck in a write (PIN_SINK_CLOSE_STALL_S) by <ms>. */
 long pin_sink_fault_stall_timeout_ms(long dflt_ms);
+
+/* A sink's status as its writer thread last left it, for readers on other threads (the
+ * session's status, the size and disk checks): the writer thread updates its own copy freely and
+ * publishes it after each call, so a reader never sees a half-updated struct. */
+typedef struct {
+    pthread_mutex_t m;
+    pin_sink_status_t st;
+} pin_sink_status_pub_t;
+
+static inline void pin_sink_status_pub_init(pin_sink_status_pub_t *p)
+{
+    pthread_mutex_init(&p->m, NULL);
+    memset(&p->st, 0, sizeof(p->st));
+}
+
+static inline void pin_sink_status_pub_destroy(pin_sink_status_pub_t *p)
+{
+    pthread_mutex_destroy(&p->m);
+}
+
+static inline void pin_sink_status_publish(pin_sink_status_pub_t *p, const pin_sink_status_t *st)
+{
+    pthread_mutex_lock(&p->m);
+    p->st = *st;
+    pthread_mutex_unlock(&p->m);
+}
+
+static inline void pin_sink_status_read(pin_sink_status_pub_t *p, pin_sink_status_t *out)
+{
+    pthread_mutex_lock(&p->m);
+    *out = p->st;
+    pthread_mutex_unlock(&p->m);
+}
 
 /* The encoder sinks (FFV1, H.264 / HEVC) write the file from their own threads. This tells a
  * drive that stalls (a thread is inside a file write) from an encoder that hangs (none is), and

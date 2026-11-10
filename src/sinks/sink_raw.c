@@ -41,6 +41,7 @@ typedef struct {
     int to_stdout;            /* path "-": pin_stdout_write(), no file */
     pin_kind_t kind;
     pin_sink_status_t st;
+    pin_sink_status_pub_t pub;   /* st as of the last call, for other threads */
 } raw_priv_t;
 
 static int is_valid_dv_unit_len(size_t len)
@@ -49,7 +50,7 @@ static int is_valid_dv_unit_len(size_t len)
            len == (size_t)DV_SEQ_COUNT_PAL * DV_SEQ_SIZE;
 }
 
-static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+static pin_status_t raw_open_call(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
 {
     raw_priv_t *p = s->priv;
     p->kind = params->kind;
@@ -68,7 +69,7 @@ static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_par
     return PIN_OK;
 }
 
-static pin_status_t raw_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
+static pin_status_t raw_write_unit_call(pin_sink_t *s, const uint8_t *data, size_t len)
 {
     raw_priv_t *p = s->priv;
     if (!p->f && !p->to_stdout)
@@ -110,15 +111,32 @@ static pin_status_t raw_close(pin_sink_t *s)
             rc = PIN_ERR_IO;
         p->f = NULL;
     }
+    pin_sink_status_pub_destroy(&p->pub);
     free(p);
     free(s);
     return rc;
 }
 
+static pin_status_t raw_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+{
+    pin_status_t r = raw_open_call(s, path, params);
+    raw_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
+static pin_status_t raw_write_unit(pin_sink_t *s, const uint8_t *data, size_t len)
+{
+    pin_status_t r = raw_write_unit_call(s, data, len);
+    raw_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
 static void raw_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     raw_priv_t *p = s->priv;
-    *out = p->st;
+    pin_sink_status_read(&p->pub, out);
 }
 
 pin_sink_t *sink_raw_create(void)
@@ -130,6 +148,7 @@ pin_sink_t *sink_raw_create(void)
         free(p);
         return NULL;
     }
+    pin_sink_status_pub_init(&p->pub);
     s->priv = p;
     s->open = raw_open;
     s->write_unit = raw_write_unit;

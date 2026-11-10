@@ -112,11 +112,10 @@ The camera used so far. Everything here needs only it and a few recorded tapes.
     `.m2t` (MOV and MKV make the first GOP closed);
   - GOPs without a sequence header (the file then decodes from the next one), and the
     three-GOP debounce against real dropouts.
-- **The aux stream (PID `0x811`).** `hdv_aux_scan_datetime()` reads a recording date and
-  time and the drop-frame and colour-frame flags from it. Its reading of the packs is a
-  best guess (`hdv_aux.h`), tested only on a hand-built pack (`test_hdv_aux`), and no
-  capture code calls it. Keep a short capture as an optional fixture in `tests/data`. If
-  the date is there, it could split scenes on cameras with a zero timecode.
+- **The aux stream (PID `0x811`).** Not read: its pack framing is unknown. Keep a short
+  capture as an optional fixture in `tests/data` and find where the recording date and
+  time packs sit. If the date is there, it could split scenes on cameras with a zero
+  timecode.
 - **Title in a raw `.m2t`.** The title goes in as the DVB service name, an SDT packet
   behind the PAT and PMT at each file start (`hdv_emit_psi()`); libavformat reads it back
   in `test_replay_mixed_kind`. Check a camera's `.m2t` in MediaInfo ("Service name") and

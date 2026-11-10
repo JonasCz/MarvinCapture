@@ -70,6 +70,125 @@ static void make_pic(uint8_t *out, int type, int gop, int closed)
     pkt(out + 564, VPID, 0, cc_v++, pl);
 }
 
+/* make_pic() with a PTS in the PES header (the decode time when there is no DTS) */
+static void make_pic_ts(uint8_t *out, int type, int gop, int64_t pts)
+{
+    uint8_t pl[184];
+    memset(pl, 0x55, sizeof(pl));
+    int o = 0;
+    pl[o++] = 0; pl[o++] = 0; pl[o++] = 1; pl[o++] = 0xE0; pl[o++] = 0; pl[o++] = 0;
+    pl[o++] = 0x80; pl[o++] = 0x80; pl[o++] = 5;
+    pl[o++] = (uint8_t)(0x21 | ((pts >> 29) & 0x0E));
+    pl[o++] = (uint8_t)(pts >> 22);
+    pl[o++] = (uint8_t)(((pts >> 14) & 0xFE) | 1);
+    pl[o++] = (uint8_t)(pts >> 7);
+    pl[o++] = (uint8_t)(((pts << 1) & 0xFE) | 1);
+    if (gop) {
+        pl[o++] = 0; pl[o++] = 0; pl[o++] = 1; pl[o++] = 0xB8;
+        pl[o++] = 0; pl[o++] = 0; pl[o++] = 0; pl[o++] = 0;
+    }
+    pl[o++] = 0; pl[o++] = 0; pl[o++] = 1; pl[o++] = 0x00;
+    pl[o++] = 0; pl[o++] = (uint8_t)(type << 3);
+    pkt(out, VPID, 1, cc_v++, pl);
+    memset(pl, 0x55, sizeof(pl));
+    pkt(out + 188, VPID, 0, cc_v++, pl);
+    pkt(out + 376, APID, 0, cc_a++, pl);
+    pkt(out + 564, VPID, 0, cc_v++, pl);
+}
+
+/* Damage that reaches past the unit it shows in: an I that loses its tail, an I that loses
+ * its PES start (its rest joins the unit before), and a TEI on a non-video packet. */
+static void test_propagation(void)
+{
+    hdv_err_state_t st;
+    hdv_error_init(&st);
+    cc_v = 0; cc_a = 0;
+    uint8_t u[8 * 188];
+    hdv_unit_errors_t e;
+
+    /* the I's last video packet is lost: the gap shows on the next unit's first packet */
+    make_pic(u, 1, 1, 0);
+    hdv_error_analyze(&st, u, 3, VPID, &e);
+    CHECK(!e.frame_error, "I without its tail reads clean");
+    make_pic(u, 3, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.video_damaged, "the gap is charged to the leading B");
+    make_pic(u, 2, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.tainted, "the P after it uses the damaged I");
+    make_pic(u, 1, 1, 1);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error, "the next I is clean");
+
+    /* a gap in front of a unit after a B leaves the references alone */
+    make_pic(u, 3, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    cc_v++;
+    make_pic(u, 3, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.video_damaged, "B with a gap in front");
+    make_pic(u, 2, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error, "a B's lost tail taints nothing");
+
+    /* the I loses its PES start: one frame's decode time goes missing */
+    hdv_error_init(&st);
+    int64_t t = 900000;
+    const int types[] = { 1, 3, 3, 2, 3 };
+    for (int k = 0; k < 5; k++, t += 3600) {
+        make_pic_ts(u, types[k], k == 0, t);
+        hdv_error_analyze(&st, u, 4, VPID, &e);
+        CHECK(!e.frame_error, "clean GOP with time stamps");
+    }
+    /* the B at t - 3600 above is followed by the I at t, whose first packet is lost: its other
+     * three packets join that B's unit */
+    hdv_error_init(&st);
+    t = 900000;
+    for (int k = 0; k < 4; k++, t += 3600) {
+        make_pic_ts(u, types[k], k == 0, t);
+        hdv_error_analyze(&st, u, 4, VPID, &e);
+    }
+    make_pic_ts(u, 3, 0, t);
+    t += 3600;
+    make_pic_ts(u + 4 * 188, 1, 1, t);
+    t += 3600;
+    memmove(u + 4 * 188, u + 5 * 188, 3 * 188);
+    hdv_error_analyze(&st, u, 7, VPID, &e);
+    CHECK(e.frame_error && e.video_damaged, "the B that took the I's rest");
+    const int after[] = { 3, 3, 2, 3, 3, 2 };
+    int tainted = 0;
+    for (int k = 0; k < 6; k++, t += 3600) {
+        make_pic_ts(u, after[k], 0, t);
+        hdv_error_analyze(&st, u, 4, VPID, &e);
+        tainted += e.tainted;
+    }
+    CHECK(tainted == 6, "every picture of the GOP whose I was lost has an error");
+    make_pic_ts(u, 1, 1, t);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error, "the next intact I is clean");
+
+    /* TEI on an audio packet: an error in that unit, the references stay clean */
+    hdv_error_init(&st);
+    make_pic(u, 1, 1, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    make_pic(u, 2, 0, 0);
+    u[376 + 1] |= 0x80;
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.tei == 1 && !e.video_damaged, "TEI on audio: error, video clean");
+    make_pic(u, 3, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(!e.frame_error, "TEI on audio does not taint");
+    /* a bad sync byte on an audio packet: the same */
+    make_pic(u, 2, 0, 0);
+    u[376] = 0x00;
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    CHECK(e.frame_error && e.sync_lost == 1 && !e.video_damaged, "bad sync on audio");
+    make_pic(u, 3, 0, 0);
+    hdv_error_analyze(&st, u, 4, VPID, &e);
+    /* (the packet without sync is lost to the audio counter: its next packet shows a gap) */
+    CHECK(!e.tainted && !e.video_damaged, "bad sync on audio does not taint");
+}
+
 static void test_synthetic(void)
 {
     hdv_err_state_t st;
@@ -292,6 +411,7 @@ static void test_fixture(void)
 int main(void)
 {
     test_synthetic();
+    test_propagation();
     test_seq_header();
 #ifdef TEST_DATA_DIR
     test_fixture();

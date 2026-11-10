@@ -84,6 +84,8 @@ typedef struct {
                                           (the sinks count frames, not time). The units queued
                                           before the overflow are still delivered; later pushes
                                           are refused. */
+#define PIN_WRITER_REPEATS 2u          /* pin_writer_push_repeat() is used: the consumer keeps
+                                          a copy of the last PIN_UNIT_VIDEO unit it took */
 
 /* capacity_bytes == 0 means PIN_WRITER_DEFAULT_CAPACITY. Starts the consumer
  * thread; returns NULL on allocation/thread-creation failure. */
@@ -98,6 +100,15 @@ pin_writer_t *pin_writer_start_ex(size_t capacity_bytes, pin_writer_consume_fn c
  * just keep counting overflow, cheaply) but not after pin_writer_stop(). */
 int pin_writer_push(pin_writer_t *w, pin_unit_kind_t kind, uint64_t index,
                     const uint8_t *data, size_t len);
+
+/* Never blocks. Queues `count` more copies of the last PIN_UNIT_VIDEO unit pushed (needs
+ * PIN_WRITER_REPEATS and a video unit pushed before): the stand-ins for lost frames, which then
+ * take no room in the queue, so a long gap cannot fill it however fast it is pushed. They still
+ * count in backlog_bytes (the file gets them), and the sink writes each one: the units pushed
+ * behind them wait for that, and a sink slower than the gap needs can still fill the queue. Repeats
+ * pushed one after another join one queue entry. They reach the consumer one unit at a time,
+ * with the indexes from `index` on. Returns 1 if queued, 0 if refused (as pin_writer_push()). */
+int pin_writer_push_repeat(pin_writer_t *w, uint64_t index, uint32_t count);
 
 /* Snapshot, cheap, any thread. */
 void pin_writer_get_stats(pin_writer_t *w, pin_writer_stats_t *out);

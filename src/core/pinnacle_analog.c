@@ -840,11 +840,14 @@ out:
  * badly wrong downstream anyway. */
 #define DELIVER_FRAMES 30
 #define DELIVER_AUDIO 64
-#define DELIVER_ITEMS (DELIVER_FRAMES + DELIVER_AUDIO)
+#define DELIVER_ITEMS (2 * DELIVER_FRAMES + DELIVER_AUDIO)
 #define TICK_MS 20
 
 typedef struct {
     int video;
+    /* video: a run of `fill` stand-ins for lost frames (no buffer of its own: the delivery
+     * thread hands out its copy of the last frame, or black), from v.index / v.seq on */
+    unsigned fill;
     pinnacle_video_frame_t v;
     pinnacle_audio_block_t a;
 } deliver_item_t;
@@ -861,6 +864,12 @@ typedef struct {
     unsigned long ihead, itail, vhead, vtail, ahead, atail;
     uint8_t *vbuf[DELIVER_FRAMES];
     uint8_t *abuf[DELIVER_AUDIO];
+    /* the delivery thread's copy of the last frame it delivered, what a non-black stand-in
+     * shows; black: the assembler's black frame, never changed after open */
+    uint8_t *last;
+    const uint8_t *black;
+    size_t frame_bytes;
+    int last_black;
     int closing;
     volatile int stop;           /* a sink callback returned non-zero */
 } deliver_t;
@@ -870,6 +879,29 @@ static double mono_ms(void)
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
     return t.tv_sec * 1e3 + t.tv_nsec / 1e6;
+}
+
+/* Hands out a run of stand-ins, one call per frame: a long gap costs the USB thread one item,
+ * and every frame of it still reaches the sink, in order. */
+static int deliver_fill(deliver_t *d, const deliver_item_t *it)
+{
+    const pinnacle_capture_sink_t *k = d->sink;
+    pinnacle_video_frame_t f = it->v;
+    const uint8_t *px = f.black ? d->black : d->last;
+    int r = 0;
+    for (unsigned i = 0; i < it->fill; i++) {
+        f.yuyv = px;
+        f.index = it->v.index + i;
+        f.seq = (uint16_t)(it->v.seq + i);
+        f.same_as_previous = i > 0 || !f.black || d->last_black;
+        if (k->video && k->video(&f, k->user))
+            r = 1;
+    }
+    if (f.black && it->fill) {
+        memcpy(d->last, d->black, d->frame_bytes);
+        d->last_black = 1;
+    }
+    return r;
 }
 
 static void *deliver_thread(void *arg)
@@ -883,13 +915,21 @@ static void *deliver_thread(void *arg)
         if (d->ihead != d->itail) {
             deliver_item_t it = d->items[d->ihead % DELIVER_ITEMS];
             pthread_mutex_unlock(&d->lock);
-            int r = it.video ? (k->video ? k->video(&it.v, k->user) : 0)
-                             : (k->audio ? k->audio(&it.a, k->user) : 0);
+            int r;
+            if (it.video && it.fill) {
+                r = deliver_fill(d, &it);
+            } else if (it.video) {
+                r = k->video ? k->video(&it.v, k->user) : 0;
+                memcpy(d->last, it.v.yuyv, d->frame_bytes);
+                d->last_black = it.v.black;
+            } else {
+                r = k->audio ? k->audio(&it.a, k->user) : 0;
+            }
             pthread_mutex_lock(&d->lock);
             d->ihead++;
-            if (it.video)
+            if (it.video && !it.fill)
                 d->vhead++;
-            else
+            else if (!it.video)
                 d->ahead++;
             if (r)
                 d->stop = 1;
@@ -921,6 +961,7 @@ static void deliver_free(deliver_t *d)
         free(d->vbuf[i]);
     for (int i = 0; i < DELIVER_AUDIO; i++)
         free(d->abuf[i]);
+    free(d->last);
     if (d->started) {
         pthread_mutex_destroy(&d->lock);
         pthread_cond_destroy(&d->wake);
@@ -929,10 +970,16 @@ static void deliver_free(deliver_t *d)
 }
 
 static int deliver_start(deliver_t *d, const pinnacle_capture_sink_t *sink, size_t frame_bytes,
-                         size_t audio_bytes)
+                         size_t audio_bytes, const uint8_t *black)
 {
     memset(d, 0, sizeof(*d));
     d->sink = sink;
+    d->black = black;
+    d->frame_bytes = frame_bytes;
+    if (!(d->last = malloc(frame_bytes)))
+        goto fail;
+    memcpy(d->last, black, frame_bytes);
+    d->last_black = 1;
     for (int i = 0; i < DELIVER_FRAMES; i++)
         if (!(d->vbuf[i] = malloc(frame_bytes)))
             goto fail;
@@ -977,15 +1024,18 @@ static uint8_t *deliver_reserve(deliver_t *d, int video)
     return video ? d->vbuf[d->vtail % DELIVER_FRAMES] : d->abuf[d->atail % DELIVER_AUDIO];
 }
 
-/* Queues the item whose buffer deliver_reserve() just returned. */
+/* Queues the item whose buffer deliver_reserve() just returned, or a run of stand-ins (no
+ * buffer), waiting for the delivery thread if the item ring is full. */
 static int deliver_commit(deliver_t *d, const deliver_item_t *it)
 {
     pthread_mutex_lock(&d->lock);
+    while (d->itail - d->ihead == DELIVER_ITEMS)
+        pthread_cond_wait(&d->space, &d->lock);
     d->items[d->itail % DELIVER_ITEMS] = *it;
     d->itail++;
-    if (it->video)
+    if (it->video && !it->fill)
         d->vtail++;
-    else
+    else if (!it->video)
         d->atail++;
     pthread_cond_signal(&d->wake);
     pthread_mutex_unlock(&d->lock);
@@ -993,6 +1043,23 @@ static int deliver_commit(deliver_t *d, const deliver_item_t *it)
 }
 
 /* --- assembler ----------------------------------------------------------- */
+
+/* While a long video gap waits for the audio to show whether time went on (see video_gap()),
+ * the frames after it are held, up to this many: a host stall can hand the read loop a few
+ * video transfers' worth of frames before it polls the audio endpoint. */
+#define HOLD_FRAMES 16
+#define HOLD_ITEMS (2 * HOLD_FRAMES + 1)
+
+typedef struct {
+    int fill;                    /* 0: a frame (px), 1: a run of stand-ins */
+    uint8_t *px;
+    uint16_t seq;
+    uint64_t t;
+    int repeated;
+    size_t received;
+    uint16_t n;                  /* fill: frames */
+    int black;                   /* fill: black stand-ins */
+} held_t;
 
 typedef struct {
     unsigned width, height;
@@ -1002,6 +1069,8 @@ typedef struct {
     uint8_t *last_good;          /* last fully-received frame, to repeat for a lost one */
     uint8_t *black;              /* a black frame (YUYV 16/128), the fill for a long gap */
     size_t frame_bytes, received;
+    size_t xfer_bytes;           /* the size of a video transfer: one that comes back shorter
+                                    ended on a short packet (0: not known) */
     int in_frame, have_frame;
     uint16_t seq, last_vseq;
     uint64_t vtime, last_vtime;
@@ -1011,13 +1080,28 @@ typedef struct {
     int have_audio_start, audio_started;
     uint16_t first_vseq;
     uint64_t next_atime;         /* device time the next audio packet should carry */
+    /* Device ticks per packet and per frame: nominal at first, then measured from the video
+     * (the "10 MHz" clock runs about 100 ppm fast), so a long gap converts to the right number
+     * of frames and packets alike. */
     uint64_t packet_ticks, frame_ticks;
+    uint64_t packet_ticks_nom, frame_ticks_nom;
+    uint64_t base_vtime;         /* start of the current run of consecutive frames */
+    unsigned long base_frames;
     uint8_t *silence;
+    uint8_t *apad;               /* a short audio packet padded to full length */
     unsigned spp;
-    /* A stream whose counter/clock jumped while the other did not move with it is a
-     * restart, not a loss: the time it jumped to, per stream (0 video, 1 audio). */
+    /* A stream whose clock jumped while the other did not run on through the jump is a restart,
+     * not a loss: the time it jumped to, per stream (0 video, 1 audio). */
     uint64_t jump_time[2];
     int jump_set[2];
+    /* A long video gap waiting for the audio: the frames it would fill, from pend_seq on,
+     * up to pend_vtime; held[] has what came after it, in order. */
+    int pend;
+    uint16_t pend_n, pend_seq;
+    uint64_t pend_vtime;
+    held_t held[HOLD_ITEMS];
+    unsigned nheld, nheld_frames;
+    uint8_t *hold_buf[HOLD_FRAMES];
     /* Stopping: no more video, but wait (briefly) for the audio of the
      * frames already delivered, so both streams end together. */
     volatile int *ext_stop;
@@ -1050,8 +1134,8 @@ static int audio_caught_up(const assembler_t *s)
     return !s->have_frame || s->audio_done;
 }
 
-static int emit_frame_x(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
-                        int repeated, size_t received, int black)
+static int emit_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
+                      int repeated, size_t received)
 {
     uint8_t *buf = deliver_reserve(s->dl, 1);
     memcpy(buf, yuyv, s->frame_bytes);
@@ -1059,35 +1143,31 @@ static int emit_frame_x(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint6
         .video = 1,
         .v = { .yuyv = buf, .width = s->width, .height = s->height,
                .index = s->index++, .seq = seq, .device_time = t,
-               .repeated = repeated, .received = received, .black = black },
+               .repeated = repeated, .received = received },
     };
     s->st->frames++;
     return deliver_commit(s->dl, &it);
 }
 
-static int emit_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
-                      int repeated, size_t received)
-{
-    return emit_frame_x(s, yuyv, seq, t, repeated, received, 0);
-}
-
 static int emit_audio(assembler_t *s, const uint8_t *pcm, unsigned samples, uint16_t seq,
-                      uint64_t t, int silence)
+                      uint64_t t, int silence, int padded)
 {
     uint8_t *buf = deliver_reserve(s->dl, 0);
     memcpy(buf, pcm, (size_t)samples * 4);
     deliver_item_t it = {
         .video = 0,
-        .a = { .pcm = buf, .samples = samples, .seq = seq, .device_time = t, .silence = silence },
+        .a = { .pcm = buf, .samples = samples, .seq = seq, .device_time = t, .silence = silence,
+               .padded = padded },
     };
     s->st->audio_blocks++;
     return deliver_commit(s->dl, &it);
 }
 
-/* Gaps of 250 frames or more are filled only when the audio shows time went on; a gap in
- * both streams is a restart. A gap over a second is filled black, a shorter one with the
- * last good frame. */
+/* Gaps of 250 frames or more are filled only when the other stream shows time went on; a gap
+ * in both streams is a restart. A gap over a second is filled black, a shorter one with the
+ * last good frame. More than MAX_FILL frames is a restart in either stream. */
 #define FILL_GAP_FRAMES 250
+#define MAX_FILL 0x7fff
 #define BLACK_AFTER_TICKS DEVICE_HZ
 
 static int near_time(const assembler_t *s, uint64_t a, uint64_t b)
@@ -1096,44 +1176,156 @@ static int near_time(const assembler_t *s, uint64_t a, uint64_t b)
     return d <= 3 * s->frame_ticks;
 }
 
-/* Emits n frames for the counters after last_vseq: black if they span over a second. */
-static int fill_frames(assembler_t *s, uint16_t n)
+/* Hands n stand-ins from counter `seq` on to the delivery thread as one item. */
+static int fill_emit(assembler_t *s, uint16_t seq, uint16_t n, int black)
 {
-    int black = (uint64_t)n * s->frame_ticks >= BLACK_AFTER_TICKS;
-    int r = 0;
+    if (!n)
+        return 0;
     s->st->frames_missing += n;
     if (black)
         s->st->frames_black += n;
-    for (uint16_t i = 1; i <= n && !r; i++)
-        r = emit_frame_x(s, black ? s->black : s->last_good, (uint16_t)(s->last_vseq + i), 0, 1, 0,
-                         black);
+    s->st->frames += n;
+    deliver_item_t it = {
+        .video = 1,
+        .fill = n,
+        .v = { .width = s->width, .height = s->height, .index = s->index, .seq = seq,
+               .repeated = 1, .black = black },
+    };
+    s->index += n;
+    return deliver_commit(s->dl, &it);
+}
+
+static int fill_is_black(const assembler_t *s, uint16_t n)
+{
+    return (uint64_t)n * s->frame_ticks >= BLACK_AFTER_TICKS;
+}
+
+static int hold_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
+                      int repeated, size_t received);
+static int resolve_pending(assembler_t *s, int force);
+
+/* A frame for the output: delivered now, or held behind a long gap that is not decided yet. */
+static int out_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t, int repeated,
+                     size_t received)
+{
+    if (s->pend) {
+        if (hold_frame(s, yuyv, seq, t, repeated, received))
+            return 0;
+        int r = resolve_pending(s, 1);    /* nothing more can be held: decide now */
+        if (r)
+            return r;
+    }
+    return emit_frame(s, yuyv, seq, t, repeated, received);
+}
+
+/* n stand-ins for the counters after last_vseq: black if they span over a second. */
+static int out_fill(assembler_t *s, uint16_t n)
+{
+    int black = fill_is_black(s, n);
+    uint16_t seq = (uint16_t)(s->last_vseq + 1);
     if (black)
         memcpy(s->last_good, s->black, s->frame_bytes);   /* a short frame next repeats black */
+    if (s->pend && s->nheld < HOLD_ITEMS) {
+        s->held[s->nheld++] = (held_t){ .fill = 1, .seq = seq, .n = n, .black = black };
+        return 0;
+    }
+    if (s->pend) {
+        int r = resolve_pending(s, 1);
+        if (r)
+            return r;
+    }
+    return fill_emit(s, seq, n, black);
+}
+
+static int hold_frame(assembler_t *s, const uint8_t *yuyv, uint16_t seq, uint64_t t,
+                      int repeated, size_t received)
+{
+    if (s->nheld_frames == HOLD_FRAMES || s->nheld == HOLD_ITEMS)
+        return 0;
+    uint8_t **b = &s->hold_buf[s->nheld_frames];
+    if (!*b && !(*b = malloc(s->frame_bytes)))
+        return 0;
+    memcpy(*b, yuyv, s->frame_bytes);
+    s->held[s->nheld++] = (held_t){ .px = *b, .seq = seq, .t = t, .repeated = repeated,
+                                    .received = received };
+    s->nheld_frames++;
+    return 1;
+}
+
+/* The audio has run on through the long video gap: fill it. It jumped too (or force, and
+ * the audio has still not got there): the gap was a restart, left out of both streams. Then
+ * what was held goes out. Returns non-zero if the sink asked to stop. */
+static int resolve_pending(assembler_t *s, int force)
+{
+    if (!s->pend)
+        return 0;
+    int jumped = s->jump_set[1] && near_time(s, s->jump_time[1], s->pend_vtime);
+    int ran = s->audio_started && s->next_atime + 2 * s->packet_ticks >= s->pend_vtime;
+    if (!jumped && !ran && !force)
+        return 0;
+    s->pend = 0;
+    int r = 0;
+    if (ran && !jumped) {
+        r = fill_emit(s, s->pend_seq, s->pend_n, fill_is_black(s, s->pend_n));
+    } else {
+        s->jump_set[0] = 1;
+        s->jump_time[0] = s->pend_vtime;
+    }
+    for (unsigned i = 0; i < s->nheld && !r; i++) {
+        const held_t *h = &s->held[i];
+        r = h->fill ? fill_emit(s, h->seq, h->n, h->black)
+                    : emit_frame(s, h->px, h->seq, h->t, h->repeated, h->received);
+    }
+    s->nheld = s->nheld_frames = 0;
     return r;
 }
 
-/* How many lost frames precede the one just received that are to be filled. */
-static uint16_t video_gap_to_fill(assembler_t *s)
+/* Lost frames before the one just received, from the device time: the audio fills its gaps by
+ * the same clock, so both streams fill the same span. The frame counter is only a check (it is
+ * logged where the two disagree): if the clock jumped while the counter ran on, filling by the
+ * counter would leave the audio's fill of the same jump unmatched.
+ * Returns 1 when a gap of FILL_GAP_FRAMES or more waits for the audio (*fill has its size). */
+static int video_gap(assembler_t *s, uint16_t *fill)
 {
-    uint16_t gap = (uint16_t)(s->seq - s->last_vseq - 1);
-    if (gap == 0 || gap >= 0x8000)
-        return 0;                       /* none, or the counter went back: a restart */
-    if (gap < FILL_GAP_FRAMES)
-        return gap;
-    /* The clock must agree with the counter and the audio must have run on through the gap
-     * (without itself jumping to this time): the capture device lost the frames, not the signal. */
-    int agrees = 0;
-    if (s->vtime > s->last_vtime) {
-        uint64_t n = (s->vtime - s->last_vtime + s->frame_ticks / 2) / s->frame_ticks;
-        agrees = n >= (uint64_t)gap && n <= (uint64_t)gap + 2;
+    *fill = 0;
+    if (s->vtime <= s->last_vtime)
+        return 0;                       /* the clock went back: a restart, nothing to fill */
+    uint64_t n = (s->vtime - s->last_vtime + s->frame_ticks / 2) / s->frame_ticks;
+    uint64_t gap = n > 1 ? n - 1 : 0;
+    uint16_t cnt = (uint16_t)(s->seq - s->last_vseq - 1);
+    if ((gap || cnt) && (gap > 0xffff || cnt != (uint16_t)gap))
+        pin_logf(PIN_LOG_WARN, "pinnacle: analog video gap: the counter says %u frames, the clock "
+                 "%llu; going by the clock\n", (unsigned)cnt, (unsigned long long)gap);
+    if (!gap)
+        return 0;
+    if (gap > MAX_FILL || (s->jump_set[1] && near_time(s, s->jump_time[1], s->vtime)) ||
+        (gap >= FILL_GAP_FRAMES && !s->audio_started)) {
+        s->jump_set[0] = 1;
+        s->jump_time[0] = s->vtime;
+        return 0;
     }
-    int audio_ran = s->audio_started && s->next_atime + 2 * s->packet_ticks >= s->vtime &&
-                    !(s->jump_set[1] && near_time(s, s->jump_time[1], s->vtime));
-    if (agrees && audio_ran)
-        return gap;
-    s->jump_set[0] = 1;
-    s->jump_time[0] = s->vtime;
-    return 0;
+    *fill = (uint16_t)gap;
+    if (gap < FILL_GAP_FRAMES || s->next_atime + 2 * s->packet_ticks >= s->vtime)
+        return 0;
+    return 1;   /* the audio has not got this far yet */
+}
+
+/* A run of consecutive frames gives the device clock's ticks per frame. */
+static void measure_clock(assembler_t *s)
+{
+    uint64_t d = s->vtime - s->last_vtime;
+    if (s->vtime <= s->last_vtime || s->seq != (uint16_t)(s->last_vseq + 1) ||
+        d + s->frame_ticks / 50 < s->frame_ticks || d > s->frame_ticks + s->frame_ticks / 50) {
+        s->base_frames = 0;
+        return;
+    }
+    if (!s->base_frames)
+        s->base_vtime = s->last_vtime;
+    s->base_frames++;
+    if (s->base_frames % FILL_GAP_FRAMES == 0) {
+        s->frame_ticks = (s->vtime - s->base_vtime + s->base_frames / 2) / s->base_frames;
+        s->packet_ticks = s->packet_ticks_nom * s->frame_ticks / s->frame_ticks_nom;
+    }
 }
 
 static int finish_frame(assembler_t *s)
@@ -1144,9 +1336,21 @@ static int finish_frame(assembler_t *s)
     if (truncated)
         s->st->frames_truncated++;
     if (s->have_frame) {
-        uint16_t gap = video_gap_to_fill(s);
-        if (gap)
-            r = fill_frames(s, gap);
+        uint16_t gap;
+        int wait = video_gap(s, &gap);
+        if (wait) {
+            if (s->pend)
+                r = resolve_pending(s, 1);   /* a second long gap: the first is decided now */
+            s->pend = 1;
+            s->pend_n = gap;
+            s->pend_seq = (uint16_t)(s->last_vseq + 1);
+            s->pend_vtime = s->vtime;
+            if (fill_is_black(s, gap))
+                memcpy(s->last_good, s->black, s->frame_bytes);
+        } else if (gap) {
+            r = out_fill(s, gap);
+        }
+        measure_clock(s);
     }
     s->have_frame = 1;
     s->last_vseq = s->seq;
@@ -1158,7 +1362,7 @@ static int finish_frame(assembler_t *s)
          * frame's pixels, so showing it would comb two different frames
          * together. Repeat the last full frame instead, the same as a
          * frame the counter skipped. */
-        return emit_frame(s, s->last_good, s->seq, s->vtime, 1, s->received);
+        return out_frame(s, s->last_good, s->seq, s->vtime, 1, s->received);
     }
     /* This one is complete: it becomes the frame to repeat, and the old
      * one's buffer takes the next frame (which overwrites all of it, or
@@ -1166,7 +1370,7 @@ static int finish_frame(assembler_t *s)
     uint8_t *done = s->frame;
     s->frame = s->last_good;
     s->last_good = done;
-    return emit_frame(s, done, s->seq, s->vtime, 0, s->received);
+    return out_frame(s, done, s->seq, s->vtime, 0, s->received);
 }
 
 /* The device sends a frame as two fields, one after the other: all lines
@@ -1191,9 +1395,9 @@ static void weave(assembler_t *s, const uint8_t *d, size_t n)
     }
 }
 
-static int on_video(assembler_t *s, const uint8_t *d, size_t n)
+/* One transfer's data (or what follows a header found inside one, see on_video()). */
+static int on_video_chunk(assembler_t *s, const uint8_t *d, size_t n, int ends_short)
 {
-    size_t wire = n;
     /* Pixel data cannot look like a header: 0xff never occurs in ITU-R BT.656
      * pixel values. Nothing else in the header is checked: the time field
      * is a 64-bit counter and its upper half is not always zero. */
@@ -1201,8 +1405,7 @@ static int on_video(assembler_t *s, const uint8_t *d, size_t n)
     int r = 0;
 
     /* A header while a frame is open: that frame ended without its short
-     * packet. Deliver what we have. (Pixel data cannot look like a header:
-     * 0xff never occurs in ITU-R BT.656 pixel values.) */
+     * packet. Deliver what we have. */
     if (header && s->in_frame && (r = finish_frame(s)) != 0)
         return r;
     if (header) {
@@ -1227,9 +1430,31 @@ static int on_video(assembler_t *s, const uint8_t *d, size_t n)
     size_t room = s->frame_bytes - s->received, take = n < room ? n : room;
     weave(s, d, take);
     s->received += take;
-    if (wire % 512 != 0 || s->received >= s->frame_bytes)
+    if (ends_short || s->received >= s->frame_bytes)
         r = finish_frame(s);
     return r;
+}
+
+/* A frame ends with a short USB packet, which also ends the transfer. A frame cut short by the
+ * device (the host was late) that happens to end on a whole packet has none: a zero-length
+ * packet then ends the transfer early, or, without one, the next frame's header follows in the
+ * same transfer at a packet boundary. Both end the open frame here. */
+static int on_video(assembler_t *s, const uint8_t *d, size_t n)
+{
+    if (n == 0)
+        return s->in_frame ? finish_frame(s) : 0;
+    int ends_short = n % 512 != 0 || (s->xfer_bytes && n < s->xfer_bytes);
+    for (size_t k = 512; k + PACKET_HEADER <= n; k += 512) {
+        if (d[k] == 0xff && d[k + 1] == 0x00) {
+            int r = on_video_chunk(s, d, k, 1);
+            if (r)
+                return r;
+            d += k;
+            n -= k;
+            k = 0;
+        }
+    }
+    return on_video_chunk(s, d, n, ends_short);
 }
 
 /* An audio packet's counter is the video frame its first sample was taken
@@ -1261,39 +1486,63 @@ static int on_audio(assembler_t *s, const uint8_t *d, size_t n)
      * small loss is accepted. The 300 ms timeout in assembler_cb() does pad, as no later packet
      * is there to show where the audio stopped. */
     if (s->draining && (uint16_t)(seq - s->last_vseq - 1) < 0x8000) {
-        s->audio_done = 1;   /* past the last delivered frame */
-        return 0;
+        /* past the last frame: a long video gap still waiting is decided by whether the audio
+         * ran on up to here */
+        if (s->pend && t <= s->next_atime + 2 * s->packet_ticks)
+            s->next_atime = t;
+        r = resolve_pending(s, 1);
+        s->audio_done = 1;
+        return r;
     }
     if (t > s->next_atime) {
         uint64_t lost = (t - s->next_atime + s->packet_ticks / 2) / s->packet_ticks;
-        /* A longer gap is silence only if the video ran on through it; else the clock restarted. */
+        /* A longer gap is silence only if the video ran on through it; else the clock restarted.
+         * A long video gap still waiting for the audio at this time did not run on either. */
         int video_ran = s->have_frame && s->last_vtime + 3 * s->frame_ticks >= t &&
-                        !(s->jump_set[0] && near_time(s, s->jump_time[0], t));
-        if (lost >= FILL_GAP_FRAMES && !video_ran) {
+                        !(s->jump_set[0] && near_time(s, s->jump_time[0], t)) &&
+                        !(s->pend && near_time(s, s->pend_vtime, t));
+        if (lost > MAX_FILL || (lost >= FILL_GAP_FRAMES && !video_ran)) {
             s->jump_set[1] = 1;
             s->jump_time[1] = t;
         } else {
             s->st->audio_missing += (unsigned long)lost;
             for (uint64_t i = 0; i < lost && !r; i++)
-                r = emit_audio(s, s->silence, s->spp, seq, 0, 1);
+                r = emit_audio(s, s->silence, s->spp, seq, 0, 1, 0);
         }
     }
     unsigned samples = (unsigned)((n - PACKET_HEADER) / 4);
+    const uint8_t *pcm = d + PACKET_HEADER;
+    int padded = 0;
+    if (samples < s->spp) {
+        /* Every packet stands for a whole packet's time: a short one is padded with silence
+         * to full length, or the audio would slip against the video by the samples missing. */
+        memcpy(s->apad, pcm, (size_t)samples * 4);
+        memset(s->apad + (size_t)samples * 4, 0, (size_t)(s->spp - samples) * 4);
+        pcm = s->apad;
+        samples = s->spp;
+        padded = 1;
+        s->st->audio_short++;
+    }
     s->next_atime = t + s->packet_ticks * samples / s->spp;
-    return r ? r : emit_audio(s, d + PACKET_HEADER, samples, seq, t, 0);
+    if (!r)
+        r = emit_audio(s, pcm, samples, seq, t, 0, padded);
+    if (!r)
+        r = resolve_pending(s, 0);
+    return r;
 }
 
 /* At the end: if audio ran on over a second past the last frame, the video was lost
  * (the signal dropped, say): add black frames up to the audio. */
 static void pad_video_to_audio(assembler_t *s)
 {
+    resolve_pending(s, 1);
     uint64_t video_end = s->last_vtime + s->frame_ticks;
     if (!s->have_frame || s->next_atime <= video_end + BLACK_AFTER_TICKS)
         return;
     uint64_t n = (s->next_atime - video_end) / s->frame_ticks;
-    if (n > 0x7fff)
-        n = 0x7fff;
-    fill_frames(s, (uint16_t)n);
+    if (n > MAX_FILL)
+        n = MAX_FILL;
+    fill_emit(s, (uint16_t)(s->last_vseq + 1), (uint16_t)n, 1);
 }
 
 static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
@@ -1314,7 +1563,7 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
     if (!s->draining)
         return 0;
 
-    if (audio_caught_up(s)) {
+    if (audio_caught_up(s) && !s->pend) {
         pad_video_to_audio(s);
         return 1;
     }
@@ -1324,12 +1573,13 @@ static int assembler_cb(uint8_t ep, const uint8_t *data, size_t len, void *user)
               (now.tv_nsec - s->drain_start.tv_nsec) / 1000000;
     if (ms < 300)
         return 0;
+    resolve_pending(s, 1);
     /* The audio never came: pad up to the end of the last frame, so the
      * streams still end together. */
     uint64_t end = s->last_vtime + s->frame_ticks;
     for (int i = 0; i < 250 && s->next_atime + s->packet_ticks / 2 <= end; i++) {
         s->st->audio_missing++;
-        emit_audio(s, s->silence, s->spp, s->last_vseq, 0, 1);
+        emit_audio(s, s->silence, s->spp, s->last_vseq, 0, 1, 0);
         s->next_atime += s->packet_ticks;
     }
     pad_video_to_audio(s);
@@ -1347,34 +1597,38 @@ static int assembler_open(assembler_t *s, const pinnacle_analog_t *a,
     s->height = a->height;
     s->st = stats;
     s->spp = a->audio_samples_per_packet;
-    /* In ticks of the device's ~10 MHz clock; it runs about 100 ppm fast,
-     * far inside the tolerance on_audio() needs. */
-    s->packet_ticks = (uint64_t)s->spp * DEVICE_HZ / AUDIO_RATE;
-    s->frame_ticks = pinnacle_std_is_60hz(a->cfg.standard) ? (uint64_t)DEVICE_HZ * 1001 / 30000
-                                                           : DEVICE_HZ / 25;
+    /* In ticks of the device's ~10 MHz clock; it runs about 100 ppm fast, which
+     * measure_clock() corrects from the video once it has run a while. */
+    s->packet_ticks = s->packet_ticks_nom = (uint64_t)s->spp * DEVICE_HZ / AUDIO_RATE;
+    s->frame_ticks = s->frame_ticks_nom = pinnacle_std_is_60hz(a->cfg.standard)
+                                              ? (uint64_t)DEVICE_HZ * 1001 / 30000
+                                              : DEVICE_HZ / 25;
     s->frame_bytes = (size_t)a->width * a->height * 2;
     s->frame = malloc(s->frame_bytes);
     s->last_good = malloc(s->frame_bytes);
     s->black = malloc(s->frame_bytes);
     s->silence = calloc(s->spp, 4);
+    s->apad = malloc((size_t)s->spp * 4);
     deliver_t *dl = malloc(sizeof(*dl));
     /* an audio block is never bigger than the transfer it came in */
     size_t audio_bytes = (s->spp * 4 + PACKET_HEADER + 511) & ~(size_t)511;
-    if (!s->frame || !s->last_good || !s->black || !s->silence || !dl ||
-        deliver_start(dl, sink, s->frame_bytes, audio_bytes) != 0) {
+    if (s->black)
+        for (size_t i = 0; i < s->frame_bytes; i += 2) {
+            s->black[i] = 0x10;
+            s->black[i + 1] = 0x80;
+        }
+    if (!s->frame || !s->last_good || !s->black || !s->silence || !s->apad || !dl ||
+        deliver_start(dl, sink, s->frame_bytes, audio_bytes, s->black) != 0) {
         free(s->frame);
         free(s->last_good);
         free(s->black);
         free(s->silence);
+        free(s->apad);
         free(dl);
         return -1;
     }
     s->dl = dl;
     /* Black, in case the very first frame arrives short. */
-    for (size_t i = 0; i < s->frame_bytes; i += 2) {
-        s->black[i] = 0x10;
-        s->black[i + 1] = 0x80;
-    }
     memcpy(s->frame, s->black, s->frame_bytes);
     memcpy(s->last_good, s->black, s->frame_bytes);
     /* The assembler watches stop_flag itself, so it can drain first. */
@@ -1382,15 +1636,19 @@ static int assembler_open(assembler_t *s, const pinnacle_analog_t *a,
     return 0;
 }
 
-/* Delivers what is queued and frees the assembler. */
+/* Delivers what is queued (and what is still held) and frees the assembler. */
 static void assembler_close(assembler_t *s)
 {
+    resolve_pending(s, 1);
     deliver_stop(s->dl);
     free(s->dl);
     free(s->frame);
     free(s->last_good);
     free(s->black);
     free(s->silence);
+    free(s->apad);
+    for (int i = 0; i < HOLD_FRAMES; i++)
+        free(s->hold_buf[i]);
 }
 
 pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
@@ -1401,6 +1659,7 @@ pinnacle_status_t pinnacle_analog_capture_loop(pinnacle_analog_t *a,
     assembler_t s;
     if (assembler_open(&s, a, sink, stats, stop_flag) != 0)
         return PINNACLE_ERR_USB_TRANSFER;
+    s.xfer_bytes = VIDEO_XFER;
     volatile int never = 0;
     pinnacle_status_t st = pinnacle_analog_read_loop(a, assembler_cb, &s, &never);
     assembler_close(&s);

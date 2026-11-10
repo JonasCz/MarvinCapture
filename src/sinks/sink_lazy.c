@@ -71,6 +71,7 @@ typedef struct {
     char path[PIN_PATH_MAX];    /* written by the writer thread when renumbered: under mtx */
     pin_sink_params_t params;
     int have_open;              /* open() was called */
+    /* set by the writer thread, read by get_status() from others: written under mtx */
     int opened;                 /* the real sink was opened (the file exists) */
     pin_status_t open_error;
     uint64_t units;             /* video units the real sink took */
@@ -180,12 +181,16 @@ static pin_status_t lazy_ensure_open(lazy_priv_t *p)
     int existed = pin_fs_exists(p->path);
     pin_status_t st = p->inner->open(p->inner, p->path, &p->params);
     if (st != PIN_OK) {
+        pthread_mutex_lock(&p->mtx);
         p->open_error = st;
+        pthread_mutex_unlock(&p->mtx);
         /* the open can fail after it created the file (header, encoder or thread start) */
         p->created_by_open = !existed && pin_fs_exists(p->path);
         return st;
     }
+    pthread_mutex_lock(&p->mtx);
     p->opened = 1;
+    pthread_mutex_unlock(&p->mtx);
     return PIN_OK;
 }
 
@@ -197,8 +202,11 @@ static pin_status_t lazy_write_unit(pin_sink_t *s, const uint8_t *data, size_t l
         return st;
     uint64_t damaged = inner_damaged(p);
     st = p->inner->write_unit(p->inner, data, len);
-    if (st == PIN_OK && inner_damaged(p) == damaged)
+    if (st == PIN_OK && inner_damaged(p) == damaged) {
+        pthread_mutex_lock(&p->mtx);
         p->units++;
+        pthread_mutex_unlock(&p->mtx);
+    }
     return st;
 }
 
@@ -210,8 +218,11 @@ static pin_status_t lazy_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t 
         return st;
     uint64_t damaged = inner_damaged(p);
     st = p->inner->write_video(p->inner, yuyv, len);
-    if (st == PIN_OK && inner_damaged(p) == damaged)
+    if (st == PIN_OK && inner_damaged(p) == damaged) {
+        pthread_mutex_lock(&p->mtx);
         p->units++;
+        pthread_mutex_unlock(&p->mtx);
+    }
     return st;
 }
 
@@ -231,11 +242,17 @@ static void lazy_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     lazy_priv_t *p = s->priv;
     memset(out, 0, sizeof(*out));
-    if (p->opened && p->inner->get_status)
+    pthread_mutex_lock(&p->mtx);
+    int opened = p->opened;
+    uint64_t units = p->units;
+    pin_status_t open_error = p->open_error;
+    pthread_mutex_unlock(&p->mtx);
+    /* the inner sink's own get_status() is safe from any thread once it is open */
+    if (opened && p->inner->get_status)
         p->inner->get_status(p->inner, out);
-    out->units_written = p->units;
-    if (p->open_error != PIN_OK)
-        out->last_error = p->open_error;
+    out->units_written = units;
+    if (open_error != PIN_OK)
+        out->last_error = open_error;
 }
 
 static pin_status_t lazy_close(pin_sink_t *s)

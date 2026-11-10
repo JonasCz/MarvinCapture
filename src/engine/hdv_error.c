@@ -45,11 +45,23 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
     uint8_t cap[6];
     int capn = 0, pics = 0;
 
+    /* a TEI or a bad sync byte damages the picture only on a video packet: on an audio or PSI
+     * packet it is an error in this unit that no later picture depends on. A video packet whose
+     * own header was hit (its PID unreadable) still shows as a continuity gap of the video PID. */
+    int video_hit = 0, video_seen = 0, video_cc_first = 0;
     for (size_t i = 0; i < n; i++) {
         const uint8_t *p = ts + i * 188;
-        if (p[0] != 0x47) { out->sync_lost++; continue; }
-        if (p[1] & 0x80) out->tei++;
         int pid = ((p[1] & 0x1F) << 8) | p[2];
+        int is_video = video_pid <= 0 || pid == video_pid;
+        if (p[0] != 0x47) {
+            out->sync_lost++;
+            if (is_video) video_hit = 1;
+            continue;
+        }
+        if (p[1] & 0x80) {
+            out->tei++;
+            if (is_video) video_hit = 1;
+        }
         int afc = (p[3] >> 4) & 3;
         if (pid == 0x1FFF) continue;
         if (afc & 1) {
@@ -58,9 +70,14 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
             /* a packet that flags a discontinuity announces the jump: it is the camera's own
              * break (the reassembler honours the flag the same way), not a loss */
             int flagged = (afc & 2) && p[4] > 0 && (p[5] & 0x80);
-            if (last >= 0 && cc != last && cc != ((last + 1) & 15) && !flagged) {
+            int gap = last >= 0 && cc != last && cc != ((last + 1) & 15) && !flagged;
+            if (gap) {
                 out->cc_errors++;
                 if (pid == video_pid) video_cc_err = 1;
+            }
+            if (pid == video_pid && !video_seen) {
+                video_seen = 1;
+                video_cc_first = gap;
             }
             st->cc[pid] = (int16_t)cc;
         }
@@ -156,9 +173,35 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
         if (pes_bad || pics == 0) out->pes_errors++;
     }
     /* lost data is charged to the video: which PID lost it is unknown */
-    int own = out->tei || out->sync_lost || video_cc_err || out->pes_errors || out->lost_data;
-    if (video_pid > 0 && (out->tei || out->sync_lost)) own = 1;
+    int own = video_hit || video_cc_err || out->pes_errors || out->lost_data;
     out->video_damaged = own;
+
+    /* A gap on the first video packet of this picture may have been the tail of the picture
+     * before it: if that was a reference, the pictures that depend on it are damaged too. (Data
+     * lost in transit is flagged on the unit it fell into, so it does not reach back.) */
+    if (video_cc_first && st->last_ref)
+        st->ref_dmg_last = 1;
+    int loss_before = video_cc_first || out->lost_data;
+    /* A whole picture lost with the data (its PES start gone, so its rest joined the unit before)
+     * leaves a gap of more than one frame in the decode times. Its type is unknown; it may have
+     * been the GOP's I, which every picture up to the next intact I depends on, so the
+     * references are taken as damaged. */
+    if (out->dts_valid && st->last_dts_valid && (loss_before || st->last_loss)) {
+        int64_t d = (out->dts - st->last_dts) & ((1LL << 33) - 1);
+        if (st->dts_step > 0 && d >= st->dts_step + st->dts_step / 2 && d < 90000)
+            st->ref_dmg_last = st->ref_dmg_prev = 1;
+    }
+    /* one frame's decode time step, learned from neighbours without a loss */
+    int video_loss = video_cc_err || out->pes_errors || out->lost_data;
+    if (out->dts_valid && st->last_dts_valid && !video_loss && !st->last_loss) {
+        int64_t d = (out->dts - st->last_dts) & ((1LL << 33) - 1);
+        if (d > 0 && d < 90000 && (st->dts_step == 0 || d < st->dts_step))
+            st->dts_step = d;
+    }
+    st->last_dts_valid = out->dts_valid;
+    st->last_dts = out->dts;
+    st->last_loss = video_loss;
+    st->last_ref = out->pic_type == 1 || out->pic_type == 2;
 
     /* propagate */
     int tainted = 0;
@@ -180,7 +223,7 @@ void hdv_error_analyze(hdv_err_state_t *st, const uint8_t *ts, size_t n,
         break;
     }
     out->tainted = tainted;
-    out->frame_error = own || tainted || out->cc_errors;
+    out->frame_error = own || tainted || out->cc_errors || out->tei || out->sync_lost;
 }
 
 int hdv_unit_has_seq_header(const uint8_t *ts, size_t n, int pid)

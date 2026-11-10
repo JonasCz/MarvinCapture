@@ -164,6 +164,8 @@ typedef struct {
     uint64_t device_time;
     int repeated;            /* a stand-in: the previous frame again, or black; this one never arrived, or arrived short */
     int black;               /* the stand-in is a black frame */
+    int same_as_previous;    /* a stand-in whose pixels are those of the frame delivered just
+                                before it: a consumer may store a reference instead of a copy */
     size_t received;         /* bytes that arrived: 0 never arrived, below width*height*2 short */
 } pinnacle_video_frame_t;
 
@@ -173,6 +175,7 @@ typedef struct {
     uint16_t seq;
     uint64_t device_time;
     int silence;             /* stand-in for a packet that never arrived */
+    int padded;              /* arrived short and was padded with silence to a full packet */
 } pinnacle_audio_block_t;
 
 typedef struct {
@@ -182,6 +185,7 @@ typedef struct {
     unsigned long frames_truncated;
     unsigned long audio_blocks;
     unsigned long audio_missing;   /* packets lost (device-time gaps), filled with silence */
+    unsigned long audio_short;     /* packets that arrived short, padded with silence */
     unsigned long resyncs;         /* video data outside a frame, discarded */
 } pinnacle_capture_stats_t;
 

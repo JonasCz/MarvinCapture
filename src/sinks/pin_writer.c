@@ -29,6 +29,8 @@ typedef struct {
     uint64_t index;
     size_t off;      /* into byte ring, mod capacity */
     size_t len;
+    uint32_t repeat; /* > 0: that many copies of the last video unit, no bytes of its own */
+    size_t rep_len;  /* the size of each copy */
 } unit_hdr_t;
 
 struct pin_writer {
@@ -42,6 +44,9 @@ struct pin_writer {
     pin_writer_stats_t stats;
     int closed, failed, overflowed, aborted;
     unsigned flags;
+    int have_video;                   /* a video unit was pushed (a repeat has a source) */
+    uint64_t rep_bytes;               /* bytes the queued repeats will write: in backlog_bytes */
+    size_t last_video_len;
 
     pthread_mutex_t lock;
     pthread_cond_t wake;
@@ -60,6 +65,9 @@ static void *writer_thread(void *arg)
      * path below copies nothing extra. */
     uint8_t *scratch = NULL;
     size_t scratch_cap = 0;
+    /* PIN_WRITER_REPEATS: the last video unit taken, the source of the repeats after it */
+    uint8_t *last = NULL;
+    size_t last_len = 0, last_cap = 0;
 
     pthread_mutex_lock(&w->lock);
     for (;;) {
@@ -70,6 +78,30 @@ static void *writer_thread(void *arg)
 
         unit_hdr_t u = w->units[w->unit_tail % PIN_WRITER_MAX_QUEUED_UNITS];
         pthread_mutex_unlock(&w->lock);
+
+        if (u.repeat) {
+            int rc = 0;
+            for (uint32_t k = 0; k < u.repeat && !rc; k++) {
+                pthread_mutex_lock(&w->lock);
+                int stop = w->aborted;
+                pthread_mutex_unlock(&w->lock);
+                if (stop)
+                    break;
+                rc = w->consume(u.kind, u.index + k, last, last_len, w->user);
+                pthread_mutex_lock(&w->lock);
+                w->rep_bytes -= u.rep_len;
+                w->stats.backlog_bytes = w->byte_head - w->byte_tail + w->rep_bytes;
+                pthread_mutex_unlock(&w->lock);
+            }
+            pthread_mutex_lock(&w->lock);
+            w->unit_tail++;
+            w->stats.units_consumed += u.repeat;
+            if (rc != 0) {
+                w->failed = 1;
+                break;
+            }
+            continue;
+        }
 
         const uint8_t *ptr;
         if (u.off + u.len <= w->capacity) {
@@ -93,11 +125,26 @@ static void *writer_thread(void *arg)
         }
 
         int rc = w->consume(u.kind, u.index, ptr, u.len, w->user);
+        if ((w->flags & PIN_WRITER_REPEATS) && u.kind == PIN_UNIT_VIDEO) {
+            if (u.len > last_cap) {
+                free(last);
+                last = malloc(u.len);
+                last_cap = last ? u.len : 0;
+            }
+            if (!last) {
+                pin_logf(PIN_LOG_ERROR, "pin_writer: out of memory keeping the last frame\n");
+                pthread_mutex_lock(&w->lock);
+                w->failed = 1;
+                break;
+            }
+            memcpy(last, ptr, u.len);
+            last_len = u.len;
+        }
 
         pthread_mutex_lock(&w->lock);
         w->byte_tail += u.len;
         w->unit_tail++;
-        w->stats.backlog_bytes = w->byte_head - w->byte_tail;
+        w->stats.backlog_bytes = w->byte_head - w->byte_tail + w->rep_bytes;
         w->stats.units_consumed++;
         if (rc != 0) {
             w->failed = 1;
@@ -106,6 +153,7 @@ static void *writer_thread(void *arg)
     }
     pthread_mutex_unlock(&w->lock);
     free(scratch);
+    free(last);
     return NULL;
 }
 
@@ -173,13 +221,58 @@ int pin_writer_push(pin_writer_t *w, pin_unit_kind_t kind, uint64_t index,
         (unit_hdr_t){ .kind = kind, .index = index, .off = off, .len = len };
     w->unit_head++;
     w->byte_head += len;
+    if (kind == PIN_UNIT_VIDEO) {
+        w->have_video = 1;
+        w->last_video_len = len;
+    }
 
     w->stats.units_pushed++;
     w->stats.bytes_pushed += len;
-    w->stats.backlog_bytes = w->byte_head - w->byte_tail;
+    w->stats.backlog_bytes = w->byte_head - w->byte_tail + w->rep_bytes;
     if (w->stats.backlog_bytes > w->stats.backlog_high_water)
         w->stats.backlog_high_water = w->stats.backlog_bytes;
 
+    pthread_cond_signal(&w->wake);
+    pthread_mutex_unlock(&w->lock);
+    return 1;
+}
+
+int pin_writer_push_repeat(pin_writer_t *w, uint64_t index, uint32_t count)
+{
+    if (!w || !count)
+        return 0;
+    pthread_mutex_lock(&w->lock);
+    if (w->closed || w->failed || w->overflowed || w->aborted || !(w->flags & PIN_WRITER_REPEATS) ||
+        !w->have_video) {
+        pthread_mutex_unlock(&w->lock);
+        return 0;
+    }
+    /* joins the entry before it when that is a repeat the consumer has not taken yet (it takes
+     * the entry at unit_tail) */
+    unit_hdr_t *prev = w->unit_head - w->unit_tail >= 2
+                           ? &w->units[(w->unit_head - 1) % PIN_WRITER_MAX_QUEUED_UNITS] : NULL;
+    if (prev && prev->repeat && prev->repeat <= UINT32_MAX - count &&
+        prev->index + prev->repeat == index && prev->rep_len == w->last_video_len) {
+        prev->repeat += count;
+    } else if (w->unit_head - w->unit_tail >= PIN_WRITER_MAX_QUEUED_UNITS) {
+        w->stats.overflow_count++;
+        if (w->flags & PIN_WRITER_OVERFLOW_FATAL)
+            w->overflowed = 1;
+        pthread_mutex_unlock(&w->lock);
+        return 0;
+    } else {
+        w->units[w->unit_head % PIN_WRITER_MAX_QUEUED_UNITS] =
+            (unit_hdr_t){ .kind = PIN_UNIT_VIDEO, .index = index, .repeat = count,
+                          .rep_len = w->last_video_len };
+        w->unit_head++;
+    }
+    w->stats.units_pushed += count;
+    w->stats.bytes_pushed += (uint64_t)w->last_video_len * count;
+    /* the queue holds no bytes for them, but the file will: the size and disk checks count them */
+    w->rep_bytes += (uint64_t)w->last_video_len * count;
+    w->stats.backlog_bytes = w->byte_head - w->byte_tail + w->rep_bytes;
+    if (w->stats.backlog_bytes > w->stats.backlog_high_water)
+        w->stats.backlog_high_water = w->stats.backlog_bytes;
     pthread_cond_signal(&w->wake);
     pthread_mutex_unlock(&w->lock);
     return 1;

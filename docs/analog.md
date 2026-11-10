@@ -205,6 +205,9 @@ never stops, and the headers just change from `... 00 00 00 00` to
   and a destination stride of two lines, and its render pin does the
   reverse conversion. `pinnacle_analog.c` weaves as the bytes arrive. The
   frame ends with a short USB packet (829,452 is not a multiple of 512).
+  A frame the device cuts short could end on a whole packet; the assembler
+  then ends it at a transfer that comes back short (a zero-length packet)
+  or at the next header found at a packet boundary inside a transfer.
   Black is `10 80`. Pixel data never contains `ff` (BT.656 reserves it), so
   a header cannot be confused with pixels.
 - **Audio, EP 0x86**: one packet per transfer, stereo 16-bit LE samples
@@ -260,8 +263,20 @@ What that means:
    (YUYV 16/128) instead, and a gap of 250 frames or more is filled too when the
    audio ran on through it (the capture device lost the frames); a lost audio gap of 250
    packets or more is filled with silence when the video ran on. A gap in both
-   streams is a restart and is left out. At stop, audio more than a second past the
+   streams is a restart and is left out. Both streams measure their gaps by the device
+   time (the ticks per frame measured from the video, so the 100 ppm fast clock does not
+   miscount a long gap); the frame counter is only a check, logged where it disagrees, so a
+   clock that jumps while the counter runs on is filled (or, from 250 frames, left out) the
+   same in both streams. A long video gap whose audio the read loop has not polled yet
+   (it drains the video transfers first) holds up to 16 frames until the audio shows
+   whether it ran on. An audio packet that arrives short is padded with silence to a full
+   packet and counted. At stop, audio more than a second past the
    last frame gets black frames up to it. A lost audio packet counts as an error frame.
+   The stand-ins go to the file's queue as repeats of the frame before them, which take no
+   room in it, so pushing a long gap at once does not overflow it. The sink still writes
+   every one, and the frames behind them wait: a gap of N seconds needs about
+   N x 21 MB/s / (disk or encoder rate) to drain, and if that is more than the queue's
+   ~25 s the capture still ends as DISK_SLOW.
    Every repair is counted, and the GUI adds both kinds to its "dropped"
    count. The file therefore always has exactly one
    frame and 1920 samples per source frame, and a player at 25 fps plays

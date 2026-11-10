@@ -264,6 +264,75 @@ static void test_date_gap_with_continuous_tc_confirms(void)
     CHECK(cut == first_anomalous, "cut back-dated to the first date-gap frame");
 }
 
+/* A camera that holds REC START over several frames: one cut, at the first flagged frame. */
+static void test_rec_start_held(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_defaults(&cfg, 25.0);
+    pin_scene_detector_t d;
+    pin_scene_init(&d, &cfg);
+    long idx = 0, cut = -1;
+    int cuts = 0;
+    for (int f = 0; f < 10; f++) {
+        pin_scene_record_t r = mk_tc(idx++, 0, 0, 0, f, 0);
+        feed_and_expect_no_cut(&d, &r, "frames before REC START");
+    }
+    long first_flagged = idx;
+    for (int f = 0; f < 20; f++) {
+        pin_scene_record_t r = mk_tc(idx++, 0, 0, 10, f, 0);
+        r.rec_start_valid = 1;
+        r.rec_start = f < 4;   /* flagged on the first four frames of the new recording */
+        long c;
+        if (pin_scene_feed(&d, &r, &c)) { cuts++; cut = c; }
+    }
+    CHECK(cuts == 1, "held REC START: one cut");
+    CHECK(cut == first_flagged, "held REC START: cut at the first flagged frame");
+}
+
+/* Just after midnight a frame has the new time but no date pack, then the date comes back
+ * with the new day: the timecode runs on, so no cut. Also a stretch without date packs. */
+static void test_date_pack_missing_at_midnight(void)
+{
+    pin_scene_config_t cfg;
+    pin_scene_config_defaults(&cfg, 25.0);
+    pin_scene_detector_t d;
+    pin_scene_init(&d, &cfg);
+    long idx = 0;
+    int cuts = 0;
+    long c;
+    /* 23:59:58 .. 00:00:03, one record per frame, 25 frames a second */
+    for (int k = 0; k < 6 * 25; k++) {
+        int sec = 58 + k / 25;
+        pin_scene_record_t r = mk_tc(idx++, 1, 0, k / 25, k % 25, 0);
+        int day = sec >= 60 ? 2 : 1;
+        int t = sec % 60;
+        add_date(&r, day, 6, 2024, sec >= 60 ? 0 : 23, sec >= 60 ? 0 : 59, t);
+        if (sec == 60 && k % 25 < 3) r.date_valid = 0;   /* the new time, no date pack */
+        cuts += pin_scene_feed(&d, &r, &c);
+    }
+    CHECK(cuts == 0, "midnight with a missing date pack: no cut");
+
+    /* ten seconds without any date pack, the timecode continuous: no cut when it returns */
+    for (int k = 0; k < 10 * 25; k++) {
+        pin_scene_record_t r = mk_tc(idx++, 1, 0, 6 + k / 25, k % 25, 0);
+        cuts += pin_scene_feed(&d, &r, &c);
+    }
+    for (int k = 0; k < 2 * 25; k++) {
+        pin_scene_record_t r = mk_tc(idx++, 1, 0, 16 + k / 25, k % 25, 0);
+        add_date(&r, 2, 6, 2024, 0, 0, 14 + k / 25);
+        cuts += pin_scene_feed(&d, &r, &c);
+    }
+    CHECK(cuts == 0, "date packs back after a stretch without: no cut");
+
+    /* but a date jump with the timecode running on still cuts */
+    for (int k = 0; k < 10; k++) {
+        pin_scene_record_t r = mk_tc(idx++, 1, 0, 18, k, 0);
+        add_date(&r, 2, 6, 2024, 5, 0, 0);
+        cuts += pin_scene_feed(&d, &r, &c);
+    }
+    CHECK(cuts == 1, "a real date jump still cuts");
+}
+
 static void test_invalid_tc_stretch_is_neutral(void)
 {
     pin_scene_config_t cfg;
@@ -518,6 +587,8 @@ int main(void)
     test_ntsc_drop_frame_continuity_no_cut();
     test_date_gap_with_continuous_tc_confirms();
     test_invalid_tc_stretch_is_neutral();
+    test_rec_start_held();
+    test_date_pack_missing_at_midnight();
     test_hdv_config();
     test_hdv_clean_run();
     test_hdv_stray_gops_absorbed();

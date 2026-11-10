@@ -281,6 +281,76 @@ static void test_writer_overflow_fatal(void)
     CHECK_EQ_I(sl.consumed, 1);    /* only the unit already being written */
 }
 
+/* ---- pin_writer: repeats of the last frame take no room in the queue ------ */
+
+typedef struct {
+    slow_t sl;
+    int video, audio, bad, last_first;
+    uint64_t last_index;
+} rep_t;
+
+static int rep_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *data, size_t len, void *user)
+{
+    rep_t *r = user;
+    while (!r->sl.release)
+        nap_ms(1);
+    if (kind == PIN_UNIT_VIDEO) {
+        if (len != 400 || (r->video && index != r->last_index + 1))
+            r->bad++;
+        r->last_first = data[0];
+        r->last_index = index;
+        r->video++;
+    } else {
+        r->audio++;
+    }
+    return 0;
+}
+
+static void test_writer_repeats(void)
+{
+    rep_t r;
+    memset(&r, 0, sizeof(r));
+    uint8_t unit[400];
+    pin_writer_t *w = pin_writer_start_ex(1000, rep_consume, &r,
+                                          PIN_WRITER_OVERFLOW_FATAL | PIN_WRITER_REPEATS);
+    CHECK(w);
+    CHECK_EQ_I(pin_writer_push_repeat(w, 0, 1), 0);     /* nothing to repeat yet */
+    memset(unit, 7, sizeof(unit));
+    CHECK_EQ_I(pin_writer_push(w, PIN_UNIT_VIDEO, 0, unit, sizeof(unit)), 1);
+    CHECK_EQ_I(pin_writer_push(w, PIN_UNIT_AUDIO, 0, unit, 100), 1);
+    /* a long gap's stand-ins, one at a time, far more than the queue's units or bytes hold */
+    for (uint64_t i = 1; i <= 20000; i++)
+        CHECK_EQ_I(pin_writer_push_repeat(w, i, 1), 1);
+    memset(unit, 9, sizeof(unit));
+    CHECK_EQ_I(pin_writer_push(w, PIN_UNIT_VIDEO, 20001, unit, sizeof(unit)), 1);
+    pin_writer_stats_t st;
+    pin_writer_get_stats(w, &st);
+    CHECK_EQ_I(st.overflowed, 0);
+    /* the repeats count in the backlog the size checks read (the first unit may be taken) */
+    CHECK(st.backlog_bytes >= 20000ull * 400 + 400 + 100);
+    r.sl.release = 1;
+    for (int i = 0; i < 2000; i++) {
+        pin_writer_get_stats(w, &st);
+        if (!st.backlog_bytes)
+            break;
+        nap_ms(1);
+    }
+    CHECK_EQ_I(st.backlog_bytes, 0);
+    CHECK_EQ_I(pin_writer_stop(w), 0);
+    CHECK_EQ_I(r.video, 20002);
+    CHECK_EQ_I(r.audio, 1);
+    CHECK_EQ_I(r.bad, 0);
+    CHECK_EQ_I(r.last_first, 9);
+
+    /* without PIN_WRITER_REPEATS: refused */
+    memset(&r, 0, sizeof(r));
+    r.sl.release = 1;
+    w = pin_writer_start_ex(1000, rep_consume, &r, PIN_WRITER_OVERFLOW_FATAL);
+    CHECK_EQ_I(pin_writer_push(w, PIN_UNIT_VIDEO, 0, unit, sizeof(unit)), 1);
+    CHECK_EQ_I(pin_writer_push_repeat(w, 1, 1), 0);
+    CHECK_EQ_I(pin_writer_stop(w), 0);
+}
+
 /* ---- sink_nut ------------------------------------------------------------ */
 
 #define NW 64
@@ -405,6 +475,7 @@ int main(void)
     test_closed_pipe();
     test_stalled_reader();
     test_writer_overflow_fatal();
+    test_writer_repeats();
     nut_case(t2, 25, 1, PIN_ASPECT_4_3);
     nut_case(t2, 30000, 1001, PIN_ASPECT_16_9);
     printf("test_stdout_sinks: ok\n");

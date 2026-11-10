@@ -29,8 +29,9 @@
  *  - video STA nibble (byte 3 high nibble) != 0. 7 and 15 are errors that were
  *    not concealed ("video_err"); 2/4/6 and 10/12/14 are concealments by the
  *    source ("video_concealed"). Both make the frame "with error".
- *  - audio block whose 36 sample words are all one non-zero value: the source's
- *    error fill (0x8000 per IEC 61834, vendor values like 0xFFB1 exist).
+ *  - audio block whose samples all carry the IEC 61834 error code (0x8000 in 16-bit mode,
+ *    0x800 in 12-bit mode, i.e. bytes 80 80 00 per sample pair), the mode read from the
+ *    AAUX source pack (either code without one). A constant non-zero value is real audio.
  *  - audio mute (Sony DSR-1500P style, from dvmerge's quirks): the deck writes
  *    literal 0x0000 when its audio correction fails. Digital zero is also real
  *    silence, and the unused second channel pair of 32 kHz 4-channel recordings
@@ -61,7 +62,7 @@ typedef struct {
     unsigned video_err;         /* STA 7 / 15 */
     unsigned video_concealed;   /* other non-zero STA */
     unsigned audio_blocks;      /* audio blocks present */
-    unsigned audio_err;         /* constant non-zero error fill */
+    unsigned audio_err;         /* every sample the error code */
     unsigned audio_mute;        /* partial all-zero pattern, see above */
     int reencoded;              /* ~all video blocks STA 14 */
     int frame_error;            /* any of the above */

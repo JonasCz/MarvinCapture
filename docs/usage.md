@@ -259,7 +259,8 @@ error" when:
 - **DV**: a DIF block is missing or its ID does not match its position (a lost
   sequence is zero-padded, so it shows up here), a video block has a non-zero
   STA status nibble (7/15 = error, 2/4/6/10/12/14 = concealed by the camera),
-  an audio block holds the constant error fill (0x8000 and vendor values), the
+  every sample of an audio block holds the DV error code (0x8000 in 16-bit,
+  0x800 in 12-bit audio), the
   first channel pair is partially all-zero (a Sony deck mutes by writing zeros;
   an all-zero or unused pair is silence, not an error), or ~every video block
   is STA 14 (a Samsung camera that re-encoded the frame). A frame with >= 90 %

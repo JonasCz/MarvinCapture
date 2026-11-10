@@ -43,14 +43,22 @@
 
 typedef struct {
     int nv, na;
+    long total_v, total_a;
     int v_repeated[MAX_ITEMS], v_black[MAX_ITEMS];
     uint8_t v_first[MAX_ITEMS];   /* the first byte of the frame */
-    int a_silence[MAX_ITEMS];
+    int a_silence[MAX_ITEMS], a_padded[MAX_ITEMS];
+    unsigned a_samples[MAX_ITEMS];
+    uint32_t next_index;
+    int index_bad;
 } got_t;
 
 static int got_video(const pinnacle_video_frame_t *f, void *user)
 {
     got_t *g = user;
+    if (f->index != g->next_index)
+        g->index_bad++;
+    g->next_index = f->index + 1;
+    g->total_v++;
     if (g->nv < MAX_ITEMS) {
         g->v_repeated[g->nv] = f->repeated;
         g->v_black[g->nv] = f->black;
@@ -63,8 +71,12 @@ static int got_video(const pinnacle_video_frame_t *f, void *user)
 static int got_audio(const pinnacle_audio_block_t *b, void *user)
 {
     got_t *g = user;
-    if (g->na < MAX_ITEMS)
+    g->total_a++;
+    if (g->na < MAX_ITEMS) {
+        g->a_padded[g->na] = b->padded;
+        g->a_samples[g->na] = b->samples;
         g->a_silence[g->na++] = b->silence;
+    }
     return 0;
 }
 
@@ -76,13 +88,13 @@ typedef struct {
     volatile int stop;
 } rig_t;
 
-static void rig_open(rig_t *r)
+static void rig_open_wh(rig_t *r, unsigned w, unsigned h)
 {
     pinnacle_analog_t a;
     memset(&a, 0, sizeof(a));
     memset(&r->got, 0, sizeof(r->got));
-    a.width = W;
-    a.height = H;
+    a.width = w;
+    a.height = h;
     a.audio_samples_per_packet = 1920;
     a.cfg.standard = PINNACLE_STD_PAL;
     r->sink = (pinnacle_capture_sink_t){ .video = got_video, .audio = got_audio, .user = &r->got };
@@ -90,8 +102,12 @@ static void rig_open(rig_t *r)
     CHECK_EQ(assembler_open(&r->s, &a, &r->sink, &r->st, &r->stop), 0);
 }
 
+static void rig_open(rig_t *r) { rig_open_wh(r, W, H); }
+
+/* Device ticks per frame (and per PAL audio packet): the device's clock runs a little fast. */
+static uint64_t g_ft = FRAME_TICKS;
 /* Device time of video frame n. The audio packet of frame n is 680 ticks in. */
-static uint64_t vt(unsigned n) { return (uint64_t)n * FRAME_TICKS; }
+static uint64_t vt(unsigned n) { return (uint64_t)n * g_ft; }
 
 static void header(uint8_t *p, uint16_t seq, uint64_t t)
 {
@@ -249,6 +265,150 @@ static void test_normal_stop_adds_nothing(void)
     CHECK_EQ(r.st.frames_missing, 0);
 }
 
+/* Both streams of a capture have the same length in time: frames and 1920-sample blocks. */
+static void check_equal_spans(rig_t *r)
+{
+    CHECK_EQ(r->st.frames, r->st.audio_blocks);
+    CHECK_EQ(r->got.total_v, r->got.total_a);
+    CHECK_EQ(r->got.index_bad, 0);
+}
+
+/* The device clock jumps by `jump` ticks while the frame counter runs on. Whatever the order the
+ * two endpoints are polled in, video and audio fill the same span. */
+static void test_clock_jump(uint64_t jump, int audio_first)
+{
+    rig_t r;
+    rig_open(&r);
+    run(&r, 1, 11);
+    if (audio_first) {
+        audio(&r, 11, vt(11) + 680 + jump);
+        video(&r, 11, vt(11) + jump, 5);
+    } else {
+        video(&r, 11, vt(11) + jump, 5);
+        audio(&r, 11, vt(11) + 680 + jump);
+    }
+    for (unsigned n = 12; n < 22; n++) {
+        video(&r, (uint16_t)n, vt(n) + jump, 5);
+        audio(&r, (uint16_t)n, vt(n) + 680 + jump);
+    }
+    assembler_close(&r.s);
+    check_equal_spans(&r);
+    uint64_t lost = jump / FRAME_TICKS;
+    if (lost < 250)
+        CHECK_EQ(r.st.frames, 21 + lost);   /* a short jump is filled in both */
+    else
+        CHECK_EQ(r.st.frames, 21);          /* a long one is a restart in both */
+}
+
+/* The host stalled and the device lost 300 frames of video; their audio arrived, but the read
+ * loop hands over five frames after the gap before it polls the audio endpoint. */
+static void test_video_gap_before_audio(void)
+{
+    rig_t r;
+    rig_open(&r);
+    run(&r, 1, 11);
+    for (unsigned n = 311; n < 316; n++)
+        video(&r, (uint16_t)n, vt(n), 3);
+    for (unsigned n = 11; n < 316; n++)
+        audio(&r, (uint16_t)n, vt(n) + 680);
+    run(&r, 316, 321);
+    assembler_close(&r.s);
+    CHECK_EQ(r.st.frames_missing, 300);
+    CHECK_EQ(r.st.frames, 320);
+    check_equal_spans(&r);
+    CHECK_EQ(r.got.v_black[10], 1);          /* the fill went before the frames held behind it */
+    CHECK_EQ(r.got.v_first[310], 3);
+}
+
+/* The same, but the audio had the gap too: a restart, also with the frames held first. */
+static void test_both_gap_video_first_held(void)
+{
+    rig_t r;
+    rig_open(&r);
+    run(&r, 1, 11);
+    for (unsigned n = 311; n < 316; n++)
+        video(&r, (uint16_t)n, vt(n), 3);
+    for (unsigned n = 311; n < 316; n++)
+        audio(&r, (uint16_t)n, vt(n) + 680);
+    run(&r, 316, 321);
+    assembler_close(&r.s);
+    CHECK_EQ(r.st.frames_missing, 0);
+    CHECK_EQ(r.st.frames, 20);
+    check_equal_spans(&r);
+}
+
+/* With the clock 110 ppm fast, a gap of 14,000 frames (the audio ran on) is filled exactly. */
+static void test_long_gap_fast_clock(void)
+{
+    g_ft = 400044;
+    rig_t r;
+    rig_open(&r);
+    run(&r, 1, 601);
+    for (unsigned n = 601; n < 14601; n++)
+        audio(&r, (uint16_t)n, vt(n) + 680);
+    run(&r, 14601, 14611);
+    assembler_close(&r.s);
+    g_ft = FRAME_TICKS;
+    CHECK_EQ(r.st.frames_missing, 14000);
+    CHECK_EQ(r.st.frames_black, 14000);
+    CHECK_EQ(r.st.audio_missing, 0);
+    check_equal_spans(&r);
+}
+
+/* A short audio packet is padded to a full one with silence, and counted. */
+static void test_short_audio_padded(void)
+{
+    rig_t r;
+    rig_open(&r);
+    run(&r, 1, 6);
+    static uint8_t buf[PACKET_HEADER + 1920 * 4];
+    video(&r, 6, vt(6), 1);
+    header(buf, 6, vt(6) + 680);
+    memset(buf + PACKET_HEADER, 0x11, 1000 * 4);
+    assembler_cb(PINNACLE_EP_AUDIO_IN, buf, PACKET_HEADER + 1000 * 4, &r.s);
+    run(&r, 7, 11);
+    assembler_close(&r.s);
+    CHECK_EQ(r.st.audio_short, 1);
+    CHECK_EQ(r.st.audio_missing, 0);
+    CHECK_EQ(r.got.a_padded[5], 1);
+    CHECK_EQ(r.got.a_samples[5], 1920);
+    check_equal_spans(&r);
+}
+
+/* A frame the device cut short that ends on a whole USB packet: ended by a zero-length packet,
+ * or (without one) by the next header at a packet boundary in the same transfer. */
+static void test_truncated_on_packet_boundary(int zlp)
+{
+    rig_t r;
+    rig_open_wh(&r, 64, 16);                /* 2048 bytes a frame */
+    static uint8_t buf[4096];
+    header(buf, 1, vt(1));
+    memset(buf + PACKET_HEADER, 0x20, 512 - PACKET_HEADER);
+    if (zlp) {
+        CHECK_EQ(assembler_cb(PINNACLE_EP_VIDEO_IN, buf, 512, &r.s), 0);
+        CHECK_EQ(assembler_cb(PINNACLE_EP_VIDEO_IN, buf, 0, &r.s), 0);
+        CHECK_EQ(r.st.frames, 1);
+        header(buf, 2, vt(2));
+        memset(buf + PACKET_HEADER, 0x30, 2048);
+        CHECK_EQ(assembler_cb(PINNACLE_EP_VIDEO_IN, buf, PACKET_HEADER + 2048, &r.s), 0);
+    } else {
+        header(buf + 512, 2, vt(2));                 /* 500 bytes of frame 2 follow */
+        memset(buf + 512 + PACKET_HEADER, 0x30, 512 - PACKET_HEADER);
+        CHECK_EQ(assembler_cb(PINNACLE_EP_VIDEO_IN, buf, 1024, &r.s), 0);
+        memset(buf, 0x30, 2048 - 500);               /* the rest, ending on a short packet */
+        CHECK_EQ(assembler_cb(PINNACLE_EP_VIDEO_IN, buf, 2048 - 500, &r.s), 0);
+    }
+    audio(&r, 1, vt(1) + 680);
+    audio(&r, 2, vt(2) + 680);
+    assembler_close(&r.s);
+    CHECK_EQ(r.st.frames, 2);
+    CHECK_EQ(r.st.frames_truncated, 1);
+    CHECK_EQ(r.st.resyncs, 0);
+    CHECK_EQ(r.got.v_repeated[0], 1);       /* the short one stands in as the last full frame */
+    CHECK_EQ(r.got.v_repeated[1], 0);
+    CHECK_EQ(r.got.v_first[1], 0x30);
+}
+
 int main(void)
 {
     test_clean();
@@ -260,6 +420,16 @@ int main(void)
     test_audio_lost_video_ran();
     test_video_stops_audio_runs_to_stop();
     test_normal_stop_adds_nothing();
+    test_clock_jump(5ull * DEVICE_HZ, 0);
+    test_clock_jump(5ull * DEVICE_HZ, 1);
+    test_clock_jump(120ull * DEVICE_HZ, 0);
+    test_clock_jump(120ull * DEVICE_HZ, 1);
+    test_video_gap_before_audio();
+    test_both_gap_video_first_held();
+    test_long_gap_fast_clock();
+    test_short_audio_padded();
+    test_truncated_on_packet_boundary(1);
+    test_truncated_on_packet_boundary(0);
     printf("test_analog_assembler: ok\n");
     return 0;
 }

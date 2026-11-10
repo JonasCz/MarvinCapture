@@ -241,53 +241,6 @@ static void test_discontinuity_indicator(void)
     CHECK(hdv_ts_discontinuity_count(clean, 1) == 0, "no false positive without adaptation field");
 }
 
-static void test_aux_datetime_scan(void)
-{
-    uint8_t pkt[HDV_TS_PACKET_SIZE];
-    ts_header(pkt, 0x0811, 0, 0);
-    uint8_t *payload = pkt + 4;
-    memset(payload, 0xFF, HDV_TS_PACKET_SIZE - 4);
-
-    /* date pack 0x62: day=9, month=6, year=2024 -> BCD "24" */
-    payload[10] = 0x62;
-    payload[11] = 0x09; /* day */
-    payload[12] = 0x06; /* month */
-    payload[13] = 0x24; /* year (2-digit BCD) */
-    payload[14] = 0xFF;
-
-    /* time pack 0x63: 14:05:59 */
-    payload[30] = 0x63;
-    payload[31] = 0x59; /* seconds */
-    payload[32] = 0x05; /* minutes */
-    payload[33] = 0x14; /* hours */
-    payload[34] = 0xFF;
-
-    hdv_aux_info_t info;
-    hdv_aux_scan_datetime(pkt, 1, 0x0811, &info);
-
-    CHECK(info.rec_date.valid, "aux rec date found");
-    CHECK(info.rec_date.day == 9 && info.rec_date.month == 6 && info.rec_date.year == 2024,
-          "aux rec date fields");
-    CHECK(info.rec_time.valid, "aux rec time found");
-    CHECK(info.rec_time.hour == 14 && info.rec_time.minute == 5 && info.rec_time.second == 59,
-          "aux rec time fields");
-    CHECK(!info.timecode.valid, "no TC pack present -> invalid");
-
-    /* timecode pack 0x13, 01:02:03;04: colour frame is bit 7, drop frame bit 6 */
-    payload[50] = 0x13;
-    payload[51] = 0x80 | 0x04; /* colour frame set, drop frame clear, frame 04 */
-    payload[52] = 0x03;
-    payload[53] = 0x02;
-    payload[54] = 0x01;
-    hdv_aux_scan_datetime(pkt, 1, 0x0811, &info);
-    CHECK(info.timecode.valid && info.timecode.hour == 1 && info.timecode.minute == 2 &&
-          info.timecode.second == 3 && info.timecode.frame == 4, "aux timecode fields");
-    CHECK(!info.timecode.drop_frame, "colour frame flag is not drop frame");
-    payload[51] = 0x40 | 0x04; /* drop frame */
-    hdv_aux_scan_datetime(pkt, 1, 0x0811, &info);
-    CHECK(info.timecode.drop_frame && info.timecode.frame == 4, "drop frame flag (bit 6)");
-}
-
 static void test_gop_time_nonzero(void)
 {
     hdv_gop_time_t g;
@@ -479,7 +432,6 @@ int main(void)
     test_gop_header_decode();
     test_no_gop_header();
     test_discontinuity_indicator();
-    test_aux_datetime_scan();
 
     if (g_failures == 0) {
         printf("test_hdv_aux: all tests passed\n");

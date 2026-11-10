@@ -118,6 +118,7 @@ typedef struct {
     int date_day, date_month, date_year;
     int time_valid;
     int time_hour, time_minute, time_second;
+    long date_index; /* frame_index of the record the date and time came from */
     int ts_valid;
     int64_t ts;
     long ts_index; /* frame_index of the record the clock came from */

@@ -404,54 +404,6 @@ unsigned hdv_ts_discontinuity_count(const uint8_t *ts_packets, size_t n_packets)
     return count;
 }
 
-static int bcd2(uint8_t b, int tens_mask, int tens_shift)
-{
-    return ((b >> tens_shift) & tens_mask) * 10 + (b & 0x0F);
-}
-
-void hdv_aux_scan_datetime(const uint8_t *ts_packets, size_t n_packets, int aux_pid,
-                            hdv_aux_info_t *out)
-{
-    memset(out, 0, sizeof(*out));
-    if (!ts_packets || !out || aux_pid < 0)
-        return;
-
-    for (size_t i = 0; i < n_packets; i++) {
-        const uint8_t *pkt = ts_packets + i * HDV_TS_PACKET_SIZE;
-        if (pkt[0] != HDV_TS_SYNC_BYTE || ts_pid(pkt) != aux_pid)
-            continue;
-        size_t plen;
-        int off = ts_payload(pkt, &plen, NULL);
-        if (off < 0)
-            continue;
-        const uint8_t *p = pkt + off;
-        for (size_t k = 0; k + 5 <= plen; k++) {
-            uint8_t pc0 = p[k];
-            const uint8_t *d = p + k + 1;
-            if (pc0 == 0x62 && !out->rec_date.valid) {
-                out->rec_date.day = bcd2(d[0], 0x3, 4);
-                out->rec_date.month = bcd2(d[1], 0x1, 4);
-                int y2 = bcd2(d[2], 0xF, 4);
-                out->rec_date.year = (y2 < 75) ? (2000 + y2) : (1900 + y2);
-                out->rec_date.valid = 1;
-            } else if (pc0 == 0x63 && !out->rec_time.valid) {
-                out->rec_time.second = bcd2(d[0], 0x7, 4);
-                out->rec_time.minute = bcd2(d[1], 0x7, 4);
-                out->rec_time.hour = bcd2(d[2], 0x3, 4);
-                out->rec_time.valid = 1;
-            } else if (pc0 == 0x13 && !out->timecode.valid) {
-                /* as the DV pack (dv_subcode.c): colour frame bit 7, drop frame bit 6 */
-                out->timecode.frame = bcd2(d[0], 0x3, 4);
-                out->timecode.drop_frame = (d[0] >> 6) & 1;
-                out->timecode.second = bcd2(d[1], 0x7, 4);
-                out->timecode.minute = bcd2(d[2], 0x7, 4);
-                out->timecode.hour = bcd2(d[3], 0x3, 4);
-                out->timecode.valid = 1;
-            }
-        }
-    }
-}
-
 size_t hdv_find_sequence_header(const uint8_t *es, size_t len)
 {
     for (size_t i = 0; i + 4 <= len; i++)

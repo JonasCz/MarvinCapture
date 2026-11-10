@@ -43,9 +43,17 @@ int main(void)
     CHECK(!tc.drop_frame, "not drop frame");
 
     /* IN_TRANSITION (tape moving) still carries the position; drop-frame flag */
-    const uint8_t moving[8] = { 0x0b, 0x20, 0x51, 0x71, 0x86, 0x59, 0x59, 0x01 };
+    const uint8_t moving[8] = { 0x0b, 0x20, 0x51, 0x71, 0x46, 0x59, 0x59, 0x01 };
     CHECK(pin_deck_parse_timecode(moving, 8, &tc) == 0 && tc.drop_frame && tc.hour == 1 &&
           tc.minute == 59 && tc.second == 59 && tc.frame == 6, "in-transition + drop frame");
+    /* drop frame (bit 6) on frame 26: still valid */
+    const uint8_t df26[8] = { 0x0c, 0x20, 0x51, 0x71, 0x66, 0x00, 0x10, 0x00 };
+    CHECK(pin_deck_parse_timecode(df26, 8, &tc) == 0 && tc.drop_frame && tc.frame == 26 &&
+          tc.minute == 10, "drop frame, frame 26");
+    /* bit 7 is the colour-frame flag, not drop frame */
+    const uint8_t cf[8] = { 0x0c, 0x20, 0x51, 0x71, 0x86, 0x00, 0x00, 0x00 };
+    CHECK(pin_deck_parse_timecode(cf, 8, &tc) == 0 && !tc.drop_frame && tc.frame == 6,
+          "colour frame flag is not drop frame");
 
     /* not usable: not implemented, short, wrong opcode, no time code (0xff) */
     const uint8_t notimpl[8] = { 0x08, 0x20, 0x51, 0x71, 0xff, 0xff, 0xff, 0xff };
@@ -75,6 +83,9 @@ int main(void)
     CHECK(pin_deck_state_from_avc(0xc4, 0x65) == PIN_DECK_REWINDING, "rewind");
     CHECK(pin_deck_state_from_avc(0xc4, 0x75) == PIN_DECK_FAST_FORWARD, "ff");
     CHECK(pin_deck_state_from_avc(0xc3, 0x75) == PIN_DECK_PLAYING, "play");
+    CHECK(pin_deck_state_from_avc(0xc3, 0x65) == PIN_DECK_PLAYING, "reverse play");
+    CHECK(pin_deck_state_from_avc(0xc3, 0x7d) == PIN_DECK_PAUSED, "pause");
+    CHECK(pin_deck_state_from_avc(0xc3, 0x6d) == PIN_DECK_PAUSED, "reverse pause");
     CHECK(pin_deck_state_from_avc(0xd0, 0x7f) == PIN_DECK_UNKNOWN, "echoed query");
 
     /* the 4-byte commands sent to the deck */

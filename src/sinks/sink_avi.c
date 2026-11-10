@@ -33,9 +33,10 @@
 typedef struct {
     avi_writer_t *w;
     pin_sink_status_t st;
+    pin_sink_status_pub_t pub;   /* st as of the last call, for other threads */
 } avi_priv_t;
 
-static pin_status_t avi_sink_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+static pin_status_t avi_sink_open_call(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
 {
     avi_priv_t *p = s->priv;
     if (params->kind != PIN_KIND_ANALOG)
@@ -65,7 +66,7 @@ static pin_status_t avi_sink_open(pin_sink_t *s, const char *path, const pin_sin
     return PIN_OK;
 }
 
-static pin_status_t avi_sink_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t len)
+static pin_status_t avi_sink_write_video_call(pin_sink_t *s, const uint8_t *yuyv, size_t len)
 {
     avi_priv_t *p = s->priv;
     if (!p->w)
@@ -79,7 +80,7 @@ static pin_status_t avi_sink_write_video(pin_sink_t *s, const uint8_t *yuyv, siz
     return PIN_OK;
 }
 
-static pin_status_t avi_sink_write_audio(pin_sink_t *s, const int16_t *pcm, size_t frames)
+static pin_status_t avi_sink_write_audio_call(pin_sink_t *s, const int16_t *pcm, size_t frames)
 {
     avi_priv_t *p = s->priv;
     if (!p->w)
@@ -102,15 +103,40 @@ static pin_status_t avi_sink_close(pin_sink_t *s)
             rc = PIN_ERR_IO;
         p->w = NULL;
     }
+    pin_sink_status_pub_destroy(&p->pub);
     free(p);
     free(s);
     return rc;
 }
 
+static pin_status_t avi_sink_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+{
+    pin_status_t r = avi_sink_open_call(s, path, params);
+    avi_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
+static pin_status_t avi_sink_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t len)
+{
+    pin_status_t r = avi_sink_write_video_call(s, yuyv, len);
+    avi_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
+static pin_status_t avi_sink_write_audio(pin_sink_t *s, const int16_t *pcm, size_t frames)
+{
+    pin_status_t r = avi_sink_write_audio_call(s, pcm, frames);
+    avi_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
 static void avi_sink_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     avi_priv_t *p = s->priv;
-    *out = p->st;
+    pin_sink_status_read(&p->pub, out);
 }
 
 pin_sink_t *sink_avi_create(void)
@@ -122,6 +148,7 @@ pin_sink_t *sink_avi_create(void)
         free(p);
         return NULL;
     }
+    pin_sink_status_pub_init(&p->pub);
     s->priv = p;
     s->open = avi_sink_open;
     s->write_video = avi_sink_write_video;

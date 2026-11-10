@@ -52,6 +52,7 @@ typedef struct {
     int64_t vpts, apts;
     int header_written;
     pin_sink_status_t st;
+    pin_sink_status_pub_t pub;   /* st as of the last call, for other threads */
 } nut_priv_t;
 
 static int nut_io_write(void *opaque, const uint8_t *buf, int size)
@@ -64,7 +65,7 @@ static int nut_io_write(void *opaque, const uint8_t *buf, int size)
     return AVERROR(EIO);
 }
 
-static pin_status_t nut_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+static pin_status_t nut_open_call(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
 {
     nut_priv_t *p = s->priv;
     if (params->kind != PIN_KIND_ANALOG || !pin_path_is_stdout(path))
@@ -168,7 +169,7 @@ static pin_status_t nut_write_packet(nut_priv_t *p, AVStream *st, int64_t pts, i
     return PIN_OK;
 }
 
-static pin_status_t nut_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t len)
+static pin_status_t nut_write_video_call(pin_sink_t *s, const uint8_t *yuyv, size_t len)
 {
     nut_priv_t *p = s->priv;
     if (!p->header_written)
@@ -190,7 +191,7 @@ static pin_status_t nut_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t l
     return rc;
 }
 
-static pin_status_t nut_write_audio(pin_sink_t *s, const int16_t *pcm, size_t frames)
+static pin_status_t nut_write_audio_call(pin_sink_t *s, const int16_t *pcm, size_t frames)
 {
     nut_priv_t *p = s->priv;
     if (!p->header_written)
@@ -222,15 +223,40 @@ static pin_status_t nut_close(pin_sink_t *s)
     }
     if (p->st.last_error != PIN_OK)
         rc = p->st.last_error;
+    pin_sink_status_pub_destroy(&p->pub);
     free(p);
     free(s);
     return rc;
 }
 
+static pin_status_t nut_open(pin_sink_t *s, const char *path, const pin_sink_params_t *params)
+{
+    pin_status_t r = nut_open_call(s, path, params);
+    nut_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
+static pin_status_t nut_write_video(pin_sink_t *s, const uint8_t *yuyv, size_t len)
+{
+    pin_status_t r = nut_write_video_call(s, yuyv, len);
+    nut_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
+static pin_status_t nut_write_audio(pin_sink_t *s, const int16_t *pcm, size_t frames)
+{
+    pin_status_t r = nut_write_audio_call(s, pcm, frames);
+    nut_priv_t *p = s->priv;
+    pin_sink_status_publish(&p->pub, &p->st);
+    return r;
+}
+
 static void nut_get_status(pin_sink_t *s, pin_sink_status_t *out)
 {
     nut_priv_t *p = s->priv;
-    *out = p->st;
+    pin_sink_status_read(&p->pub, out);
 }
 
 pin_sink_t *sink_nut_create(void)
@@ -242,6 +268,7 @@ pin_sink_t *sink_nut_create(void)
         free(p);
         return NULL;
     }
+    pin_sink_status_pub_init(&p->pub);
     s->priv = p;
     s->open = nut_open;
     s->write_video = nut_write_video;
