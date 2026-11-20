@@ -140,7 +140,8 @@ int pout_link_it_start(pout_link_t *k, unsigned channel, unsigned speed);
 int pout_link_it_packet(pout_link_t *k, const uint8_t *pkt, unsigned len);
 /* Hands the partly filled chunk to the sender now (call at the end of a frame period). */
 int pout_link_it_flush(pout_link_t *k);
-/* Flushes, waits for the queue to drain, clears the IT context and waits for it to go idle. */
+/* Flushes, waits for the queue to drain, clears the IT context and waits for it to go idle.
+ * -1 if the stream had failed (also when that showed only in the last writes) or on a USB error. */
 int pout_link_it_stop(pout_link_t *k);
 int pout_link_it_running(const pout_link_t *k);
 

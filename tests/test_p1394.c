@@ -278,6 +278,9 @@ static void test_cfg(void)
     const uint8_t guid[10] = { 0x80, 0x03, 0x08 };
     uint8_t r[20] = { 0x80, 0x03, 0x08, 0x00 };
     CHECK(pinnacle_cfg_reply_matches(guid, 10, r, 20), "80 03 08 answered");
+    /* what the 500-USB and 510-USB really send (2026-11-19): 80 03 01 00, then the GUID */
+    const uint8_t real[20] = { 0x80, 0x03, 0x01, 0x00, 0x0e, 0x73, 0x35, 0x00, 0x12, 0x8d, 0x30, 0x00 };
+    CHECK(pinnacle_cfg_reply_matches(guid, 10, real, 20), "the real GUID reply answers 80 03 08");
     CHECK(!pinnacle_cfg_reply_matches(guid, 10, r, 8), "too short for the 8 bytes");
     r[1] = 0x00;
     CHECK(!pinnacle_cfg_reply_matches(guid, 10, r, 20), "the reply for index 0 is not index 3's");

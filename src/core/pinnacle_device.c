@@ -450,7 +450,8 @@ static pinnacle_status_t config_exchange(pinnacle_device_t *dev,
         return st;
 
     /* "80 <index> 08 00..." reads 8 bytes of the device's configuration
-     * memory; the reply echoes the request header in bytes 0..3 (checked by
+     * memory; the reply echoes the opcode and index in bytes 0..1, bytes 2..3
+     * are not the request's (80 03 01 00 on the 500/510-USB; see
      * pinnacle_cfg_reply_matches). Index 3 is the 1394 GUID that MarvinBus64
      * publishes in the node's config ROM (byte-identical in the cold-boot
      * trace). Index 0 is another 8-byte ID (fb82ad03 8d615d0e on the

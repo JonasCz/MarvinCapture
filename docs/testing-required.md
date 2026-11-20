@@ -46,7 +46,7 @@ attached: the device table showed the 510-USB, so section 10 is still open for t
 
 **Found (need code changes):**
 
-- **The GUID / serial read fails on both units (regression).** The unit answers `80 03 08`
+- **Fixed 2026-11-20: the GUID / serial read failed on both units (regression).** The unit answers `80 03 08`
   with `80 03 01 00` + the 8 GUID bytes + 8 more bytes (500: `80 03 01 00 fb 82 ad 03 12 8d
   30 00 f2 40 40 38 ef 54 8f 88`; 510: `80 03 01 00 0e 73 35 00 12 8d 30 00 f4 f9 be ad bd bf
   c5 bd`). `pinnacle_cfg_reply_matches()` (`pinnacle_cfg.c`, added in 39e402a) wants byte 2 to
@@ -57,8 +57,8 @@ attached: the device table showed the 510-USB, so section 10 is still open for t
   (`fb82ad03128d3000`) in their config ROM, two equal GUIDs on one bus. The build from
   9 Oct reads both serials. With the check reduced to `reply[1] == req[1]` (local test build
   only) serials, distinct GUIDs and warm start (35 ms probe) all work; everything below was
-  run with that change.
-- **`scripts\build.ps1` fails on Windows**: `tests/engine/test_pin_closer.c` calls `setenv` /
+  run with that change, which is now in the code.
+- **Fixed 2026-11-20: `scripts\build.ps1` failed on Windows**: `tests/engine/test_pin_closer.c` calls `setenv` /
   `unsetenv`, which MSYS2 UCRT64 does not declare (implicit declaration error). The shipped
   targets build; only the full script run stops.
 - **Two Marvins on one bus reset each other a few times.** Each link init initiates a bus

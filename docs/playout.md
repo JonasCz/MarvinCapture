@@ -4,9 +4,9 @@
 Pinnacle device, as a virtual tape deck. It is a separate command-line program installed next to
 `MarvinCaptureCLI` and uses the same left-to-right syntax and wait conditions (see [cli.md](cli.md)).
 
-**Status: DV playout works on hardware** (2026-11-20, 510-USB to 500-USB: bit-exact PAL and NTSC,
-script mode and virtual deck, through bus resets). HDV, a camcorder or a PC as the other end, and
-mixed tapes are untested. See
+**Status: DV and HDV playout work on hardware** (2026-11-20, 510-USB to 500-USB: DV PAL and NTSC
+bit-exact, HDV 1080i50 picture-exact, script mode and virtual deck, through bus resets). A camcorder
+or a PC as the other end, and mixed tapes, are untested. See
 [Hardware test results](#hardware-test-results-2026-11-19) and its second session. The packetizer, the virtual tape and deck, the AV/C
 target, the script and the whole playout loop are unit-tested without a device, and `--dry-run`
 works. The code that talks to the Marvin (transmit on EP 0x06, the 1394 plug registers, the IRM) is
@@ -318,14 +318,19 @@ Results with the four fixes:
 | script, `pal10min.dv`, 2 min | 2966 sent, 2950 captured, 0 errors, all identical and consecutive |
 | **virtual deck** `MarvinPlayout pal20.dv`, capture `--rew --wait --play --capture x.dv --wait nosignal=00:00:05` | the 500 connected oPCR[0] (p2p), REW / PLAY / status / timecode over AV/C, capture exit 0: **499 frames = tape frames 0..498, identical**, 0 errors |
 | the same with `ntsc20.dv` | 598 frames = tape frames 0..597, identical |
+| the same with an HDV file (ffmpeg: MPEG-2 1440x1080i50 25 Mbit/s, MP2 audio, 20 s `.m2t`) | the 500 connected (oPCR `0x813f0092`, 584-byte payload), 499 frames, 0 errors; the decoded pictures equal the file's frames 0..498 (per-frame MD5). The TS bytes differ from the file (the stream is re-paced), as `--dry-run`'s output does |
 
 Still wrong or untested:
 
 - **The last tape frame is missing** in both virtual-deck captures (499 of 500, 598 of 599); not yet
   known whether the playout or the capture's no-signal stop drops it.
-- **MarvinPlayout hangs after an EP 0x06 failure** in script mode: it never exits (killed by
-  `timeout` after 40–60 s, exit 124) instead of exit 2.
+- **Fixed: MarvinPlayout hung after an EP 0x06 failure** (killed by `timeout` after 40–60 s): the
+  stop polled a wedged unit 20 times at 2 s per EP 0x02 transfer, and a failure in the last writes
+  went unreported (exit 0). Now the stop gives up on the first failed transfer, waits for the last
+  write to finish or fail, and such a run ends with exit 2 within seconds (checked with a build that
+  sets the s bit to make the stream fail).
 - IT status writebacks with the s bit (why they stall) and the FPGA's IT events are not understood;
   not needed with s off.
-- Steps 2 (camcorder as receiver), 3 (replug), 6 (HDV), 7 (mixed tape), 8 (record) not done; the
+- Steps 2 (camcorder as receiver), 3 (replug), 7 (mixed tape), 8 (record) not done, nor HDV to a
+  real camcorder (step 6 used the second Marvin) or the HDV RAM-overlap TODO; the
   Windows MSDV / dvgrab controller of step 4 neither.

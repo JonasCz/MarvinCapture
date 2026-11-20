@@ -769,29 +769,40 @@ int pout_link_it_stop(pout_link_t *k)
     if (!k->it_running)
         return 0;
     pout_link_it_flush(k);
-    /* let the queue drain; GUESS: if the FPGA sits in a type-11 wait that never ends, this times out */
-    unsigned long long deadline = now_ms() + 3000;
+    /* let the queue drain. Longer than one write's timeout: a write that is going to fail must have
+     * failed by the end of this wait, so the failure is reported here (and in the exit code); the
+     * sender drops the rest of the queue once one write has failed */
+    unsigned long long deadline = now_ms() + IT_WRITE_TIMEOUT_MS + 1000;
     pthread_mutex_lock(&k->it_mtx);
     while ((k->q_count || k->sending) && !k->it_error && now_ms() < deadline) {
         pthread_mutex_unlock(&k->it_mtx);
         sleep_ms(2);
         pthread_mutex_lock(&k->it_mtx);
     }
+    int failed = k->it_error;
     pthread_mutex_unlock(&k->it_mtx);
 
     uint8_t msg[8];
     int rc = 0;
     if (pout_it_stop(&k->it, msg, sizeof(msg)) == 8 && p1394_send(&k->l, msg, 8) != 0)
         rc = -1;
-    /* FUN_0002e450 re-clears run and polls the control register until active and run are both 0 */
-    for (int i = 0; i < 20; i++) {
+    /* FUN_0002e450 re-clears run and polls the control register until active and run are both 0.
+     * Not on a wedged unit: every EP 0x02 transfer then times out (2 s), and 20 rounds of that kept
+     * MarvinPlayout from exiting for over a minute after a stream failure (2026-11-20). */
+    for (int i = 0; i < 20 && rc == 0; i++) {
         uint32_t ctl = 0;
-        if (p1394_reg_read(&k->l, POUT_IT_REG_CTRL_SET, &ctl) == 0 &&
-            !(ctl & (POUT_IT_CTX_ACTIVE | POUT_IT_CTX_RUN)))
+        if (p1394_reg_read(&k->l, POUT_IT_REG_CTRL_SET, &ctl) != 0) {
+            rc = -1;
             break;
-        p1394_reg_write(&k->l, POUT_IT_REG_CTRL_CLR, POUT_IT_CTX_RUN);
+        }
+        if (!(ctl & (POUT_IT_CTX_ACTIVE | POUT_IT_CTX_RUN)))
+            break;
+        if (p1394_reg_write(&k->l, POUT_IT_REG_CTRL_CLR, POUT_IT_CTX_RUN) != 0) {
+            rc = -1;
+            break;
+        }
         sleep_ms(10);
     }
     k->it_running = 0;
-    return rc;
+    return failed ? -1 : rc;
 }

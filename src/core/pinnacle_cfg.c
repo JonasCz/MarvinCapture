@@ -48,9 +48,11 @@ int pinnacle_cfg_reply_matches(const uint8_t *req, int req_len, const uint8_t *r
 {
     if (req_len < 1 || n < 1 || reply[0] != req[0])
         return 0;
-    /* "80 idx 08": the 20-byte reply repeats the request header before the 8 bytes */
+    /* "80 idx 08": the 20-byte reply repeats the opcode and the index, then two bytes that are
+     * not the request's (the 500-USB and 510-USB answer 80 03 08 with 80 03 01 00, seen
+     * 2026-11-19), then the 8 bytes */
     if (req[0] == 0x80 && req_len >= 3)
-        return n >= 12 && reply[1] == req[1] && reply[2] == req[2];
+        return n >= 12 && reply[1] == req[1];
     return 1;
 }
 

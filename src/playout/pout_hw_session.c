@@ -153,7 +153,8 @@ static int it_packet(pout_out_t *o, const uint8_t *pkt, unsigned len)
 static void it_stop(pout_out_t *o)
 {
     hw_t *h = (hw_t *)o->priv;
-    pout_link_it_stop(h->link);
+    if (pout_link_it_stop(h->link) != 0)
+        fail_note(h, "the isochronous transmit stream failed (EP 0x06 write error or timeout)");
 }
 
 static void it_destroy(pout_out_t *o) { (void)o; }
@@ -407,6 +408,13 @@ int pout_hw_run(const pout_script_t *sc, pout_tape_t *tape, int (*interrupted)(v
         code = POUT_EXIT_DEVICE;
     } else {
         code = pout_session_run(h.session, err, err_cap);
+    }
+    /* the last writes can still fail after the script's end: that is a failed run, not exit 0 */
+    if (pout_link_it_stop(h.link) != 0)
+        fail_note(&h, "the isochronous transmit stream failed (EP 0x06 write error or timeout)");
+    if (code == POUT_EXIT_OK && h.failure[0]) {
+        snprintf(err, err_cap, "%s", h.failure);
+        code = POUT_EXIT_DEVICE;
     }
     pin_logf(PIN_LOG_INFO, "playout: %lu frames sent\n", pout_session_frames_sent(h.session));
     pout_session_destroy(h.session);
