@@ -4,7 +4,10 @@
 Pinnacle device, as a virtual tape deck. It is a separate command-line program installed next to
 `MarvinCaptureCLI` and uses the same left-to-right syntax and wait conditions (see [cli.md](cli.md)).
 
-**Status: nothing on the device side has run yet.** The packetizer, the virtual tape and deck, the AV/C
+**Status: DV playout works on hardware with four fixes not yet in the code** (2026-11-20, 510-USB to
+500-USB: bit-exact PAL and NTSC, script mode and virtual deck). Without them it does not transmit
+(the EP 0x06 stream stalls). See
+[Hardware test results](#hardware-test-results-2026-11-19) and its second session. The packetizer, the virtual tape and deck, the AV/C
 target, the script and the whole playout loop are unit-tested without a device, and `--dry-run`
 works. The code that talks to the Marvin (transmit on EP 0x06, the 1394 plug registers, the IRM) is
 written from the decompiled vendor driver ([handoff/playout-feasibility.md](handoff/playout-feasibility.md))
@@ -216,3 +219,110 @@ detail, with `--debug` and the exit code, each step only if the previous worked:
    per kind); try `--switch kind=reset:1` and other values, and compare with what a real camera does
    ([testing-required.md](testing-required.md#31-dv-and-hdv-on-one-tape)).
 8. Recording to tape: AV/C RECORD to the camcorder while playing ("export to tape").
+
+## Hardware test results (2026-11-19)
+
+A 510-USB running MarvinPlayout and a 500-USB running MarvinCaptureCLI, joined by one FireWire cable,
+on Windows 10 x64, HEAD 8523d32 (with the GUID-read fix described in
+[testing-required.md](testing-required.md#bench-session-2026-11-19-windows-500-usb--510-usb-head-8523d32)).
+Tape: a 20 s PAL DV file made by ffmpeg (`testsrc2`, timecode 00:10:00:00).
+
+| step | result |
+|---|---|
+| 1. `--dry-run` | the output equals the tape byte for byte (500 frames) |
+| bring-up, warm start | works: OHCI design found and kept, link up, 2-node bus |
+| 1394 target side (`pout_csr`) | works: the 500 read oMPR `0x3f000001` and oPCR[0], and its compare-swap connected the plug (`0x813f007a` / `0xc13f007a`, channel 63); MarvinPlayout logged "a controller connected our output plug" and its responses completed with `ack_complete` (`0x11`) |
+| IT contexts in the FPGA | 8 (`IsoXmitIntMaskSet` reads back `0xff`) |
+| 2. / 5. transmit | **fails**: the first EP 0x06 bulk write (~26.8 KB) times out after 3 s (`LIBUSB_ERROR_TIMEOUT`, "EP 0x06 write failed (-1 of 26880 bytes, usb -7)"), 0 frames sent, exit 2. Same in virtual-deck mode (after the 500 connected) and in script mode with no receiver |
+| AV/C target | not reached: the capture's REW came after MarvinPlayout had exited |
+
+What the registers say after the stall (read through EP 0x02 from a local diagnostic build): IT0
+ContextControl `0x00009011` (run and wake set, not active, event `ack_complete`), CommandPtr
+`0x000016b3` (block 0, Z = 3), IsoXmitIntEvent 0. So the context was started, ran its program and
+stopped at its end. The likely blocker is the **type-11 message**: the FPGA holds the EP 0x06 stream
+in it and never lets it go.
+
+Experiments with a local build (env switches, not in the code):
+
+- s bit on every OUTPUT_LAST (`status_every` 1 instead of 64): no change, same stall. Afterwards
+  EP 0x02 writes on that unit also timed out until the next bring-up.
+- **No type-11 messages at all**: EP 0x06 takes everything and MarvinPlayout runs to the end of its
+  script (exit 0), but at about twice real time (1499 frames in 30 s; nothing paces the loop), and
+  the 500-USB, connected to the plug on channel 63, receives **0 EP 0x88 completions** ("No video
+  received", exit 5). Whether anything reached the wire is unknown.
+
+The type-11 reading above was wrong; the second session (below) found the real causes.
+
+### Second session (2026-11-20): playout works
+
+Same bench, same 510-USB → 500-USB cable. `MarvinBus64.sys` / `MarvinAVS64.sys` were read again
+(the installed copies, ImageBase `0x10000`, so the Ghidra addresses are VA = RVA + `0x10000`), then
+fixes were tried with env switches in a local build (not in the code). **With four changes, DV
+playout works bit-exactly, in script mode and as a virtual deck.**
+
+What the vendor driver says (certain from the disassembly):
+
+- **The EP 0x06 stream `pout_it.c` builds is the vendor's, byte for byte**: slot `n % 4`, sequence
+  `n % 64` in the OUTPUT_LAST address word, CommandPtr `0x16b0` (Z = 0) plus run|wake at packet 3, a
+  patch and a wake on every packet from 4 on, type 11 = `0xb0000000 | first << 26 | ((n - 3) & 0x3f)`
+  on every packet from 3 on (`FUN_0002db20`, its only caller of `FUN_0002c400`). The one difference is
+  the s bit (below). A USB transfer is cut after the packet that passes 30000 bytes; nothing marks a
+  transfer's end.
+- **Nothing else is set up for transmit**: TALK (`FUN_0003db50`) sends type-4 register 0 with bit 8
+  clear (isochronous on), then only builds host state; no IsoXmitIntMask, IntMask, IT match,
+  ContextControlClear or FPGA register >= `0x800`. Stop (`FUN_0002e450`): type-4 bit 8 set,
+  ContextControlClear `0x8000`, then poll ContextControl until active and run are clear (200 ms).
+- `MarvinAVS64` queues up to 300 EP 0x06 URBs (`MaxPending1394IsoWrite` default `0x12c`), plain bulk
+  with `USBD_SHORT_TRANSFER_OK`, no timeout; EP 0x84 always has reads pending. The vendor reacts to
+  bus resets through the EP 0x84 type-`0xa` IntEvent record (bit 17) and clears it with `0x084` =
+  `0x20000`.
+- The FPGA has IT event bits (16..22 of the type-6 event mask `0x0c`: `IT_fifo_underflow`,
+  `IT_cycle_missed`, `IT_wait_begin`, `IT_wait_done`, ...); the vendor leaves them masked
+  (`0x2008`). Enabling them (`0x7f2008`) produced no EP 0x84 record we could see.
+
+What was wrong, each found by bisecting on hardware (5 / 5 runs pass with all four, from a freshly
+loaded design each time):
+
+1. **No cycle master.** When the idle 500 was root (`NodeID 0x8000ffc0`), no cycle start packets were
+   sent, IT0 never became active (ContextControl `0x9000`, CommandPtr still `0x16b0`), the type-11 wait
+   for packet 0 never ended and EP 0x06 stopped after ~1 KB. Every passing run had the 510 as root
+   (`0xc000ffc1`), where its own cycleMaster bit (already set by the link init) takes effect. **Fix
+   tried:** after link init, if NodeID bit 30 (root) is clear, set PHY register 1 RHB | IBR (`0xc0`)
+   and wait for the reset: the 510 became root every time. (A real camcorder as root is cycle master;
+   an idle Marvin or a PC without a running stack may not be. Forcing root unconditionally costs
+   one bus reset; a bus with another working cycle master would not need it.)
+2. **The s bit.** With `status_every` 64 (the s bit on every 64th OUTPUT_LAST) EP 0x06 stopped after
+   11776 bytes every time; with s never set it never did. The vendor sets s only on the last packet
+   of a client buffer that asked for completion. **Fix:** never set it (`status_every` 0).
+3. **EP 0x84 not read while waiting for an EP 0x06 chunk.** `take_free_locked()` slept while the
+   sender thread blocked; with a bus reset during the stream (the 500's bring-up), the unread EP 0x84
+   records stalled the FPGA: EP 0x06 stopped (7168 of 19908 bytes) and EP 0x02 writes timed out until
+   the next bring-up. **Fix tried:** `pout_link_pump(k, 1)` instead of `sleep_ms(1)` there.
+4. **Bus resets are seen too late.** SelfIDCount's generation changed only ~1.5 s after the reset
+   (after the controller had already reconnected), while IntEvent bit 17 was set at once. The
+   controller (the 500's capture) connects our oPCR within milliseconds of its own reset, so the
+   0.25 s poll saw the reset after the new connection and its rescan wiped it: the deck played, 0
+   frames sent. **Fix tried:** detect the reset by IntEvent bit 17 (clear with `0x084` = `0x20000`),
+   and check it before dispatching each batch of incoming requests, so the CSR state is reset before
+   a lock that came after the reset; the session's own reset handling then keeps the plugs.
+
+Results with the four fixes:
+
+| run | result |
+|---|---|
+| script `pal20.dv --play --wait wallclock=00:00:05 --stop`, no receiver | 95 frames in 5 s (real time), exit 0; 5 / 5 |
+| script, 500 capturing (`--capture`, no deck commands), 20 s | survived a bus reset ("restarting the stream"); 194 frames captured, **identical to tape frames 22..215**, 0 errors |
+| script, `pal10min.dv`, 2 min | 2966 sent, 2950 captured, 0 errors, all identical and consecutive |
+| **virtual deck** `MarvinPlayout pal20.dv`, capture `--rew --wait --play --capture x.dv --wait nosignal=00:00:05` | the 500 connected oPCR[0] (p2p), REW / PLAY / status / timecode over AV/C, capture exit 0: **499 frames = tape frames 0..498, identical**, 0 errors |
+| the same with `ntsc20.dv` | 598 frames = tape frames 0..597, identical |
+
+Still wrong or untested:
+
+- **The last tape frame is missing** in both virtual-deck captures (499 of 500, 598 of 599); not yet
+  known whether the playout or the capture's no-signal stop drops it.
+- **MarvinPlayout hangs after an EP 0x06 failure** in script mode: it never exits (killed by
+  `timeout` after 40–60 s, exit 124) instead of exit 2.
+- IT status writebacks with the s bit (why they stall) and the FPGA's IT events are not understood;
+  not needed with s off.
+- Steps 2 (camcorder as receiver), 3 (replug), 6 (HDV), 7 (mixed tape), 8 (record) not done; the
+  Windows MSDV / dvgrab controller of step 4 neither.

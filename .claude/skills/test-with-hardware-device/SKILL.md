@@ -44,8 +44,8 @@ MarvinCaptureCLI -d <id|serial|file> -i svideo --capture a.avi --wait wallclock=
 MarvinCaptureCLI -i composite --wait wallclock=00:00:05     # analog bring-up + signal check only
 ```
 
-Exit codes: 0 ok, 1 usage, 2 device, 3 deck, 4 capture ended abnormally, 130
-Ctrl-C. Human output goes to stderr (redirect with `2> log.txt`), stdout is
+Exit codes: 0 ok, 1 usage, 2 device, 3 deck, 4 capture ended abnormally, 5 a
+capture received no video (nothing written), 130 Ctrl-C. Human output goes to stderr (redirect with `2> log.txt`), stdout is
 reserved for `--capture -`. Syntax and semantics: `docs/cli.md`.
 
 Switching between DV and analog is just another invocation (the next run's

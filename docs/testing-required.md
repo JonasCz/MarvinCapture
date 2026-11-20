@@ -35,6 +35,90 @@ have never seen, with the tests that cover the logic.
 - **Units**: 500-USB (`0213`) and 510-USB (`0223`). **Hosts**: Windows x64, Apple Silicon
   macOS, Linux x86_64.
 
+## Bench session 2026-11-19 (Windows, 500-USB + 510-USB, HEAD 8523d32)
+
+Setup: a 500-USB (`0213`, GUID `fb82ad03128d3000`) and a 510-USB (`0223`, GUID
+`0e733500128d3000`) on one Windows 10 x64 host, joined to each other by a FireWire cable
+(each sees a 2-node bus). No camera or deck, and nothing on the analog inputs. Built from
+8523d32 in a separate worktree (`MarvinCaptureCLI`, `MarvinPlayout`, `marvin-core.dll`;
+`scripts\build.ps1` stops at a test that does not compile, see below). No 700-USB was
+attached: the device table showed the 510-USB, so section 10 is still open for the 700.
+
+**Found (need code changes):**
+
+- **The GUID / serial read fails on both units (regression).** The unit answers `80 03 08`
+  with `80 03 01 00` + the 8 GUID bytes + 8 more bytes (500: `80 03 01 00 fb 82 ad 03 12 8d
+  30 00 f2 40 40 38 ef 54 8f 88`; 510: `80 03 01 00 0e 73 35 00 12 8d 30 00 f4 f9 be ad bd bf
+  c5 bd`). `pinnacle_cfg_reply_matches()` (`pinnacle_cfg.c`, added in 39e402a) wants byte 2 to
+  repeat the request's `08`, so every `80` reply is read past and the read times out
+  (2 s each). Effects: the device table shows serial `-`; warm start is never taken ("could
+  not read the GUID, cold start"), so every run reloads the FPGA; "Checking what the FPGA
+  holds" takes ~6.9 s; and both units publish the same fallback GUID
+  (`fb82ad03128d3000`) in their config ROM, two equal GUIDs on one bus. The build from
+  9 Oct reads both serials. With the check reduced to `reply[1] == req[1]` (local test build
+  only) serials, distinct GUIDs and warm start (35 ms probe) all work; everything below was
+  run with that change.
+- **`scripts\build.ps1` fails on Windows**: `tests/engine/test_pin_closer.c` calls `setenv` /
+  `unsetenv`, which MSYS2 UCRT64 does not declare (implicit declaration error). The shipped
+  targets build; only the full script run stops.
+- **Two Marvins on one bus reset each other a few times.** Each link init initiates a bus
+  reset (PHY IBR), and each side restarts its link on a bus reset, so a capture started while
+  MarvinPlayout starts (or the other way round) sees 3 link starts in 14 s and may miss the
+  other node ("no camera answered"). It settles; starting one side ~8 s after the other gives
+  one link start each.
+- **MarvinPlayout does not transmit as shipped**, but does with four fixes tried on 2026-11-20
+  (cycle master / force root, no s bit, EP 0x84 drained while EP 0x06 waits, bus reset from
+  IntEvent bit 17): the 500-USB captured the 510's playout bit-exactly, PAL and NTSC, also as a
+  virtual deck driven over AV/C (section 15 step 5). See
+  [playout.md](playout.md#second-session-2026-11-20-playout-works).
+
+**Verified:**
+
+- **Cold start** on both units: a unit with nothing loaded probes as `06 -> 00` ("no design
+  running"), uploads the OHCI design and comes up; warm start then skips the upload (500 and
+  510, DV and analog). Not a true power-up from the wall, but the FPGA was empty.
+- **T2 / U4 config replies**: analog bring-up (composite and S-video) on the 500-USB and the
+  510-USB shows no I2C NAK and no config-reply error ([code-review.md](code-review.md)).
+- **Plug connection to another Marvin**: the 500-USB found MarvinPlayout on the 510 as
+  "camera node 0/1 (oMPR `0x3f000001`)" and connected its oPCR[0] on channel 63
+  (compare-swap, through MarvinPlayout's CSR target), section 6 / 7 "plug emulation".
+- **Device lock, same user**: a second `MarvinCaptureCLI` on a unit in use fails with
+  "device is in use by another process", exit 2; the device table shows `in use (pid N)`.
+- **Windows (MSYS2) tests**: `pinnacle_lock`, `pin_cond` (T4), `test_pin_fs`,
+  `test_pin_naming`, `test_lazy_sink`, `test_pin_settings` pass.
+- **Z1, capture part**: replay captures (`PIN_REPLAY`, DV and DV AVI) into
+  `Café ü 日本\café.dv` and to 273/274-character paths (`\\?\` prefix) write complete
+  files. Only with `LongPathsEnabled = 1` and the UTF-8 code page (ACP 65001) on; the other
+  combinations of the matrix were not run (system settings).
+- **Deck that stops answering**: after MarvinPlayout exited, the capture's REW got no
+  response, then `--wait idle` polled `01 20 d0 7f` with "FCP command not delivered
+  (event 0x03)" for a minute and never ended (section 5, "no deck not responding status";
+  now seen on hardware).
+
+**Observed, not yet explained:**
+
+- A replay of a 500-frame PAL `.dv` writes 497 frames: the first three are not in the file
+  (frames 3..499 are, byte for byte). Replay only; check whether this is the start gate and
+  whether a live capture loses its first frames the same way.
+- After the capture side released its connection to MarvinPlayout's oPCR[0], it logged
+  "releasing the camera's oPCR[0] failed (0xc03f007a)": the plug already read point-to-point
+  count 0. Either MarvinPlayout's lock handler or the release compare value.
+
+**Long runs:**
+
+- **DV AVI past the 1 GiB RIFF segments** (section 9): a 10-minute PAL replay (`PIN_REPLAY`,
+  the 20 s tape 30 times) to DV AVI: 2.1 GB in one file, 14,997 frames (the first 3 missing
+  again, as above), 0 errors, 0 dropped; ffprobe reads all 14,997 video frames and 599.88 s of
+  audio, and a full ffmpeg decode reports no error. Not yet opened in an editor.
+- **1-hour armed soak, no source** (both units at once, `--capture ... --wait
+  wallclock=01:00:00`): 510-USB on DV, 500-USB on composite. Both ran the hour and ended with
+  "No video received", exit 5; no USB, config or AV/C error. Memory: DV process flat at
+  13.7 MB, analog process 17.85 -> 18.16 MB (+0.3 MB/h, watch in a longer run). The DV log had
+  6 link starts (bus resets on the 2-node bus while idle) and the warning "the file name's
+  extension does not suit analog video" for `dv-armed.dv` although no `-i` was given: check
+  whether the CLI takes the input from saved settings. A long run **with a real signal**
+  (analog source or camera) is still open.
+
 ## Inputs at a glance
 
 | Input | What it tests | Section |
@@ -496,7 +580,8 @@ Any input; DV is the easiest.
 ## 10. Other Pinnacle units
 
 - **700-USB (`0212`) and 710-USB / MovieBox Plus (`0224`)**: supported, untested. Their
-  extra I2C chip and PHY ports are not driven.
+  extra I2C chip and PHY ports are not driven. (The 2026-11-19 session had a 510-USB, not a
+  700-USB.)
 - **MovieBox Deluxe (`0206`)**: the FX2 firmware download, the re-enumeration wait and the
   GUID read are best guesses ([hardware.md](hardware.md)). If the GUID read fails, a fixed
   fallback GUID is used, so two such units on one bus would collide.
@@ -681,8 +766,11 @@ Two MovieBoxes joined by a FireWire cable, one sending. None of this has been tr
 
 **What is unknown, cheapest first:**
 
-1. **Does the bitstream implement IT contexts?** Write all ones to `IsoXmitIntMaskSet` and
-   read the mask back: one register poke on the Linux host.
+1. **Does the bitstream implement IT contexts?** **Yes, 8** (2026-11-19, 510-USB): all ones
+   written to `IsoXmitIntMaskSet` (`0x098`) read back as `0x000000ff`. IT0 transmits, and the
+   transmit path (questions 2 and 4) is answered and working: a second Marvin captured the
+   stream bit-exactly on 2026-11-20, see
+   [playout.md](playout.md#second-session-2026-11-20-playout-works).
 2. **How do data and descriptors reach the device?** On receive, descriptors in device RAM
    point at a buffer, and address bit 23 routes it to EP 0x88 ([startup.md](startup.md)).
    Transmit presumably mirrors that, with packet data written on EP 0x06 and
