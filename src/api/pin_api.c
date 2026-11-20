@@ -674,8 +674,8 @@ const char *pin_retry_setting_help(int which)
 {
     switch (which) {
     case 0:
-        return "How often one bad section is read again. A re-read that mends nothing ends the "
-               "attempts early: the damage is on the tape, not dirt on the heads.";
+        return "How often one bad section is read again. Two re-reads in a row that mend nothing end "
+               "the attempts early: the damage is on the tape, not dirt on the heads.";
     case 1:
         return "The longest stretch of tape held for one retry (DV and HDV need about 3.6 MB per "
                "second: 60 s is about 220 MB; in memory at most 600 s). A lone bad spot is re-read "

@@ -34,11 +34,14 @@ Settings:
   --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, hdv-mov, hdv-mkv and the analog NUT stream on stdout, and by raw .ts/.m2t (hdv-ts, also on stdout) as the DVB service name (ffprobe: the program's service_name; MediaInfo: "Service name"). Raw .dv (dv) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.
   --keep-raw               keep the raw .dv/.ts next to a rewrapped file
   --retry                  DV/HDV: when the camera reads damage (dirt, a dropout), rewind, read the section again and keep the best of every read (DV block by block, HDV GOP by GOP), so the file gets the cleanest copy the tape gives. Bad spots close together are re-read in one go. Needs a camera that takes deck commands; the capture sends PLAY itself. Not with --capture -.
-  --retry-attempts N       re-reads of one bad section, 1 to 10 (default 3); a re-read that mends nothing ends the section's attempts
+  --retry-attempts N       re-reads of one bad section, 1 to 10 (default 3); two re-reads in a row that mend nothing end the section's attempts
   --retry-window S         the longest stretch of tape held in memory for one retry, 10 to 600 seconds (default 60, about 220 MB)
   --retry-preroll S        how far before a bad section the deck starts playing again, 1 to 30 seconds (default 3)
   --retry-on any|uncorrected
                            what damage asks for a re-read: any (default; also what the camera concealed) or uncorrected (errors nobody concealed, lost frames)
+  --retry-mode auto|section|whole
+                           section: rewind as soon as a bad stretch is over (quickest for a few bad spots; a lone spot is re-read at once, the more damage follows the more is re-read in one go). whole: read to the end of the recording, then rewind once and re-read from the first damage, pass after pass: far fewer rewinds, less deck and tape wear, the file is written at the end and the drive needs room for the tape twice. auto (default): section, and whole once the tape turns out very poor
+  --retry-store ram|file   where held tape is kept: ram (default, at most 600 s) or a temporary file next to the output (deleted afterwards; whole always uses one)
   --overwrite              overwrite an existing target file (else an error)
   Analog picture and audio controls (svideo/composite only; with defaults):
   --brightness N           0 to 255 (default 128)
@@ -147,7 +150,8 @@ when done).
 ## Progress and summary
 
 While capturing, the CLI rewrites one status line on stderr, e.g.
-`REC 00:01:02:03  pass 1/1  scene 1  12.5 MB  4 s  err 2  drops 0`. `err` counts frames
+`REC 00:01:02:03  scene 1  12.5 MB  4 s  err 2  drops 0` (and while `--retry` works on a
+section, e.g. `Retry 1/3: rewinding to a 14 s section`). `err` counts frames
 with errors (damaged DV/HDV data, see [usage.md](usage.md)); `drops` counts frames missing
 from the output. When a capture ends, a line stays on screen with the totals, e.g.
 `Frames 1,234, with errors 2, dropped 0` (plus `, N lost blocks` if any). Errors do not change

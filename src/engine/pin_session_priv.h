@@ -311,6 +311,7 @@ struct pin_session {
     double retry_rew_s;           /* when the retry's REW went out (0: not winding) */
     double retry_busy_s;          /* last dv_tick() while it wound / re-read (time limit pause) */
     int retry_phase;              /* last phase reported (PIN_EVT_RETRY) */
+    int retry_trace;              /* units after a retry's PLAY still to log (debug) */
     double retry_rate, retry_cycle; /* learned on this deck, kept across captures */
     pin_retry_stats_t retry_stats; /* the last capture's, once it ended */
     int deck_tc_valid;            /* the deck's last TIME CODE answer, as frames */

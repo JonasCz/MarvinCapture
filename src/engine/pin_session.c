@@ -2642,6 +2642,8 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         ru.picture = pic_pid >= 0;
         ru.opens_gop = flags ? 1 : 0;
         ru.damaged = herr.frame_error;
+        ru.dts_valid = ru.picture && herr.dts_valid;
+        ru.dts = herr.dts;
         ru.lost_before = hdv_loss;
         if (ru.opens_gop && herr.dts_valid) {
             ru.key_valid = 1;
@@ -2680,6 +2682,12 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         ru.len = len;
         ru.meta = &m;
         ru.meta_len = sizeof(m);
+        if (s->retry_trace > 0) {
+            /* the first units after a retry's PLAY: where the deck landed (debug log) */
+            s->retry_trace--;
+            pin_logf(PIN_LOG_DEBUG, "session: retry: after PLAY: %s key %s%lld\n", s->timecode,
+                     ru.key_valid ? "" : "(none) ", (long long)ru.key);
+        }
         retry_budget(s);
         pin_retry_push(s->retry, pin_session_now(), &ru);
     } else {
@@ -2934,9 +2942,13 @@ static void finish_file(pin_session_t *s)
          * rest goes at once and the queue counts what it cannot take. */
         double stuck_since = pin_session_now();
         int left = -1;
+        uint64_t frames_before = s->frames;
         for (;;) {
             retry_budget(s);
             int now_left = pin_retry_flush_some(s->retry);
+            if (left < 0)
+                pin_logf(PIN_LOG_DEBUG, "session: retry: the capture ends, %d held slot(s) left after "
+                         "the first piece\n", now_left);
             if (now_left == 0)
                 break;
             if (now_left != left) {
@@ -2952,6 +2964,8 @@ static void finish_file(pin_session_t *s)
             }
             sleep_ms(5);
         }
+        pin_logf(PIN_LOG_DEBUG, "session: retry: %llu frame(s) went to the file at the end\n",
+                 (unsigned long long)(s->frames - frames_before));
     }
     if (!s->sink) {
         /* the file was lost (a failed open): what was held for it has no file to go to, and
@@ -3440,6 +3454,10 @@ static void retry_tick(pin_session_t *s, uint16_t node, double now)
         char text[PIN_TEXT_MAX];
         pin_format_retry_status(&st, text, sizeof(text));
         pin_logf(PIN_LOG_INFO, "session: %s\n", text);
+        pin_logf(PIN_LOG_DEBUG, "session: retry: wind speed %.1fx, stop lead %.2f s, retry cycle %.1f s, "
+                 "join gap %.1f s, %llu rewinds, %u bad\n", rs.rew_rate, rs.stop_lead_s, rs.cycle_s, rs.join_s,
+                 (unsigned long long)rs.rewinds, rs.bad_slots);
+        s->retry_trace = rs.phase == PIN_RETRY_SEEKING ? 8 : 0;
         pin_session_push_event(s, PIN_EVT_RETRY, (int32_t)rs.phase, text);
     }
     if (pin_retry_busy(s->retry)) {
@@ -3607,9 +3625,13 @@ static void dv_tick(void *user)
         int winding = s->deck == PIN_DECK_REWINDING || s->deck == PIN_DECK_FAST_FORWARD;
         /* HDV that carries no timecode of its own: ask the deck while it plays, too */
         int hdv_from_deck = s->signal && s->stream_kind == PIN_KIND_HDV && !s->hdv_tc_live;
-        if (now - s->last_transport_poll_s > (winding || hdv_from_deck ? 0.5 : 1.0)) {
+        /* a retry winding back: where the tape is, as often as the deck answers (it decides when
+         * to PLAY, and measures the wind speed) */
+        int retry_wind = s->retry && s->retry_rew_s > 0 && pin_retry_busy(s->retry);
+        double period = retry_wind ? 0.2 : winding || hdv_from_deck ? 0.5 : 1.0;
+        if (now - s->last_transport_poll_s > period) {
             s->last_transport_poll_s = now;
-            int want_tc = (!s->signal && (winding || s->tc_after_wind)) || hdv_from_deck;
+            int want_tc = (!s->signal && (winding || s->tc_after_wind)) || hdv_from_deck || retry_wind;
             pin_deck_query_t q = s->poll_tc_next && want_tc ? PIN_DECK_QUERY_TIMECODE
                                                               : PIN_DECK_QUERY_STATE;
             s->poll_tc_next = q == PIN_DECK_QUERY_STATE && want_tc;

@@ -54,8 +54,8 @@
  * As quick as possible: the join gap adapts to how damaged the tape is. It starts short (about
  * a second: one bad spot is re-read at once), doubles for each section that follows soon after
  * the previous one (a damaged stretch: fewer, longer sections, many bad spots per rewind), up to
- * half the window, and halves again as the tape gets clean. A section whose attempt mended
- * nothing gets no further attempts.
+ * half the window, and halves again as the tape gets clean. A section where two attempts in a
+ * row mended nothing gets no further attempts (the damage is on the tape).
  *
  * Modes (pin_retry_cfg_t.mode): SECTIONS as above; WHOLE holds everything from the first damage
  * to the end of the recording (the signal stays away) in the temporary file, then winds back
@@ -143,6 +143,8 @@ typedef struct {
     int picture;            /* a picture (0: PAT/PMT and other non-picture units) */
     int opens_gop;          /* carries a sequence header: starts a slot */
     int damaged;            /* hdv_unit_errors_t.frame_error */
+    int dts_valid;          /* the picture's decode time stamp: which pictures follow each other */
+    int64_t dts;
     /* DV and HDV: the key a re-read is lined up by. DV: the subcode timecode as
      * pin_retry_tc_frames(); HDV: the DTS of the GOP's first picture (on the unit with opens_gop). */
     int key_valid;
@@ -184,6 +186,7 @@ typedef struct {
     uint64_t rewinds;       /* REW commands sent */
     double rew_rate;        /* learned wind speed (x real time), 0 = not known yet */
     double cycle_s;         /* learned cost of one retry cycle (seconds), 0 = not known */
+    double stop_lead_s;     /* learned: PLAY goes out this much earlier than the wind needs */
     double join_s;          /* join gap in use */
     int whole;              /* holding the whole tape (mode WHOLE, or AUTO turned to it) */
     int spooling;           /* units go to the temporary file */

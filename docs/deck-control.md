@@ -238,9 +238,10 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   retry's REW). The state stays CAPTURING. The TIME CODE poll runs while the
   tape winds (no stream) and, for HDV without GOP timecode, during play; every
   answer is kept as `deck_tc_frames` for the engine (where to stop winding, the
-  deck position of an HDV section). Reasoned and simulated
-  (`test_pin_retry.c`), not tried on a deck yet: REW then PLAY straight from
-  winding, how far the deck runs on after PLAY, the TIME CODE answers while
+  deck position of an HDV section); while a retry winds it asks every 0.2 s.
+  Tried on the bench against MarvinPlayout's virtual deck (retry.md, "Bench
+  results"), not yet on a camcorder: REW then PLAY straight from winding, how
+  far a real deck runs on after REW and PLAY, its TIME CODE answers while
   winding.
 - **Why it ended.** Every end of a capture goes through `capture_end()`, which
   closes the file, sends Stop if asked, and reports a `pin_stop_reason_t` with a

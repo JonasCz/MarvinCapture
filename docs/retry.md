@@ -38,13 +38,18 @@ deck in `tests/engine/test_pin_retry.c`); the session feeds it the units and dri
    when the clean run after the last bad slot reaches the join gap, when it reaches the **longest
    section** (default 60 s of tape, about 220 MB; 10-600 s in memory, up to 3600 s in a temporary
    file; the join gap is at most half of it), or when the signal ends (the end of the recording).
-4. **Wind back.** REW, then PLAY a **preroll** (default 3 s) before the section. How far: from the
-   deck's TIME CODE answers while it winds, if it gives them, else from the wind time at the wind
-   speed this deck has shown so far (learned on every retry: from the frames' own positions when the
-   re-read lines up; 6x real time before the first measurement, deliberately low because landing too
-   early only costs a few seconds of reading). Landing after the start of the damage winds back
-   again (at most three times per attempt). A PLAY the deck refuses straight from winding is
-   retried after a STOP.
+4. **Wind back.** REW, then PLAY a **preroll** (default 3 s) before the section. While a retry winds,
+   the deck's TIME CODE is asked every 0.2 s: it shows when the deck really winds (a deck plays on
+   for a moment after REW, and a PLAY in that moment leaves the tape where it is, so PLAY never goes
+   out before the timecode goes back; a deck that answers nothing while winding gets a second), it
+   measures the wind speed, and PLAY goes out when the tape will be a preroll before the section.
+   Without timecode answers it is the wind time at the speed learned so far (20x before the first
+   measurement). A **stop lead** is learned from where the deck landed against where it should have
+   (the deck winds on until it takes PLAY). Landing after the start of the damage winds back again
+   (at most three times per attempt). A PLAY the deck refuses straight from winding is retried
+   after a STOP. A stale frame right after PLAY (the one shown before the wind, sent once more) is
+   not taken for the landing: two frames in a row must agree. Frames the deck sent before the wind
+   took effect, arriving late, are the next frames of the tape and are kept.
 5. **Re-read and mend.** The re-read is lined up with the held slots by key: the DV subcode timecode,
    the HDV decode time stamp (DTS) of the GOP's first picture (the Canon writes 00:00:00:00 into
    every GOP header; the DTS is what the tape carries). A unit without a readable key takes the slot
@@ -57,8 +62,8 @@ deck in `tests/engine/test_pin_retry.c`); the session feeds it the units and dri
    file's own order (`hdv_psi_out`).
 6. **Again, or go on.** When the re-read runs past the section, the section is done if it is clean.
    Otherwise, with **attempts** left (default 3, 1-10) and if this attempt mended something, it winds
-   back again, now to the first slot still bad. An attempt that mended nothing ends the section's
-   attempts (the damage is on the tape, not dirt). Then the section leaves the FIFO and the capture
+   back again, now to the first slot still bad. Two attempts in a row that mended nothing end the
+   section's attempts (the damage is on the tape, not dirt; dirt can take two reads to come off). Then the section leaves the FIFO and the capture
    simply goes on: what the deck plays now is the tape after the section, so nothing is read twice
    into the file and nothing is skipped.
 
@@ -138,9 +143,27 @@ end and re-reads from 1:00 (two rewinds in all).
 same file and counts as one without it (DV and HDV, the replay device has no deck: seam
 `PIN_TEST_RETRY_REPLAY`).
 
-## Not verified on hardware
+## Bench results (2026-11-20, 510-USB as virtual deck, 500-USB capturing)
 
-Everything that needs a real deck is reasoned, not tried yet: the REW / PLAY timing, PLAY straight
-from winding, the TIME CODE answers while winding on each camera, the HDV DTS staying the same
-between reads, and the join gap / wind speed learning on a real transport. See also
-[deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
+MarvinPlayout (wind speed 30x, plays on 0.5 s after REW, 1 s from PLAY to the first frame) with
+`POUT_TEST_DIRT`, `MarvinCaptureCLI --retry`; checked frame by frame against the tape
+(`build/bench/check_dv.py`, `check_hdv.py`, `tei.py`, `cc.py`, not in git):
+
+| tape | result |
+|---|---|
+| DV PAL 120 s, clean | 2999 frames = tape 0..2998 identical, no section |
+| DV, dirt at 0:30 (1 read), 1:00 (2 reads) + 1:01 (1 read), crease at 1:30 | every frame once, in order; the dirt mended, the crease left; 3 sections, 4 rewinds, 212 s |
+| the same, `--retry-mode whole` | the same frames (3000), 4 passes, 474 s |
+| HDV 1080i50 60 s, dirt at 0:15, 0:30 (2 reads), crease at 0:48, raw `.m2t` | 1499 pictures identical to the tape; TEI only at 0:48; video and audio continuity counters unbroken across the joins; 5 rewinds |
+| the same into HDV MOV | the dirt pictures identical to the tape; the crease's GOPs re-encoded by the MOV repair, as without retry |
+
+What the bench taught (fixed): PLAY sent before the deck had started winding; a frame sent before
+the wind arriving after PLAY taken for the landing; the stale frame after PLAY; wind speeds learned
+from near-zero wind times; the distance played into blank tape at the end of a recording; a 2-read
+spot given up after one fruitless attempt.
+
+Still to know: a real camcorder's REW / PLAY timing and its TIME CODE answers while winding (the DV
+camcorder answers only every other poll during REW), HDV DTS between reads on a real tape, the join
+gap on a really damaged tape. On this deck a retry costs about 20 s: a 25x wind cannot stop closer
+than about 10-15 s before the section (wind delay plus the time to see it moving), so that much is
+read twice; reverse play (AV/C PLAY reverse) would land closer but is not tried.

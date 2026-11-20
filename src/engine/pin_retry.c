@@ -36,7 +36,8 @@
 #endif
 
 #define ANCHOR_S 1.0          /* good tape kept in front of a section to line a re-read up on */
-#define REW_GUESS 6.0         /* wind speed before one was measured (low: overshoot is cheap) */
+#define REW_GUESS 20.0        /* wind speed before one was measured: landing short costs one
+                                 more short wind, overshooting costs reading it all at 1x */
 #define REW_LATENCY_S 0.5     /* from REW sent to the tape moving */
 #define JOIN_MIN_S 1.0        /* the shortest join gap: one bad spot is re-read at once */
 #define DENSE_GUESS_S 10.0    /* sections closer than this (or the measured retry cycle) are dense */
@@ -70,6 +71,8 @@ typedef struct {
     int pics, damaged;      /* HDV pictures, damaged ones */
     int hole;               /* data lost in transit before / in it */
     int complete;           /* HDV: closed by the next GOP */
+    int ldts_valid;         /* HDV: the DTS of its last picture */
+    int64_t ldts;
     int retried;            /* part of a section that was retried: never opens one again */
     unsigned read;
     int mended;
@@ -103,12 +106,24 @@ struct pin_retry {
     int reseeks;
     int play_failed;
     int tail_ok;            /* units still continue the held tape (REW not effective yet) */
+    int seek_tail;          /* HDV, seeking: the GOP being read continues the held tape */
+    int cand_valid;         /* seeking: the last keyed unit, which the next one must follow before
+                               it counts (a deck can send a stale frame right after PLAY) */
+    int64_t cand_key;
+    int gated;              /* PLAY of this wind waited for the deck to start winding: its landing
+                               says nothing about the stop lead */
+    int64_t rew_tc;         /* the deck's TIME CODE when the REW went out */
+    int rew_tc_valid;
+    int64_t wtc;            /* the deck's last TIME CODE while this wind runs, for its speed */
+    double wtc_t;
+    int wtc_valid;
 
     /* re-read */
     int cursor, matched;
     double seek_s;          /* tape seconds read since PLAY before the first match */
     unsigned mended_now;    /* slots mended in this attempt */
     unsigned mended_sec;    /* ... in this section */
+    int fruitless;          /* attempts in a row that mended nothing */
     slot_t *pend;           /* HDV: the re-read GOP being assembled */
 
     int64_t deck_tc;
@@ -116,6 +131,8 @@ struct pin_retry {
     int deck_tc_valid;
     unsigned long lost_pending;
 
+    int tail_dts_valid;     /* HDV: the DTS of the newest picture held */
+    int64_t tail_dts;
     uint8_t *prev;          /* the previous DV frame of the running read (block grades) */
     size_t prev_len, prev_cap;
     uint8_t *mapbuf;        /* block grades of the frame being graded */
@@ -204,6 +221,12 @@ static double key_rate(const pin_retry_t *r)
     return r->fps > 27 ? 30.0 : 25.0;
 }
 
+/* TIME CODE frames per second (pin_retry_tc_frames()'s nominal rate) */
+static double key_rate_tc(const pin_retry_t *r)
+{
+    return r->fps > 27 ? 30.0 : 25.0;
+}
+
 static double key_seconds(const pin_retry_t *r, int64_t a, int64_t b)
 {
     return (double)key_diff(r, a, b) / key_rate(r);
@@ -213,6 +236,16 @@ static int key_near(const pin_retry_t *r, int64_t a, int64_t b)
 {
     double d = key_seconds(r, a, b);
     return d > -NEAR_S && d < NEAR_S;
+}
+
+/* HDV: picture b decodes right after picture a (one picture's DTS step, 90 kHz). */
+static int dts_follows(const pin_retry_t *r, int64_t a, int64_t b)
+{
+    int64_t d = b - a;
+    d %= DTS_WRAP;
+    if (d < 0) d += DTS_WRAP;
+    double step = 90000.0 / (r->fps > 1 ? r->fps : 25.0);
+    return d > 0 && d <= 1.6 * step;
 }
 
 static double join_gap(const pin_retry_t *r)
@@ -600,6 +633,10 @@ static void wind_back(pin_retry_t *r, double now, double at, int tail)
     r->rew_t = r->play_t = r->wind_start_t = 0;
     r->rew_from = r->pos;
     r->tc_seen = 0;
+    r->wtc_valid = 0;
+    r->seek_tail = 0;
+    r->gated = 0;
+    r->cand_valid = 0;
     r->tail_ok = tail;
     r->matched = 0;
     r->cursor = -1;
@@ -618,7 +655,10 @@ static void attempt_begin(pin_retry_t *r, double now)
     r->mended_now = 0;
     r->reseeks = 0;
     r->sec_end = r->n - 1;
-    wind_back(r, now, r->pos, 1);
+    /* With the signal gone (the end of the recording) the deck has played on into blank tape
+     * since the last unit: that is further to wind back. */
+    double blank = r->last_push > 0 && now - r->last_push > 0.5 ? now - r->last_push : 0;
+    wind_back(r, now, r->pos + blank, 1);
 }
 
 /* The section is complete (join gap, window, signal end): retry it or let it go. */
@@ -634,6 +674,7 @@ static void section_trigger(pin_retry_t *r, double now)
     r->trigger_t = now;
     r->attempt = 0;
     r->mended_sec = 0;
+    r->fruitless = 0;
     r->mended_now = 0;
     attempt_begin(r, now);
 }
@@ -649,7 +690,10 @@ static void attempt_end(pin_retry_t *r, double now)
         section_close(r);
         return;
     }
-    if (r->attempt < r->cfg.attempts && r->mended_now > 0) {
+    /* Dirt can take more than one more read to come off; damage that two reads in a row could
+     * not mend is on the tape. */
+    r->fruitless = r->mended_now > 0 ? 0 : r->fruitless + 1;
+    if (r->attempt < r->cfg.attempts && r->fruitless < 2) {
         /* again, from the first slot still bad; what is before it is done */
         r->sec_start = anchor_start(r, first);
         r->first_bad = first;
@@ -777,6 +821,8 @@ static slot_t *make_slot(pin_retry_t *r, const pin_retry_unit_t *u, double now, 
     s->read = r->read;
     s->hole = u->lost_before ? 1 : 0;
     if (r->hdv) {
+        s->ldts_valid = u->dts_valid;
+        s->ldts = u->dts;
         s->pics = u->picture ? 1 : 0;
         s->damaged = u->damaged ? 1 : 0;
         s->dur = u->picture ? 1.0 / r->fps : 0;
@@ -816,6 +862,14 @@ static void append_live(pin_retry_t *r, const pin_retry_unit_t *u, double now)
             }
             if (u->damaged) cur->damaged++;
             if (u->lost_before || hole) cur->hole = 1;
+            if (u->dts_valid) {
+                cur->ldts_valid = 1;
+                cur->ldts = u->dts;
+            }
+        }
+        if (u->dts_valid) {
+            r->tail_dts_valid = 1;
+            r->tail_dts = u->dts;
         }
     } else {
         slot_t *s = make_slot(r, u, now, spool_wanted(r));
@@ -843,6 +897,8 @@ static int continues_tail(const pin_retry_t *r, const pin_retry_unit_t *u)
 {
     if (!r->n)
         return 0;
+    if (r->hdv && u->dts_valid && r->tail_dts_valid)
+        return dts_follows(r, r->tail_dts, u->dts);
     if (r->hdv && !u->opens_gop)
         return r->tail_ok;
     if (!u->key_valid)
@@ -855,6 +911,18 @@ static int continues_tail(const pin_retry_t *r, const pin_retry_unit_t *u)
         return d > 0 && d < step * (r->n - i) + 1.0;
     }
     return r->tail_ok;
+}
+
+/* The key is the very next one after the newest held slot (DV: the next frame; HDV: the next
+ * GOP), allowing for drop-frame timecode. */
+static int next_after_tail(const pin_retry_t *r, int64_t key)
+{
+    const slot_t *s = r->s[r->n - 1];
+    if (!s->key_valid)
+        return 0;
+    double d = key_seconds(r, key, s->key);
+    double step = s->dur > 0 ? s->dur : 1.0 / r->fps;
+    return d > 0 && d < step + 0.5 / r->fps + (!r->hdv && r->fps > 27 ? 2.0 / 30 : 0);
 }
 
 /* Find the slot a re-read key belongs to: from `from` on, then anywhere in the section. */
@@ -993,6 +1061,19 @@ static int reread_slot(pin_retry_t *r, slot_t *n, double now)
             slot_free(n);
             return 0;
         }
+        /* Where the deck is counts only once two units in a row say so: a stale frame (the one
+         * shown before the wind, sent again as PLAY starts) must not move anything. */
+        {
+            double gap = r->cand_valid ? key_seconds(r, n->key, r->cand_key) : -1;
+            double step = r->hdv ? 1.0 : 1.5 / r->fps;
+            int follows = r->cand_valid && gap > 0 && gap <= step;
+            r->cand_key = n->key;
+            r->cand_valid = 1;
+            if (!follows) {
+                slot_free(n);
+                return 0;
+            }
+        }
         int i = find_key(r, n->key, r->sec_start);
         if (i < 0) {
             /* not in the section: before it (read on), or past its end (wind again) */
@@ -1008,18 +1089,31 @@ static int reread_slot(pin_retry_t *r, slot_t *n, double now)
                 double over = key_seconds(r, n->key, last);
                 double at = r->s[r->sec_end]->pos + r->s[r->sec_end]->dur + over;
                 double wound = r->pos_at_rew - (at - r->seek_s);
-                if (r->play_t > r->wind_start_t && r->wind_start_t > 0)
-                    learn(&r->st.rew_rate, wound / (r->play_t - r->wind_start_t));
+                if (r->play_t - r->wind_start_t > 0.5 && r->wind_start_t > 0 && wound > 0) {
+                    double v = wound / (r->play_t - r->wind_start_t);
+                    if (v > 1.5 && v < 400)
+                        learn(&r->st.rew_rate, v);
+                }
                 wind_back(r, now, at, 0);
             }
             slot_free(n);
             return 0;
         }
-        /* landed: learn the wind speed */
+        /* landed: learn the wind speed, and how much earlier PLAY must go out to land a preroll
+         * before the section (positive: it wound too far, negative: not far enough) */
         double landing = r->s[i]->pos - (r->seek_s - n->dur);
         double wound = r->pos_at_rew - landing;
-        if (r->play_t > r->wind_start_t && r->wind_start_t > 0 && wound > 0)
-            learn(&r->st.rew_rate, wound / (r->play_t - r->wind_start_t));
+        if (r->play_t - r->wind_start_t > 0.5 && r->wind_start_t > 0 && wound > 0) {
+            double v = wound / (r->play_t - r->wind_start_t);
+            if (v > 1.5 && v < 400)
+                learn(&r->st.rew_rate, v);
+        }
+        if (!r->gated) {
+            double want = r->s[r->sec_start]->pos - r->cfg.preroll_s;
+            double err = want - landing;
+            double l = r->st.stop_lead_s + 0.7 * err / rew_rate(r);
+            r->st.stop_lead_s = l < -1.0 ? -1.0 : l > 3.0 ? 3.0 : l;
+        }
         if (i > r->first_bad && i > r->sec_start) {
             /* too late: the start of the damage went by unread */
             slot_free(n);
@@ -1104,6 +1198,27 @@ static int reread_slot(pin_retry_t *r, slot_t *n, double now)
 
 static void reread_push(pin_retry_t *r, const pin_retry_unit_t *u, double now)
 {
+    if (!r->matched && r->phase == PIN_RETRY_SEEKING) {
+        /* A unit that continues the held tape is one the deck sent before it started winding (it
+         * plays on for a moment after REW), arriving late: it is the next frame of the tape, not
+         * where the deck landed. */
+        int cont = 0;
+        if (!r->tail_ok || !r->n)
+            cont = 0;
+        else if (!r->hdv)
+            cont = u->key_valid && next_after_tail(r, u->key);
+        else if (u->dts_valid && r->tail_dts_valid)
+            cont = r->seek_tail = dts_follows(r, r->tail_dts, u->dts);
+        else if (u->opens_gop)
+            cont = r->seek_tail = u->key_valid && next_after_tail(r, u->key);
+        else
+            cont = r->seek_tail;
+        if (cont) {
+            append_live(r, u, now);
+            tail_fix(r);
+            return;
+        }
+    }
     if (!r->hdv) {
         slot_t *n = make_slot(r, u, now, 0);
         if (!n) return;
@@ -1149,6 +1264,14 @@ static void reread_push(pin_retry_t *r, const pin_retry_unit_t *u, double now)
             return;
         }
     }
+    if (r->pend && u->dts_valid && r->pend->ldts_valid && !dts_follows(r, r->pend->ldts, u->dts)) {
+        /* the deck jumped (a stale picture, the wind taking effect): what was assembled is not
+         * one stretch of tape */
+        slot_free(r->pend);
+        r->pend = NULL;
+        if (!u->opens_gop)
+            return;
+    }
     if (!r->pend) {
         r->pend = make_slot(r, u, now, 0);
         if (r->pend) r->pend->read = r->read;
@@ -1162,6 +1285,10 @@ static void reread_push(pin_retry_t *r, const pin_retry_unit_t *u, double now)
     }
     if (u->damaged) r->pend->damaged++;
     if (u->lost_before) r->pend->hole = 1;
+    if (u->dts_valid) {
+        r->pend->ldts_valid = 1;
+        r->pend->ldts = u->dts;
+    }
 }
 
 void pin_retry_push(pin_retry_t *r, double now, const pin_retry_unit_t *u)
@@ -1222,9 +1349,23 @@ pin_retry_action_t pin_retry_tick(pin_retry_t *r, double now, const pin_retry_de
         d = &none;
     }
     if (d->tc_valid) {
-        if (r->phase == PIN_RETRY_REWINDING && r->rew_t > 0 && now - r->rew_t > 1.0 &&
-            (!r->deck_tc_valid || r->deck_tc != d->tc_frames))
+        /* the deck answers TIME CODE while it winds: it has started moving back */
+        if (r->phase == PIN_RETRY_REWINDING && r->rew_t > 0 && r->rew_tc_valid &&
+            d->tc_frames < r->rew_tc)
             r->tc_seen = 1;
+        if (r->phase == PIN_RETRY_REWINDING && r->rew_t > 0) {
+            /* the deck says where it is while it winds: its speed, measured */
+            if (r->wtc_valid && d->tc_frames < r->wtc && now - r->wtc_t > 0.2) {
+                double v = (double)(r->wtc - d->tc_frames) / key_rate_tc(r) / (now - r->wtc_t);
+                if (v > 1.5 && v < 400)
+                    learn(&r->st.rew_rate, v);
+            }
+            if (!r->wtc_valid || d->tc_frames != r->wtc) {
+                r->wtc = d->tc_frames;
+                r->wtc_t = now;
+                r->wtc_valid = 1;
+            }
+        }
         r->deck_tc = d->tc_frames;
         r->deck_tc_t = now;
         r->deck_tc_valid = 1;
@@ -1267,15 +1408,30 @@ pin_retry_action_t pin_retry_tick(pin_retry_t *r, double now, const pin_retry_de
             int tv = 0;
             if (!r->hdv && t->key_valid) { target = t->key; tv = 1; }
             else if (t->dtc_valid) { target = t->dtc; tv = 1; }
-            if (r->tc_seen && tv && d->tc_valid && now - r->deck_tc_t < 1.5) {
-                double ahead = (double)(d->tc_frames - target) / (r->fps > 27 ? 30.0 : 25.0);
-                if (ahead <= -r->cfg.preroll_s)
+            /* PLAY goes out early by the stop lead (the deck winds on until it takes it) */
+            double lead = r->st.stop_lead_s * rew_rate(r);
+            if (r->tc_seen && tv && d->tc_valid && now - r->deck_tc_t < 1.0) {
+                double ahead = (double)(d->tc_frames - target) / key_rate_tc(r);
+                /* where it will be at the next answer: only with a measured speed (a guess that
+                 * is too high stops it short, which costs another wind) */
+                double v = r->st.rew_rate > 0 ? r->st.rew_rate : 0;
+                double step = (now - r->deck_tc_t + 0.2) * v;
+                if (v <= 0)
+                    lead = 0;
+                if (ahead - lead - step <= -r->cfg.preroll_s)
                     go = 1;
             } else if (now > r->wind_start_t &&
-                       (now - r->wind_start_t) * rew_rate(r) >= r->dist_s) {
+                       (now - r->wind_start_t) * rew_rate(r) + lead >= r->dist_s) {
                 go = 1;
             }
             double max_rew = r->dist_s / 2 + 60 > MAX_REW_S ? r->dist_s / 2 + 60 : MAX_REW_S;
+            /* Not before the deck is winding: it plays on for a moment after REW, and a PLAY in that
+             * moment leaves the tape where it is. Its TIME CODE going back shows it; a deck that
+             * does not answer while winding gets a second. */
+            if (go && !r->tc_seen && (r->rew_tc_valid || now - r->rew_t < 1.0) && now - r->rew_t < 3.0) {
+                go = 0;
+                r->gated = 1;
+            }
             if (d->at_start || now - r->rew_t > max_rew)
                 go = 1;
             if (go) {
@@ -1290,6 +1446,19 @@ pin_retry_action_t pin_retry_tick(pin_retry_t *r, double now, const pin_retry_de
         if (r->act == PIN_RETRY_ACT_NONE && d->cmd_failed && r->play_t > 0 && !r->play_failed) {
             r->play_failed = 1;
             r->act = PIN_RETRY_ACT_STOP;
+            break;
+        }
+        if (r->play_t > 0 && r->seek_s == 0 && now - r->play_t > 6.0 && r->act == PIN_RETRY_ACT_NONE &&
+            !d->signal) {
+            /* Nothing at all since PLAY: the deck landed in blank tape after the recording (it
+             * played on into it before the wind). Back again, by that much more. */
+            if (r->reseeks++ >= MAX_RESEEKS) {
+                r->st.sections_failed++;
+                section_close(r);
+                break;
+            }
+            const slot_t *e = r->s[r->sec_end];
+            wind_back(r, now, e->pos + e->dur + (now - r->play_t) + r->dist_s, 0);
             break;
         }
         if (r->play_t > 0 && now - r->play_t > 30.0 + 2 * r->dist_s) {
@@ -1310,6 +1479,8 @@ pin_retry_action_t pin_retry_tick(pin_retry_t *r, double now, const pin_retry_de
         r->act = PIN_RETRY_ACT_NONE;
         if (a == PIN_RETRY_ACT_REW) {
             r->rew_t = now;
+            r->rew_tc = r->deck_tc;
+            r->rew_tc_valid = r->deck_tc_valid && now - r->deck_tc_t < 3.0;
             r->st.rewinds++;
             r->read++;
         } else if (a == PIN_RETRY_ACT_PLAY) {

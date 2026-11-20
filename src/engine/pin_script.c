@@ -262,7 +262,7 @@ const char *pin_script_help_text(void)
         "  --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, hdv-mov, hdv-mkv and the analog NUT stream on stdout, and by raw .ts/.m2t (hdv-ts, also on stdout) as the DVB service name (ffprobe: the program's service_name; MediaInfo: \"Service name\"). Raw .dv (dv) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.\n"
         "  --keep-raw               keep the raw .dv/.ts next to a rewrapped file\n"
         "  --retry                  DV/HDV: when the camera reads damage (dirt, a dropout), rewind, read the section again and keep the best of every read (DV block by block, HDV GOP by GOP), so the file gets the cleanest copy the tape gives. Bad spots close together are re-read in one go. Needs a camera that takes deck commands; the capture sends PLAY itself. Not with --capture -.\n"
-        "  --retry-attempts N       re-reads of one bad section, 1 to 10 (default 3); a re-read that mends nothing ends the section's attempts\n"
+        "  --retry-attempts N       re-reads of one bad section, 1 to 10 (default 3); two re-reads in a row that mend nothing end the section's attempts\n"
         "  --retry-window S         the longest stretch of tape held in memory for one retry, 10 to 600 seconds (default 60, about 220 MB)\n"
         "  --retry-preroll S        how far before a bad section the deck starts playing again, 1 to 30 seconds (default 3)\n"
         "  --retry-on any|uncorrected\n"

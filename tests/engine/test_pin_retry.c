@@ -57,6 +57,7 @@ typedef struct {
     double rate;            /* wind speed, x real time */
     int tc_wind;            /* TIME CODE answers while winding */
     int ignore_rew;         /* the deck refuses REW */
+    int stale;              /* after PLAY the deck first sends the last frame it showed again */
 } tape_t;
 
 typedef struct {
@@ -154,8 +155,21 @@ static void on_release(void *user, uint8_t *data, size_t len, const void *meta, 
     o->n++;
 }
 
+/* A frame on its way from the deck to the engine (the bus, USB and the reassembler take time). */
+typedef struct {
+    double at;
+    int k, dam, cc, lost;
+} inflight_t;
+
+#define DELIVERY_S 0.3      /* frames reach the engine this long after the deck sent them */
+#define WIND_DELAY_S 0.5    /* after REW the deck plays on this long before it winds (MarvinPlayout) */
+#define PLAY_DELAY_S 1.0    /* after PLAY from winding, the first frame comes this much later */
+
 typedef struct {
     int state;          /* 0 stop, 1 play, 2 rew */
+    int want;           /* the commanded state (takes effect at switch_at) */
+    int last_k;         /* the last frame sent */
+    double switch_at;
     double p;           /* position, frames */
     double rew_t;
     int next;           /* next frame to emit while playing */
@@ -179,7 +193,15 @@ static void run(tape_t *t, const pin_retry_cfg_t *cfg, out_t *o, pin_retry_stats
     double dt = 1.0 / FPS / 4;
     int failed = 0;
     double t_end = 0;
+    static inflight_t q[4096];
+    int qh = 0, qt = 0;
+    d.want = 1;
     for (double now = 0; now < 2000; now += dt) {
+        if (d.want != d.state && now >= d.switch_at) {
+            d.state = d.want;
+            if (d.state == 1)
+                d.next = (int)ceil(d.p);
+        }
         if (d.state == 1) {
             d.p += FPS * dt;
             while (d.next <= (int)floor(d.p)) {
@@ -187,11 +209,33 @@ static void run(tape_t *t, const pin_retry_cfg_t *cfg, out_t *o, pin_retry_stats
                 if (k < 0 || k >= t->n)
                     continue;
                 t->reads[k]++;
-                int dam = t->perm[k] || t->reads[k] <= t->trans[k];
-                if (t->lost1[k] && t->reads[k] == 1) {
-                    pin_retry_lost(r, 1);
-                    continue;
-                }
+                inflight_t *f = &q[qt++ % 4096];
+                f->at = now + DELIVERY_S;
+                d.last_k = k;
+                f->k = k;
+                f->dam = t->perm[k] || t->reads[k] <= t->trans[k];
+                f->lost = t->lost1[k] && t->reads[k] == 1;
+                f->cc = d.cc;
+                d.cc += 1;
+            }
+            if (d.p > t->n + 2 * FPS && !t_end)
+                t_end = now;
+        } else if (d.state == 2) {
+            d.p -= t->rate * FPS * dt;
+            if (d.p <= 0) {
+                d.p = 0;
+                d.state = d.want = 0;
+                d.at_start = 1;
+            }
+        }
+        while (qh < qt && q[qh % 4096].at <= now) {
+            inflight_t *f = &q[qh++ % 4096];
+            int k = f->k, dam = f->dam;
+            if (f->lost) {
+                pin_retry_lost(r, 1);
+                continue;
+            }
+            {
                 d.last_emit = now;
                 pin_retry_unit_t u;
                 memset(&u, 0, sizeof(u));
@@ -209,7 +253,7 @@ static void run(tape_t *t, const pin_retry_cfg_t *cfg, out_t *o, pin_retry_stats
                     frame[0] = 0x47;
                     frame[1] = (uint8_t)(0x40 | (VPID >> 8));
                     frame[2] = (uint8_t)(VPID & 0xFF);
-                    frame[3] = (uint8_t)(0x10 | (d.cc++ & 15));
+                    frame[3] = (uint8_t)(0x10 | (f->cc & 15));
                     frame[4] = dam ? 0xEE : 0x00;
                     u.hdv = 1;
                     u.data = frame;
@@ -219,18 +263,10 @@ static void run(tape_t *t, const pin_retry_cfg_t *cfg, out_t *o, pin_retry_stats
                     u.damaged = dam;
                     u.key_valid = u.opens_gop && !(dam && t->notc[k]);
                     u.key = (int64_t)k * 3600;
+                    u.dts_valid = !(dam && t->notc[k]);
+                    u.dts = (int64_t)k * 3600;
                 }
                 pin_retry_push(r, now, &u);
-            }
-            if (d.p > t->n + 2 * FPS && !t_end)
-                t_end = now;
-        } else if (d.state == 2) {
-            if (now - d.rew_t > 0.5)
-                d.p -= t->rate * FPS * dt;
-            if (d.p <= 0) {
-                d.p = 0;
-                d.state = 0;
-                d.at_start = 1;
             }
         }
         pin_retry_deck_t dk;
@@ -240,7 +276,7 @@ static void run(tape_t *t, const pin_retry_cfg_t *cfg, out_t *o, pin_retry_stats
         dk.at_start = d.at_start;
         dk.cmd_failed = failed;
         failed = 0;
-        if (d.state != 2 || t->tc_wind) {
+        if (d.state != 2 || t->tc_wind || d.want != 2) {
             dk.tc_valid = 1;
             dk.tc_frames = KEY_BASE + (int64_t)floor(d.p);
         }
@@ -248,17 +284,30 @@ static void run(tape_t *t, const pin_retry_cfg_t *cfg, out_t *o, pin_retry_stats
         if (a == PIN_RETRY_ACT_REW && t->ignore_rew) {
             failed = 1;
         } else if (a == PIN_RETRY_ACT_REW) {
-            d.state = 2;
+            /* plays on for a moment, then winds */
+            d.want = 2;
+            d.switch_at = now + WIND_DELAY_S;
             d.rew_t = now;
             d.at_start = 0;
         } else if (a == PIN_RETRY_ACT_PLAY) {
-            d.state = 1;
-            d.next = (int)ceil(d.p);
+            /* brakes at once, the picture comes later */
+            if (d.state == 2)
+                d.state = 0;
+            d.want = 1;
+            d.switch_at = now + (d.state == 1 ? 0 : PLAY_DELAY_S);
+            if (t->stale && d.state != 1) {
+                inflight_t *f = &q[qt++ % 4096];
+                f->at = d.switch_at;
+                f->k = d.last_k;
+                f->dam = 0;
+                f->lost = 0;
+                f->cc = d.cc;
+            }
             d.cc = (d.cc * 7 + 5) & 15;   /* a new run starts anywhere */
         } else if (a == PIN_RETRY_ACT_STOP) {
-            d.state = 0;
+            d.state = d.want = 0;
         }
-        if (t_end && now - t_end > 10 && !pin_retry_busy(r)) {
+        if (t_end && now - t_end > 10 && !pin_retry_busy(r) && qh == qt) {
             pin_retry_stats_t ps;
             pin_retry_get_stats(r, &ps);
             if (ps.phase == PIN_RETRY_IDLE || now - t_end > 40)
@@ -447,7 +496,7 @@ static void test_permanent(void)
     int bad = check_complete(t, &g_out, "permanent");
     CHECK(bad == 4, "crease: the damage stays");
     CHECK(st.sections_failed == 1, "crease: counted as failed");
-    CHECK(st.rewinds == 1, "crease: no second attempt after one that mended nothing");
+    CHECK(st.rewinds == 2, "crease: given up after two attempts that mended nothing");
     tape_free(t);
 }
 
@@ -517,6 +566,36 @@ static void test_slow_deck(void)
     CHECK(check_complete(t, &g_out, "slow deck") == 0, "slow deck: mended");
     printf("slow deck: %llu rewinds, speed %.1f\n", (unsigned long long)st.rewinds, st.rew_rate);
     CHECK(st.rew_rate < 4, "slow deck: the slow wind speed was learned");
+    tape_free(t);
+}
+
+static void test_stale_frame(void)
+{
+    /* the deck sends the frame it showed last once more as PLAY starts: no extra wind for it */
+    tape_t *t = tape_new(1200, 0);
+    for (int k = 400; k < 404; k++) t->trans[k] = 1;
+    for (int k = 900; k < 902; k++) t->trans[k] = 1;
+    t->stale = 1;
+    pin_retry_cfg_t c; cfg_def(&c);
+    pin_retry_stats_t st;
+    run(t, &c, &g_out, &st);
+    CHECK(check_complete(t, &g_out, "stale") == 0, "stale frame after PLAY: mended");
+    CHECK(st.rewinds == 2, "stale frame after PLAY: one wind per section");
+    tape_free(t);
+}
+
+static void test_hdv_stale(void)
+{
+    /* HDV: a stale picture after PLAY, the deck playing on after REW: GOPs stay whole */
+    tape_t *t = tape_new(1500, 1);
+    for (int k = 400; k < 404; k++) t->trans[k] = 1;
+    for (int k = 1000; k < 1003; k++) t->trans[k] = 2;
+    t->stale = 1;
+    pin_retry_cfg_t c; cfg_def(&c);
+    pin_retry_stats_t st;
+    run(t, &c, &g_out, &st);
+    CHECK(check_complete(t, &g_out, "hdv stale") == 0, "HDV stale picture: mended, every picture once");
+    CHECK(g_out.cc_breaks == 0, "HDV stale picture: continuity counters");
     tape_free(t);
 }
 
@@ -711,6 +790,8 @@ int main(void)
     test_lost();
     test_no_timecode();
     test_slow_deck();
+    test_stale_frame();
+    test_hdv_stale();
     test_end_of_tape();
     test_window();
     test_uncorrected_mode();

@@ -588,8 +588,8 @@ typedef struct {
     /* Appended fields, ABI-compatible: how `retry` works. 0 = the default for each; out of range
      * values are clamped (pin_capture_opts_normalize()). A caller compiled before them passes the
      * old size and gets the defaults.
-     *   retry_attempts  re-reads of one bad section, 1..10 (default 3); a re-read that mended
-     *                   nothing ends the section's attempts early
+     *   retry_attempts  re-reads of one bad section, 1..10 (default 3); two re-reads in a
+     *                   row that mended nothing end the section's attempts early
      *   retry_window_s  longest stretch of tape held for one retry, 10..3600 s (default 60; DV and
      *                   HDV are about 3.6 MB/s; at most 600 in memory): one bad spot is re-read
      *                   at once, and the more damage follows, the more of it is joined into one
