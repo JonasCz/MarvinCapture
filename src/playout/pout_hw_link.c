@@ -107,6 +107,10 @@ struct pout_link {
     int it_stop_thread;
     int it_error;
     unsigned long long it_bytes;
+
+    /* bus resets seen (IntEvent busReset), and the count the CSR state was last reset for */
+    int resets;
+    int csr_reset_for;
 };
 
 /* --- the request hook ----------------------------------------------------- */
@@ -186,10 +190,41 @@ static void dispatch_one(pout_link_t *k, struct req_slot *s)
     }
 }
 
+/* A bus reset clears the plug registers (IEC 61883-1) and the IRM allocations. */
+static void reset_csr(pout_link_t *k)
+{
+    k->irm = 0;
+    /* GUESS: the IRM forgets the allocations that are not renewed within a second */
+    k->have_res = 0;
+    pout_csr_cfg_t pc = k->csr.cfg;
+    pout_csr_init(&k->csr, &pc);
+    k->csr_reset_for = k->resets;
+}
+
+/* Counts a bus reset that happened since the last look. With handle_now, the plug state is reset
+ * and the topology read at once: a controller connects our plug within milliseconds of its own
+ * bus reset, so a request that came after a reset must meet the state after it, not be wiped
+ * later by the session's (polled) reset handling. -1 on a USB error. */
+static int note_bus_reset(pout_link_t *k, int handle_now)
+{
+    int r = p1394_take_bus_reset(&k->l);
+    if (r <= 0)
+        return r;
+    k->resets++;
+    if (handle_now) {
+        reset_csr(k);
+        if (p1394_read_topology(&k->l) != 0)
+            return -1;
+    }
+    return 1;
+}
+
 int pout_link_pump(pout_link_t *k, unsigned timeout_ms)
 {
     int handled = 0;
     if (p1394_pump(&k->l, timeout_ms) < 0)
+        return -1;
+    if (k->rq_head != k->rq_tail && note_bus_reset(k, 1) < 0)
         return -1;
     for (;;) {
         while (k->rq_head != k->rq_tail) {
@@ -216,22 +251,20 @@ int pout_link_tx(const pout_link_t *k, unsigned *channel, unsigned *speed)
 uint16_t pout_link_node(const pout_link_t *k) { return k->l.local_node; }
 int pout_link_node_count(const pout_link_t *k) { return k->l.node_count; }
 
+/* The number of bus resets seen. Not the SelfIDCount generation: on this FPGA it changed ~1.5 s
+ * after the reset (2026-11-20), long after the controller had connected again. */
 int pout_link_bus_generation(pout_link_t *k)
 {
-    uint32_t v;
-    if (p1394_reg_read(&k->l, P1394_OHCI_SELF_ID_COUNT, &v) != 0)
+    if (note_bus_reset(k, 0) < 0)
         return -1;
-    return (int)((v >> 16) & 0xff);
+    return k->resets;
 }
 
 int pout_link_rescan(pout_link_t *k)
 {
-    k->irm = 0;
-    /* GUESS: IEC 61883-1 clears the point-to-point and broadcast counters on a bus reset, and the
-     * IRM forgets the allocations that are not renewed within a second */
-    k->have_res = 0;
-    pout_csr_cfg_t pc = k->csr.cfg;
-    pout_csr_init(&k->csr, &pc);
+    /* a reset already handled by pout_link_pump() keeps the plug state set up after it */
+    if (k->csr_reset_for != k->resets)
+        reset_csr(k);
     return p1394_read_topology(&k->l);
 }
 
@@ -346,6 +379,13 @@ int pout_link_open(pout_link_t **out, const pout_link_cfg_t *cfg, char *err, siz
         free(k);
         return -1;
     }
+    /* Isochronous transmit needs cycle start packets, which only a root with cycleMaster set sends.
+     * An idle Marvin as root sends none (2026-11-20: IT0 never started and EP 0x06 stalled), so
+     * take root ourselves; our cycleMaster bit is set by the link init. */
+    int root = p1394_ensure_root(&k->l);
+    if (root != 0)
+        pin_logf(PIN_LOG_WARN, "playout: %s; transmitting needs a cycle master on the bus\n",
+                 root > 0 ? "could not become the bus root" : "USB error while taking the bus root");
     pin_logf(PIN_LOG_INFO, "playout: 1394 bus has %d node(s), we are node %u\n", k->l.node_count,
              k->l.local_node & 0x3f);
 
@@ -602,9 +642,13 @@ static int take_free_locked(pout_link_t *k)
         unsigned long long now = now_ms();
         if (now >= deadline)
             return -1;
-        /* the condition variable has no portable timed wait here without absolute times; poll */
+        /* the condition variable has no portable timed wait here without absolute times; poll.
+         * Keep EP 0x84 read meanwhile (requests are only queued here, pout_link_pump() answers
+         * them): unread records there, e.g. after a bus reset, stall the FPGA, and with it EP 0x06
+         * and EP 0x02 until the next bring-up (seen 2026-11-20). */
         pthread_mutex_unlock(&k->it_mtx);
-        sleep_ms(1);
+        if (p1394_pump(&k->l, 1) < 0)
+            sleep_ms(1);
         pthread_mutex_lock(&k->it_mtx);
     }
     if (k->it_error)

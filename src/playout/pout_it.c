@@ -41,7 +41,7 @@ void pout_it_init(pout_it_t *it, unsigned channel, unsigned speed, unsigned max_
     it->speed = speed & 7;
     it->sy = 0;
     it->max_packet = align4(max_packet < 8 ? 8 : max_packet);
-    it->status_every = 64;
+    it->status_every = 0;       /* an s bit stalls the stream on hardware (pout_it.h) */
     it->start_z = 0;
     it->first_pending = 1;
 }

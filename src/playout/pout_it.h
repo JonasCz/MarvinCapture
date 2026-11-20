@@ -50,7 +50,8 @@
  *   - The isochronous header is ONE immediate quadlet, spd<<16 | tag<<14 | chan<<8 | 0xa<<4 | sy
  *     (OHCI's layout), then dataLength<<16 as the second. sy is 0 in the vendor driver.
  *   - OUTPUT_LAST has the s (status) bit only on the last packet of a client buffer that wants
- *     completion, not on every packet. Here s is set every status_every packets (default 64).
+ *     completion, not on every packet. Here s is never set by default (status_every 0): on the
+ *     510-USB any s bit stopped the EP 0x06 stream after ~11.8 KB (2026-11-20).
  *   - The start writes CommandPtr = 0x16b0 with Z = 0 (FUN_00018de0 passes ring[0] unmodified),
  *     not "block 0 | Z". start_z makes that adjustable; the default follows the decompile
  *     (GUESS: the FPGA ignores Z there, since it works for the vendor).

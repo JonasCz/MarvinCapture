@@ -29,6 +29,15 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(_WIN32)
+/* MinGW / UCRT have no setenv / unsetenv; _putenv_s with an empty value removes the variable */
+static void test_setenv(const char *name, const char *val) { _putenv_s(name, val); }
+static void test_unsetenv(const char *name) { _putenv_s(name, ""); }
+#else
+static void test_setenv(const char *name, const char *val) { setenv(name, val, 1); }
+static void test_unsetenv(const char *name) { unsetenv(name); }
+#endif
+
 static int g_failures = 0;
 #define CHECK(cond, msg)                                                     \
     do {                                                                     \
@@ -208,11 +217,11 @@ int main(void)
 
     /* the test seam: the n-th file closed fails */
     pin_closer_t *c2 = pin_closer_create(on_done, &log);
-    setenv("PIN_TEST_CLOSE_FAIL", "2", 1);
+    test_setenv("PIN_TEST_CLOSE_FAIL", "2");
     pin_closer_submit(c2, NULL, fake_sink(0), "seam1", 1, 0, 0, 0, NULL);
     pin_closer_submit(c2, NULL, fake_sink(0), "seam2", 1, 0, 0, 0, NULL);
     pin_closer_wait(c2);
-    unsetenv("PIN_TEST_CLOSE_FAIL");
+    test_unsetenv("PIN_TEST_CLOSE_FAIL");
     CHECK(pin_closer_take_failure(c2, &fst, fpath, sizeof(fpath)) == 1 && fst == PIN_ERR_IO &&
               strcmp(fpath, "seam2") == 0, "seam: the 2nd close fails");
     pin_closer_destroy(c2);

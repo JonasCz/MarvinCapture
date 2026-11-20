@@ -189,8 +189,9 @@ static void test_status_and_limits(void)
     uint8_t data[488], out[1024];
     make_pkt(data, 488, 3);
     pout_it_init(&it, 63, 0, 488);
-    CHECK(it.status_every == 64 && it.start_z == 0, "defaults");
-    /* s bit (bit 27 of OUTPUT_LAST word 0) on packet 63 only */
+    CHECK(it.status_every == 0 && it.start_z == 0, "defaults");
+    it.status_every = 64;
+    /* s bit (bit 27 of OUTPUT_LAST word 0) on packet 63 only, when asked for */
     for (int i = 0; i < 65; i++) {
         size_t n = pout_it_packet(&it, data, 488, out, sizeof(out));
         uint32_t w8 = rd32(out + 4 + 488 + 4 + 8 * 4);

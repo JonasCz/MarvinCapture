@@ -1145,6 +1145,38 @@ int p1394_bus_reset(pinnacle_1394_t *l)
     return phy_write(l, 1, (uint8_t)(phy | 0x40), 4);
 }
 
+int p1394_take_bus_reset(pinnacle_1394_t *l)
+{
+    uint32_t v = 0;
+    if (p1394_reg_read(l, 0x080, &v) != 0)          /* IntEvent */
+        return -1;
+    if (!(v & 0x00020000u))                         /* busReset */
+        return 0;
+    if (p1394_reg_write(l, 0x084, 0x00020000u) != 0)
+        return -1;
+    return 1;
+}
+
+int p1394_ensure_root(pinnacle_1394_t *l)
+{
+    uint32_t id = 0;
+    uint8_t phy = 0;
+    if (p1394_reg_read(l, OHCI_NODE_ID, &id) != 0)
+        return -1;
+    if (id & 0x40000000u)                           /* NodeID bit 30: root */
+        return 0;
+    /* PHY register 1: RHB (bit 7) makes this PHY take root at the next tree identify, IBR (bit 6)
+     * starts that bus reset; the gap count stays. RHB stays set, so later resets keep us root. */
+    if (phy_read(l, 1, &phy) != 0 || phy_write(l, 1, (uint8_t)(phy | 0xc0), 4) != 0)
+        return -1;
+    sleep_ms(50);
+    if (p1394_read_topology(l) != 0)
+        return -1;
+    if (p1394_take_bus_reset(l) < 0 || p1394_reg_read(l, OHCI_NODE_ID, &id) != 0)
+        return -1;
+    return (id & 0x40000000u) ? 0 : 1;
+}
+
 int p1394_link_init(pinnacle_1394_t *l)
 {
     struct batch m = { .n = 0 };

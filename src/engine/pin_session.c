@@ -4727,6 +4727,12 @@ static int fat32_and_free(const char *path, uint64_t *free_bytes, int *fat32)
     wchar_t *wpath = pin_fs_wpath(path);
     if (!wpath)
         return -1;
+    /* GetVolumePathNameW answers for a path that does not exist too; like statvfs, a folder not
+     * made yet has no free space to judge */
+    if (GetFileAttributesW(wpath) == INVALID_FILE_ATTRIBUTES) {
+        free(wpath);
+        return -1;
+    }
     size_t cap = wcslen(wpath) + 2;
     wchar_t *root = malloc(cap * sizeof(wchar_t));
     int got_root = root && GetVolumePathNameW(wpath, root, (DWORD)cap);

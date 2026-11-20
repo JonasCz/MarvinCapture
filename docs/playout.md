@@ -4,9 +4,9 @@
 Pinnacle device, as a virtual tape deck. It is a separate command-line program installed next to
 `MarvinCaptureCLI` and uses the same left-to-right syntax and wait conditions (see [cli.md](cli.md)).
 
-**Status: DV playout works on hardware with four fixes not yet in the code** (2026-11-20, 510-USB to
-500-USB: bit-exact PAL and NTSC, script mode and virtual deck). Without them it does not transmit
-(the EP 0x06 stream stalls). See
+**Status: DV playout works on hardware** (2026-11-20, 510-USB to 500-USB: bit-exact PAL and NTSC,
+script mode and virtual deck, through bus resets). HDV, a camcorder or a PC as the other end, and
+mixed tapes are untested. See
 [Hardware test results](#hardware-test-results-2026-11-19) and its second session. The packetizer, the virtual tape and deck, the AV/C
 target, the script and the whole playout loop are unit-tested without a device, and `--dry-run`
 works. The code that talks to the Marvin (transmit on EP 0x06, the 1394 plug registers, the IRM) is
@@ -257,8 +257,10 @@ The type-11 reading above was wrong; the second session (below) found the real c
 
 Same bench, same 510-USB → 500-USB cable. `MarvinBus64.sys` / `MarvinAVS64.sys` were read again
 (the installed copies, ImageBase `0x10000`, so the Ghidra addresses are VA = RVA + `0x10000`), then
-fixes were tried with env switches in a local build (not in the code). **With four changes, DV
-playout works bit-exactly, in script mode and as a virtual deck.**
+fixes were tried with env switches in a local build, then put into the code (checked again with
+the code as committed: 3 / 3 script runs, a virtual-deck capture identical to the tape, a bus reset
+in mid-stream survived). **With four changes, DV playout works bit-exactly, in script mode and as a
+virtual deck.**
 
 What the vendor driver says (certain from the disassembly):
 
@@ -286,23 +288,24 @@ loaded design each time):
 1. **No cycle master.** When the idle 500 was root (`NodeID 0x8000ffc0`), no cycle start packets were
    sent, IT0 never became active (ContextControl `0x9000`, CommandPtr still `0x16b0`), the type-11 wait
    for packet 0 never ended and EP 0x06 stopped after ~1 KB. Every passing run had the 510 as root
-   (`0xc000ffc1`), where its own cycleMaster bit (already set by the link init) takes effect. **Fix
-   tried:** after link init, if NodeID bit 30 (root) is clear, set PHY register 1 RHB | IBR (`0xc0`)
+   (`0xc000ffc1`), where its own cycleMaster bit (already set by the link init) takes effect. **Fix**
+   (`p1394_ensure_root()`, called by `pout_link_open()`): after link init, if NodeID bit 30 (root) is clear, set PHY register 1 RHB | IBR (`0xc0`)
    and wait for the reset: the 510 became root every time. (A real camcorder as root is cycle master;
    an idle Marvin or a PC without a running stack may not be. Forcing root unconditionally costs
    one bus reset; a bus with another working cycle master would not need it.)
 2. **The s bit.** With `status_every` 64 (the s bit on every 64th OUTPUT_LAST) EP 0x06 stopped after
    11776 bytes every time; with s never set it never did. The vendor sets s only on the last packet
-   of a client buffer that asked for completion. **Fix:** never set it (`status_every` 0).
+   of a client buffer that asked for completion. **Fix:** never set it (`status_every` defaults to 0).
 3. **EP 0x84 not read while waiting for an EP 0x06 chunk.** `take_free_locked()` slept while the
    sender thread blocked; with a bus reset during the stream (the 500's bring-up), the unread EP 0x84
    records stalled the FPGA: EP 0x06 stopped (7168 of 19908 bytes) and EP 0x02 writes timed out until
-   the next bring-up. **Fix tried:** `pout_link_pump(k, 1)` instead of `sleep_ms(1)` there.
+   the next bring-up. **Fix:** read EP 0x84 (`p1394_pump(&k->l, 1)`) in that wait; the requests it queues are
+   answered by the next `pout_link_pump()`.
 4. **Bus resets are seen too late.** SelfIDCount's generation changed only ~1.5 s after the reset
    (after the controller had already reconnected), while IntEvent bit 17 was set at once. The
    controller (the 500's capture) connects our oPCR within milliseconds of its own reset, so the
    0.25 s poll saw the reset after the new connection and its rescan wiped it: the deck played, 0
-   frames sent. **Fix tried:** detect the reset by IntEvent bit 17 (clear with `0x084` = `0x20000`),
+   frames sent. **Fix** (`p1394_take_bus_reset()`): detect the reset by IntEvent bit 17 (clear with `0x084` = `0x20000`),
    and check it before dispatching each batch of incoming requests, so the CSR state is reset before
    a lock that came after the reset; the session's own reset handling then keeps the plugs.
 

@@ -255,6 +255,18 @@ int p1394_link_init(pinnacle_1394_t *l);
  * Does not wait for the bus to settle. 0, or -1 on a USB error. */
 int p1394_bus_reset(pinnacle_1394_t *l);
 
+/* Whether a bus reset happened since the last call: reads OHCI IntEvent bit 17 (busReset) and
+ * clears it. Unlike the SelfIDCount generation, which on this FPGA changed only ~1.5 s after a
+ * reset (seen 2026-11-20), the bit is set at once (MarvinBus64 reacts to it as well).
+ * 1 = a reset happened, 0 = none, -1 on a USB error. */
+int p1394_take_bus_reset(pinnacle_1394_t *l);
+
+/* Makes our node the bus root, so that our cycleMaster bit (set by p1394_link_init) takes effect
+ * and cycle start packets are sent: isochronous transmit needs them, and a root that is not cycle
+ * master (an idle Marvin) sends none. If we are not root, sets PHY RHB and resets the bus, then
+ * reads the topology again. 0 = we are root, 1 = still not root, -1 on a USB error. */
+int p1394_ensure_root(pinnacle_1394_t *l);
+
 /* Finds the first other node that has an output master plug register. */
 int p1394_find_camera(pinnacle_1394_t *l, uint16_t *node, uint32_t *ompr);
 

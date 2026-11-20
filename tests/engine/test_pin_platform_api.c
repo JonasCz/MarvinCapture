@@ -667,11 +667,17 @@ static void test_update_state(void)
     u.size = sizeof(u);
     CHECK(pin_update_refresh(&u, 1000) == 1 && strcmp(u.latest, newer) == 0, "refresh: failed download keeps the old result");
     CHECK(pin_update_due((int64_t)time(NULL)) == 1, "refresh: a failed download is retried");
+#if !defined(_WIN32)
+    /* "set empty" turns the check off; the Windows C runtime cannot hold an empty variable
+     * (putenv("X=") removes it, and the default address applies), so this is POSIX only */
     putenv("MARVIN_UPDATE_URL=");
     CHECK(pin_update_due((int64_t)time(NULL)) == 0, "turned off: never due");
     memset(&u, 0, sizeof(u));
     u.size = sizeof(u);
     CHECK(pin_update_refresh(&u, 1000) == 1, "turned off: still shows the remembered one");
+#else
+    putenv("MARVIN_UPDATE_URL=");
+#endif
 
     CHECK(pin_set_app_dirs(NULL, "", NULL) == PIN_OK, "update: restore app dirs");
 }

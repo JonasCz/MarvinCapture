@@ -66,9 +66,8 @@ attached: the device table showed the 510-USB, so section 10 is still open for t
   MarvinPlayout starts (or the other way round) sees 3 link starts in 14 s and may miss the
   other node ("no camera answered"). It settles; starting one side ~8 s after the other gives
   one link start each.
-- **MarvinPlayout does not transmit as shipped**, but does with four fixes tried on 2026-11-20
-  (cycle master / force root, no s bit, EP 0x84 drained while EP 0x06 waits, bus reset from
-  IntEvent bit 17): the 500-USB captured the 510's playout bit-exactly, PAL and NTSC, also as a
+- **MarvinPlayout transmits** since four fixes of 2026-11-20 (cycle master / force root, no s
+  bit, EP 0x84 drained while EP 0x06 waits, bus reset from IntEvent bit 17): the 500-USB captured the 510's playout bit-exactly, PAL and NTSC, also as a
   virtual deck driven over AV/C (section 15 step 5). See
   [playout.md](playout.md#second-session-2026-11-20-playout-works).
 
