@@ -426,11 +426,11 @@ static void test_hwenc_formats(void)
     fi.size = sizeof(fi);
     CHECK(pin_format_info(PIN_FMT_DV_HEVC_MKV, &fi) == PIN_OK && fi.kind == PIN_KIND_DV &&
           strcmp(fi.extension, "mkv") == 0 && fi.supports_title && fi.supports_scene_split &&
-          fi.supports_multi_pass && !fi.is_default, "DV HEVC: like the other DV formats");
+          fi.supports_retry && !fi.is_default, "DV HEVC: like the other DV formats");
     CHECK(strstr(fi.label, "HEVC") != NULL && strstr(fi.label, "hardware encoder") != NULL, "label");
     CHECK(pin_format_info(PIN_FMT_ANALOG_H264_MKV, &fi) == PIN_OK && fi.kind == PIN_KIND_ANALOG &&
           strcmp(fi.extension, "mkv") == 0 && fi.supports_title && !fi.supports_scene_split &&
-          !fi.supports_multi_pass && !fi.is_default, "analog H.264");
+          !fi.supports_retry && !fi.is_default, "analog H.264");
 
 #if defined(__linux__) && !defined(__ANDROID__)
     CHECK(pin_encoders_probe() == 0, "Linux: no H.264 / HEVC encoder");
@@ -488,7 +488,7 @@ static void test_format_settings(void)
     pin_capture_opts_t *oldo = (pin_capture_opts_t *)buf;
     oldo->size = (uint32_t)old;
     pin_capture_opts_defaults(oldo);
-    CHECK(oldo->size == old && oldo->passes == 1 && oldo->format_dv == PIN_FMT_DV_RAW, "old size: filled");
+    CHECK(oldo->size == old && oldo->retry == 0 && oldo->format_dv == PIN_FMT_DV_RAW, "old size: filled");
     int untouched = 1;
     for (size_t i = old; i < sizeof(buf); i++)
         if (buf[i] != 0xAA)

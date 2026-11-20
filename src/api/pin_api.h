@@ -234,7 +234,7 @@ typedef enum {
     PIN_STATE_READY,        /* idle, preview running if a signal is present */
     PIN_STATE_CAPTURING,
     PIN_STATE_STOPPING,     /* finalising files (may take a moment) */
-    PIN_STATE_REWINDING,    /* multi-pass: rewinding to the start of the tape */
+    PIN_STATE_REWINDING,    /* rewinding to the start of the tape before a capture */
     PIN_STATE_ERROR,        /* see last_error; close and reopen, or pin_prepare() again */
 } pin_state_t;
 
@@ -378,7 +378,7 @@ typedef struct {
                                    its DVB service name; raw .dv does not, the capture ignores it
                                    there) */
     int supports_scene_split;
-    int supports_multi_pass;
+    int supports_retry;         /* DV / HDV formats: pin_capture_opts_t.retry applies */
     int is_default;             /* the default format for its kind */
     /* Appended. A caller compiled before it sets size (of out[0] for pin_formats()) to its own
      * sizeof and gets that layout. 1 if the file stores a display aspect: pin_capture_opts_t's
@@ -540,7 +540,7 @@ typedef struct {
     uint32_t size;
     char path[PIN_PATH_MAX];    /* base output path; extension optional. "-" = standard output:
                                    DV raw DIF, HDV MPEG-TS, analog NUT (rawvideo YUY2 + PCM s16le);
-                                   the format_* fields, scene_split, keep_raw and passes > 1 are
+                                   the format_* fields, scene_split, keep_raw and retry are
                                    ignored, naming, collision and disk checks do not apply, and the
                                    capture ends with PIN_STOP_PIPE_SLOW / PIN_STOP_PIPE_CLOSED if the
                                    reader cannot keep up / exits. */
@@ -553,8 +553,12 @@ typedef struct {
     pin_aspect_t aspect;        /* display aspect of analog and DV files (aspect_hdv: HDV files);
                                    ignored by formats that store none (supports_aspect) */
     int scene_split;            /* DV/HDV: new numbered file per recording */
-    int idle_stop_minutes;      /* stop (or end the pass) after this long without data / signal; 0 = never */
-    int passes;                 /* DV/HDV: capture the tape this many times (>= 1) */
+    int idle_stop_minutes;      /* stop after this long without data / signal; 0 = never */
+    int retry;                  /* DV/HDV with start_deck: re-read bad sections of the tape and
+                                   mend them (rewind, play, merge; the retry_* fields below).
+                                   Ignored for a manual capture (no deck control), a pipe and
+                                   analog. (This field was `passes`, the number of times to
+                                   capture the whole tape, which it replaces.) */
     int start_deck;             /* DV/HDV: send PLAY first ("Play and capture") */
     int keep_raw;               /* also keep the raw .dv/.ts next to a rewrapped file */
     int rewind_first;           /* DV/HDV: with start_deck, REWIND to the start of the tape,
@@ -565,11 +569,8 @@ typedef struct {
                                     "base-NNNN.ext", starting at this number and counting up
                                     per scene; the caller picks an unused number. Appended. */
     int max_duration_minutes;   /* stop after this long of capture time, signal/data or not;
-                                    0 = never. DV/HDV: per pass, counting only the capture time
-                                    of the current pass (not the rewind between passes); when it
-                                    expires the pass ends like a no-signal timeout (rewind and
-                                    next pass, or end of the capture in the last pass).
-                                    Appended field, ABI-compatible. */
+                                    0 = never. The time spent winding back and re-reading for a
+                                    retry is not counted. Appended field, ABI-compatible. */
     char ts_extension[8];       /* extension of a raw HDV transport stream file (PIN_FMT_HDV_TS),
                                     without the dot: "" = "m2t", or "ts" to keep the name the user
                                     gave. Appended field, ABI-compatible. */
@@ -584,25 +585,78 @@ typedef struct {
      * kind's, whichever kind the capture started on. A caller compiled before it passes the old
      * size and gets aspect_hdv = aspect. */
     pin_aspect_t aspect_hdv;
+    /* Appended fields, ABI-compatible: how `retry` works. 0 = the default for each; out of range
+     * values are clamped (pin_capture_opts_normalize()). A caller compiled before them passes the
+     * old size and gets the defaults.
+     *   retry_attempts  re-reads of one bad section, 1..10 (default 3); a re-read that mended
+     *                   nothing ends the section's attempts early
+     *   retry_window_s  longest stretch of tape held for one retry, 10..3600 s (default 60; DV and
+     *                   HDV are about 3.6 MB/s; at most 600 in memory): one bad spot is re-read
+     *                   at once, and the more damage follows, the more of it is joined into one
+     *                   section, up to this length (docs/retry.md)
+     *   retry_trigger   a pin_retry_on_t: what damage asks for a re-read
+     *   retry_preroll_s how far before a section PLAY starts, 1..30 s (default 3)
+     *   retry_mode      a pin_retry_mode_api_t (default AUTO)
+     *   retry_storage   a pin_retry_storage_t: where held tape is kept (default memory) */
+    int retry_attempts;
+    int retry_window_s;
+    int retry_trigger;
+    int retry_preroll_s;
+    int retry_mode;
+    int retry_storage;
 } pin_capture_opts_t;
+
+/* How the capture retries (pin_capture_opts_t.retry_mode). */
+typedef enum {
+    PIN_RETRY_AUTO = 0,         /* each bad section at once; the whole tape once it is very poor */
+    PIN_RETRY_EACH_SECTION = 1, /* each bad section at once: quickest for a few bad spots */
+    PIN_RETRY_WHOLE_TAPE = 2,   /* hold everything from the first damage to the end of the recording
+                                   (a temporary file), then wind back once and re-read it, pass after
+                                   pass: far fewer rewinds, less deck and tape wear; the file is written
+                                   at the end and the output drive needs room for the tape twice */
+} pin_retry_mode_api_t;
+
+/* Where held tape is kept (pin_capture_opts_t.retry_storage). */
+typedef enum {
+    PIN_RETRY_IN_MEMORY = 0,
+    PIN_RETRY_IN_FILE = 1,      /* a temporary file next to the output, deleted afterwards */
+} pin_retry_storage_t;
+
+/* What damage makes the capture re-read a section (pin_capture_opts_t.retry_trigger). */
+typedef enum {
+    PIN_RETRY_ON_ANY_DAMAGE = 0,    /* any: also what the camera concealed (DV STA 2-14, muted
+                                       audio), frames lost in transit, HDV stream damage */
+    PIN_RETRY_ON_UNCORRECTED = 1,   /* only what nobody concealed: DV STA 7/15, missing blocks,
+                                       audio error code, lost frames; HDV stream damage */
+} pin_retry_on_t;
+
+/* What the retry is doing (pin_status_snapshot_t.retry_phase). */
+typedef enum {
+    PIN_RETRY_PHASE_IDLE = 0,       /* passing frames through (held about a second) */
+    PIN_RETRY_PHASE_HOLDING,        /* damage seen: holding the section until it ends */
+    PIN_RETRY_PHASE_REWINDING,      /* winding back to the section */
+    PIN_RETRY_PHASE_SEEKING,        /* playing toward the section */
+    PIN_RETRY_PHASE_REREADING,      /* reading the section again, mending it */
+} pin_retry_state_t;
 
 /* Fills *o with the defaults. A caller compiled against an older pin_api.h sets o->size to its
  * sizeof() first; only that many bytes are written then. Any other size (0 included) means
  * the full struct of this header. */
 PIN_API void pin_capture_opts_defaults(pin_capture_opts_t *o);
 
-/* Multi-pass needs a way to notice the end of a pass: the no-signal timeout
- * (idle_stop_minutes > 0) or the per-pass time limit (max_duration_minutes > 0).
- * Without either, a second pass could never start, so more than one pass is not
- * allowed. Returns 1 if passes > 1 makes sense with these limits, else 0. GUIs
- * use it to disable their "passes" entry. */
-PIN_API int pin_capture_passes_allowed(int idle_stop_minutes, int max_duration_minutes);
-
-/* Makes opts consistent: passes < 1 becomes 1 and, when pin_capture_passes_allowed()
- * says no, passes is forced to 1. Returns 1 if passes was changed. Called by
- * pin_capture_start() (not for replay sessions, whose end-of-file is the end of
- * the pass), so command-line presets and other front ends are covered too. */
+/* Makes opts consistent: the retry_* fields into their ranges (0 or out of range: the default).
+ * Returns 1 if anything was changed. Called by pin_capture_start(), so command-line presets and
+ * other front ends are covered too. */
 PIN_API int pin_capture_opts_normalize(pin_capture_opts_t *o);
+
+/* The retry settings' ranges and defaults, for the GUIs' settings dialog: which is 0 attempts,
+ * 1 window seconds (up to 3600, of which at most 600 in memory), 2 preroll seconds. */
+PIN_API void pin_retry_setting_range(int which, int *min, int *max, int *def);
+
+/* Ready-made help texts for the retry settings (tooltips / help lines): which as above, 3 the
+ * trigger choice, 4 the retry checkbox itself, 5 the mode choice, 6 the storage choice, 7 the
+ * note under "whole tape" (less deck wear). Static strings, never NULL. */
+PIN_API const char *pin_retry_setting_help(int which);
 
 typedef struct {
     uint32_t size;
@@ -702,7 +756,8 @@ typedef struct {
     int tape_percent;           /* 0..100, or -1 when the deck doesn't report it */
 
     /* capture */
-    int pass, passes;
+    int retry_attempt;          /* the attempt running on the current section (1-based), 0 = none */
+    int retry_attempts;         /* the configured maximum (0 when the capture does not retry) */
     int scene;                  /* 1-based scene / file number */
     char current_file[PIN_PATH_MAX];
     double elapsed_s;
@@ -882,6 +937,34 @@ typedef struct {
     uint32_t capture_files;
     double capture_idle_stop_s;
     double capture_duration_s;
+
+    /* Appended. Retry of bad sections (pin_capture_opts_t.retry), the running capture's, or the
+     * last one's once it ended (until the next starts):
+     * retry_on 1 if the capture retries; retry_phase a pin_retry_state_t; retry_held_s the
+     * tape held in memory; retry_section_s the open / retried section's length and retry_bad its
+     * bad frames (DV) / GOPs (HDV); retry_sections the sections retried, of which retry_fixed
+     * came out clean, retry_partly better but not clean, retry_failed unchanged; retry_mended the
+     * frames / GOPs a re-read made better; retry_rewinds the REW commands; retry_wind_speed the
+     * deck's wind speed learned (x real time, 0 = not yet). pin_format_retry_status() makes the
+     * line to show. camera_name: "Vendor Model" from the camera's configuration ROM, "" if it
+     * has none or no camera answered. */
+    int retry_on;
+    int retry_phase;
+    double retry_held_s;
+    double retry_section_s;
+    uint32_t retry_bad;
+    uint64_t retry_sections;
+    uint64_t retry_fixed;
+    uint64_t retry_partly;
+    uint64_t retry_failed;
+    uint64_t retry_mended;
+    uint64_t retry_rewinds;
+    double retry_wind_speed;
+    char camera_name[96];
+    /* Appended. retry_whole_tape 1 while the capture holds the whole tape (WHOLE_TAPE, or AUTO
+     * turned to it on a very poor tape); retry_spool_bytes the size of the temporary file now. */
+    int retry_whole_tape;
+    uint64_t retry_spool_bytes;
 } pin_status_snapshot_t;
 
 /* Non-blocking. out->size is the caller's sizeof(): a caller built against an older, shorter
@@ -896,7 +979,8 @@ PIN_API pin_status_t pin_get_status(pin_session_t *s, pin_status_snapshot_t *out
 PIN_API pin_status_t pin_get_capture_end_status(pin_session_t *s, pin_status_snapshot_t *out);
 
 /* Ready-made text so every GUI shows the same thing. While capturing:
- * "REC <timecode> [deck]  pass 1/1  scene 2  123.4 MB  60 s  err 0  drops 0", all of it the
+ * "REC <timecode> [deck]  scene 2  123.4 MB  60 s  err 0  drops 0" (and while a retry works on
+ * a section, two spaces and pin_format_retry_status()), all of it the
  * whole capture's (MB = total_bytes_written, frames since the capture started). */
 PIN_API void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t cap);
 /* Seconds as "5m30s" / "1h02m10s" / "45s" (rounded up), for the stop countdowns
@@ -942,7 +1026,8 @@ typedef enum {
     PIN_EVT_FILE_OPENED,    /* text = path */
     PIN_EVT_FILE_CLOSED,    /* text = path, a = pin_status_t of the finalise */
     PIN_EVT_SCENE,          /* a new scene started: a = scene number */
-    PIN_EVT_PASS,           /* a new pass started: a = pass number */
+    PIN_EVT_RETRY,          /* the retry changed what it does: a = pin_retry_state_t, text =
+                               pin_format_retry_status() (this value was PIN_EVT_PASS) */
     PIN_EVT_DECK,           /* a = pin_deck_state_t */
     PIN_EVT_INPUT_FORMAT,   /* signal / stream format changed; re-read the status */
     PIN_EVT_LOG,            /* a = level (0 debug .. 3 error), text = message */
@@ -1277,11 +1362,11 @@ PIN_API const char *pin_manual_capture_block_text(int deck_available, pin_deck_s
 PIN_API int pin_state_is_capturing(pin_state_t state);
 
 /* Session state: "Closed", "Preparing…", "Ready", "Capturing", "Finalizing…",
- * "Rewinding (pass 2/3)", "Error". */
+ * "Rewinding to the start", "Error". */
 PIN_API void pin_format_state(const pin_status_snapshot_t *st, char *out, size_t cap);
 
-/* The status bar's first line: while capturing the file name (no directory) and, for
- * several passes, "  ·  pass 2/3" (two spaces each side of the dot); while READY
+/* The status bar's first line: while capturing the file name (no directory) and, while the
+ * retry works on a section, "  ·  " + pin_format_retry_status(); while READY
  * after a capture that ended on its own or without video, the core's stop_text; "Error: "
  * + the error text; "Preparing: " + detail; else pin_format_state(). behind_hub = the open
  * device sits behind a USB hub (pin_device_info_t.hub_depth > 0): READY then reads
@@ -1289,6 +1374,17 @@ PIN_API void pin_format_state(const pin_status_snapshot_t *st, char *out, size_t
  * tooltip should then be pin_usb_hub_hint()); else 0. */
 PIN_API int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub,
                                     char *out, size_t cap);
+
+/* The retry of bad sections in one line, "" when the capture does not retry and none did:
+ *   holding:    "Retry: damage, holding 8 s of tape"
+ *               (whole tape: "Retry: holding 12m30s of tape, re-read at the end of the recording")
+ *   rewinding:  "Retry 1/3: rewinding to a 14 s section"   (seeking: "Retry 1/3: finding the section")
+ *   re-reading: "Retry 2/3: re-reading 14 s (5 bad left)"
+ *   otherwise:  "Retry: 4 sections, 3 mended, 1 partly" / "Retry: no damage so far"
+ * and the multi-line tooltip pin_format_retry_tooltip(): the counts, the learned wind speed,
+ * the camera's name. */
+PIN_API void pin_format_retry_status(const pin_status_snapshot_t *st, char *out, size_t cap);
+PIN_API void pin_format_retry_tooltip(const pin_status_snapshot_t *st, char *out, size_t cap);
 
 /* What is arriving: "S-Video", "Composite", "HDV", "DV" or "DV/HDV" for the input, and with a
  * signal " · " + the format: DV/HDV the snapshot's video_label ("PAL", "1080i25"), analog

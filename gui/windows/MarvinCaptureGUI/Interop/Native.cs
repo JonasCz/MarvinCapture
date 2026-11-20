@@ -380,20 +380,84 @@ public static unsafe partial class Native
     private static partial void pin_capture_opts_defaults(ref PinCaptureOpts o);
 
     [LibraryImport(Lib)]
-    private static partial int pin_capture_passes_allowed(int idleStopMinutes, int maxDurationMinutes);
+    private static partial void pin_retry_setting_range(int which, out int min, out int max, out int def);
 
-    /// <summary>Core rule: more than one pass needs the no-signal timeout or the per-pass time limit.</summary>
-    public static bool PassesAllowed(double idleStopMinutes, double maxDurationMinutes)
+    [LibraryImport(Lib)]
+    private static partial nint pin_retry_setting_help(int which);
+
+    /// <summary>Which retry setting: the order pin_retry_setting_range() / _help() number them.</summary>
+    public enum RetrySetting { Attempts = 0, WindowSeconds = 1, PrerollSeconds = 2, Trigger = 3, Checkbox = 4, Mode = 5, Storage = 6, WholeTapeNote = 7 }
+
+    /// <summary>Range and default of a retry setting (attempts, window, preroll), from the core.</summary>
+    public static (int Min, int Max, int Default) RetrySettingRange(RetrySetting which)
     {
-        static int Min(double v) => double.IsNaN(v) || v < 0 ? 0 : (int)Math.Min(v, int.MaxValue);
         try
         {
-            return pin_capture_passes_allowed(Min(idleStopMinutes), Min(maxDurationMinutes)) != 0;
+            pin_retry_setting_range((int)which, out int lo, out int hi, out int def);
+            return (lo, hi, def);
         }
         catch (EntryPointNotFoundException)
         {
-            return true; // older core: it enforces nothing either
+            return which switch
+            {
+                RetrySetting.Attempts => (1, 10, 3),
+                RetrySetting.WindowSeconds => (10, 3600, 60),
+                _ => (1, 30, 3),
+            };
         }
+    }
+
+    /// <summary>The core's help text (tooltip) of a retry setting or the retry check box.</summary>
+    public static string RetrySettingHelp(RetrySetting which)
+    {
+        try
+        {
+            return PtrToUtf8(pin_retry_setting_help((int)which));
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+    }
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_retry_status(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    [LibraryImport(Lib)]
+    private static partial void pin_format_retry_tooltip(in PinStatusSnapshot st, byte* out_, nuint cap);
+
+    /// <summary>The retry in one line ("Retry 2/3: re-reading 14 s (5 bad left)"), "" when the capture does not retry.</summary>
+    public static string FormatRetryStatus(in PinStatusSnapshot st)
+    {
+        const int cap = PinLimits.TextMax;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_retry_status(in st, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
+    }
+
+    /// <summary>The retry counts, the learned wind speed and the camera's name, several lines (tooltip).</summary>
+    public static string FormatRetryTooltip(in PinStatusSnapshot st)
+    {
+        const int cap = 1024;
+        byte* buf = stackalloc byte[cap];
+        buf[0] = 0;
+        try
+        {
+            pin_format_retry_tooltip(in st, buf, (nuint)cap);
+        }
+        catch (EntryPointNotFoundException)
+        {
+            return string.Empty;
+        }
+        return Utf8Fixed.Get(buf, cap);
     }
 
     public static PinCaptureOpts CaptureOptsDefaults()
@@ -618,7 +682,7 @@ public static unsafe partial class Native
     [LibraryImport(Lib)]
     private static partial void pin_format_state(in PinStatusSnapshot st, byte* out_, nuint cap);
 
-    /// <summary>"Ready", "Rewinding (pass 2/3)", ...</summary>
+    /// <summary>"Ready", "Rewinding to the start", ...</summary>
     public static string FormatState(in PinStatusSnapshot st)
     {
         const int cap = 64;
@@ -633,7 +697,7 @@ public static unsafe partial class Native
     /// <summary>The status bar's first line. <paramref name="hubReady"/>: it is the "Ready (connection via USB hub ...)" text, whose tooltip is the hub hint.</summary>
     public static string FormatStatusShort(in PinStatusSnapshot st, bool behindHub, out bool hubReady)
     {
-        const int cap = PinLimits.PathMax + 128; // a long file name, then "  ·  pass 2/3"
+        const int cap = PinLimits.PathMax + PinLimits.TextMax; // a long file name, then "  ·  " and the retry
         byte* buf = stackalloc byte[cap];
         hubReady = pin_format_status_short(in st, behindHub ? 1 : 0, buf, (nuint)cap) != 0;
         return Utf8Fixed.Get(buf, cap);

@@ -76,7 +76,7 @@ public unsafe struct PinFormatInfo
     public fixed byte ExtensionBuf[16];
     public int SupportsTitle;
     public int SupportsSceneSplit;
-    public int SupportsMultiPass;
+    public int SupportsRetry;       // DV / HDV: PinCaptureOpts.Retry applies
     public int IsDefault;
     // Appended (the core takes the old size too): the file stores a display aspect (raw .dv / .m2t do not).
     public int SupportsAspect;
@@ -106,7 +106,7 @@ public unsafe struct PinCaptureOpts
     public PinAspect Aspect;
     public int SceneSplit;
     public int IdleStopMinutes;
-    public int Passes;
+    public int Retry;           // DV/HDV with StartDeck: re-read bad sections (was the pass count)
     public int StartDeck;
     public int KeepRaw;
     // Appended in ABI v2:
@@ -120,6 +120,13 @@ public unsafe struct PinCaptureOpts
     public int Ffv1Compression; // FFV1: a PinFfv1Compression (default Fast)
     // Appended later: the display aspect of HDV files (Aspect is that of analog and DV files).
     public PinAspect AspectHdv;
+    // Appended later: how Retry works (0 = the core's default; pin_retry_setting_range()).
+    public int RetryAttempts;   // re-reads of one bad section, 1..10
+    public int RetryWindowS;    // longest stretch of tape held in memory, 10..600 s
+    public int RetryTrigger;    // a PinRetryOn
+    public int RetryPrerollS;   // PLAY starts this long before a section, 1..30 s
+    public int RetryMode;       // a PinRetryMode
+    public int RetryStorage;    // a PinRetryStorage
 
     public string Path
     {
@@ -271,7 +278,8 @@ public unsafe struct PinStatusSnapshot
     public fixed byte RecDatetimeBuf[32];
     public int TapePercent;
 
-    public int Pass, Passes;
+    public int RetryAttempt;        // the attempt on the current section (1-based), 0 = none
+    public int RetryAttempts;       // the configured maximum, 0 = the capture does not retry
     public int Scene;
     public fixed byte CurrentFileBuf[PinLimits.PathMax];
     public double ElapsedS;
@@ -339,7 +347,26 @@ public unsafe struct PinStatusSnapshot
     public int CaptureWithDeck;       // 1: it drives the deck (start_deck)
     public uint CaptureFiles;
     public double CaptureIdleStopS;   // the no-signal timeout in seconds
-    public double CaptureDurationS;   // the per-pass time limit in seconds
+    public double CaptureDurationS;   // the capture time limit in seconds
+
+    // Appended later: the retry of bad sections (see pin_api.h), and the camera's name.
+    public int RetryOn;
+    public PinRetryPhase RetryPhase;
+    public double RetryHeldS;
+    public double RetrySectionS;
+    public uint RetryBad;
+    public ulong RetrySections;
+    public ulong RetryFixed;
+    public ulong RetryPartly;
+    public ulong RetryFailed;
+    public ulong RetryMended;
+    public ulong RetryRewinds;
+    public double RetryWindSpeed;
+    public fixed byte CameraNameBuf[96];
+    public int RetryWholeTape;      // 1 while the whole tape is held (whole-tape mode, or automatic on a very poor tape)
+    public ulong RetrySpoolBytes;   // the temporary file's size
+
+    public string CameraName { get { fixed (byte* p = CameraNameBuf) return Utf8Fixed.Get(p, 96); } }
 
     public string ErrorText { get { fixed (byte* p = ErrorTextBuf) return Utf8Fixed.Get(p, PinLimits.TextMax); } }
     public string VideoLabel { get { fixed (byte* p = VideoLabelBuf) return Utf8Fixed.Get(p, 16); } }

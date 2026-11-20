@@ -14,6 +14,7 @@ public sealed partial class KindSettingsView : UserControl
         ViewModel = viewModel;
         InitializeComponent();
         FormatFlyout.Content = new FormatOptionsView(viewModel.FormatOptions);
+        RetryFlyout.Content = new RetryOptionsView(viewModel.RetryOptions);
     }
 
     public KindSettingsViewModel ViewModel { get; }
@@ -28,6 +29,8 @@ public sealed partial class KindSettingsView : UserControl
     public string FormatAutomationName => $"{ViewModel.TabHeader} format";
     public string AspectAutomationName => $"{ViewModel.TabHeader} aspect ratio";
     public string FormatSettingsAutomationName => $"{ViewModel.TabHeader} format settings";
+    public string RetryAutomationName => $"{ViewModel.TabHeader}: retry bad sections";
+    public string RetrySettingsAutomationName => $"{ViewModel.TabHeader} retry settings";
 
     public bool Both(bool a, bool b) => a && b;
 

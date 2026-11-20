@@ -73,6 +73,26 @@ typedef struct {
  * (out is zeroed). */
 int dv_error_analyze(const uint8_t *frame, size_t len, dv_frame_errors_t *out);
 
+/* Per-block grades for merging re-reads of the same frame (pin_retry.c): one byte per DIF block,
+ * in stream order (sequence * 150 + block). Lower is better; a block is replaced by the same
+ * block of another read when that one grades lower.
+ *   DV_BLOCK_GOOD      nothing wrong found
+ *   DV_BLOCK_SUSPECT   audio a deck may have patched by copying another block without saying so
+ *                      (a non-constant 72-byte payload that occurs twice in the frame, or the same
+ *                      block of the previous frame repeated: dvmerge's "copied audio", JVC /
+ *                      DSR-1500P). Also what a periodic test tone looks like, so it only decides
+ *                      which copy to keep, it never asks for a re-read by itself.
+ *   DV_BLOCK_CONCEALED the source concealed it: video STA 2/4/6/10/12/14, the Sony partial mute of
+ *                      the first channel pair. A re-encoding camera (Samsung VP-D340: every video
+ *                      block STA 14) grades its blocks by content instead: STA 14 counts only where
+ *                      the payload equals the previous frame's same block (stuck concealment),
+ *                      as in dvmerge's sta14_visual quirk. prev = NULL: no such comparison.
+ *   DV_BLOCK_ERROR     missing / garbled block (wrong ID: a lost sequence the reassembler padded),
+ *                      video STA 7 / 15, audio carrying the error code in every sample.
+ * Returns the frame's worst grade, or -1 on a bad length. map holds len / 80 bytes. */
+enum { DV_BLOCK_GOOD = 0, DV_BLOCK_SUSPECT = 1, DV_BLOCK_CONCEALED = 2, DV_BLOCK_ERROR = 3 };
+int dv_error_block_map(const uint8_t *frame, size_t len, const uint8_t *prev, uint8_t *map);
+
 #ifdef __cplusplus
 }
 #endif

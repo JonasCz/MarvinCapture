@@ -38,7 +38,7 @@ Traps (all learned the hard way):
   Continuity tracking must restart after a stream break (`hdv_err_reset`, >1 s
   without data) or every rewind/pause shows a false loss.
 - Counted only while a file can get the unit (`counting()`: a file is open, or no capture is
-  running at all, the "since the app started" preview totals): not between passes, during a
+  running at all, the "since the app started" preview totals): not during a
   rewind or before the first file opens. A unit counted at arrival that then misses its file
   is taken out again (`uncount_frame()`): refused by the writer queue (`writer_commit()`,
   decided by the bytes, `unit_is_frame()`, so PAT / PMT never count; it goes to

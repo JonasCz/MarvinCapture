@@ -187,7 +187,7 @@ static int next_name(const file_out_t *f, pout_media_t media, char *out, size_t 
         pin_naming_strip_extension(base, "m2t", tmp, sizeof tmp) != 0 ||
         pin_naming_strip_extension(tmp, "ts", base, sizeof base) != 0)
         return -1;
-    pin_naming_opts_t opts = { 0, 1, (unsigned)f->nnames + 1, 1 };
+    pin_naming_opts_t opts = { 0, 1, (unsigned)f->nnames + 1 };
     return pin_naming_build(base, &opts, media == POUT_MEDIA_HDV ? "m2t" : "dv", out, cap);
 }
 

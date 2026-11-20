@@ -13,7 +13,7 @@ Two ways in, both on the same core library:
   Both have a device list, live preview, deck control, DV/HDV/analog capture with
   scene splitting and the same integrity checks. They remember the window position
   and size, and keep a separate set of settings (output folders and names,
-  formats, passes, idle/duration limits, aspect, standard, picture controls)
+  formats, retry, idle/duration limits, aspect, standard, picture controls)
   for each camera/capture unit, keyed by the unit's FireWire GUID, so switching
   device in the list loads that unit's own options (defaults for a new one). They ask before capturing when the output drive has under 25 GB
   free. During a capture the deck buttons are disabled; "Manual capture"
@@ -26,17 +26,15 @@ Two ways in, both on the same core library:
   "No camera or deck signal" and, if the "Stop no signal (min)" option is on,
   "Stopping capture in 5m30s" with a bar running down; the same time is
   appended to the stop button. At zero the capture stops and, for "Automatic
-  rewind & capture", so does the tape. With several passes the tape is
-  rewound instead and the next pass starts from the beginning. The "Stop
-  after (min)" limit is per pass and counts only capture time (not the rewind);
-  it ends a pass like the no-signal timeout, and in the last pass it ends the
-  capture and stops the tape. "Capture passes" is greyed out (fixed at 1, with a
-  tooltip saying why) while neither "Stop no signal" nor "Stop after" is set,
-  because multi-pass needs one of them to detect the end of a pass; with only
-  "Stop after" set, each pass is stopped and rewound after that time. The
-  value you chose comes back when a limit is set again. The core enforces the
-  same rule (`pin_capture_passes_allowed`, `pin_capture_opts_normalize`), so
-  `--passes 2` without `--idle-min` / a duration limit also captures once.
+  rewind & capture", so does the tape. The "Stop after (min)" limit counts
+  capture time and ends the capture and the tape like the no-signal timeout.
+  "Retry bad sections" (DV / HDV tab, settings behind the gear next to it)
+  makes "Automatic rewind & capture" wind back over damaged stretches of tape,
+  read them again and keep the best of every read: a lone bad spot at once, a
+  damaged stretch in longer goes, or (mode "Whole tape") the whole recording
+  first and the damaged parts again in passes at the end, for less deck wear:
+  see [retry.md](retry.md).
+  The time a retry spends winding back counts towards neither limit.
   How this works inside: [deck-control.md](deck-control.md#capture-flow-in-the-session-engine).
   The "Name and title" field is the files' name and also their title, stored in each file
   whose format has one (AVI, MOV, MKV, and HDV `.m2t` as its DVB service name; raw `.dv`
@@ -104,7 +102,7 @@ ffmpeg -i out.dv -c:v copy -c:a copy out.avi     # rewrap, no re-encode
 break (HDV: or a jump of the camera's clock) starts a new file (`name-0001`, `name-0002`, ...). A new file is only
 created once the new segment is a real one, i.e. it has reached **at least
 1 s and at least 1 MB**; the frames are held in memory until then. If the
-capture, the pass or the tape ends first, or another break arrives first, the
+capture or the tape ends first, or another break arrives first, the
 held frames are appended to the previous file instead, so a few odd frames
 with a weird timecode at the end of a scene or tape don't leave a tiny file
 behind (the very first file is always created). Only content-triggered splits
@@ -135,10 +133,10 @@ The new file gets the new format's parameters, and its own kind's options: the f
 `aspect` for DV, `aspect_hdv` for HDV: the GUI's DV and HDV tabs; `--aspect` sets both)
 and the title, which goes into every file whose format stores one, so a DV AVI after an
 HDV `.m2t` has it whichever kind the capture started on. Scene split, the no-signal stop,
-the time limit and the passes stay those of the kind the capture started with.
+the time limit and the retry stay those of the kind the capture started with.
 Without `--split` the first file keeps its
 name and the ones after a change are numbered: `name.dv`, `name-0002.m2t`,
-`name-0003.dv` (`name-pass-2-0002.dv` in pass 2); with `--split` a change takes the next
+`name-0003.dv`; with `--split` a change takes the next
 scene number. A format change is a hard cut: it never waits for the 1 s / 1 MB minimum,
 and a scene break still pending before it is merged into the previous file as usual.
 The name check before a capture covers both kinds' extensions. The status shows the
@@ -306,7 +304,7 @@ Every end of a capture is reported once, after its files are closed, as
 "Capture stopped after capturing 12m30s, because the output drive is almost
 full (60 MB left).") and in the status (`stop_reason`, `stop_captured_s`,
 `stop_text`, kept until the next capture starts). The captured time is the
-frame count of all passes, not the wall time.
+frame count, not the wall time (a retry's re-reads are not counted twice).
 
 `pin_stop_reason_abnormal()` splits the reasons. **Abnormal** (device or camera
 gone, disk full, write error, any error): the GUI shows the sentence in a
@@ -317,8 +315,8 @@ capture starts (not for the user's own stop).
 
 | reason | when |
 |---|---|
-| `NO_SIGNAL` / `TIME_LIMIT` | the no-signal timeout or the time limit, in the last pass |
-| `END_OF_TAPE` | replay device: the end of the file in the last pass |
+| `NO_SIGNAL` / `TIME_LIMIT` | the no-signal timeout or the time limit |
+| `END_OF_TAPE` | replay device: the end of the file |
 | `DEVICE_LOST` | the USB stream failed and the unit no longer answers a standard GET_STATUS on EP0 (unplugged); the session goes to ERROR. Another USB failure is `ERROR` |
 | `CAMERA_LOST` | DV / HDV: the FireWire bus was reset while the capture was under way (cable moved, camera switched off): frames were lost, so it stops rather than carry on in the same file |
 | `DISK_FULL` | free space on the output drive fell below what finishing the file needs: 64 MB, plus what the disk writer still has queued. Checked once a second. Also an analog file on a FAT32 drive that reached its 4 GiB limit (see "Long captures") |
@@ -335,7 +333,7 @@ while nothing ever arrived) leaves no file behind: no output file, no
 `--keep-raw` file, no temporary file, and an existing file that `--overwrite`
 would have replaced is not touched. The sinks create a file only when its first
 video unit is written (`pin_sink_lazy`, `src/sinks/sink_lazy.c`; audio that
-arrives before the first video is dropped), and a pass or scene file that gets no unit is
+arrives before the first video is dropped), and a scene file that gets no unit is
 never created. The core reports it as `stop_no_video` in the status (1 until the
 next capture starts) and, when the end was not abnormal, as
 `PIN_EVT_NO_VIDEO` right after `PIN_EVT_CAPTURE_ENDED`; `stop_text` and the
@@ -368,7 +366,7 @@ Closing a file is the other long wait on the disk: it drains the writer queue
 and finalises the container (HDV to MOV / MKV also waits for the GOP repairs still
 running). A file is therefore handed to a closer thread
 (`src/engine/pin_closer.c`) and the capture goes straight on into the next
-scene or pass; the files close one at a time, in order, each with its
+scene; the files close one at a time, in order, each with its
 `PIN_EVT_FILE_CLOSED` (now also for a scene split). The end of a capture
 (`PIN_EVT_CAPTURE_ENDED`, `capture_end_seq`) is still reported only once every
 file is closed; until then the session is in `PIN_STATE_STOPPING` with the
@@ -463,8 +461,8 @@ Interlacing (`deinterlace`, `--deinterlace`): none of the encoders can code fiel
 Every encoder gets: a keyframe each second, no B-frames, H.264 High / HEVC Main, BT.601
 limited range, the SAR of the other formats. DV is decoded with FFmpeg's `dvvideo`; its
 audio (32, 44.1 or 48 kHz, one or two stereo pairs) goes through the same per-frame demux
-and silence padding as DV to AVI / MOV. Scene split and multi-pass work as for the other DV
-formats.
+and silence padding as DV to AVI / MOV. Scene split and the retry of bad sections work as for
+the other DV formats.
 
 **Availability.** `pin_formats()` lists these formats only where the encoder opens:
 `pin_encoders_probe()` opens each one once (720 x 576, 25 fps) on a thread of its own and

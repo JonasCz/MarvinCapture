@@ -270,6 +270,15 @@ int p1394_ensure_root(pinnacle_1394_t *l);
 /* Finds the first other node that has an output master plug register. */
 int p1394_find_camera(pinnacle_1394_t *l, uint16_t *node, uint32_t *ompr);
 
+/* The node's identity from its configuration ROM (IEEE 1212): the root directory's vendor id
+ * (key 0x03) and model id (key 0x17), and the textual descriptor leaves that follow them (key
+ * 0x81), e.g. "Canon" / "HV20". Every output is optional; strings are "" where the ROM has none
+ * (a minimal ROM, or a leaf in another character set). Reads quadlets one by one, so not while a
+ * read loop owns EP 0x84 (call it at bring-up, like p1394_find_camera()). 0 if the root
+ * directory could be read, -1 if not. */
+int p1394_read_identity(pinnacle_1394_t *l, uint16_t node, uint32_t *vendor_id, uint32_t *model_id,
+                        char *vendor, size_t vendor_cap, char *model, size_t model_cap);
+
 /* Adds / removes our point-to-point connection on the node's oPCR[0].
  * *opcr receives the register value (channel in bits 21:16). */
 int p1394_connect(pinnacle_1394_t *l, uint16_t node, uint32_t *opcr);

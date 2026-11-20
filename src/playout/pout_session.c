@@ -20,6 +20,7 @@
 
 #include "pin_log.h"
 #include "pout_switch.h"
+#include "pout_dirt.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -176,6 +177,7 @@ static int read_and_send(pout_session_t *s, int64_t frame)
         }
         return blank_period(s);
     }
+    pout_dirt_apply(frame, s->buf, len);   /* test seam POUT_TEST_DIRT */
     int n = pout_cip_frame(&s->cip, s->buf, len, send_cb, s);
     if (s->out_failed)
         return -1;

@@ -179,15 +179,15 @@ core, `pin_status_progress`; `Controls/TaskbarProgress` only talks to the shell)
 |---|---|
 | Device initialisation | green bar, same value as the in-window progress bar (indeterminate if unmeasurable) |
 | Capturing, no signal, "no signal" timeout set | green bar counting down from full to empty |
-| Capturing with "Stop after (min)" | green bar, elapsed / limit of the current pass |
+| Capturing with "Stop after (min)" | green bar, elapsed / limit |
 | Capturing, no limit | indeterminate |
-| Capturing, waiting for signal (no timeout), or rewinding between passes | yellow (paused), full |
+| Capturing, waiting for signal (no timeout) | yellow (paused), full |
 | Capturing and the core reports low disk space (under 1 hour or 50 GB left) | yellow (paused); keeps the value of a countdown / time limit bar, else full. Beaten only by an error |
 | Stopping / finalising | indeterminate |
 | Device error, or an error InfoBar open | red; clears when the InfoBar is dismissed, or when the next capture starts |
 | Idle / ready | none |
 
-While a capture runs (including stopping and rewinding between passes) the button also carries a small red
+While a capture runs (including stopping and a retry winding back) the button also carries a small red
 dot at its lower right corner (`ITaskbarList3::SetOverlayIcon`, accessible name "Capturing"). The icon is
 drawn at run time at the small-icon size of the window's DPI (`Controls/TaskbarIcons`), so there are no
 asset files. It is cleared when the capture ends.
@@ -225,7 +225,7 @@ MarvinCaptureGUI/
                 KindSettingsViewModel (DV / HDV tab), FormatOptionsViewModel
                 (+ FormatChoices: the format settings), ControlSliderViewModel,
                 DeviceItemViewModel
-  Views/        KindSettingsView (format, aspect, split, idle, passes),
+  Views/        KindSettingsView (format, aspect, split, idle, retry), RetryOptionsView (the retry gear),
                 FormatOptionsView (the format gear's Flyout)
   Controls/     SameHeightSwitchPanel, DeviceComboBox, TaskbarButton + TaskbarIcons (ITaskbarList3), DbThumbConverter,
                 MarvinIdle (the animated logo on the no-signal screen, XAML shapes)
@@ -255,20 +255,21 @@ MarvinCaptureGUI/
   with a camera (a manual one too). "Manual capture" is enabled when READY with an incoming
   video signal (`pin_manual_capture_allowed`, tooltip "No incoming video signal"
   otherwise), records without touching the deck (never a deck command, also not
-  at the no-signal timeout or time limit, and a single pass) and becomes
+  at the no-signal timeout or time limit, and no retry of bad sections) and becomes
   "Stop capture" while recording, enabled for any DV/HDV capture
   (`pin_capture_stop_ex` with `PIN_STOP_DECK_NO`; the Auto stop button uses
   `PIN_STOP_DECK_YES`). While recording, the button the capture was started
   with shows a second line: "Stopping in 4m12s" (", no signal" while the
   no-signal timeout counts), for an automatic capture "Stopping capture and tape
-  in ..." or "Next pass in ... (pass 1 of 2)"; the analog "Stop capture" shows
+  in ..."; the analog "Stop capture" shows
   "Stopping in ...". Idle, the analog button says "Capture S-Video input to file".
-- "Capture passes" is disabled and shown as 1 (tooltip: multi-pass needs a way
-  to detect the end of a pass) while both "Stop no signal" and "Stop after" are
-  0. The rule is the core's (`pin_capture_passes_allowed`, called through
-  `Native.PassesAllowed`); `KindSettingsViewModel` keeps the user's pass count
-  and restores it when a limit is set again, and `EffectivePasses` is what goes
-  into the capture options (the core also enforces it at capture start).
+- "Retry bad sections" (per kind, `gui.retry_dv` / `gui.retry_hdv`) with a gear: the
+  retry settings (attempts, memory window, preroll, re-read on any / uncorrected damage),
+  one `RetryOptionsViewModel` shared by both tabs, ranges and help texts from the core
+  (`pin_retry_setting_range`, `pin_retry_setting_help`). It goes into the capture options
+  for "Automatic rewind & capture" only (`BuildCaptureOpts`). While the retry works on a
+  section the status bar's file item says what it does (`pin_format_status_short`);
+  `Native.FormatRetryTooltip` has the counts. See `docs/retry.md`.
 - A capture that ends abnormally (`Native.StopReasonAbnormal`: device or
   camera disconnected, disk almost full, write error) shows a "Capture stopped"
   dialog with the core's sentence ("Capture stopped after capturing 12m30s,

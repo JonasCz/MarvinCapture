@@ -560,6 +560,7 @@ void pin_format_quality_hint(pin_format_t f, int video_quality, int deinterlace,
  * what a front end compiled against those headers passes (the Windows GUI sets size itself). */
 #define CAPTURE_OPTS_SIZE_V3 offsetof(pin_capture_opts_t, deinterlace)
 #define CAPTURE_OPTS_SIZE_V4 offsetof(pin_capture_opts_t, aspect_hdv)
+#define CAPTURE_OPTS_SIZE_V5 offsetof(pin_capture_opts_t, retry_attempts)
 
 static void opts_full_defaults(pin_capture_opts_t *o)
 {
@@ -573,7 +574,13 @@ static void opts_full_defaults(pin_capture_opts_t *o)
     o->format_dv = PIN_FMT_DV_RAW;
     o->format_hdv = PIN_FMT_HDV_TS;
     o->aspect = PIN_ASPECT_AUTO;
-    o->passes = 1;
+    o->retry = 0;
+    o->retry_attempts = PIN_RETRY_ATTEMPTS_DEFAULT;
+    o->retry_window_s = PIN_RETRY_WINDOW_DEFAULT;
+    o->retry_trigger = PIN_RETRY_ON_ANY_DAMAGE;
+    o->retry_preroll_s = PIN_RETRY_PREROLL_DEFAULT;
+    o->retry_mode = PIN_RETRY_AUTO;
+    o->retry_storage = PIN_RETRY_IN_MEMORY;
     o->deinterlace = PIN_DEINTERLACE_DEFAULT;
     o->video_quality = PIN_QUALITY_DEFAULT;
     o->ffv1_compression = PIN_FFV1_DEFAULT;
@@ -585,7 +592,10 @@ static void opts_full_defaults(pin_capture_opts_t *o)
  * sizes were looked at. Only exact older sizes count, so stack garbage cannot shrink it. */
 static size_t opts_caller_size(const pin_capture_opts_t *o)
 {
-    return o->size == CAPTURE_OPTS_SIZE_V3 || o->size == CAPTURE_OPTS_SIZE_V4 ? o->size : sizeof(*o);
+    return o->size == CAPTURE_OPTS_SIZE_V3 || o->size == CAPTURE_OPTS_SIZE_V4 ||
+                   o->size == CAPTURE_OPTS_SIZE_V5
+               ? o->size
+               : sizeof(*o);
 }
 
 void pin_capture_opts_defaults(pin_capture_opts_t *o)
@@ -613,25 +623,89 @@ const pin_capture_opts_t *pin_capture_opts_import(const pin_capture_opts_t *o, p
     opts_full_defaults(buf);
     memcpy(buf, o, n);
     buf->size = sizeof(*buf);
-    buf->aspect_hdv = buf->aspect;
+    if (n < CAPTURE_OPTS_SIZE_V5)
+        buf->aspect_hdv = buf->aspect;
     return buf;
 }
 
-int pin_capture_passes_allowed(int idle_stop_minutes, int max_duration_minutes)
+static int clamp_or_default(int v, int lo, int hi, int def)
 {
-    return idle_stop_minutes > 0 || max_duration_minutes > 0;
+    return v < lo || v > hi ? (v > hi ? hi : def) : v;
 }
 
 int pin_capture_opts_normalize(pin_capture_opts_t *o)
 {
     if (!o)
         return 0;
-    int want = o->passes < 1 ? 1 : o->passes;
-    if (want > 1 && !pin_capture_passes_allowed(o->idle_stop_minutes, o->max_duration_minutes))
-        want = 1;
-    int changed = want != o->passes;
-    o->passes = want;
-    return changed;
+    pin_capture_opts_t before = *o;
+    o->retry = o->retry ? 1 : 0;
+    o->retry_attempts = clamp_or_default(o->retry_attempts, 1, PIN_RETRY_ATTEMPTS_MAX,
+                                         PIN_RETRY_ATTEMPTS_DEFAULT);
+    o->retry_window_s = clamp_or_default(o->retry_window_s, PIN_RETRY_WINDOW_MIN, PIN_RETRY_WINDOW_MAX,
+                                         PIN_RETRY_WINDOW_DEFAULT);
+    if (o->retry_trigger != PIN_RETRY_ON_UNCORRECTED)
+        o->retry_trigger = PIN_RETRY_ON_ANY_DAMAGE;
+    o->retry_preroll_s = clamp_or_default(o->retry_preroll_s, 1, PIN_RETRY_PREROLL_MAX,
+                                          PIN_RETRY_PREROLL_DEFAULT);
+    if (o->retry_mode != PIN_RETRY_EACH_SECTION && o->retry_mode != PIN_RETRY_WHOLE_TAPE)
+        o->retry_mode = PIN_RETRY_AUTO;
+    if (o->retry_storage != PIN_RETRY_IN_FILE)
+        o->retry_storage = PIN_RETRY_IN_MEMORY;
+    if (o->retry_storage == PIN_RETRY_IN_MEMORY && o->retry_window_s > PIN_RETRY_WINDOW_MAX_RAM)
+        o->retry_window_s = PIN_RETRY_WINDOW_MAX_RAM;
+    return memcmp(&before, o, sizeof(*o)) != 0;
+}
+
+void pin_retry_setting_range(int which, int *min, int *max, int *def)
+{
+    int lo = 0, hi = 0, d = 0;
+    switch (which) {
+    case 0: lo = 1; hi = PIN_RETRY_ATTEMPTS_MAX; d = PIN_RETRY_ATTEMPTS_DEFAULT; break;
+    case 1: lo = PIN_RETRY_WINDOW_MIN; hi = PIN_RETRY_WINDOW_MAX; d = PIN_RETRY_WINDOW_DEFAULT; break;
+    case 2: lo = 1; hi = PIN_RETRY_PREROLL_MAX; d = PIN_RETRY_PREROLL_DEFAULT; break;
+    default: break;
+    }
+    if (min) *min = lo;
+    if (max) *max = hi;
+    if (def) *def = d;
+}
+
+const char *pin_retry_setting_help(int which)
+{
+    switch (which) {
+    case 0:
+        return "How often one bad section is read again. A re-read that mends nothing ends the "
+               "attempts early: the damage is on the tape, not dirt on the heads.";
+    case 1:
+        return "The longest stretch of tape held for one retry (DV and HDV need about 3.6 MB per "
+               "second: 60 s is about 220 MB; in memory at most 600 s). A lone bad spot is re-read "
+               "at once; the more damage follows, the more of it is re-read in one go, up to this "
+               "length.";
+    case 2:
+        return "How far before a bad section the deck starts playing again, so it has locked onto "
+               "the tape by then.";
+    case 3:
+        return "Any damage: also what the camera concealed (blocks it filled in from a neighbouring "
+               "frame, muted audio). Uncorrected only: errors nobody concealed and lost frames; "
+               "fewer rewinds, less tape wear.";
+    case 4:
+        return "When the camera reads a frame with damage (dirt, dropout), rewind a few seconds, "
+               "read the section again and keep the best of every read: DV block by block, HDV "
+               "GOP by GOP. Needs \"Play and capture\" (deck control).";
+    case 5:
+        return "Each bad section: rewinds as soon as a bad stretch is over, quickest for a tape with a "
+               "few bad spots. Whole tape: reads to the end of the recording, then rewinds once and "
+               "re-reads it from the first damage, pass after pass. Automatic: each section, and the "
+               "whole tape once the tape turns out very poor.";
+    case 6:
+        return "Memory: quickest, up to 600 s of tape held. Temporary file: next to the output file, "
+               "for longer sections, deleted afterwards. The whole tape always uses a temporary file.";
+    case 7:
+        return "Far fewer rewinds and stops: less wear on the deck and the tape. The file is written "
+               "when the passes are done, and the output drive needs room for the tape twice.";
+    default:
+        return "";
+    }
 }
 
 pin_status_t pin_check_output(pin_session_t *s, const pin_capture_opts_t *o,
@@ -800,10 +874,16 @@ void pin_format_status_line(const pin_status_snapshot_t *st, char *out, size_t c
         /* the capture's total, like the frame counts next to it (a new file restarts
          * bytes_written, not them) */
         double mb = st->total_bytes_written / (1024.0 * 1024.0);
-        snprintf(out, cap, "REC%s%s  pass %d/%d  scene %d  %.1f MB  %.0f s  err %llu  drops %llu",
-                 tc, deck, st->pass, st->passes, st->scene, mb, st->elapsed_s,
+        char retry[96] = "";
+        if (st->retry_on && st->retry_phase != PIN_RETRY_PHASE_IDLE) {
+            char r[80];
+            pin_format_retry_status(st, r, sizeof(r));
+            snprintf(retry, sizeof(retry), "  %s", r);
+        }
+        snprintf(out, cap, "REC%s%s  scene %d  %.1f MB  %.0f s  err %llu  drops %llu%s",
+                 tc, deck, st->scene, mb, st->elapsed_s,
                  (unsigned long long)st->frames_error,
-                 (unsigned long long)(st->frames_dropped + st->write_dropped));
+                 (unsigned long long)(st->frames_dropped + st->write_dropped), retry);
     } else if (st->state == PIN_STATE_ERROR) {
         snprintf(out, cap, "Error: %s", st->error_text);
         pin_utf8_trim_end(out);     /* a short buffer cuts the text: not inside a character */
@@ -948,7 +1028,7 @@ void pin_format_state(const pin_status_snapshot_t *st, char *out, size_t cap)
     case PIN_STATE_READY: snprintf(out, cap, "Ready"); break;
     case PIN_STATE_CAPTURING: snprintf(out, cap, "Capturing"); break;
     case PIN_STATE_STOPPING: snprintf(out, cap, "Finishing the file" ELLIPSIS); break;
-    case PIN_STATE_REWINDING: snprintf(out, cap, "Rewinding (pass %d/%d)", st->pass, st->passes); break;
+    case PIN_STATE_REWINDING: snprintf(out, cap, "Rewinding to the start"); break;
     case PIN_STATE_ERROR: snprintf(out, cap, "Error"); break;
     default: snprintf(out, cap, "?"); break;
     }
@@ -988,12 +1068,88 @@ int pin_format_status_short(const pin_status_snapshot_t *st, int behind_hub, cha
             return 1;
         }
         pin_format_state(st, out, cap);
-    } else if (st->passes > 1) {
-        snprintf(out, cap, "%s  " MIDDOT "  pass %d/%d", file, st->pass, st->passes);
+    } else if (st->retry_on && st->retry_phase != PIN_RETRY_PHASE_IDLE) {
+        char r[PIN_TEXT_MAX];
+        pin_format_retry_status(st, r, sizeof(r));
+        snprintf(out, cap, "%s  " MIDDOT "  %s", file, r);
     } else {
         snprintf(out, cap, "%s", file);
     }
     return 0;
+}
+
+void pin_format_retry_status(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    if (!st)
+        return;
+    char att[24] = "Retry";
+    if (st->retry_attempt > 0)
+        snprintf(att, sizeof(att), "Retry %d/%d", st->retry_attempt, st->retry_attempts);
+    switch (st->retry_phase) {
+    case PIN_RETRY_PHASE_HOLDING:
+        if (st->retry_whole_tape) {
+            char t[32];
+            pin_format_remaining(st->retry_held_s, t, sizeof(t));
+            snprintf(out, cap, "Retry: holding %s of tape, re-read at the end of the recording", t);
+        } else {
+            snprintf(out, cap, "Retry: damage, holding %.0f s of tape", st->retry_held_s);
+        }
+        return;
+    case PIN_RETRY_PHASE_REWINDING:
+        snprintf(out, cap, "%s: rewinding to a %.0f s section", att, st->retry_section_s);
+        return;
+    case PIN_RETRY_PHASE_SEEKING:
+        snprintf(out, cap, "%s: finding the section", att);
+        return;
+    case PIN_RETRY_PHASE_REREADING:
+        snprintf(out, cap, "%s: re-reading %.0f s (%u bad left)", att, st->retry_section_s,
+                 (unsigned)st->retry_bad);
+        return;
+    default:
+        break;
+    }
+    if (!st->retry_on && !st->retry_sections)
+        return;
+    if (!st->retry_sections) {
+        snprintf(out, cap, "Retry: no damage so far");
+        return;
+    }
+    size_t n = (size_t)snprintf(out, cap, "Retry: %llu section%s", (unsigned long long)st->retry_sections,
+                                st->retry_sections == 1 ? "" : "s");
+    if (n < cap && st->retry_fixed)
+        n += (size_t)snprintf(out + n, cap - n, ", %llu mended", (unsigned long long)st->retry_fixed);
+    if (n < cap && st->retry_partly)
+        n += (size_t)snprintf(out + n, cap - n, ", %llu partly", (unsigned long long)st->retry_partly);
+    if (n < cap && st->retry_failed)
+        n += (size_t)snprintf(out + n, cap - n, ", %llu not", (unsigned long long)st->retry_failed);
+}
+
+void pin_format_retry_tooltip(const pin_status_snapshot_t *st, char *out, size_t cap)
+{
+    if (!out || cap == 0)
+        return;
+    out[0] = 0;
+    if (!st)
+        return;
+    char speed[48] = "not measured yet";
+    if (st->retry_wind_speed > 0)
+        snprintf(speed, sizeof(speed), "%.0fx real time", st->retry_wind_speed);
+    snprintf(out, cap,
+             "Bad sections retried: %llu\n"
+             "  mended: %llu\n"
+             "  better, not clean: %llu\n"
+             "  unchanged (damage on the tape): %llu\n"
+             "Frames / GOPs mended: %llu\n"
+             "Rewinds: %llu\n"
+             "Wind speed: %s\n"
+             "Camera: %s",
+             (unsigned long long)st->retry_sections, (unsigned long long)st->retry_fixed,
+             (unsigned long long)st->retry_partly, (unsigned long long)st->retry_failed,
+             (unsigned long long)st->retry_mended, (unsigned long long)st->retry_rewinds, speed,
+             st->camera_name[0] ? st->camera_name : "unknown");
 }
 
 void pin_format_signal(const pin_status_snapshot_t *st, char *out, size_t cap)

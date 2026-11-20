@@ -18,6 +18,7 @@
 
 #include "pin_script.h"
 #include "pin_format_opts.h"
+#include "pin_retry.h"
 
 #include <ctype.h>
 #include <stdarg.h>
@@ -260,6 +261,15 @@ const char *pin_script_help_text(void)
         "  --split                  scene split (DV/HDV): a confirmed timecode or recording-date break (HDV: or a jump of the camera's clock) starts a new file. Always on for hdv-mov and hdv-mkv. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.\n"
         "  --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, hdv-mov, hdv-mkv and the analog NUT stream on stdout, and by raw .ts/.m2t (hdv-ts, also on stdout) as the DVB service name (ffprobe: the program's service_name; MediaInfo: \"Service name\"). Raw .dv (dv) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.\n"
         "  --keep-raw               keep the raw .dv/.ts next to a rewrapped file\n"
+        "  --retry                  DV/HDV: when the camera reads damage (dirt, a dropout), rewind, read the section again and keep the best of every read (DV block by block, HDV GOP by GOP), so the file gets the cleanest copy the tape gives. Bad spots close together are re-read in one go. Needs a camera that takes deck commands; the capture sends PLAY itself. Not with --capture -.\n"
+        "  --retry-attempts N       re-reads of one bad section, 1 to 10 (default 3); a re-read that mends nothing ends the section's attempts\n"
+        "  --retry-window S         the longest stretch of tape held in memory for one retry, 10 to 600 seconds (default 60, about 220 MB)\n"
+        "  --retry-preroll S        how far before a bad section the deck starts playing again, 1 to 30 seconds (default 3)\n"
+        "  --retry-on any|uncorrected\n"
+        "                           what damage asks for a re-read: any (default; also what the camera concealed) or uncorrected (errors nobody concealed, lost frames)\n"
+        "  --retry-mode auto|section|whole\n"
+        "                           section: rewind as soon as a bad stretch is over (quickest for a few bad spots; a lone spot is re-read at once, the more damage follows the more is re-read in one go). whole: read to the end of the recording, then rewind once and re-read from the first damage, pass after pass: far fewer rewinds, less deck and tape wear, the file is written at the end and the drive needs room for the tape twice. auto (default): section, and whole once the tape turns out very poor\n"
+        "  --retry-store ram|file   where held tape is kept: ram (default, at most 600 s) or a temporary file next to the output (deleted afterwards; whole always uses one)\n"
         "  --overwrite              overwrite an existing target file (else an error)\n"
         "  Analog picture and audio controls (svideo/composite only; with defaults):\n"
         "  --brightness N           0 to 255 (default 128)\n"
@@ -333,6 +343,7 @@ typedef struct {
     int deinterlace;
     int video_quality;
     int ffv1_compression;
+    int retry, retry_attempts, retry_window_s, retry_preroll_s, retry_trigger, retry_mode, retry_storage;
     int started;
     int capture_open;
     int stdout_used;            /* a --capture - was seen: only one per script */
@@ -522,7 +533,8 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
         const char *val = NULL;
         static const char *const value_opts[] = { "--device", "--input", "--std", "--format", "--aspect",
             "--title", "--brightness", "--contrast", "--saturation", "--hue", "--sharpness", "--audio-gain",
-            "--quality", "--deinterlace", "--ffv1-compression" };
+            "--quality", "--deinterlace", "--ffv1-compression", "--retry-attempts", "--retry-window",
+            "--retry-preroll", "--retry-on", "--retry-mode", "--retry-store" };
         int takes_value = 0;
         for (unsigned k = 0; k < sizeof(value_opts) / sizeof(value_opts[0]); k++)
             if (strcmp(name, value_opts[k]) == 0)
@@ -536,11 +548,12 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
                 FAIL("%s needs a value", name);
         }
         int is_setting = takes_value || strcmp(name, "--split") == 0 || strcmp(name, "--keep-raw") == 0 ||
-                         strcmp(name, "--overwrite") == 0;
+                         strcmp(name, "--overwrite") == 0 || strcmp(name, "--retry") == 0;
         if (is_setting && p.capture_open)
             FAIL("%s cannot change while a capture is open (it ends at the next transport action, "
                  "--capture or the end of the arguments)", name);
         int is_flag = strcmp(name, "--split") == 0 || strcmp(name, "--keep-raw") == 0 ||
+                      strcmp(name, "--retry") == 0 ||
                       strcmp(name, "--overwrite") == 0 || strcmp(name, "--debug") == 0 ||
                       strcmp(name, "--exit-when-done") == 0;
         if (is_flag && inl)
@@ -635,6 +648,33 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             else FAIL("--ffv1-compression: expected fast, smaller or smallest, got \"%s\"", val);
             p.ffv1_compression = c;
             if (!p.started) { sc->initial.has_ffv1_compression = 1; sc->initial.ffv1_compression = c; }
+        } else if (strcmp(name, "--retry") == 0) {
+            p.retry = 1;
+        } else if (strcmp(name, "--retry-attempts") == 0 || strcmp(name, "--retry-window") == 0 ||
+                   strcmp(name, "--retry-preroll") == 0) {
+            int which = strcmp(name, "--retry-attempts") == 0 ? 0 : strcmp(name, "--retry-window") == 0 ? 1 : 2;
+            int lo = which == 1 ? PIN_RETRY_WINDOW_MIN : 1;
+            int hi = which == 0 ? PIN_RETRY_ATTEMPTS_MAX : which == 1 ? PIN_RETRY_WINDOW_MAX
+                                                                      : PIN_RETRY_PREROLL_MAX;
+            int32_t v;
+            if (!parse_int(val, &v) || v < lo || v > hi)
+                FAIL("%s: expected a whole number from %d to %d, got \"%s\"", name, lo, hi, val);
+            if (which == 0) p.retry_attempts = (int)v;
+            else if (which == 1) p.retry_window_s = (int)v;
+            else p.retry_preroll_s = (int)v;
+        } else if (strcmp(name, "--retry-mode") == 0) {
+            if (ieq(val, "auto")) p.retry_mode = PIN_RETRY_AUTO;
+            else if (ieq(val, "section")) p.retry_mode = PIN_RETRY_EACH_SECTION;
+            else if (ieq(val, "whole")) p.retry_mode = PIN_RETRY_WHOLE_TAPE;
+            else FAIL("--retry-mode: expected auto, section or whole, got \"%s\"", val);
+        } else if (strcmp(name, "--retry-store") == 0) {
+            if (ieq(val, "ram")) p.retry_storage = PIN_RETRY_IN_MEMORY;
+            else if (ieq(val, "file")) p.retry_storage = PIN_RETRY_IN_FILE;
+            else FAIL("--retry-store: expected ram or file, got \"%s\"", val);
+        } else if (strcmp(name, "--retry-on") == 0) {
+            if (ieq(val, "any")) p.retry_trigger = PIN_RETRY_ON_ANY_DAMAGE;
+            else if (ieq(val, "uncorrected")) p.retry_trigger = PIN_RETRY_ON_UNCORRECTED;
+            else FAIL("--retry-on: expected any or uncorrected, got \"%s\"", val);
         } else if (strcmp(name, "--overwrite") == 0) {
             p.overwrite = 1;
         } else if (strcmp(name, "--debug") == 0) {
@@ -695,6 +735,13 @@ pin_status_t pin_script_parse_args(int argc, const char *const *argv, pin_script
             c->deinterlace = p.deinterlace;
             c->video_quality = p.video_quality;
             c->ffv1_compression = p.ffv1_compression;
+            c->retry = p.retry;
+            c->retry_attempts = p.retry_attempts;
+            c->retry_window_s = p.retry_window_s;
+            c->retry_preroll_s = p.retry_preroll_s;
+            c->retry_trigger = p.retry_trigger;
+            c->retry_mode = p.retry_mode;
+            c->retry_storage = p.retry_storage;
             for (int k = 0; k < 3; k++)
                 c->format[k] = p.fmt[k];
             if (strcmp(inl, "-") == 0) {

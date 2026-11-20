@@ -187,6 +187,7 @@ final class WindowModel {
             refreshDevices()   // the open device's badge reads "Capturing"
             // The format settings apply at capture start: locked while capturing, like the other options.
             for o in allFormatOptions { o.isEditable = !isCapturing }
+            retryOptions.isEditable = !isCapturing
         }
     }
     var isIdle: Bool { !isCapturing }
@@ -203,7 +204,7 @@ final class WindowModel {
         Pin.deckCmdAllowed(state: sessionState, deckAvailable: deckAvailable, deck: deckState, cmd: c)
     }
 
-    /// Stop is possible while writing (or between passes); not while already finalising.
+    /// Stop is possible while writing (or while a retry winds back); not while already finalising.
     var canStop: Bool { captureAllowed(PIN_CAPTURE_STOP) }
     /// The Capture / Stop button (analog) and the Manual capture / Stop button (DV/HDV).
     var captureEnabled: Bool { captureAllowed(isCapturing ? PIN_CAPTURE_STOP : PIN_CAPTURE_START_MANUAL) }
@@ -237,7 +238,7 @@ final class WindowModel {
             let why = Pin.manualCaptureBlockText(deckAvailable: deckAvailable, deck: deckState, signal: signalLocked)
             if !why.isEmpty { return why }
         }
-        return "Captures whatever the camera or deck is sending, without issuing deck control commands. Always one pass: a new pass would need a deck rewind."
+        return "Captures whatever the camera or deck is sending, without issuing deck control commands. No retry of bad sections: that needs deck control."
     }
     /// The countdown line goes under the button the capture was started with only.
     var manualCaptureCaption: String? { isCapturing && !captureWithDeck && !captureSubtitle.isEmpty ? captureSubtitle : nil }
@@ -314,6 +315,8 @@ final class WindowModel {
 
     /// The format settings the user chose (deinterlace, quality, FFV1 compression), stored per device.
     let formatChoices: FormatChoices
+    /// How the retry of bad sections works, shared by the DV and HDV tabs (the gear next to the toggle).
+    let retryOptions: RetryOptionsModel
     /// The analog format's settings, behind the gear next to its picker.
     let analogFormatOptions: FormatOptionsModel
     private var allFormatOptions: [FormatOptionsModel] {
@@ -470,7 +473,7 @@ final class WindowModel {
     private(set) var statusLine = "Idle"
     /// First status-bar item: the file being written while capturing, else state / error.
     private(set) var statusShortText = "No device open"
-    /// "Capturing  ·  pass 2/3" while a capture runs, else "".
+    /// "Capturing" (and the retry, while it works on a section) while a capture runs, else "".
     private(set) var statusSubText = ""
     private(set) var timecode = "--:--:--:--"
     /// The tape timecode for DV/HDV, the time since capture start for analog.
@@ -608,8 +611,10 @@ final class WindowModel {
         let choices = FormatChoices()
         formatChoices = choices
         analogFormatOptions = FormatOptionsModel(choices: choices, analog: true)
-        dvSettings = KindSettingsModel(kind: PIN_KIND_DV, tabHeader: "DV", choices: choices)
-        hdvSettings = KindSettingsModel(kind: PIN_KIND_HDV, tabHeader: "HDV", choices: choices)
+        let retry = RetryOptionsModel()
+        retryOptions = retry
+        dvSettings = KindSettingsModel(kind: PIN_KIND_DV, tabHeader: "DV", choices: choices, retry: retry)
+        hdvSettings = KindSettingsModel(kind: PIN_KIND_HDV, tabHeader: "HDV", choices: choices, retry: retry)
 
         var std = [StdItem(std: PIN_STD_AUTO, name: "Auto")]
         for i in 1..<Int(PIN_STD_COUNT.rawValue) {
@@ -631,7 +636,20 @@ final class WindowModel {
             tab.onChanged = { [unowned self] k, field in self.kindChanged(k, field) }
         }
         formatChoices.onChanged = { [unowned self] field in self.formatChoiceChanged(field) }
+        retryOptions.onChanged = { [unowned self] field in self.retryOptionChanged(field) }
         probeEncoders()
+    }
+
+    private func retryOptionChanged(_ field: RetryOptionsModel.Field) {
+        let r = retryOptions
+        switch field {
+        case .attempts: saveSetting("gui.retry_attempts", String(r.attempts))
+        case .window: saveSetting("gui.retry_window", String(r.windowSeconds))
+        case .preroll: saveSetting("gui.retry_preroll", String(r.prerollSeconds))
+        case .trigger: saveSetting("gui.retry_on", String(r.triggerIndex))
+        case .mode: saveSetting("gui.retry_mode", String(r.modeIndex))
+        case .storage: saveSetting("gui.retry_store", String(r.storageIndex))
+        }
     }
 
     private func formatChoiceChanged(_ field: FormatChoices.Field) {
@@ -967,7 +985,7 @@ final class WindowModel {
         // The DV input auto-detects DV vs HDV, and a tape can switch between them. Each file gets its own
         // kind's aspect (aspect: analog or the DV tab, aspect_hdv: the HDV tab; Auto where the format stores
         // none) and the name as its title (the core leaves it out of formats that have none). Scene split,
-        // the two stops and the passes come from the tab matching what is arriving right now.
+        // the two stops and the retry come from the tab matching what is arriving right now.
         let kind = lastStreamKind == PIN_KIND_HDV ? hdvSettings : dvSettings
         setCString(&o.title, analog ? analogName : dvName)
         o.aspect = pin_aspect_t(rawValue: UInt32(clamping: analog ? analogEffectiveAspectIndex : dvSettings.effectiveAspectIndex))
@@ -975,7 +993,9 @@ final class WindowModel {
         o.scene_split = !analog && kind.splitChecked && (kind.selectedFormat?.supportsSceneSplit ?? false) ? 1 : 0
         o.idle_stop_minutes = Int32(clamping: Swift.max(0, analog ? analogIdleStopMinutes : kind.idleStopMinutes))
         o.max_duration_minutes = Int32(clamping: Swift.max(0, analog ? analogMaxDurationMinutes : kind.maxDurationMinutes))
-        o.passes = Int32(analog ? 1 : kind.effectivePasses)
+        // the retry winds the deck: only for "Play and capture" (the core ignores it otherwise too)
+        o.retry = !analog && startDeck && kind.retry && kind.retryEnabled ? 1 : 0
+        retryOptions.apply(to: &o)
         o.start_deck = startDeck ? 1 : 0
         o.rewind_first = rewindFirst ? 1 : 0   // "Automatic rewind & capture": start of tape, then play
 
@@ -1171,7 +1191,7 @@ final class WindowModel {
     }
 
     /// The line under the stop button the capture was started with (see `captureSubtitle`): the no-signal
-    /// countdown if it is running, else the time limit, else none; none while rewinding between passes.
+    /// countdown if it is running, else the time limit, else none.
     private func captureSubtitleText(_ st: pin_status_snapshot_t) -> String {
         guard st.state == PIN_STATE_CAPTURING else { return "" }
         let t: String
@@ -1183,8 +1203,7 @@ final class WindowModel {
             return ""
         }
         if !isDvInput || !captureWithDeck { return "Stopping in \(t)" }
-        if st.pass >= st.passes { return "Stopping capture and tape in \(t)" }
-        return "Next pass in \(t) (pass \(st.pass) of \(st.passes))"
+        return "Stopping capture and tape in \(t)"
     }
 
     private func applyStatus(_ st: pin_status_snapshot_t) {
@@ -1306,8 +1325,8 @@ final class WindowModel {
             if st != PIN_OK { showInfo("File not finalised cleanly", lastLogLine, .error) }
         case PIN_EVT_SCENE:
             lastLogLine = "Scene \(e.a)"
-        case PIN_EVT_PASS:
-            lastLogLine = "Pass \(e.a)"
+        case PIN_EVT_RETRY:
+            lastLogLine = e.text
         case PIN_EVT_DECK:
             applyDeckStatus(pin_deck_state_t(rawValue: UInt32(clamping: e.a)), busy: deckBusy)
         case PIN_EVT_INPUT_FORMAT:
@@ -1462,7 +1481,7 @@ final class WindowModel {
         let p = k.settingsPrefix
         if let f = k.selectedFormat { saveSetting("gui.format_\(p)", String(f.format.rawValue)) }
         saveSetting("gui.split_\(p)", k.splitIntoScenes ? "1" : "0")
-        saveSetting("gui.passes_\(p)", String(k.passes))
+        saveSetting("gui.retry_\(p)", k.retry ? "1" : "0")
         saveSetting("gui.idle_\(p)", String(k.idleStopMinutes))
         saveSetting("gui.duration_\(p)", String(k.maxDurationMinutes))
         saveSetting("gui.aspect_\(p)", String(k.aspectIndex))
@@ -1508,12 +1527,21 @@ final class WindowModel {
         formatChoices.qualityDv = loadInt("gui.quality_dv", -1)
         formatChoices.ffv1Compression = loadInt("gui.ffv1_compression", -1)
 
+        // 0 / missing = the core's default (pin_retry_setting_range)
+        let ra = loadInt("gui.retry_attempts", 0), rw = loadInt("gui.retry_window", 0), rp = loadInt("gui.retry_preroll", 0)
+        retryOptions.attempts = ra > 0 ? ra : retryOptions.attemptsDefault
+        retryOptions.windowSeconds = rw > 0 ? rw : retryOptions.windowDefault
+        retryOptions.prerollSeconds = rp > 0 ? rp : retryOptions.prerollDefault
+        retryOptions.triggerIndex = loadInt("gui.retry_on", 0) == 1 ? 1 : 0
+        retryOptions.modeIndex = Swift.min(Swift.max(loadInt("gui.retry_mode", 0), 0), 2)
+        retryOptions.storageIndex = loadInt("gui.retry_store", 0) == 1 ? 1 : 0
+
         for k in kindTabs {
             let p = k.settingsPrefix
             let f = loadInt("gui.format_\(p)", -1)
             if f >= 0 { k.applyFormat(pin_format_t(rawValue: UInt32(clamping: f))) }
             k.splitIntoScenes = loadInt("gui.split_\(p)", 0) != 0
-            k.passes = Swift.max(1, loadInt("gui.passes_\(p)", 1))
+            k.retry = loadInt("gui.retry_\(p)", 0) != 0
             k.idleStopMinutes = Swift.max(0, loadInt("gui.idle_\(p)", 5))
             k.maxDurationMinutes = Swift.max(0, loadInt("gui.duration_\(p)", 0))
             k.aspectIndex = Swift.min(Swift.max(loadInt("gui.aspect_\(p)", 0), 0), 2)

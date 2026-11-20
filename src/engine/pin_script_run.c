@@ -333,7 +333,17 @@ static int do_capture(run_t *r, const pin_script_capture_t *c)
     o.ffv1_compression = c->ffv1_compression;
     o.start_deck = 0;
     o.rewind_first = 0;
-    o.passes = 1;
+    if (c->retry && !c->to_stdout) {
+        /* the capture winds the deck back and plays it for a retry: it drives the deck */
+        o.retry = 1;
+        o.start_deck = 1;
+        if (c->retry_attempts) o.retry_attempts = c->retry_attempts;
+        if (c->retry_window_s) o.retry_window_s = c->retry_window_s;
+        if (c->retry_preroll_s) o.retry_preroll_s = c->retry_preroll_s;
+        o.retry_trigger = c->retry_trigger;
+        o.retry_mode = c->retry_mode;
+        o.retry_storage = c->retry_storage;
+    }
     o.idle_stop_minutes = 0;
     o.max_duration_minutes = 0;
 

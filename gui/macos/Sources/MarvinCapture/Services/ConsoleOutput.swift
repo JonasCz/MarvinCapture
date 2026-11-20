@@ -81,7 +81,7 @@ enum ConsoleOutput {
         case PIN_EVT_FILE_OPENED: "FileOpened"
         case PIN_EVT_FILE_CLOSED: "FileClosed"
         case PIN_EVT_SCENE: "Scene"
-        case PIN_EVT_PASS: "Pass"
+        case PIN_EVT_RETRY: "Retry"
         case PIN_EVT_DECK: "Deck"
         case PIN_EVT_INPUT_FORMAT: "InputFormat"
         case PIN_EVT_LOG: "Log"

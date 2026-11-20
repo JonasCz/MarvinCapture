@@ -17,7 +17,8 @@
 import SwiftUI
 
 /// One kind's (DV or HDV) file options: format (its settings behind the gear), aspect, scene split, the two
-/// minute limits, passes. Port of KindSettingsView.xaml. The caller disables the whole view while capturing.
+/// minute limits, the retry of bad sections (its settings behind the gear). Port of KindSettingsView.xaml.
+/// The caller disables the whole view while capturing.
 struct KindSettingsView: View {
     @Bindable var settings: KindSettingsModel
 
@@ -57,17 +58,22 @@ struct KindSettingsView: View {
                 .help(settings.splitHelp)
             HStack(alignment: .top, spacing: 8) {
                 NumberField(title: "No signal (min)", value: $settings.idleStopMinutes,
-                            help: "Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically).",
+                            help: "Ends the capture after this many minutes without signal or data (the end of the tape). The time a retry spends winding back does not count. 0 disables it (never stops automatically).",
                             width: 64, accessibilityName: "Stop no signal (min)")
                     .frame(maxWidth: .infinity, alignment: .leading)
                 NumberField(title: "Stop after (min)", value: $settings.maxDurationMinutes,
-                            help: "Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it.", width: 64)
+                            help: "Ends the capture and stops the tape after this many minutes of capture, whether or not signal is present. The time a retry spends winding back and re-reading does not count. 0 disables it.", width: 64)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                NumberField(title: "Passes", value: $settings.displayPasses, range: 1...20,
-                            help: settings.passesToolTip, width: 52, accessibilityName: "Capture passes")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .disabled(!settings.passesUsable)
             }
+            // Retry bad sections, its settings behind the gear (shared by DV and HDV)
+            HStack(spacing: 4) {
+                Toggle("Retry bad sections", isOn: $settings.retry)
+                    .help(settings.retryHelp)
+                    .accessibilityLabel("\(settings.tabHeader): retry bad sections")
+                RetryOptionsButton(options: settings.retryOptions,
+                                   accessibilityName: "\(settings.tabHeader) retry settings")
+            }
+            .disabled(!settings.retryEnabled)
         }
     }
 }

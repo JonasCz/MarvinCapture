@@ -5,7 +5,7 @@
     xmlns:vm="using:PinnacleCapture.ViewModels">
 
     <!-- One "Settings for: DV | HDV" page: format (its settings behind the gear), aspect, scene split,
-         idle stop, passes. -->
+         the two stops, the retry of bad sections (its settings behind the gear). -->
     <StackPanel Spacing="10">
         <Grid ColumnSpacing="8">
             <Grid.ColumnDefinitions>
@@ -95,8 +95,8 @@
                 Value="{x:Bind ViewModel.IdleStopMinutes, Mode=TwoWay}"
                 IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
                 AutomationProperties.Name="Stop when no signal for this many minutes"
-                AutomationProperties.HelpText="Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)."
-                ToolTipService.ToolTip="Ends the pass after this many minutes without signal or data. With passes left, rewinds and starts the next one. 0 disables it (never stops automatically)." />
+                AutomationProperties.HelpText="Ends the capture after this many minutes without signal or data (the end of the tape). The time a retry spends winding back does not count. 0 disables it (never stops automatically)."
+                ToolTipService.ToolTip="Ends the capture after this many minutes without signal or data (the end of the tape). The time a retry spends winding back does not count. 0 disables it (never stops automatically)." />
             <NumberBox
                 Grid.Column="1"
                 Header="Stop after (min)"
@@ -104,20 +104,32 @@
                 SpinButtonPlacementMode="Compact"
                 Value="{x:Bind ViewModel.MaxDurationMinutes, Mode=TwoWay}"
                 IsEnabled="{x:Bind IsEditable, Mode=OneWay}"
-                AutomationProperties.Name="Stop this many minutes into the pass, regardless of signal"
-                AutomationProperties.HelpText="Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it."
-                ToolTipService.ToolTip="Ends the pass after this many minutes of capture, per pass, excluding rewind time (the count restarts with each pass), whether or not signal is present. With passes left, rewinds and starts the next one; in the last pass it ends the capture and stops the tape. 0 disables it." />
+                AutomationProperties.Name="Stop this many minutes into the capture, regardless of signal"
+                AutomationProperties.HelpText="Ends the capture and stops the tape after this many minutes of capture, whether or not signal is present. The time a retry spends winding back and re-reading does not count. 0 disables it."
+                ToolTipService.ToolTip="Ends the capture and stops the tape after this many minutes of capture, whether or not signal is present. The time a retry spends winding back and re-reading does not count. 0 disables it." />
         </Grid>
 
-        <NumberBox
-            Header="Capture passes"
-            HorizontalAlignment="Left" Width="140"
-            Minimum="1" Maximum="20" SmallChange="1"
-            SpinButtonPlacementMode="Compact"
-            Value="{x:Bind ViewModel.DisplayPasses, Mode=TwoWay}"
-            IsEnabled="{x:Bind Both(ViewModel.PassesUsable, IsEditable), Mode=OneWay}"
-            AutomationProperties.Name="Capture passes"
-            AutomationProperties.HelpText="{x:Bind ViewModel.PassesToolTip, Mode=OneWay}"
-            ToolTipService.ToolTip="{x:Bind ViewModel.PassesToolTip, Mode=OneWay}" />
+        <!-- Retry bad sections, its settings behind the gear (shared by DV and HDV). The Grid carries
+             the tooltip: a disabled CheckBox shows none. -->
+        <StackPanel Orientation="Horizontal" Spacing="4">
+            <Grid Background="Transparent" ToolTipService.ToolTip="{x:Bind ViewModel.RetryHelp}">
+                <CheckBox
+                    Content="Retry bad sections"
+                    IsChecked="{x:Bind ViewModel.Retry, Mode=TwoWay}"
+                    IsEnabled="{x:Bind Both(ViewModel.RetryEnabled, IsEditable), Mode=OneWay}"
+                    AutomationProperties.Name="{x:Bind RetryAutomationName}"
+                    AutomationProperties.HelpText="{x:Bind ViewModel.RetryHelp}" />
+            </Grid>
+            <Button VerticalAlignment="Center" Width="36" Height="32" Padding="0"
+                    IsEnabled="{x:Bind Both(ViewModel.RetryEnabled, IsEditable), Mode=OneWay}"
+                    AutomationProperties.Name="{x:Bind RetrySettingsAutomationName}"
+                    AutomationProperties.HelpText="Attempts, memory window, preroll and what damage asks for a re-read"
+                    ToolTipService.ToolTip="Retry settings">
+                <FontIcon Glyph="&#xE713;" FontSize="14" />
+                <Button.Flyout>
+                    <Flyout x:Name="RetryFlyout" Placement="BottomEdgeAlignedLeft" />
+                </Button.Flyout>
+            </Button>
+        </StackPanel>
     </StackPanel>
 </UserControl>

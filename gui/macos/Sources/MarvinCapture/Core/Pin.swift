@@ -246,8 +246,27 @@ enum Pin {
         return o
     }
 
-    static func passesAllowed(idleStopMinutes: Int, maxDurationMinutes: Int) -> Bool {
-        pin_capture_passes_allowed(Int32(clamping: idleStopMinutes), Int32(clamping: maxDurationMinutes)) != 0
+    /// Range and default of a retry setting: 0 attempts, 1 window seconds, 2 preroll seconds.
+    static func retrySettingRange(_ which: Int) -> (min: Int, max: Int, def: Int) {
+        var lo: Int32 = 0, hi: Int32 = 0, def: Int32 = 0
+        pin_retry_setting_range(Int32(which), &lo, &hi, &def)
+        return (Int(lo), Int(hi), Int(def))
+    }
+
+    /// The core's help text of a retry setting (0-2 as above, 3 the trigger) or the retry toggle (4).
+    static func retrySettingHelp(_ which: Int) -> String {
+        guard let p = pin_retry_setting_help(Int32(which)) else { return "" }
+        return String(cString: p)
+    }
+
+    /// The retry in one line ("Retry 2/3: re-reading 14 s (5 bad left)"), "" when the capture does not retry.
+    static func formatRetryStatus(_ st: pin_status_snapshot_t) -> String {
+        withStatus(st) { p in format { pin_format_retry_status(p, $0, $1) } }
+    }
+
+    /// The retry counts, the learned wind speed and the camera's name, several lines (tooltip).
+    static func formatRetryTooltip(_ st: pin_status_snapshot_t) -> String {
+        withStatus(st) { p in format(capacity: 1024) { pin_format_retry_tooltip(p, $0, $1) } }
     }
 
     static func nextFileNumber(path: String) -> UInt32 { pin_next_file_number(path) }

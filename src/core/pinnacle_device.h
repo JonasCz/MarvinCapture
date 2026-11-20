@@ -89,6 +89,10 @@ typedef struct {
     void *progress_user;
     /* set by pinnacle_stream_start */
     uint16_t camera_node;      /* 0xffc0 | node number, 0 if none found */
+    /* the camera's name from its configuration ROM (p1394_read_identity()), "" if it has none */
+    char camera_vendor[64];
+    char camera_model[64];
+    uint32_t camera_vendor_id, camera_model_id;  /* IEEE company id / model id, 0 if unknown */
     int node_count;            /* nodes on the 1394 bus, us included (0 = not scanned) */
     int iso_channel;           /* channel IR context 0 listens on */
     int pcr_connected;         /* we hold a point-to-point connection on oPCR[0] */

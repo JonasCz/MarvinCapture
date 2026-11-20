@@ -50,7 +50,7 @@ seen — the ring is already running when we join, so what precedes that is a
 partial picture and possibly stale ring contents. This mirrors DV waiting for
 `Dseq 0`. When the gate opens, the most recently seen PAT and PMT are written
 first, so the file is decodable from its first packet. Every file starts this
-way: the next pass's, a scene split's (below), and one from the replay device.
+way: a scene split's (below), and one from the replay device.
 On stop, the trailing partial picture is cut, so the file ends on a whole one.
 (A non-seekable output, e.g. a pipe, cannot be cut and keeps the tail.)
 

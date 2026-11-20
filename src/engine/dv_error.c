@@ -103,3 +103,78 @@ int dv_error_analyze(const uint8_t *frame, size_t len, dv_frame_errors_t *out)
                        out->audio_err || out->audio_mute || out->reencoded;
     return 0;
 }
+
+/* A 72-byte audio payload that is one byte value repeated (silence, the error code's bytes):
+ * such payloads repeat legitimately. */
+static int payload_constant(const uint8_t *d)
+{
+    for (int i = 1; i < 72; i++)
+        if (d[i] != d[0]) return 0;
+    return 1;
+}
+
+int dv_error_block_map(const uint8_t *frame, size_t len, const uint8_t *prev, uint8_t *map)
+{
+    if (!frame || !map || len % DV_SEQ_SIZE != 0)
+        return -1;
+    unsigned nseq = (unsigned)(len / DV_SEQ_SIZE);
+    if (nseq != DV_SEQ_COUNT_NTSC && nseq != DV_SEQ_COUNT_PAL)
+        return -1;
+    dv_frame_errors_t fe;
+    dv_error_analyze(frame, len, &fe);
+    int abits = 0;
+    dv_frame_info_t info;
+    if (dv_subcode_parse_frame(frame, len, &info) == 0 && info.audio.valid)
+        abits = info.audio.bits;
+
+    unsigned nblk = nseq * DV_SEQ_BLOCKS;
+    int worst = DV_BLOCK_GOOD;
+    for (unsigned i = 0; i < nblk; i++) {
+        unsigned si = i / DV_SEQ_BLOCKS, b = i % DV_SEQ_BLOCKS;
+        const uint8_t *blk = frame + (size_t)i * DV_BLOCK_SIZE;
+        unsigned esct, edbn;
+        expected_id(b, &esct, &edbn);
+        uint8_t g = DV_BLOCK_GOOD;
+        if ((unsigned)(blk[0] >> 5) != esct || (unsigned)(blk[1] >> 4) != si ||
+            (blk[1] & 7) != 7 || blk[2] != edbn) {
+            g = DV_BLOCK_ERROR;
+        } else if (esct == 4) {
+            unsigned sta = blk[3] >> 4;
+            if (sta == 7 || sta == 15) {
+                g = DV_BLOCK_ERROR;
+            } else if (sta == 14 && fe.reencoded) {
+                /* re-encoding camera: only a payload stuck from the previous frame is concealed */
+                const uint8_t *pb = prev ? prev + (size_t)i * DV_BLOCK_SIZE : NULL;
+                if (pb && memcmp(blk + 4, pb + 4, DV_BLOCK_SIZE - 4) == 0)
+                    g = DV_BLOCK_CONCEALED;
+            } else if (sta) {
+                g = DV_BLOCK_CONCEALED;
+            }
+        } else if (esct == 3) {
+            const uint8_t *d = blk + 8;
+            if (audio_block_is_error(blk, abits)) {
+                g = DV_BLOCK_ERROR;
+            } else if (fe.audio_mute && si < nseq / 2) {
+                int zero = 1;
+                for (int k = 0; k < 72 && zero; k++)
+                    if (d[k]) zero = 0;
+                if (zero) g = DV_BLOCK_CONCEALED;
+            }
+            if (g == DV_BLOCK_GOOD && !payload_constant(d)) {
+                /* copied audio: the same payload elsewhere in this frame, or here last frame */
+                const uint8_t *pb = prev ? prev + (size_t)i * DV_BLOCK_SIZE : NULL;
+                if (pb && memcmp(d, pb + 8, 72) == 0)
+                    g = DV_BLOCK_SUSPECT;
+                for (unsigned j = 6; j < nblk && g == DV_BLOCK_GOOD; j++) {
+                    if (j == i || (j % DV_SEQ_BLOCKS) < 6 || ((j % DV_SEQ_BLOCKS) - 6) % 16 != 0)
+                        continue;
+                    if (memcmp(d, frame + (size_t)j * DV_BLOCK_SIZE + 8, 72) == 0)
+                        g = DV_BLOCK_SUSPECT;
+                }
+            }
+        }
+        map[i] = g;
+        if (g > worst) worst = g;
+    }
+    return worst;
+}

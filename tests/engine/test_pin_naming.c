@@ -78,7 +78,6 @@ static void test_build(void)
     pin_naming_opts_t opts;
 
     memset(&opts, 0, sizeof(opts));
-    opts.pass = 1;
     opts.scene_split = 0;
     CHECK(pin_naming_build("base", &opts, "dv", out, sizeof(out)) == 0, "plain build ok");
     CHECK_STR(out, "base.dv", "plain name");
@@ -89,20 +88,12 @@ static void test_build(void)
     CHECK_STR(out, "base-0003.dv", "split name");
 
     opts.scene_split = 0;
-    opts.pass = 2;
-    CHECK(pin_naming_build("base", &opts, "dv", out, sizeof(out)) == 0, "pass build ok");
-    CHECK_STR(out, "base-pass-2.dv", "pass name");
-
-    opts.scene_split = 1;
+    opts.always_number = 1;
     opts.scene_index = 7;
-    opts.pass = 2;
-    CHECK(pin_naming_build("base", &opts, "dv", out, sizeof(out)) == 0, "pass+split build ok");
-    CHECK_STR(out, "base-pass-2-0007.dv", "pass+split name");
+    CHECK(pin_naming_build("base", &opts, "dv", out, sizeof(out)) == 0, "numbered build ok");
+    CHECK_STR(out, "base-0007.dv", "numbered name");
+    opts.always_number = 0;
 
-    opts.pass = 0;
-    CHECK(pin_naming_build("base", &opts, "dv", out, sizeof(out)) == -1, "pass 0 rejected");
-
-    opts.pass = 1;
     opts.scene_split = 1;
     opts.scene_index = 0;
     CHECK(pin_naming_build("base", &opts, "dv", out, sizeof(out)) == -1,
@@ -110,7 +101,6 @@ static void test_build(void)
 
     char tiny[4];
     opts.scene_split = 0;
-    opts.pass = 1;
     CHECK(pin_naming_build("base", &opts, "dv", tiny, sizeof(tiny)) == -1,
           "output buffer too small must fail");
 }

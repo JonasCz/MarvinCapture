@@ -245,7 +245,17 @@ pinnacle_status_t pinnacle_stream_start(pinnacle_device_t *dev)
             link.node_count, link.local_node & 0x3f);
 
     pinnacle_progress(dev, "Looking for a camera on the FireWire bus", -1);
-    if (p1394_find_camera(&link, &dev->camera_node, &ompr) != 0) {
+    dev->camera_vendor[0] = dev->camera_model[0] = 0;
+    dev->camera_vendor_id = dev->camera_model_id = 0;
+    if (p1394_find_camera(&link, &dev->camera_node, &ompr) == 0 &&
+        p1394_read_identity(&link, dev->camera_node, &dev->camera_vendor_id, &dev->camera_model_id,
+                            dev->camera_vendor, sizeof(dev->camera_vendor), dev->camera_model,
+                            sizeof(dev->camera_model)) == 0)
+        pin_logf(PIN_LOG_INFO, "pinnacle: camera: %s %s (vendor 0x%06x, model 0x%06x)\n",
+                 dev->camera_vendor[0] ? dev->camera_vendor : "?",
+                 dev->camera_model[0] ? dev->camera_model : "?", (unsigned)dev->camera_vendor_id,
+                 (unsigned)dev->camera_model_id);
+    if (!dev->camera_node) {
         dev->camera_node = 0;
         pin_logf(PIN_LOG_INFO, "pinnacle: no camera answered on the 1394 bus; listening on "
                         "broadcast channel 63 anyway\n");

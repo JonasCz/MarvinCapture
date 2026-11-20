@@ -25,7 +25,7 @@ struct FormatItem: Identifiable, Hashable {
     var fileExtension: String
     var supportsTitle: Bool
     var supportsSceneSplit: Bool
-    var supportsMultiPass: Bool
+    var supportsRetry: Bool
     var isDefault: Bool
     /// The file stores a display aspect (raw .dv / .m2t do not: players take it from the video).
     var supportsAspect: Bool
@@ -41,7 +41,7 @@ struct FormatItem: Identifiable, Hashable {
         fileExtension = cString(info.extension)
         supportsTitle = info.supports_title != 0
         supportsSceneSplit = info.supports_scene_split != 0
-        supportsMultiPass = info.supports_multi_pass != 0
+        supportsRetry = info.supports_retry != 0
         isDefault = info.is_default != 0
         supportsAspect = info.supports_aspect != 0
         sceneSplitForced = info.scene_split_forced != 0

@@ -33,6 +33,12 @@ Settings:
   --split                  scene split (DV/HDV): a confirmed timecode or recording-date break (HDV: or a jump of the camera's clock) starts a new file. Always on for hdv-mov and hdv-mkv. Files are named NAME-0001.EXT, NAME-0002.EXT, ... (NAME is the --capture path without its extension). A new file is only started once the new scene is at least 1 s and 1 MB long; shorter scraps are appended to the previous file.
   --title T                metadata title, stored by avi, ffv1-mkv, h264-mkv, hevc-mkv, dv-avi, dv-mov, dv-h264-mkv, dv-hevc-mkv, hdv-mov, hdv-mkv and the analog NUT stream on stdout, and by raw .ts/.m2t (hdv-ts, also on stdout) as the DVB service name (ffprobe: the program's service_name; MediaInfo: "Service name"). Raw .dv (dv) files have no title. A tape that switches between DV and HDV gets it in each file whose format stores one.
   --keep-raw               keep the raw .dv/.ts next to a rewrapped file
+  --retry                  DV/HDV: when the camera reads damage (dirt, a dropout), rewind, read the section again and keep the best of every read (DV block by block, HDV GOP by GOP), so the file gets the cleanest copy the tape gives. Bad spots close together are re-read in one go. Needs a camera that takes deck commands; the capture sends PLAY itself. Not with --capture -.
+  --retry-attempts N       re-reads of one bad section, 1 to 10 (default 3); a re-read that mends nothing ends the section's attempts
+  --retry-window S         the longest stretch of tape held in memory for one retry, 10 to 600 seconds (default 60, about 220 MB)
+  --retry-preroll S        how far before a bad section the deck starts playing again, 1 to 30 seconds (default 3)
+  --retry-on any|uncorrected
+                           what damage asks for a re-read: any (default; also what the camera concealed) or uncorrected (errors nobody concealed, lost frames)
   --overwrite              overwrite an existing target file (else an error)
   Analog picture and audio controls (svideo/composite only; with defaults):
   --brightness N           0 to 255 (default 128)
@@ -141,9 +147,8 @@ when done).
 ## Progress and summary
 
 While capturing, the CLI rewrites one status line on stderr, e.g.
-`REC 00:01:02:03  pass 1/1  scene 1  12.5 MB  4 s  err 2  drops 0`, all of it for the
-whole capture (MB = every file so far). `err` counts frames with errors (damaged DV/HDV data,
-data lost on the way, see [usage.md](usage.md)); `drops` counts frames missing from the
-output. When a capture ends, a line stays on screen with the totals, e.g.
-`Frames 1,234, with errors 2, dropped 0; 1.5 GB in 2 files`. Errors do not change the exit
-code.
+`REC 00:01:02:03  pass 1/1  scene 1  12.5 MB  4 s  err 2  drops 0`. `err` counts frames
+with errors (damaged DV/HDV data, see [usage.md](usage.md)); `drops` counts frames missing
+from the output. When a capture ends, a line stays on screen with the totals, e.g.
+`Frames 1,234, with errors 2, dropped 0` (plus `, N lost blocks` if any). Errors do not change
+the exit code.

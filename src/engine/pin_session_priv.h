@@ -28,6 +28,7 @@
 #ifndef PIN_SESSION_PRIV_H
 #define PIN_SESSION_PRIV_H
 
+#include "pin_retry.h"
 #include "../api/pin_api.h"
 #include "../core/pinnacle_device.h"
 #include "../core/pinnacle_lock.h"
@@ -120,7 +121,7 @@ struct pin_session {
     char timecode[16];
     char rec_datetime[32];
     int tape_percent;
-    int pass, passes, scene;
+    int scene;
     char current_file[PIN_PATH_MAX];
     double elapsed_s, idle_s;
     uint64_t frames, frames_dropped, frames_damaged, lost_blocks, ts_errors;
@@ -222,6 +223,8 @@ struct pin_session {
     /* not yet committed raw units (DV frames, HDV pictures, PAT/PMT), so a confirmed scene cut
      * can be back-dated to its first frame (pin_holdback.h; zeroed = not initialised) */
     pin_holdback_t hold;
+    hdv_psi_t hdv_psi_out;   /* HDV with retry: the latest PAT/PMT committed (the order the file
+                                gets units in; units arrive up to minutes earlier, pin_retry.h) */
     hdv_psi_t hdv_psi;       /* HDV: the latest PAT/PMT the stream sent (dv_write_cb()), to start
                                 a file with (capture start, scene cut) */
     unsigned hdv_sdt_cc;     /* titled raw HDV TS: continuity counter of the title's SDT packets
@@ -297,8 +300,22 @@ struct pin_session {
     double deck_cmd_done_s;       /* when the last transport command was answered */
     int rewind_done;              /* CAPTURE_START: the rewind-to-start has finished */
     int start_play_sent;          /* CAPTURE_START: PLAY already sent for this capture */
-    int pass_rewinding;           /* between passes: REWINDING, next pass starts at the tape start */
     int rewind_failed;            /* the deck refused or did not answer that rewind's REW */
+
+    /* Retry of bad sections (pin_retry.h): the engine while a capture with retry runs */
+    struct pin_retry *retry;
+    size_t writer_cap;            /* the open writer queue's capacity (bytes) */
+    pin_retry_cc_fix_t *retry_cc;  /* HDV continuity counters where reads join */
+    int retry_cmd_inflight;       /* a transport command the retry sent is not answered yet */
+    int retry_cmd_failed;         /* ... and the deck refused it (pin_retry_deck_t.cmd_failed) */
+    double retry_rew_s;           /* when the retry's REW went out (0: not winding) */
+    double retry_busy_s;          /* last dv_tick() while it wound / re-read (time limit pause) */
+    int retry_phase;              /* last phase reported (PIN_EVT_RETRY) */
+    double retry_rate, retry_cycle; /* learned on this deck, kept across captures */
+    pin_retry_stats_t retry_stats; /* the last capture's, once it ended */
+    int deck_tc_valid;            /* the deck's last TIME CODE answer, as frames */
+    int64_t deck_tc_frames;
+    double deck_tc_s;
     double rewind_wait_start_s;   /* when the current rewind was started */
 
     /* replay (virtual device) */

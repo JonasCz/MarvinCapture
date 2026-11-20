@@ -66,8 +66,10 @@ add_test(NAME test_replay_dv_formats COMMAND test_replay_dv_formats "${PIN_TRACE
 pin_engine_replay_test_env(test_replay_dv_formats)
 set_tests_properties(test_replay_dv_formats PROPERTIES TIMEOUT 30)
 
-# 1c: --passes 2 produces base.dv and base-pass-2.dv.
-pin_engine_replay_test(test_replay_multipass "${PIN_TRACE_PAL}")
+# Retry of bad sections: a capture through the retry engine (no deck to wind on a replay, the
+# seam PIN_TEST_RETRY_REPLAY) writes the same file and counts as one without it, DV and HDV.
+pin_engine_replay_test(test_replay_retry "${PIN_TRACE_PAL}" "${PIN_HDV_CAPTURE}")
+set_tests_properties(test_replay_retry PROPERTIES TIMEOUT 120)
 
 # 1e: preview-dump equivalent (720x576, chroma shift 1,1, DAR 4:3 for PAL DV).
 pin_engine_replay_test(test_replay_preview "${PIN_TRACE_PAL}")
@@ -167,8 +169,7 @@ pin_engine_replay_test_env(test_replay_disk)
 set_tests_properties(test_replay_disk PROPERTIES TIMEOUT 60)
 
 # Commands in a row (none lost, a second start refused), a cut whose file cannot be opened
-# (PIN_TEST_OPEN_FAIL), a long non-ASCII name in the stop text, two passes of a raw dump ending by
-# themselves, and Ctrl-C followed by a failed close (exit 4).
+# (PIN_TEST_OPEN_FAIL), a long non-ASCII name in the stop text, a raw dump ending by itself, and Ctrl-C followed by a failed close (exit 4).
 pin_engine_replay_test(test_replay_lifecycle "${PIN_TEST_DATA}/dv-pal.dv" "${PIN_TRACE_PAL}")
 set_tests_properties(test_replay_lifecycle PROPERTIES TIMEOUT 90)
 
@@ -197,7 +198,7 @@ if(UNIX)
 endif()
 
 # All of the above replay the generated recordings.
-set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_multipass
+set_tests_properties(test_replay_dv_baseline test_replay_dv_formats test_replay_retry
     test_replay_preview test_replay_preview_pacing test_pin_script_run test_pin_check_output
     test_replay_hdv test_replay_hdv_split test_replay_hdv_mov test_replay_unplug test_replay_hwenc
     test_replay_mixed_dv test_replay_status_numbers test_replay_mixed_kind test_replay_dv_loss test_replay_hdv_loss test_replay_stop_waiting test_replay_disk test_replay_fat32 test_cli_pipe test_replay_lifecycle

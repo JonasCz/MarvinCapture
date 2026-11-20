@@ -1319,6 +1319,82 @@ int p1394_link_init(pinnacle_1394_t *l)
     return b_send(l, &m, 13);
 }
 
+/* A textual descriptor leaf (IEEE 1212 7.5.4.1): length, then specifier / type, then
+ * width / character set / language, then the text, big-endian bytes, NUL-padded. Minimal ASCII
+ * only (character set 0). */
+static void rom_text_leaf(pinnacle_1394_t *l, uint16_t node, uint32_t at, char *out, size_t cap)
+{
+    if (!out || !cap)
+        return;
+    out[0] = 0;
+    uint32_t q;
+    if (p1394_read_quadlet(l, node, at, &q) != 0)
+        return;
+    unsigned len = q >> 16;
+    if (len < 3 || len > 64)
+        return;
+    uint32_t type, cs;
+    if (p1394_read_quadlet(l, node, at + 4, &type) != 0 || type != 0 ||
+        p1394_read_quadlet(l, node, at + 8, &cs) != 0 || cs != 0)
+        return;
+    size_t n = 0;
+    for (unsigned i = 2; i < len && n + 1 < cap; i++) {
+        if (p1394_read_quadlet(l, node, at + 4 + 4 * i, &q) != 0)
+            break;
+        for (int b = 3; b >= 0 && n + 1 < cap; b--) {
+            char c = (char)((q >> (8 * b)) & 0xff);
+            if (!c)
+                break;
+            out[n++] = (c >= 0x20 && c < 0x7f) ? c : '?';
+        }
+    }
+    while (n && out[n - 1] == ' ')
+        n--;
+    out[n] = 0;
+}
+
+int p1394_read_identity(pinnacle_1394_t *l, uint16_t node, uint32_t *vendor_id, uint32_t *model_id,
+                        char *vendor, size_t vendor_cap, char *model, size_t model_cap)
+{
+    if (vendor_id) *vendor_id = 0;
+    if (model_id) *model_id = 0;
+    if (vendor && vendor_cap) vendor[0] = 0;
+    if (model && model_cap) model[0] = 0;
+    uint32_t q;
+    if (p1394_read_quadlet(l, node, P1394_CSR_CONFIG_ROM, &q) != 0)
+        return -1;
+    unsigned info_len = q >> 24;
+    if (info_len < 1 || info_len > 16)
+        return -1;      /* a minimal ROM (info_length 1 is the vendor id only) or garbage */
+    uint32_t root = P1394_CSR_CONFIG_ROM + 4 * (1 + info_len);
+    if (p1394_read_quadlet(l, node, root, &q) != 0)
+        return -1;
+    unsigned n = q >> 16;
+    if (n > 32) n = 32;
+    int last_key = 0;
+    for (unsigned i = 1; i <= n; i++) {
+        uint32_t at = root + 4 * i;
+        if (p1394_read_quadlet(l, node, at, &q) != 0)
+            break;
+        unsigned key = q >> 24;
+        uint32_t val = q & 0xffffff;
+        if (key == 0x03) {
+            if (vendor_id) *vendor_id = val;
+        } else if (key == 0x17) {
+            if (model_id) *model_id = val;
+        } else if (key == 0x81) {
+            /* the leaf describes the entry before it */
+            uint32_t leaf = at + 4 * val;
+            if (last_key == 0x03 && vendor && !vendor[0])
+                rom_text_leaf(l, node, leaf, vendor, vendor_cap);
+            else if (last_key == 0x17 && model && !model[0])
+                rom_text_leaf(l, node, leaf, model, model_cap);
+        }
+        last_key = (int)key;
+    }
+    return 0;
+}
+
 int p1394_find_camera(pinnacle_1394_t *l, uint16_t *node, uint32_t *ompr)
 {
     for (int n = 0; n < l->node_count && n < 63; n++) {

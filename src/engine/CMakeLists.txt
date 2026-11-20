@@ -41,6 +41,7 @@ add_library(pinnacle_engine_pure STATIC
     pin_audio_resample.c
     pin_usb_topology.c
     pin_pace.c
+    pin_retry.c
     pin_ui_text.c
     pin_update.c
     pin_exe_dir.c
@@ -94,6 +95,7 @@ if(PIN_BUILD_TESTS)
     pinnacle_engine_test(test_pin_pace)
     pinnacle_engine_test(test_pin_ui_text)
     pinnacle_engine_test(test_pin_update)
+    pinnacle_engine_test(test_pin_retry)
     # also check the recordings the fixture-setup test pin_test_data makes at test time
     # (tests/CMakeLists.txt, tests/data/README.md), and test_dv_error a camera's recording
     # in tests/data when there

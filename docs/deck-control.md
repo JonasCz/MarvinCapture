@@ -11,7 +11,7 @@ the same commands):
 - That is confirmed independently of the camera's replies by the EP 0x88
   stream: about 3.6 MB/s of HDV while the tape moves, 0 when stopped.
 - The GUI and `MarvinCaptureCLI` use it through the session engine (`pin_deck`).
-- The capture flow (rewind first, multi-pass, time limit, no-signal stop) was
+- The capture flow (rewind first, time limit, no-signal stop) was
   also verified on a Pinnacle 510-USB with a DV camcorder (short tape), see
   "Capture flow in the session engine" and "Verified on the DV camcorder".
 - A Canon HDV camcorder with an HDV tape was tested again on a Pinnacle 510-USB
@@ -209,42 +209,39 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   (PLAY sent, waiting for the first frame) before CAPTURING. The API reports
   CAPTURING for that gap (`visible_state()`: READY with `capture_want_start`),
   so no UI or script sees an idle session. `last_data_s` (no-signal timer) is
-  reset when the capture or the next pass starts, so the minutes of rewinding
-  never count as "no signal".
+  reset when the capture starts, so the minutes of rewinding never count as
+  "no signal".
 - **NOT_IMPLEMENTED is never a deck state.** The answer (08) echoes the
   command; it must not be mapped to a transport state.
 - **A refused rewind is not a finished one.** A transport command still
   answered 08 after its retries, REJECTED (0a) or not answered is FAILED
   (`pin_deck_judge_answer()`), and only an accepted one sets `deck_cmd_done_s`
-  (`pin_deck_rewind_finished()`). A REW that fails before pass 1 or between
-  passes ends the capture with `PIN_STOP_ERROR` ("the camera did not rewind
+  (`pin_deck_rewind_finished()`). A REW that fails before the capture
+  ends it with `PIN_STOP_ERROR` ("the camera did not rewind
   the tape") instead of sending PLAY where the tape is. While the capture
   rewinds, `pin_deck()` takes only Stop, which ends the capture. Reasoned from
   the code, not tried on a deck that refuses REW: to test on hardware.
 - **Stopping.** The no-signal timeout (`idle_stop_minutes`; time since data
-  last arrived) and the time limit (`max_duration_minutes`, per pass: capture
-  time of the current pass only, `elapsed_s`, which restarts with each pass so
-  the rewind is not counted) end a pass; in the last pass they close the file
-  and, if `start_deck`, send Stop.
+  last arrived) and the time limit (`max_duration_minutes`, capture time,
+  `elapsed_s`) end the capture: they close the file and, if `start_deck`, send
+  Stop. Neither runs while a retry winds back and re-reads.
   `pin_status_snapshot_t.idle_stop_remaining_s` / `duration_remaining_s` give
   the seconds left (-1 = off); `pin_format_remaining()` formats "5m30s".
 - **Manual stop.** `pin_capture_stop()` sends deck Stop only if the capture was
   started with `start_deck`. `pin_capture_stop_ex(s, PIN_STOP_DECK_NO | _YES)`
   overrides that either way (the GUI's "continue tape" / "stop tape" buttons);
   the Stop goes through `deck_send()` like every other deck command.
-- **Multi-pass.** The no-signal timeout is also how the end of the tape is
-  noticed. With passes left it closes the file, sends REW (state REWINDING,
-  `pass_rewinding`), and at BOT sends PLAY and opens the next file (if the
-  closing file's queue overflowed, the capture ends there with DISK_SLOW
-  instead); `elapsed_s` stands still during the rewind; the
-  no-signal timer and the per-pass time limit restart with each pass (they must
-  not count the rewind). Whichever limit comes first ends the pass.
-- **Passes need a limit.** `pin_capture_passes_allowed(idle_min, duration_min)`
-  is true when either is > 0; `pin_capture_opts_normalize()` forces `passes` to 1
-  otherwise, and `pin_capture_start()` calls it for real devices (replay
-  sessions are exempt: their end of file ends a pass). With only the time limit
-  set, the no-signal check is off and the pass ends after the time alone; with
-  both, whichever comes first.
+- **Retry of bad sections** (replaces multi-pass; [retry.md](retry.md)). The
+  retry engine (`pin_retry.c`) asks for REW and PLAY through `retry_tick()`,
+  which sends them with `deck_send()` and tells the engine when the deck refused
+  one (`retry_cmd_failed`) or reached BOT (`pin_deck_rewind_finished()` from the
+  retry's REW). The state stays CAPTURING. The TIME CODE poll runs while the
+  tape winds (no stream) and, for HDV without GOP timecode, during play; every
+  answer is kept as `deck_tc_frames` for the engine (where to stop winding, the
+  deck position of an HDV section). Reasoned and simulated
+  (`test_pin_retry.c`), not tried on a deck yet: REW then PLAY straight from
+  winding, how far the deck runs on after PLAY, the TIME CODE answers while
+  winding.
 - **Why it ended.** Every end of a capture goes through `capture_end()`, which
   closes the file, sends Stop if asked, and reports a `pin_stop_reason_t` with a
   ready-made sentence (`PIN_EVT_CAPTURE_ENDED`, `stop_*` in the status). See
@@ -255,7 +252,7 @@ from the stream loop's tick hook, about every 100 ms). Rules that matter:
   (no deck Stop: the node may have changed) and then re-scans as when idle. A
   capture still waiting for its first frame keeps waiting. Untested.
 - Not implemented: detecting the end of tape from the deck state alone (with
-  the no-signal timeout off, a multi-pass capture waits forever at the end).
+  the no-signal timeout off, a capture waits forever at the end).
   Left out on purpose: a false "stopped" while PLAY is still threading would
   abort a good capture. The DV camcorder does not stop by itself at the end of
   the recording (it keeps PLAY into blank tape), so the no-signal timeout is the
@@ -313,9 +310,7 @@ recording):
   seeking the deck stopped answering status for a few seconds. Position the
   tape by FF/REW plus timecode polling instead.
 - **Capture checks passed:** rewind-first capture (REW with live timecode, then
-  PLAY, the file starts at the first frame); multi-pass with only a per-pass
-  time limit (pass 1 about 60 s, rewind, pass 2; the rewind time is not
-  counted); no-signal stop (the capture stopped 1 min after the recording
+  PLAY, the file starts at the first frame); the time limit; no-signal stop (the capture stopped 1 min after the recording
   ended and the deck was stopped).
 
 ## Verified on the Canon HDV camcorder

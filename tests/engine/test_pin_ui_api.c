@@ -59,10 +59,8 @@ static void test_state_and_short(void)
 {
     char b[512];
     pin_status_snapshot_t st = snap(PIN_STATE_REWINDING);
-    st.pass = 2;
-    st.passes = 3;
     pin_format_state(&st, b, sizeof(b));
-    CHECK_STR(b, "Rewinding (pass 2/3)", "rewinding");
+    CHECK_STR(b, "Rewinding to the start", "rewinding");
     st.state = PIN_STATE_PREPARING;
     pin_format_state(&st, b, sizeof(b));
     CHECK_STR(b, "Preparing\xe2\x80\xa6", "preparing");
@@ -102,15 +100,48 @@ static void test_state_and_short(void)
     pin_format_status_short(&st, 0, b, sizeof(b));
     CHECK_STR(b, "Capturing", "capturing before the first file");
     snprintf(st.current_file, sizeof(st.current_file), "C:\\Videos\\tape-0001.avi");
-    st.pass = 1;
-    st.passes = 1;
     pin_format_status_short(&st, 0, b, sizeof(b));
     CHECK_STR(b, "tape-0001.avi", "file name only (backslashes)");
     snprintf(st.current_file, sizeof(st.current_file), "/home/u/tape-0001.dv");
-    st.pass = 2;
-    st.passes = 3;
+    st.retry_on = 1;
+    st.retry_phase = PIN_RETRY_PHASE_REREADING;
+    st.retry_attempt = 2;
+    st.retry_attempts = 3;
+    st.retry_section_s = 14.2;
+    st.retry_bad = 5;
     pin_format_status_short(&st, 0, b, sizeof(b));
-    CHECK_STR(b, "tape-0001.dv  \xc2\xb7  pass 2/3", "file name and pass");
+    CHECK_STR(b, "tape-0001.dv  \xc2\xb7  Retry 2/3: re-reading 14 s (5 bad left)", "file name and retry");
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "Retry 2/3: re-reading 14 s (5 bad left)", "retry: re-reading");
+    st.retry_phase = PIN_RETRY_PHASE_HOLDING;
+    st.retry_held_s = 8.4;
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "Retry: damage, holding 8 s of tape", "retry: holding");
+    st.retry_whole_tape = 1;
+    st.retry_held_s = 750;
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "Retry: holding 12m30s of tape, re-read at the end of the recording", "retry: whole tape");
+    st.retry_whole_tape = 0;
+    st.retry_phase = PIN_RETRY_PHASE_REWINDING;
+    st.retry_attempt = 1;
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "Retry 1/3: rewinding to a 14 s section", "retry: rewinding");
+    st.retry_phase = PIN_RETRY_PHASE_IDLE;
+    st.retry_attempt = 0;
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "Retry: no damage so far", "retry: idle, nothing yet");
+    st.retry_sections = 4;
+    st.retry_fixed = 3;
+    st.retry_partly = 1;
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "Retry: 4 sections, 3 mended, 1 partly", "retry: summary");
+    pin_format_status_short(&st, 0, b, sizeof(b));
+    CHECK_STR(b, "tape-0001.dv", "idle retry: only the file name");
+    st.retry_on = 0;
+    st.retry_sections = 0;
+    st.retry_fixed = st.retry_partly = 0;
+    pin_format_retry_status(&st, b, sizeof(b));
+    CHECK_STR(b, "", "retry: off");
     st.state = PIN_STATE_STOPPING;
     pin_format_status_short(&st, 0, b, sizeof(b));
     CHECK_STR(b, "Finishing tape-0001.dv\xe2\x80\xa6", "stopping names the file being finished");
@@ -202,8 +233,6 @@ static void test_counters(void)
     CHECK_STR(b, "Frames 1,234, with errors 2, dropped 1,501; 1.5 GB in 3 files", "summary, three files");
     CHECK(strstr(b, "lost") == NULL && strstr(b, "block") == NULL, "no lost blocks in the summary");
     st.state = PIN_STATE_CAPTURING;
-    st.pass = 1;
-    st.passes = 1;
     st.scene = 2;
     st.bytes_written = 10ull << 20;         /* the second file */
     st.clip_bytes_written = 10ull << 20;
@@ -370,22 +399,22 @@ static void test_format_help(void)
 {
     char b[512];
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_AVI, PIN_FMT_HDV_TS, b, sizeof(b));
-    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+    CHECK_STR(b, "File name for DV and HDV (scenes get numbered suffixes). Also stored as the "
                  "title in DV AVI and raw .m2t (HDV) files.", "title: DV AVI, raw HDV");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_TS, b, sizeof(b));
-    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+    CHECK_STR(b, "File name for DV and HDV (scenes get numbered suffixes). Also stored as the "
                  "title in raw .m2t (HDV) files; raw .dv files have no title.", "title: both raw");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_MOV, PIN_FMT_HDV_MKV, b, sizeof(b));
-    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+    CHECK_STR(b, "File name for DV and HDV (scenes get numbered suffixes). Also stored as the "
                  "title in DV MOV and HDV MKV files.", "title: both store it");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_DV_RAW, PIN_FMT_HDV_MOV, b, sizeof(b));
-    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes). Also stored as the "
+    CHECK_STR(b, "File name for DV and HDV (scenes get numbered suffixes). Also stored as the "
                  "title in HDV MOV files; raw .dv files have no title.", "title: raw DV, HDV MOV");
     pin_format_title_help(PIN_INPUT_SVIDEO, PIN_FMT_ANALOG_FFV1_MKV, PIN_FMT_HDV_TS, b, sizeof(b));
     CHECK_STR(b, "File name (the extension follows the format). Also stored as the title in FFV1 MKV files.",
               "title: analog (the HDV format ignored)");
     pin_format_title_help(PIN_INPUT_DV, PIN_FMT_COUNT, PIN_FMT_COUNT, b, sizeof(b));
-    CHECK_STR(b, "File name for DV and HDV (scenes and passes get numbered suffixes).", "title: no list yet");
+    CHECK_STR(b, "File name for DV and HDV (scenes get numbered suffixes).", "title: no list yet");
     pin_format_title_help(PIN_INPUT_COMPOSITE, PIN_FMT_DV_AVI, PIN_FMT_COUNT, b, sizeof(b));
     CHECK_STR(b, "File name (the extension follows the format).", "title: a DV format in the analog field");
 

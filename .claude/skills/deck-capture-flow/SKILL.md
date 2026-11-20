@@ -1,6 +1,6 @@
 ---
 name: deck-capture-flow
-description: How the session engine drives the camera/deck during a DV/HDV capture (rewind first, PLAY, stop on no-signal/total-time, multi-pass, timecode while winding): the async AV/C state machine and its traps. Read before changing deck or capture behaviour in src/engine/pin_session.c.
+description: How the session engine drives the camera/deck during a DV/HDV capture (rewind first, PLAY, stop on no-signal/total-time, retry of bad sections, timecode while winding): the async AV/C state machine and its traps. Read before changing deck or capture behaviour in src/engine/pin_session.c.
 ---
 
 # Deck / capture flow (src/engine/pin_session.c, pin_deck.c)
@@ -23,25 +23,27 @@ session engine"). The traps:
   (`deck_cmd_done_s`). NOT_IMPLEMENTED (08) echoes the command: never map it to a
   deck state.
 - **Timers that count "no data"** (`last_data_s`) must be reset when a capture or
-  pass starts; the minutes spent rewinding are not "no signal".
+  retry winds back (`retry_tick()` keeps resetting it); the minutes spent rewinding are not
+  "no signal".
 - A stopped deck sends no data, so the stream kind (DV/HDV) stays unknown: PLAY
   must go out before waiting for it, and rewinding must not wait for it.
 - State flow with `start_deck` + `rewind_first`: READY -> REWINDING (REW, poll to
   STOPPED) -> READY (PLAY sent, waiting for the first frame) -> CAPTURING.
-  Between passes: CAPTURING -> REWINDING (`pass_rewinding`) -> CAPTURING.
-- Stopping: no-signal (`idle_stop_minutes`) ends a pass (rewind if passes are left)
-  or the capture; the time limit (`max_duration_minutes`) is per pass (`elapsed_s`,
-  reset when the next pass starts, so no rewind time) and ends a pass exactly like
-  no-signal does; in the last pass both end the capture and send deck Stop when
-  `start_deck`. Remaining seconds are in the
+- Retry of bad sections (`docs/retry.md`, `pin_retry.c`): the state stays CAPTURING; the
+  engine asks for REW / PLAY / STOP in `retry_tick()` (dv_tick), which sends them with
+  `deck_send()`, marks them `retry_cmd_inflight` and reports a refusal back
+  (`retry_cmd_failed`). Units go through the engine (`retry_routes()`), which hands them to
+  `unit_commit()` later, possibly mended; the arrival half of `dv_on_unit()` (preview, monitor,
+  timecode display, error analysis) still runs at once. Test the engine in
+  `tests/engine/test_pin_retry.c` (simulated tape and deck), not on hardware first.
+- Stopping: no-signal (`idle_stop_minutes`) and the time limit (`max_duration_minutes`,
+  `elapsed_s`, which stands still while a retry winds back and re-reads) end the capture and
+  send deck Stop when `start_deck`. Remaining seconds are in the
   status snapshot (`idle_stop_remaining_s`, `duration_remaining_s`).
-- Passes need a limit: `pin_capture_passes_allowed()` / `pin_capture_opts_normalize()`
-  (no-signal or time limit, else passes = 1), enforced in `pin_session_capture_start`
-  except for replay sessions; the GUI mirrors it via `Native.PassesAllowed`.
 - **End a capture only with `capture_end(s, reason, detail, deck_node)`** (then
   set the state). It closes the file, sends Stop, and reports the reason
   (`PIN_EVT_CAPTURE_ENDED` + `stop_*` status; abnormal reasons per
-  `pin_stop_abnormal()` get the GUI's dialog, normal ones a status-bar line). A pass change uses `finish_file()`. A file whose close failed (closer) turns the end into
+  `pin_stop_abnormal()` get the GUI's dialog, normal ones a status-bar line). `finish_file()` lets the retry engine's held units go first (`pin_retry_flush()`). A file whose close failed (closer) turns the end into
   `PIN_STOP_WRITE_ERROR` with the file named in `stop_text`, and `capture_guard()` ends the capture on a
   split's failed close; a failed open mid-capture (`open_failed()`) ends it and stops the deck. `capture_guard()` (disk reserve,
   writer failure) runs from dv_tick / analog_tick / the replay loops;

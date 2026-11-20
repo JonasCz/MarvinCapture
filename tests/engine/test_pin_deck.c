@@ -68,16 +68,31 @@ int main(void)
     {
         pin_capture_opts_t o;
         pin_capture_opts_defaults(&o);
-        CHECK(!pin_capture_passes_allowed(0, 0), "no limit: no passes");
-        CHECK(pin_capture_passes_allowed(5, 0), "idle only");
-        CHECK(pin_capture_passes_allowed(0, 30), "duration only");
-        CHECK(pin_capture_passes_allowed(5, 30), "both");
-        o.passes = 3;
-        CHECK(pin_capture_opts_normalize(&o) == 1 && o.passes == 1, "forced to 1 without limits");
-        o.passes = 3; o.max_duration_minutes = 10;
-        CHECK(pin_capture_opts_normalize(&o) == 0 && o.passes == 3, "kept with duration");
-        o.passes = 0;
-        CHECK(pin_capture_opts_normalize(&o) == 1 && o.passes == 1, "passes < 1 becomes 1");
+        CHECK(o.retry == 0 && o.retry_attempts == 3 && o.retry_window_s == 60 &&
+              o.retry_preroll_s == 3 && o.retry_trigger == PIN_RETRY_ON_ANY_DAMAGE, "retry defaults");
+        CHECK(pin_capture_opts_normalize(&o) == 0, "defaults are normal");
+        o.retry = 5; o.retry_attempts = 0; o.retry_window_s = 5; o.retry_preroll_s = 99;
+        o.retry_trigger = 7;
+        CHECK(pin_capture_opts_normalize(&o) == 1, "out of range changed");
+        CHECK(o.retry == 1 && o.retry_attempts == 3 && o.retry_window_s == 60 &&
+              o.retry_preroll_s == 30 && o.retry_trigger == PIN_RETRY_ON_ANY_DAMAGE, "clamped");
+        o.retry_attempts = 99; o.retry_window_s = 9999;
+        pin_capture_opts_normalize(&o);
+        CHECK(o.retry_attempts == 10 && o.retry_window_s == 600, "above the range: the maximum");
+        int lo, hi, def;
+        pin_retry_setting_range(1, &lo, &hi, &def);
+        CHECK(lo == 10 && hi == 3600 && def == 60, "window range");
+        o.retry_mode = 9; o.retry_storage = 5;
+        pin_capture_opts_normalize(&o);
+        CHECK(o.retry_mode == PIN_RETRY_AUTO && o.retry_storage == PIN_RETRY_IN_MEMORY, "mode / storage clamped");
+        o.retry_storage = PIN_RETRY_IN_FILE; o.retry_window_s = 1800;
+        pin_capture_opts_normalize(&o);
+        CHECK(o.retry_window_s == 1800, "a temporary file holds longer sections");
+        o.retry_storage = PIN_RETRY_IN_MEMORY;
+        pin_capture_opts_normalize(&o);
+        CHECK(o.retry_window_s == 600, "memory: at most 600 s");
+        CHECK(pin_retry_setting_help(7)[0] != 0, "whole tape note");
+        CHECK(pin_retry_setting_help(4)[0] != 0 && pin_retry_setting_help(9)[0] == 0, "help texts");
     }
     CHECK(pin_deck_state_from_avc(0xc4, 0x60) == PIN_DECK_STOPPED, "wind stop");
     CHECK(pin_deck_state_from_avc(0xc4, 0x65) == PIN_DECK_REWINDING, "rewind");

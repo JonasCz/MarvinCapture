@@ -1,0 +1,70 @@
+<UserControl
+    x:Class="PinnacleCapture.Views.RetryOptionsView"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- How the retry of bad sections works: the Flyout of the gear next to "Retry bad sections".
+         Shared by the DV and HDV tabs; ranges and help texts from the core. Locked while capturing. -->
+    <StackPanel Spacing="12" Width="360">
+        <StackPanel Spacing="4">
+            <RadioButtons Header="Retry"
+                          SelectedIndex="{x:Bind Options.ModeIndex, Mode=TwoWay}"
+                          IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                          AutomationProperties.Name="Retry mode"
+                          AutomationProperties.HelpText="{x:Bind Options.ModeHelp}"
+                          ToolTipService.ToolTip="{x:Bind Options.ModeHelp}">
+                <RadioButton Content="Automatic" />
+                <RadioButton Content="Each bad section (quickest)" />
+                <RadioButton Content="Whole tape, then re-read" />
+            </RadioButtons>
+            <!-- the whole tape: fewer rewinds, less deck wear -->
+            <InfoBar Severity="Informational" IsClosable="False"
+                     IsOpen="{x:Bind Options.WholeTapeChosen, Mode=OneWay}"
+                     Message="{x:Bind Options.WholeTapeNote}" />
+        </StackPanel>
+        <NumberBox Header="Attempts per section"
+                   Minimum="{x:Bind Options.AttemptsMin}" Maximum="{x:Bind Options.AttemptsMax}"
+                   SmallChange="1" SpinButtonPlacementMode="Compact"
+                   Value="{x:Bind Options.Attempts, Mode=TwoWay}"
+                   IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                   AutomationProperties.HelpText="{x:Bind Options.AttemptsHelp}"
+                   ToolTipService.ToolTip="{x:Bind Options.AttemptsHelp}" />
+        <NumberBox Header="Longest section (seconds of tape)"
+                   Minimum="{x:Bind Options.WindowMin}" Maximum="{x:Bind Options.WindowMax}"
+                   SmallChange="10" LargeChange="60" SpinButtonPlacementMode="Compact"
+                   Value="{x:Bind Options.WindowSeconds, Mode=TwoWay}"
+                   IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                   AutomationProperties.HelpText="{x:Bind Options.WindowHelp}"
+                   ToolTipService.ToolTip="{x:Bind Options.WindowHelp}" />
+        <NumberBox Header="Preroll (seconds)"
+                   Minimum="{x:Bind Options.PrerollMin}" Maximum="{x:Bind Options.PrerollMax}"
+                   SmallChange="1" SpinButtonPlacementMode="Compact"
+                   Value="{x:Bind Options.PrerollSeconds, Mode=TwoWay}"
+                   IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                   AutomationProperties.HelpText="{x:Bind Options.PrerollHelp}"
+                   ToolTipService.ToolTip="{x:Bind Options.PrerollHelp}" />
+        <RadioButtons Header="Keep held tape in"
+                      SelectedIndex="{x:Bind Options.StorageIndex, Mode=TwoWay}"
+                      IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                      AutomationProperties.Name="Keep held tape in"
+                      AutomationProperties.HelpText="{x:Bind Options.StorageHelp}"
+                      ToolTipService.ToolTip="{x:Bind Options.StorageHelp}">
+            <RadioButton Content="Memory" />
+            <RadioButton Content="Temporary file next to the output" />
+        </RadioButtons>
+        <StackPanel Spacing="4">
+            <RadioButtons Header="Re-read on"
+                          SelectedIndex="{x:Bind Options.TriggerIndex, Mode=TwoWay}"
+                          IsEnabled="{x:Bind Options.IsEditable, Mode=OneWay}"
+                          AutomationProperties.Name="Re-read on"
+                          AutomationProperties.HelpText="{x:Bind Options.TriggerHelp}">
+                <RadioButton Content="Any damage" />
+                <RadioButton Content="Uncorrected errors only" />
+            </RadioButtons>
+            <TextBlock Text="{x:Bind Options.TriggerHelp}"
+                       TextWrapping="Wrap"
+                       Style="{StaticResource CaptionTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
+        </StackPanel>
+    </StackPanel>
+</UserControl>

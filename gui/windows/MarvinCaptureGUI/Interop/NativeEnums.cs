@@ -175,7 +175,7 @@ public enum PinEventKind : int
     FileOpened,
     FileClosed,
     Scene,
-    Pass,
+    Retry,          // the retry of bad sections changed what it does: A = PinRetryPhase, Text = status line (was Pass)
     Deck,
     InputFormat,
     Log,
@@ -185,6 +185,38 @@ public enum PinEventKind : int
     CaptureEnded,   // A = PinStopReason, Text = ready-made sentence
     Step,           // command-line script: A = step index, Text = its description
     NoVideo,        // a capture that did not end abnormally got no video: A = PinStopReason, Text = sentence
+}
+
+/// <summary>What damage makes the capture re-read a section (pin_retry_on_t).</summary>
+public enum PinRetryOn : int
+{
+    AnyDamage = 0,
+    Uncorrected = 1,
+}
+
+/// <summary>How the capture retries (pin_retry_mode_api_t).</summary>
+public enum PinRetryMode : int
+{
+    Auto = 0,
+    EachSection = 1,
+    WholeTape = 2,
+}
+
+/// <summary>Where held tape is kept (pin_retry_storage_t).</summary>
+public enum PinRetryStorage : int
+{
+    Memory = 0,
+    File = 1,
+}
+
+/// <summary>What the retry of bad sections is doing (pin_retry_state_t).</summary>
+public enum PinRetryPhase : int
+{
+    Idle = 0,
+    Holding,
+    Rewinding,
+    Seeking,
+    Rereading,
 }
 
 /// <summary>Why a capture ended (pin_stop_reason_t).</summary>

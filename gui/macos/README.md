@@ -151,9 +151,9 @@ repainted on `display()` and does not animate, so every state is static:
 |---|---|
 | Device initialisation | green bar, same value as the in-window progress bar (full bar at 40 % opacity if unmeasurable) |
 | Capturing, no signal, "no signal" timeout set | green bar counting down from full to empty |
-| Capturing with "Stop after (min)" | green bar, elapsed / limit of the current pass |
+| Capturing with "Stop after (min)" | green bar, elapsed / limit |
 | Capturing, no limit | full bar at 40 % opacity (indeterminate) |
-| Capturing, waiting for signal (no timeout), or rewinding between passes | yellow, full |
+| Capturing, waiting for signal (no timeout) | yellow, full |
 | Capturing and the core reports low disk space (under 1 hour or 50 GB left) | yellow; keeps the value of a countdown / time limit bar, else full. Beaten only by an error |
 | Stopping / finalising | full bar at 40 % opacity (indeterminate) |
 | Device error, or an error banner open | red; clears when the banner is dismissed, or when the next capture starts |
@@ -162,7 +162,7 @@ repainted on `display()` and does not animate, so every state is static:
 The tile is redrawn only when the mode, the badge or the fraction (by 1 %)
 changed. It is reset on quit.
 
-While a capture runs (including stopping and rewinding between passes) the icon
+While a capture runs (including stopping and a retry winding back) the icon
 carries a red "REC" badge.
 
 When a capture finishes or fails while the app is in the background, the Dock icon
@@ -199,9 +199,9 @@ captures and stops the tape at the end; it needs a camera. While a capture runs:
 
 While the core finalises the file both show its state text and are disabled. Only the
 button the capture was started with has a second line: "Stopping in 4m12s" (manual),
-"Stopping capture and tape in 4m12s" (automatic, last pass) or "Next pass in 4m12s (pass 1 of 2)",
+"Stopping capture and tape in 4m12s" (automatic),
 each with ", no signal" while the no-signal timeout is the running countdown, else the time
-limit; none while rewinding between passes or with no limit. The analog button reads
+limit; none with no limit. The analog button reads
 "Capture" with "Capture S-Video input to file" (or composite) and becomes "Stop capture"
 with the same countdown line.
 

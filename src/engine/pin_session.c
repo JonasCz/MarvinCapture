@@ -259,6 +259,7 @@ static void set_error(pin_session_t *s, pin_status_t err, const char *msg)
 
 static int capture_active(const pin_session_t *s);
 static void capture_end(pin_session_t *s, pin_stop_reason_t why, const char *detail, uint16_t deck_node);
+static uint64_t test_seam(const char *name);
 
 /* An input switch or close is waiting for the worker: what it is bringing up or running is no
  * longer wanted, and its READY or error must not replace the PREPARING pin_session_set_input()
@@ -1014,11 +1015,14 @@ static int hdv_ts_titled(const pin_session_t *s)
  * "Service name". Behind the PAT, where MediaInfo looks for it; once per file is enough for both. */
 static void hdv_emit_psi(pin_session_t *s)
 {
-    if (s->hdv_psi.pat_valid) commit_unit(s, s->hdv_psi.pat, HDV_TS_PACKET_SIZE);
-    if (s->hdv_psi.pmt_valid) commit_unit(s, s->hdv_psi.pmt, HDV_TS_PACKET_SIZE);
+    /* with retry the units reach the file well after they arrived: the PAT/PMT the file has seen
+     * so far, so their continuity counters go on from these */
+    const hdv_psi_t *psi = s->retry && s->hdv_psi_out.pat_valid ? &s->hdv_psi_out : &s->hdv_psi;
+    if (psi->pat_valid) commit_unit(s, psi->pat, HDV_TS_PACKET_SIZE);
+    if (psi->pmt_valid) commit_unit(s, psi->pmt, HDV_TS_PACKET_SIZE);
     uint8_t sdt[HDV_TS_PACKET_SIZE];
     if (s->sink && hdv_ts_titled(s) &&
-        hdv_sdt_packet(&s->hdv_psi, "MarvinCapture", s->capture_opts.title, s->hdv_sdt_cc, sdt)) {
+        hdv_sdt_packet(psi, "MarvinCapture", s->capture_opts.title, s->hdv_sdt_cc, sdt)) {
         s->hdv_sdt_cc = (s->hdv_sdt_cc + 1) & 0x0F;
         commit_push(s, sdt, sizeof(sdt), -1); /* not commit_unit(), which leaves SDTs out */
     }
@@ -1279,51 +1283,51 @@ static int writer_consume(pin_unit_kind_t kind, uint64_t index, const uint8_t *d
 static const pin_format_info_t g_formats[PIN_FMT_COUNT] = {
     [PIN_FMT_ANALOG_AVI] = { .format = PIN_FMT_ANALOG_AVI, .kind = PIN_KIND_ANALOG,
         .label = "Uncompressed AVI (YUY2)", .extension = "avi",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = ANALOG_DEFAULT_IS_AVI,
+        .supports_title = 1, .supports_scene_split = 0, .supports_retry = 0, .is_default = ANALOG_DEFAULT_IS_AVI,
         .supports_aspect = 1 },
     [PIN_FMT_ANALOG_FFV1_MKV] = { .format = PIN_FMT_ANALOG_FFV1_MKV, .kind = PIN_KIND_ANALOG,
         .label = "FFV1 + FLAC lossless (MKV)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = !ANALOG_DEFAULT_IS_AVI,
+        .supports_title = 1, .supports_scene_split = 0, .supports_retry = 0, .is_default = !ANALOG_DEFAULT_IS_AVI,
         .supports_aspect = 1 },
     [PIN_FMT_DV_RAW] = { .format = PIN_FMT_DV_RAW, .kind = PIN_KIND_DV,
         .label = "Raw DV stream", .extension = "dv",
-        .supports_title = 0, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1,
+        .supports_title = 0, .supports_scene_split = 1, .supports_retry = 1, .is_default = 1,
         .supports_aspect = 0 },
     [PIN_FMT_DV_AVI] = { .format = PIN_FMT_DV_AVI, .kind = PIN_KIND_DV,
         .label = "DV in AVI (type 2)", .extension = "avi",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 0,
         .supports_aspect = 1 },
     [PIN_FMT_DV_MOV] = { .format = PIN_FMT_DV_MOV, .kind = PIN_KIND_DV,
         .label = "DV in QuickTime", .extension = "mov",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 0,
         .supports_aspect = 1 },
     [PIN_FMT_HDV_TS] = { .format = PIN_FMT_HDV_TS, .kind = PIN_KIND_HDV,
         .label = "Raw transport stream", .extension = "m2t",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 1,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 1,
         .supports_aspect = 0 },
     [PIN_FMT_HDV_MOV] = { .format = PIN_FMT_HDV_MOV, .kind = PIN_KIND_HDV,
         .label = "HDV in QuickTime", .extension = "mov",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 0,
         .supports_aspect = 1, .scene_split_forced = 1 },
     [PIN_FMT_HDV_MKV] = { .format = PIN_FMT_HDV_MKV, .kind = PIN_KIND_HDV,
         .label = "HDV in Matroska", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 0,
         .supports_aspect = 1, .scene_split_forced = 1 },
     [PIN_FMT_ANALOG_H264_MKV] = { .format = PIN_FMT_ANALOG_H264_MKV, .kind = PIN_KIND_ANALOG,
         .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 0, .supports_retry = 0, .is_default = 0,
         .supports_aspect = 1 },
     [PIN_FMT_ANALOG_HEVC_MKV] = { .format = PIN_FMT_ANALOG_HEVC_MKV, .kind = PIN_KIND_ANALOG,
         .label = "HEVC in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 0, .supports_multi_pass = 0, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 0, .supports_retry = 0, .is_default = 0,
         .supports_aspect = 1 },
     [PIN_FMT_DV_H264_MKV] = { .format = PIN_FMT_DV_H264_MKV, .kind = PIN_KIND_DV,
         .label = "H.264 in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 0,
         .supports_aspect = 1 },
     [PIN_FMT_DV_HEVC_MKV] = { .format = PIN_FMT_DV_HEVC_MKV, .kind = PIN_KIND_DV,
         .label = "HEVC in MKV (hardware encoder)", .extension = "mkv",
-        .supports_title = 1, .supports_scene_split = 1, .supports_multi_pass = 1, .is_default = 0,
+        .supports_title = 1, .supports_scene_split = 1, .supports_retry = 1, .is_default = 0,
         .supports_aspect = 1 },
 };
 
@@ -1441,7 +1445,7 @@ void pin_session_format_title_help(pin_input_t input, pin_format_t format, pin_f
     pin_format_t fs[2];
     int n = 0;
     if (input == PIN_INPUT_DV) {
-        snprintf(out, cap, "File name for DV and HDV (scenes and passes get numbered suffixes).");
+        snprintf(out, cap, "File name for DV and HDV (scenes get numbered suffixes).");
         if (format_is_kind(format, PIN_KIND_DV))
             fs[n++] = format;
         if (format_is_kind(format_hdv, PIN_KIND_HDV))
@@ -1774,7 +1778,6 @@ static void open_sink_for_scene(pin_session_t *s)
         .scene_split = scene_split_on(s),
         .always_number = s->capture_opts.first_number != 0 || s->fmt_numbered,
         .scene_index = s->scene_index,
-        .pass = s->pass_index,
     };
     char path[PIN_PATH_MAX];
     const int to_stdout = pin_path_is_stdout(s->capture_opts.path);
@@ -1877,6 +1880,7 @@ static void open_sink_for_scene(pin_session_t *s)
         cap = (size_t)s->test_writer_queue;
     /* analog: the stand-ins for lost frames go in as repeats of the frame before, which take no
      * room in the queue, so a long gap filled at once cannot overflow it */
+    s->writer_cap = cap;
     s->writer = pin_writer_start_ex(cap, writer_consume, s->sink,
                                     PIN_WRITER_OVERFLOW_FATAL |
                                         (kind == PIN_KIND_ANALOG ? PIN_WRITER_REPEATS : 0));
@@ -2048,6 +2052,22 @@ static void dv_reasm_discard(dv_ctx_t *ctx)
  * stream's kind newly becomes known. */
 static void maybe_begin_capture(pin_session_t *s, uint16_t camera_node);
 
+/* What dv_on_unit() found out about a unit on arrival, for its commit (unit_commit()): at once,
+ * or once the retry engine lets it go (pin_retry.h), possibly mended. */
+typedef struct {
+    pin_kind_t kind;
+    int aux;                    /* HDV: not a picture (PAT/PMT unit from dv_write_cb()) */
+    pin_stream_fmt_t obs;
+    unsigned flags;
+    pin_scene_record_t rec;
+    int have_rec;
+    unit_counts_t uc;
+    int dar_num, dar_den, bff;
+} unit_meta_t;
+
+static int retry_routes(const pin_session_t *s);
+static void retry_budget(pin_session_t *s);
+
 static int dv_write_cb(const uint8_t *data, size_t len, void *user)
 {
     dv_ctx_t *ctx = user;
@@ -2063,8 +2083,29 @@ static int dv_write_cb(const uint8_t *data, size_t len, void *user)
      * held units here with the index of the picture that follows it, so it goes where that
      * picture goes (after a new video PID or a DV -> HDV change: the new file, where the
      * gate writes the latest PAT/PMT in front of the first GOP anyway). */
-    if (s->sink && hdv_picture_pid(data, len) < 0 && !hdv_gate_now(s, data, len))
-        hold_push(s, data, len, s->unit_seq, 0);
+    if (s->sink && hdv_picture_pid(data, len) < 0) {
+        if (retry_routes(s) && s->stream_kind_known) {
+            /* in line with the pictures the retry engine holds */
+            unit_meta_t m;
+            memset(&m, 0, sizeof(m));
+            m.kind = PIN_KIND_HDV;
+            m.aux = 1;
+            m.bff = -1;
+            pin_retry_unit_t ru;
+            memset(&ru, 0, sizeof(ru));
+            ru.hdv = 1;
+            ru.data = data;
+            ru.len = len;
+            ru.meta = &m;
+            ru.meta_len = sizeof(m);
+            retry_budget(s);
+            pin_retry_push(s->retry, pin_session_now(), &ru);
+        } else {
+            hdv_psi_scan(&s->hdv_psi_out, data, len / HDV_TS_PACKET_SIZE);
+            if (!hdv_gate_now(s, data, len))
+                hold_push(s, data, len, s->unit_seq, 0);
+        }
+    }
     pin_session_unlock(s);
     return 0;
 }
@@ -2269,7 +2310,116 @@ static void dv_on_loss(unsigned long blocks, unsigned long frames, void *user)
     count_lost_frames(s, frames);
     if (blocks)
         s->hdv_loss_pending = 1;
+    /* a re-read can fill the hole (a lost DV frame, counted dropped above until then) */
+    if (s->retry && frames && counting(s))
+        pin_retry_lost(s->retry, frames);
     pin_session_unlock(s);
+}
+
+
+/* A unit goes into the capture: format watch, counters, the file. begin: the unit that made the
+ * stream kind known (it opens the capture, whose counters restart before it is counted).
+ * Caller holds the lock. */
+static void unit_commit(pin_session_t *s, const uint8_t *data, size_t len, const unit_meta_t *m,
+                        int begin)
+{
+    long idx = s->unit_seq++;
+    /* The format, with its cool-down: a different value counts only once it persists
+     * (pin_fmtwatch.h); the status (and the next file) shows the confirmed one. */
+    long fmt_start = idx;
+    pin_stream_fmt_t old_fmt;
+    pin_fmtwatch_result_t fr = pin_fmtwatch_feed(&s->fmtw, &m->obs, idx, &fmt_start, &old_fmt);
+    if (m->kind == PIN_KIND_HDV && pin_stream_fmt_agrees(&s->fmtw.cur, &m->obs)) {
+        /* aspect and field order of the confirmed format's pictures */
+        if (m->dar_num > 0) {
+            s->hdv_dar_num = m->dar_num;
+            s->hdv_dar_den = m->dar_den;
+        }
+        if (m->bff >= 0)
+            s->hdv_bff = m->bff;
+    }
+    stream_status_from_format(s);
+    if (fr == PIN_FMTWATCH_CHANGED) {
+        char a[96], b[96];
+        pin_stream_fmt_describe(&old_fmt, a, sizeof(a));
+        pin_stream_fmt_describe(&s->fmtw.cur, b, sizeof(b));
+        pin_logf(PIN_LOG_INFO, "session: the input changed from %s to %s\n", a, b);
+    }
+
+    /* The unit that makes the stream kind known opens the file, and is its first unit:
+     * the capture's counters restart there, so this unit is counted after them. */
+    if (begin)
+        maybe_begin_capture(s, s->dev.camera_node);
+    apply_unit_counts(s, &m->uc);
+
+    if (s->sink)
+        capture_unit(s, data, len, m->kind, idx, m->flags, fr, &old_fmt, fmt_start,
+                     m->have_rec ? &m->rec : NULL);
+    if (fr != PIN_FMTWATCH_SAME)
+        pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
+}
+
+/* The retry engine lets a unit go (pin_retry_release_fn): into the capture. Under the lock. */
+static void retry_release(void *user, uint8_t *data, size_t len, const void *meta, unsigned read,
+                          int mended)
+{
+    pin_session_t *s = user;
+    unit_meta_t m = *(const unit_meta_t *)meta;
+    if (m.kind == PIN_KIND_HDV) {
+        /* where two reads join, the continuity counters go on as one stream */
+        if (s->retry_cc)
+            pin_retry_cc_fix_apply(s->retry_cc, data, len / HDV_TS_PACKET_SIZE, read);
+        hdv_psi_scan(&s->hdv_psi_out, data, len / HDV_TS_PACKET_SIZE);
+        if (m.aux) {
+            if (s->sink && !hdv_gate_now(s, data, len))
+                hold_push(s, data, len, s->unit_seq, 0);
+            return;
+        }
+    } else if (mended) {
+        /* the frame is another than the one that arrived: its statistics anew */
+        dv_frame_errors_t derr;
+        if (dv_error_analyze(data, len, &derr) == 0) {
+            m.uc.err = derr.frame_error;
+            m.uc.dropped = derr.frame_dropped;
+            m.uc.video = derr.video_err + derr.video_concealed;
+            m.uc.audio = derr.audio_err + derr.audio_mute;
+            m.uc.missing = derr.missing_blocks;
+        }
+    }
+    if (mended == 2 && m.kind == PIN_KIND_DV && counting(s)) {
+        /* counted as lost when the first read missed it; it is in the file after all */
+        if (s->frames_dropped) s->frames_dropped--;
+        if (s->clip_frames_dropped) s->clip_frames_dropped--;
+    }
+    unit_commit(s, data, len, &m, 0);
+}
+
+/* How much the retry engine may let go now: the writer queue must not overflow when a held
+ * section of up to minutes of tape goes at once. Caller holds the lock. */
+static void retry_budget(pin_session_t *s)
+{
+    if (!s->retry)
+        return;
+    size_t room = SIZE_MAX;
+    if (s->writer) {
+        pin_writer_stats_t wst;
+        pin_writer_get_stats(s->writer, &wst);
+        /* a quarter of the queue: a full queue ends the capture (DISK_SLOW) */
+        const size_t full = s->writer_cap ? s->writer_cap : PIN_WRITER_DEFAULT_CAPACITY;
+        const size_t cap = full / 4;
+        room = wst.backlog_bytes >= cap ? 0 : cap - (size_t)wst.backlog_bytes;
+        /* an empty queue takes even a unit bigger than a quarter of it (an HDV GOP into a small
+         * queue), or such a unit would never go */
+        if (wst.backlog_bytes == 0 && room < full / 2)
+            room = full / 2;
+    }
+    pin_retry_set_release_budget(s->retry, room);
+}
+
+/* Units go through the retry engine: a capture with retry is writing. */
+static int retry_routes(const pin_session_t *s)
+{
+    return s->retry && s->sink && s->capture_began;
 }
 
 static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *user)
@@ -2296,7 +2446,6 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
      * frame shows it itself (zero-padded blocks) */
     int hdv_loss = s->hdv_loss_pending;
     s->hdv_loss_pending = 0;
-    long idx = s->unit_seq++;
     pin_stream_fmt_t obs;          /* what this unit says about the format */
     pin_stream_fmt_init(&obs, kind);
     unsigned flags = 0;            /* PIN_HOLD_CUT_OK: a file may start with it */
@@ -2306,6 +2455,9 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
     unit_counts_t uc;
     memset(&uc, 0, sizeof(uc));
     int hdv_dar_num = 0, hdv_dar_den = 0, hdv_bff = -1; /* this picture's, if it says */
+    pin_retry_unit_t ru;          /* what the retry engine needs (retry_routes()) */
+    memset(&ru, 0, sizeof(ru));
+    ru.fps = 25;
 
     if (kind == PIN_KIND_DV) {
         dv_frame_info_t info;
@@ -2320,6 +2472,12 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
                 obs.audio_bits = info.audio.bits;
             }
             flags = PIN_HOLD_CUT_OK;
+            ru.fps = is_pal ? 25.0 : 30000.0 / 1001.0;
+            if (info.timecode.valid) {
+                ru.key_valid = 1;
+                ru.key = pin_retry_tc_frames(info.timecode.hour, info.timecode.minute,
+                                             info.timecode.second, info.timecode.frame, ru.fps);
+            }
             if (info.timecode.valid)
                 snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
                          info.timecode.hour, info.timecode.minute, info.timecode.second,
@@ -2480,6 +2638,19 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
          * other pictures are neutral, and the detector debounces over GOPs
          * (pin_scene_config_hdv()). */
         flags = hdv_unit_opens_gop(data, len) ? PIN_HOLD_CUT_OK : 0;
+        ru.hdv = 1;
+        ru.picture = pic_pid >= 0;
+        ru.opens_gop = flags ? 1 : 0;
+        ru.damaged = herr.frame_error;
+        ru.lost_before = hdv_loss;
+        if (ru.opens_gop && herr.dts_valid) {
+            ru.key_valid = 1;
+            ru.key = herr.dts;
+        }
+        if (s->fmtw.cur.fps_num > 0 && s->fmtw.cur.fps_den > 0)
+            ru.fps = (double)s->fmtw.cur.fps_num / s->fmtw.cur.fps_den;
+        else if (obs.fps_num > 0 && obs.fps_den > 0)
+            ru.fps = (double)obs.fps_num / obs.fps_den;
         have_rec = 1;
         if (gop.found) {
             rec.tc_valid = 1;
@@ -2492,40 +2663,32 @@ static void dv_on_unit(dv_format_t fmt, const uint8_t *data, size_t len, void *u
         }
     }
 
-    /* The format, with its cool-down: a different value counts only once it persists
-     * (pin_fmtwatch.h); the status (and the next file) shows the confirmed one. */
-    long fmt_start = idx;
-    pin_stream_fmt_t old_fmt;
-    pin_fmtwatch_result_t fr = pin_fmtwatch_feed(&s->fmtw, &obs, idx, &fmt_start, &old_fmt);
-    if (kind == PIN_KIND_HDV && pin_stream_fmt_agrees(&s->fmtw.cur, &obs)) {
-        /* aspect and field order of the confirmed format's pictures */
-        if (hdv_dar_num > 0) {
-            s->hdv_dar_num = hdv_dar_num;
-            s->hdv_dar_den = hdv_dar_den;
-        }
-        if (hdv_bff >= 0)
-            s->hdv_bff = hdv_bff;
+    unit_meta_t m;
+    memset(&m, 0, sizeof(m));
+    m.kind = kind;
+    m.obs = obs;
+    m.flags = flags;
+    m.rec = rec;
+    m.have_rec = have_rec;
+    m.uc = uc;
+    m.dar_num = hdv_dar_num;
+    m.dar_den = hdv_dar_den;
+    m.bff = hdv_bff;
+    if (!kind_newly_known && retry_routes(s)) {
+        /* held back until it is known whether this stretch of tape is read again */
+        ru.data = data;
+        ru.len = len;
+        ru.meta = &m;
+        ru.meta_len = sizeof(m);
+        retry_budget(s);
+        pin_retry_push(s->retry, pin_session_now(), &ru);
+    } else {
+        unit_commit(s, data, len, &m, kind_newly_known);
     }
-    stream_status_from_format(s);
-    if (fr == PIN_FMTWATCH_CHANGED) {
-        char a[96], b[96];
-        pin_stream_fmt_describe(&old_fmt, a, sizeof(a));
-        pin_stream_fmt_describe(&s->fmtw.cur, b, sizeof(b));
-        pin_logf(PIN_LOG_INFO, "session: the input changed from %s to %s\n", a, b);
-    }
-
-    /* The unit that makes the stream kind known opens the file, and is its first unit:
-     * the capture's counters restart there, so this unit is counted after them. */
-    if (kind_newly_known)
-        maybe_begin_capture(s, s->dev.camera_node);
-    apply_unit_counts(s, &uc);
-
-    if (s->sink)
-        capture_unit(s, data, len, kind, idx, flags, fr, &old_fmt, fmt_start, have_rec ? &rec : NULL);
 
     s->last_data_s = pin_session_now();
     s->idle_s = 0;
-    if (fr != PIN_FMTWATCH_SAME || signal_back)
+    if (signal_back)
         pin_session_push_event(s, PIN_EVT_INPUT_FORMAT, 0, NULL);
     pin_session_unlock(s);
 }
@@ -2578,7 +2741,7 @@ static void dir_of(const char *path, char *dir, size_t cap)
     if (slash) *slash = 0; else snprintf(dir, cap, ".");
 }
 
-/* Length of what this capture recorded (all passes), summed over the units that went into a
+/* Length of what this capture recorded , summed over the units that went into a
  * file (count_frame()). */
 static double captured_seconds(const pin_session_t *s)
 {
@@ -2672,10 +2835,10 @@ static void capture_report_end(pin_session_t *s, pin_stop_reason_t why, const ch
     s->capture_end_seq++;
 }
 
-/* A capture is running, rewinding between passes, or waiting to start. */
+/* A capture is running, rewinding to the start, or waiting to start. */
 static int capture_active(const pin_session_t *s)
 {
-    return s->sink || s->capture_want_start || s->rewind_before_capture || s->pass_rewinding ||
+    return s->sink || s->capture_want_start || s->rewind_before_capture ||
            s->state == PIN_STATE_CAPTURING || s->state == PIN_STATE_REWINDING;
 }
 
@@ -2688,10 +2851,108 @@ int pin_session_capture_busy(pin_session_t *s)
     return busy;
 }
 
+/* A capture with retry begins (start_capture_now()): the engine, with what this deck taught the
+ * last one. Only for a DV / HDV capture that drives the deck. Caller holds the lock. */
+static void retry_start(pin_session_t *s, uint16_t camera_node)
+{
+    /* Test seam PIN_TEST_RETRY_REPLAY: a replay goes through the engine too (no deck: a section
+     * it would retry is let go after the window, see test_replay_retry) */
+    int seam = s->is_replay && test_seam("PIN_TEST_RETRY_REPLAY") != 0;
+    if (s->retry || !s->capture_opts.retry || pin_path_is_stdout(s->capture_opts.path) ||
+        s->input != PIN_INPUT_DV)
+        return;
+    if (!seam && (!s->capture_opts.start_deck || !camera_node || s->is_replay))
+        return;
+    pin_retry_cfg_t cfg;
+    pin_retry_cfg_defaults(&cfg);
+    cfg.attempts = s->capture_opts.retry_attempts;
+    cfg.window_s = s->capture_opts.retry_window_s;
+    cfg.trigger = s->capture_opts.retry_trigger == PIN_RETRY_ON_UNCORRECTED
+                      ? PIN_RETRY_TRIGGER_UNCORRECTED : PIN_RETRY_TRIGGER_ANY;
+    cfg.preroll_s = s->capture_opts.retry_preroll_s;
+    cfg.mode = s->capture_opts.retry_mode == PIN_RETRY_EACH_SECTION ? PIN_RETRY_MODE_SECTIONS
+             : s->capture_opts.retry_mode == PIN_RETRY_WHOLE_TAPE ? PIN_RETRY_MODE_WHOLE
+             : PIN_RETRY_MODE_AUTO;
+    cfg.storage = s->capture_opts.retry_storage == PIN_RETRY_IN_FILE ? PIN_RETRY_STORE_FILE
+                                                                      : PIN_RETRY_STORE_RAM;
+    /* the temporary file goes next to the output (the drive the disk checks look at) */
+    dir_of(s->naming_base[0] ? s->naming_base : s->capture_opts.path, cfg.spool_dir,
+           sizeof(cfg.spool_dir));
+    pin_retry_cfg_clamp(&cfg);
+    s->retry = pin_retry_new(&cfg, retry_release, s);
+    if (!s->retry)
+        return;
+    memset(&s->hdv_psi_out, 0, sizeof(s->hdv_psi_out));
+    if (!s->retry_cc)
+        s->retry_cc = malloc(sizeof(*s->retry_cc));
+    if (s->retry_cc)
+        pin_retry_cc_fix_init(s->retry_cc);
+    pin_retry_set_learned(s->retry, s->retry_rate, s->retry_cycle);
+    memset(&s->retry_stats, 0, sizeof(s->retry_stats));
+    s->retry_cmd_inflight = s->retry_cmd_failed = 0;
+    s->retry_rew_s = s->retry_busy_s = 0;
+    s->retry_phase = PIN_RETRY_IDLE;
+    pin_logf(PIN_LOG_INFO, "session: retry of bad sections on (%d attempts, %.0f s window, %s, %s, %s)\n",
+             cfg.attempts, cfg.window_s,
+             cfg.trigger == PIN_RETRY_TRIGGER_UNCORRECTED ? "uncorrected damage" : "any damage",
+             cfg.mode == PIN_RETRY_MODE_WHOLE ? "whole tape" : cfg.mode == PIN_RETRY_MODE_SECTIONS
+                 ? "each section" : "automatic",
+             cfg.storage == PIN_RETRY_STORE_FILE ? "temporary file" : "memory");
+}
+
+/* The capture ended: keep the counts for the status and what was learned about the deck. */
+static void retry_end(pin_session_t *s)
+{
+    if (!s->retry)
+        return;
+    pin_retry_get_stats(s->retry, &s->retry_stats);
+    s->retry_stats.phase = PIN_RETRY_IDLE;
+    s->retry_stats.attempt = 0;
+    if (s->retry_stats.rew_rate > 0) s->retry_rate = s->retry_stats.rew_rate;
+    if (s->retry_stats.cycle_s > 0) s->retry_cycle = s->retry_stats.cycle_s;
+    if (s->retry_stats.sections)
+        pin_logf(PIN_LOG_INFO,
+                 "session: retry: %llu section(s), %llu mended, %llu partly, %llu unchanged; "
+                 "%llu rewinds, wind speed %.1fx\n",
+                 (unsigned long long)s->retry_stats.sections,
+                 (unsigned long long)s->retry_stats.sections_fixed,
+                 (unsigned long long)s->retry_stats.sections_partly,
+                 (unsigned long long)s->retry_stats.sections_failed,
+                 (unsigned long long)s->retry_stats.rewinds, s->retry_stats.rew_rate);
+    pin_retry_free(s->retry);
+    s->retry = NULL;
+}
+
 /* Finishes the open file (pending units first): hands it to the closer,
  * which reports it closed (PIN_EVT_FILE_CLOSED). */
 static void finish_file(pin_session_t *s)
 {
+    if (s->retry && s->sink) {
+        /* What the retry holds goes into the file first, best so far: up to its whole window (or
+         * the whole tape), more than the writer queue takes at once, so in pieces as the disk takes
+         * them (the writer thread needs no lock). A drive that takes nothing for 10 s ends it: the
+         * rest goes at once and the queue counts what it cannot take. */
+        double stuck_since = pin_session_now();
+        int left = -1;
+        for (;;) {
+            retry_budget(s);
+            int now_left = pin_retry_flush_some(s->retry);
+            if (now_left == 0)
+                break;
+            if (now_left != left) {
+                left = now_left;
+                stuck_since = pin_session_now();
+            }
+            pin_writer_stats_t wst;
+            if (s->writer)
+                pin_writer_get_stats(s->writer, &wst);
+            if (!s->writer || wst.failed || pin_session_now() - stuck_since > 10.0) {
+                pin_retry_flush(s->retry);
+                break;
+            }
+            sleep_ms(5);
+        }
+    }
     if (!s->sink) {
         /* the file was lost (a failed open): what was held for it has no file to go to, and
          * must not open the next capture's */
@@ -2713,8 +2974,8 @@ static void capture_end(pin_session_t *s, pin_stop_reason_t why, const char *det
     int active = capture_active(s);
     s->capture_want_start = 0;
     s->rewind_before_capture = 0;
-    s->pass_rewinding = 0;
     finish_file(s);
+    retry_end(s);
     if (deck_node)
         deck_send(s, deck_node, PIN_DECK_CMD_STOP);
     if (active) {
@@ -2965,7 +3226,6 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     s->fmt_stop = 0;
     s->scene_cut_deferred = 0;
     s->scene_index = first_scene_number(s);
-    s->pass_index = 1;
     s->unit_index = 0;
     reset_frame_counters(s);
     s->bytes_written = 0;
@@ -2992,9 +3252,8 @@ static void start_capture_now(pin_session_t *s, uint16_t camera_node)
     if (s->state != PIN_STATE_ERROR) {
         s->disk_check_s = 0;
         set_state(s, PIN_STATE_CAPTURING);
-        s->pass = 1;
-        s->passes = s->capture_opts.passes < 1 ? 1 : s->capture_opts.passes;
         s->scene = 1;
+        retry_start(s, camera_node);
         /* PLAY was already sent by maybe_begin_capture() (before the stream
          * kind was known); this only covers a caller that skipped that. */
         if (s->capture_opts.start_deck && camera_node && !s->start_play_sent)
@@ -3072,10 +3331,11 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
     } else if (kind == PIN_CMD_CAPTURE_START) {
         s->capture_opts = cmd.capture;
         if (pin_path_is_stdout(s->capture_opts.path)) {
-            /* a stream has no files to split, keep or number, and one pass */
+            /* a stream has no files to split, keep or number, and cannot hold back for a retry
+             * (a reader waits for it) */
             s->capture_opts.scene_split = 0;
             s->capture_opts.keep_raw = 0;
-            s->capture_opts.passes = 1;
+            s->capture_opts.retry = 0;
             s->capture_opts.first_number = 0;
         }
         s->stop_reason = PIN_STOP_NONE;
@@ -3091,7 +3351,6 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
         s->rewind_before_capture = 0;
         s->rewind_done = 0;
         s->start_play_sent = 0;
-        s->pass_rewinding = 0;
         maybe_begin_capture(s, camera_node);
     } else if (kind == PIN_CMD_CAPTURE_STOP) {
         /* AS_STARTED: only a capture that drives the deck stops it. */
@@ -3131,6 +3390,67 @@ static int handle_inline_commands(pin_session_t *s, uint16_t camera_node)
 static int deck_timecode_wanted(const pin_session_t *s)
 {
     return !s->signal || (s->stream_kind == PIN_KIND_HDV && !s->hdv_tc_live);
+}
+
+/* The retry engine's clock and deck (pin_retry_tick()): sends what it asks for through
+ * deck_send(), reports a change of what it does (PIN_EVT_RETRY), and while it winds back and
+ * re-reads, stops the no-signal timer and the time limit. Caller holds the lock. */
+static void retry_tick(pin_session_t *s, uint16_t node, double now)
+{
+    pin_retry_deck_t dk;
+    memset(&dk, 0, sizeof(dk));
+    dk.signal = s->signal;
+    dk.tc_valid = s->deck_tc_valid && now - s->deck_tc_s < 1.5;
+    dk.tc_frames = s->deck_tc_frames;
+    dk.at_start = s->retry_rew_s > 0 &&
+                  pin_deck_rewind_finished(s->deck, s->deck_busy || s->deck_q_valid,
+                                           s->deck_cmd_done_s, s->retry_rew_s, now);
+    dk.cmd_failed = s->retry_cmd_failed;
+    s->retry_cmd_failed = 0;
+    dk.can_send = !s->deck_q_valid && !s->retry_cmd_inflight;
+    retry_budget(s);
+    pin_retry_action_t a = pin_retry_tick(s->retry, now, &dk);
+    if (a != PIN_RETRY_ACT_NONE && node) {
+        pin_deck_cmd_t cmd = a == PIN_RETRY_ACT_REW ? PIN_DECK_CMD_REW
+                           : a == PIN_RETRY_ACT_PLAY ? PIN_DECK_CMD_PLAY : PIN_DECK_CMD_STOP;
+        deck_send(s, node, cmd);
+        s->retry_cmd_inflight = 1;
+        s->retry_rew_s = a == PIN_RETRY_ACT_REW ? now : 0;
+        pin_logf(PIN_LOG_INFO, "session: retry: %s\n",
+                 a == PIN_RETRY_ACT_REW ? "rewind" : a == PIN_RETRY_ACT_PLAY ? "play" : "stop");
+    }
+    pin_retry_stats_t rs;
+    pin_retry_get_stats(s->retry, &rs);
+    if ((int)rs.phase != s->retry_phase) {
+        s->retry_phase = (int)rs.phase;
+        pin_status_snapshot_t st;
+        memset(&st, 0, sizeof(st));
+        st.retry_on = 1;
+        st.retry_phase = (int)rs.phase;
+        st.retry_attempt = rs.attempt;
+        st.retry_attempts = rs.attempts;
+        st.retry_held_s = rs.held_s;
+        st.retry_section_s = rs.section_s;
+        st.retry_bad = rs.bad_slots;
+        st.retry_sections = rs.sections;
+        st.retry_fixed = rs.sections_fixed;
+        st.retry_partly = rs.sections_partly;
+        st.retry_failed = rs.sections_failed;
+        st.retry_whole_tape = rs.whole;
+        char text[PIN_TEXT_MAX];
+        pin_format_retry_status(&st, text, sizeof(text));
+        pin_logf(PIN_LOG_INFO, "session: %s\n", text);
+        pin_session_push_event(s, PIN_EVT_RETRY, (int32_t)rs.phase, text);
+    }
+    if (pin_retry_busy(s->retry)) {
+        /* winding back and re-reading is not "no signal", nor capture time */
+        if (s->retry_busy_s > 0 && s->capture_start_s > 0)
+            s->capture_start_s += now - s->retry_busy_s;
+        s->retry_busy_s = now;
+        s->last_data_s = now;
+    } else {
+        s->retry_busy_s = 0;
+    }
 }
 
 static void dv_tick(void *user)
@@ -3200,7 +3520,7 @@ static void dv_tick(void *user)
         }
         /* only a capture that is under way (file open, or the deck rewinding
          * for it); one still waiting for its first frame just waits on */
-        if (bus_changed && (s->capture_began || s->rewind_before_capture || s->pass_rewinding)) {
+        if (bus_changed && (s->capture_began || s->rewind_before_capture)) {
             capture_end(s, PIN_STOP_CAMERA_LOST,
                         "the FireWire connection to the camera was interrupted (cable moved or "
                         "camera switched off)", 0);
@@ -3225,6 +3545,12 @@ static void dv_tick(void *user)
              * must not let the deck's "stopped" pass for the tape's start. */
             if (s->deck_async.cmd[0] == 0x00 && st == PIN_DECK_ASYNC_DONE)
                 s->deck_cmd_done_s = pin_session_now();
+            if (s->deck_async.cmd[0] == 0x00 && s->retry_cmd_inflight) {
+                /* the retry's REW / PLAY / STOP: refused or not answered, it must know */
+                s->retry_cmd_inflight = 0;
+                if (st == PIN_DECK_ASYNC_FAILED)
+                    s->retry_cmd_failed = 1;
+            }
             if (s->deck_async.cmd[0] == 0x00 && st == PIN_DECK_ASYNC_FAILED) {
                 uint8_t rew[8];
                 unsigned rl = pin_deck_build_cmd(PIN_DECK_CMD_REW, rew);
@@ -3232,17 +3558,24 @@ static void dv_tick(void *user)
                 pin_logf(PIN_LOG_WARN, "session: the deck %s the command %02x %02x\n",
                          s->deck_async.resp_len > 0 ? "refused" : "did not answer",
                          s->deck_async.cmd[2], s->deck_async.cmd[3]);
-                if (was_rew && (s->rewind_before_capture || s->pass_rewinding))
+                if (was_rew && s->rewind_before_capture)
                     s->rewind_failed = 1;
             }
             if (st == PIN_DECK_ASYNC_DONE && s->deck_async.cmd[2] == 0x51) {
                 /* TIME CODE answer: the tape position, shown while no DV/HDV stream
                  * carries its own timecode (winding, stopped). */
                 pin_deck_timecode_t tc;
-                if (pin_deck_parse_timecode(s->deck_async.resp, s->deck_async.resp_len, &tc) == 0 &&
-                    deck_timecode_wanted(s))
+                int tc_ok = pin_deck_parse_timecode(s->deck_async.resp, s->deck_async.resp_len, &tc) == 0;
+                if (tc_ok && deck_timecode_wanted(s))
                     snprintf(s->timecode, sizeof(s->timecode), "%02d:%02d:%02d%c%02d",
                              tc.hour, tc.minute, tc.second, tc.drop_frame ? ';' : ':', tc.frame);
+                if (tc_ok) {
+                    /* the tape position for the retry (where to stop winding, HDV sections) */
+                    s->deck_tc_valid = 1;
+                    s->deck_tc_frames = pin_retry_tc_frames(tc.hour, tc.minute, tc.second, tc.frame,
+                                                            s->is_60hz ? 29.97 : 25.0);
+                    s->deck_tc_s = pin_session_now();
+                }
                 if (s->deck != PIN_DECK_REWINDING && s->deck != PIN_DECK_FAST_FORWARD)
                     s->tc_after_wind = 0;
             } else if (st == PIN_DECK_ASYNC_DONE && s->deck_async.resp_len >= 4 &&
@@ -3285,7 +3618,11 @@ static void dv_tick(void *user)
         }
     }
 
-    /* the pass's capture time: it stands still while the deck rewinds for the next pass */
+    if (s->retry && s->state == PIN_STATE_CAPTURING)
+        retry_tick(s, node, tnow);
+
+    /* the capture time: it stands still while the deck winds back and re-reads for a retry
+     * (retry_tick() moves capture_start_s on by that time) */
     if (s->state == PIN_STATE_CAPTURING && s->capture_start_s > 0)
         s->elapsed_s = pin_session_now() - s->capture_start_s;
     s->idle_s = pin_session_now() - s->last_data_s;
@@ -3320,13 +3657,9 @@ static void dv_tick(void *user)
         capture_guard(s, auto_stop_node(s, node));
 
     /* No-signal stop (idle_stop_minutes) and total-time stop (max_duration_minutes).
-     * The no-signal timeout is also how the end of the tape is noticed: with
-     * passes left it ends this pass, rewinds and starts the next one. The
-     * time limit is per pass: elapsed_s counts only the capture time of the
-     * current pass (it restarts when the next pass starts, so the rewind is
-     * not counted) and ends the pass exactly like the no-signal timeout; in
-     * the last pass either one ends the capture and a capture that drives the
-     * deck stops the deck. */
+     * The no-signal timeout is also how the end of the tape is noticed. Either one ends the
+     * capture, and a capture that drives the deck stops the deck. Neither runs while a retry
+     * winds back and re-reads (retry_tick()). */
     int duration_stop = s->capture_opts.max_duration_minutes > 0 &&
                          s->elapsed_s > s->capture_opts.max_duration_minutes * 60.0;
     int idle_stop = s->capture_opts.idle_stop_minutes > 0 &&
@@ -3339,87 +3672,39 @@ static void dv_tick(void *user)
         pin_session_lock(s);
     }
     if (s->state == PIN_STATE_CAPTURING && (idle_stop || duration_stop)) {
-        if (s->pass < s->passes) {
-            /* end this pass, rewind, next pass */
-            finish_file(s);
-            s->hdv_err_reset = 1;   /* the stream breaks off: no continuity across it */
-            if (s->disk_slow_pending) {
-                /* The last units of this pass (flushed with the file) overflowed its queue: they
-                 * are missing from its file. The capture ends here, where it happened, rather
-                 * than after a whole rewind. */
-                capture_end(s, PIN_STOP_DISK_SLOW, NULL, auto_stop_node(s, node));
-                set_state(s, PIN_STATE_READY);
-            } else {
-                set_state(s, PIN_STATE_REWINDING);
-                s->pass_rewinding = 1;
-                s->rewind_failed = 0;
-                s->rewind_wait_start_s = pin_session_now();
-                deck_send(s, node, PIN_DECK_CMD_REW);
-                s->pass_index++;
-                s->pass++;
-                s->last_data_s = pin_session_now(); /* reset idle timer across the rewind */
-            }
+        char mins[32], detail[PIN_TEXT_MAX];
+        if (idle_stop) {
+            minutes_text(s->capture_opts.idle_stop_minutes, mins, sizeof(mins));
+            snprintf(detail, sizeof(detail), "there was no camera or deck signal for %s", mins);
         } else {
-            /* last pass: stop */
-            char mins[32], detail[PIN_TEXT_MAX];
-            if (idle_stop) {
-                minutes_text(s->capture_opts.idle_stop_minutes, mins, sizeof(mins));
-                snprintf(detail, sizeof(detail), "there was no camera or deck signal for %s", mins);
-            } else {
-                minutes_text(s->capture_opts.max_duration_minutes, mins, sizeof(mins));
-                snprintf(detail, sizeof(detail), "the time limit of %s was reached", mins);
-            }
-            capture_end(s, idle_stop ? PIN_STOP_NO_SIGNAL : PIN_STOP_TIME_LIMIT, detail,
-                        auto_stop_node(s, node));
-            set_state(s, PIN_STATE_READY);
+            minutes_text(s->capture_opts.max_duration_minutes, mins, sizeof(mins));
+            snprintf(detail, sizeof(detail), "the time limit of %s was reached", mins);
         }
-    } else if (s->state == PIN_STATE_REWINDING && (s->rewind_before_capture || s->pass_rewinding) &&
-               s->rewind_failed) {
+        capture_end(s, idle_stop ? PIN_STOP_NO_SIGNAL : PIN_STOP_TIME_LIMIT, detail,
+                    auto_stop_node(s, node));
+        set_state(s, PIN_STATE_READY);
+    } else if (s->state == PIN_STATE_REWINDING && s->rewind_before_capture && s->rewind_failed) {
         /* The deck refused the REW or did not answer it (after the retries): the tape is not
-         * at its start. Playing from here would capture the wrong part of the tape (or the
-         * blank end of it as pass 2), so the capture ends and says why. */
+         * at its start. Playing from here would capture the wrong part of the tape, so the
+         * capture ends and says why. */
         s->rewind_failed = 0;
         capture_end(s, PIN_STOP_ERROR,
                     "the camera did not rewind the tape (it refused the command or did not answer)",
                     auto_stop_node(s, node));
         set_state(s, PIN_STATE_READY);
-    } else if (s->state == PIN_STATE_REWINDING && (s->rewind_before_capture || s->pass_rewinding) &&
+    } else if (s->state == PIN_STATE_REWINDING && s->rewind_before_capture &&
                pin_deck_rewind_finished(s->deck, s->deck_busy || s->deck_q_valid, s->deck_cmd_done_s,
                                         s->rewind_wait_start_s, pin_session_now())) {
         /* Rewind finished (BOT). A status query answered within a moment of
          * the REW command can still report the old "stopped", so the deck must
-         * also have had a few seconds since REW was acknowledged. */
-        if (s->rewind_before_capture) {
-            /* "Automatic rewind & capture": this was the initial rewind (pass 1).
-             * maybe_begin_capture() sends PLAY and opens the file once the
-             * stream kind is known; READY meanwhile, as for any capture that
-             * is waiting for its first data. */
-            s->rewind_before_capture = 0;
-            s->rewind_done = 1;
-            set_state(s, PIN_STATE_READY);
-            maybe_begin_capture(s, node);
-        } else {
-            /* start the next pass, in the kind the stream has now (a change at the tape's
-             * start replaces the file, see format_cut_begin()) */
-            s->pass_rewinding = 0;
-            s->scene_index = first_scene_number(s);
-            s->fmt_numbered = 0;
-            s->scene_cut_deferred = 0;
-            file_format_for_stream(s);
-            open_sink_for_scene(s);
-            /* a failed open has ended the capture and stopped the deck (open_sink_for_scene()) */
-            if (s->state != PIN_STATE_ERROR) {
-                deck_send(s, node, PIN_DECK_CMD_PLAY);
-                set_state(s, PIN_STATE_CAPTURING);
-                pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
-                s->capture_start_s = pin_session_now();
-                s->elapsed_s = 0;
-                s->last_data_s = pin_session_now(); /* no-signal timer restarts with the pass */
-                s->idle_s = 0;
-                s->scene_det_ready = 0;
-                s->hdv_err_reset = 1;   /* the first packets after the rewind start afresh */
-            }
-        }
+         * also have had a few seconds since REW was acknowledged.
+         * "Automatic rewind & capture": maybe_begin_capture() sends PLAY and opens the file
+         * once the stream kind is known; READY meanwhile, as for any capture that is waiting
+         * for its first data. */
+        s->rewind_before_capture = 0;
+        s->rewind_done = 1;
+        set_state(s, PIN_STATE_READY);
+        maybe_begin_capture(s, node);
     }
     pin_session_unlock(s);
     /* a capture that ended without the flush above (Stop, an error): see dv_reasm_discard() */
@@ -3903,43 +4188,15 @@ static void do_run_analog(pin_session_t *s, pin_input_t input, int reuse)
  * replay (virtual device)
  * ==================================================================== */
 
-/* EOT: for multi-pass testing (the plan's "multi-pass with replay EOT")
- * this drives the same pass sequencing the real async transport-state poll
- * (dv_tick()) would on hardware -- replay has no such poll (there is no
- * real deck to ask), so that logic is reproduced here instead. Shared by
- * every replay source mode (DV frames, raw EP 0x88 dump, HDV .ts). */
+/* EOT of a replay: the end of the tape. Shared by every replay source mode (DV frames, raw EP
+ * 0x88 dump, HDV .ts). */
 static void replay_handle_eot(pin_session_t *s)
 {
     pin_session_lock(s);
     s->deck = PIN_DECK_STOPPED;
     pin_session_push_event(s, PIN_EVT_DECK, (int32_t)s->deck, NULL);
-    if (s->sink && s->pass < s->passes) {
-        finish_file(s);
-        s->hdv_err_reset = 1;
-        if (s->disk_slow_pending) {
-            /* as a live pass change (dv_tick()): pass 1's last units overflowed its queue */
-            capture_end(s, PIN_STOP_DISK_SLOW, NULL, 0);
-            set_state(s, PIN_STATE_READY);
-            pin_session_unlock(s);
-            return;
-        }
-        s->pass_index++;
-        s->pass++;
-        s->scene_index = first_scene_number(s);
-        s->fmt_numbered = 0;
-        s->scene_cut_deferred = 0;
-        file_format_for_stream(s);
-        open_sink_for_scene(s);
-        s->deck = PIN_DECK_PLAYING;
-        s->capture_start_s = pin_session_now();
-        /* as a live pass change (dv_tick()): the tape starts over, so does the scene
-         * detector, and an HDV file starts on a GOP */
-        s->scene_det_ready = 0;
-        s->elapsed_s = 0;
-        if (s->state != PIN_STATE_ERROR)   /* (a failed open ended the capture) */
-            pin_session_push_event(s, PIN_EVT_PASS, s->pass, NULL);
-    } else if (s->sink) {
-        /* last pass: stop */
+    if (s->sink) {
+        /* the end of the recording: the capture ends */
         capture_end(s, PIN_STOP_END_OF_TAPE, NULL, 0);
         set_state(s, PIN_STATE_READY);
     } else {
@@ -4840,7 +5097,7 @@ pin_status_t pin_session_check_output(pin_session_t *s, const pin_capture_opts_t
     char base[PIN_PATH_MAX];
     pin_naming_strip_extension(o->path, ext, base, sizeof(base));
     pin_naming_opts_t nopts = { .scene_split = 0, .always_number = o->first_number != 0,
-                                .scene_index = o->first_number ? o->first_number : 1, .pass = 1 };
+                                .scene_index = o->first_number ? o->first_number : 1 };
     pin_naming_build(base, &nopts, ext, out->first_path, sizeof(out->first_path));
 
     char first_match[PIN_PATH_MAX];
@@ -4938,15 +5195,12 @@ pin_status_t pin_session_capture_start(pin_session_t *s, const pin_capture_opts_
     if (!overwrite && cs == PIN_OK && chk.collision)
         return PIN_ERR_EXISTS;
     pin_cmd_t c = { .kind = PIN_CMD_CAPTURE_START, .capture = *o, .overwrite = overwrite };
-    /* A real tape needs a no-signal or time limit to notice the end of a pass;
-     * a replay's end of file is the end of the pass. */
-    if (!s->is_replay) {
-        pin_capture_opts_normalize(&c.capture);
-        /* A pass change rewinds the deck: without start_deck (manual capture) there is
-         * one pass, and the no-signal / time limit just ends the capture. */
-        if (!c.capture.start_deck)
-            c.capture.passes = 1;
-    }
+    pin_capture_opts_normalize(&c.capture);
+    /* A retry winds the deck: without start_deck (manual capture) or a deck (replay) there is
+     * nothing to wind. */
+    if ((!c.capture.start_deck || s->is_replay) &&
+        !(s->is_replay && test_seam("PIN_TEST_RETRY_REPLAY")))
+        c.capture.retry = 0;
     /* checked again: another caller may have started one while the output was checked */
     pin_session_lock(s);
     if (cmd_slot_wait(s, PIN_CMD_CAPTURE_START) != PIN_OK || !capture_can_start(s)) {
@@ -4992,7 +5246,7 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
     strncpy(out->timecode, s->timecode, sizeof(out->timecode) - 1);
     strncpy(out->rec_datetime, s->rec_datetime, sizeof(out->rec_datetime) - 1);
     out->tape_percent = s->tape_percent;
-    out->pass = s->pass; out->passes = s->passes; out->scene = (int)s->scene_index;
+    out->scene = (int)s->scene_index;
     strncpy(out->current_file, s->current_file, sizeof(out->current_file) - 1);
     out->elapsed_s = s->elapsed_s;
     out->frames = s->frames; out->frames_dropped = s->frames_dropped;
@@ -5035,6 +5289,33 @@ static void status_fill_locked(pin_session_t *s, pin_status_snapshot_t *out)
             out->capture_idle_stop_s = s->capture_opts.idle_stop_minutes * 60.0;
         if (s->capture_opts.max_duration_minutes > 0)
             out->capture_duration_s = s->capture_opts.max_duration_minutes * 60.0;
+    }
+    {
+        /* the running capture's retry, or the last one's */
+        pin_retry_stats_t rs = s->retry_stats;
+        if (s->retry)
+            pin_retry_get_stats(s->retry, &rs);
+        out->retry_on = s->retry != NULL;
+        out->retry_phase = s->retry ? (int)rs.phase : PIN_RETRY_PHASE_IDLE;
+        out->retry_attempt = s->retry ? rs.attempt : 0;
+        out->retry_attempts = s->retry ? rs.attempts : 0;
+        out->retry_held_s = s->retry ? rs.held_s : 0;
+        out->retry_section_s = s->retry ? rs.section_s : 0;
+        out->retry_bad = s->retry ? rs.bad_slots : 0;
+        out->retry_sections = rs.sections;
+        out->retry_fixed = rs.sections_fixed;
+        out->retry_partly = rs.sections_partly;
+        out->retry_failed = rs.sections_failed;
+        out->retry_mended = rs.frames_mended;
+        out->retry_rewinds = rs.rewinds;
+        out->retry_wind_speed = rs.rew_rate > 0 ? rs.rew_rate : s->retry_rate;
+        out->retry_whole_tape = s->retry ? rs.whole : 0;
+        out->retry_spool_bytes = s->retry ? rs.spool_bytes : 0;
+        if (s->input == PIN_INPUT_DV && s->dev.camera_node &&
+            (s->dev.camera_vendor[0] || s->dev.camera_model[0]))
+            snprintf(out->camera_name, sizeof(out->camera_name), "%s%s%s", s->dev.camera_vendor,
+                     s->dev.camera_vendor[0] && s->dev.camera_model[0] ? " " : "",
+                     s->dev.camera_model);
     }
     out->idle_stop_remaining_s = -1;
     out->duration_remaining_s = -1;

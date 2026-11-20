@@ -197,7 +197,7 @@ static int ends_with_iext(const char *name, const char *ext)
     return str_iequal(name + nlen - elen, ext);
 }
 
-#define PIN_NAME_MAX_BYTES 200 /* 255 minus "-pass-99-0001.ext" and some slack */
+#define PIN_NAME_MAX_BYTES 200 /* 255 minus "-0001.ext" and some slack */
 
 static int fail(char *reason, size_t size, const char *fmt, int arg)
 {
@@ -338,23 +338,15 @@ int pin_naming_build(const char *base_no_ext, const pin_naming_opts_t *opts, con
 {
     if (!base_no_ext || !opts || !ext || !out || out_size == 0)
         return -1;
-    if (opts->pass == 0)
-        return -1;
     int numbered = opts->scene_split || opts->always_number;
     if (numbered && opts->scene_index == 0)
         return -1;
 
     int n;
-    if (opts->pass == 1 && !numbered) {
+    if (!numbered)
         n = snprintf(out, out_size, "%s.%s", base_no_ext, ext);
-    } else if (opts->pass == 1 && numbered) {
+    else
         n = snprintf(out, out_size, "%s-%04u.%s", base_no_ext, opts->scene_index, ext);
-    } else if (opts->pass != 1 && !numbered) {
-        n = snprintf(out, out_size, "%s-pass-%u.%s", base_no_ext, opts->pass, ext);
-    } else {
-        n = snprintf(out, out_size, "%s-pass-%u-%04u.%s", base_no_ext, opts->pass,
-                     opts->scene_index, ext);
-    }
     if (n < 0 || (size_t)n >= out_size)
         return -1;
     return 0;
@@ -417,7 +409,7 @@ int pin_naming_collides(const char *base_no_ext, const char *ext, char *first_ma
     const char *name;
     while ((name = pin_fs_readdir(d)) != NULL) {
         size_t n = name_key(name, kname, KEY_MAX);
-        /* "base.ext", or "base-...ext" (covers -NNNN, -pass-N, -pass-N-NNNN) */
+        /* "base.ext", or "base-...ext" (covers -NNNN, and the -pass-N names of older versions) */
         int match = (n == nexact && memcmp(kname, kexact, n * sizeof(*kname)) == 0) ||
                     (n >= nprefix && n >= next &&
                      memcmp(kname, kprefix, nprefix * sizeof(*kname)) == 0 &&

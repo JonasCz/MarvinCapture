@@ -119,6 +119,13 @@ typedef struct {
     int deinterlace;            /* pin_capture_opts_t's format settings */
     int video_quality;
     int ffv1_compression;
+    int retry;                  /* --retry: pin_capture_opts_t.retry and its settings (0 = default) */
+    int retry_attempts;
+    int retry_window_s;
+    int retry_preroll_s;
+    int retry_trigger;
+    int retry_mode;             /* pin_retry_mode_api_t */
+    int retry_storage;          /* pin_retry_storage_t */
 } pin_script_capture_t;
 
 typedef struct {

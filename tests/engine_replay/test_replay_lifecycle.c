@@ -25,11 +25,10 @@
  *     with WRITE_ERROR and the session in ERROR, CAPTURE_ENDED before ERROR, no hang;
  *   - a failed close with a long non-ASCII file name: the status' stop_text keeps the whole
  *     "could not be written completely" sentence as valid UTF-8, the event names the whole file;
- *   - two passes of a raw EP 0x88 dump that end by themselves: both files equal (the dump's last
- *     frame goes into its pass, the next pass starts on a fresh reassembler);
+ *   - a raw EP 0x88 dump that ends by itself: END_OF_TAPE, the file has the dump's frames;
  *   - a script cancelled (Ctrl-C) whose capture then fails to close exits 4, not 130;
- *   - pass 1's queue overflows as its file is finished: the capture ends there with DISK_SLOW,
- *     pass 2 never starts.
+ *   - the queue overflows as the last file is finished (the units held for a scene cut go out
+ *     together, onto a slow drive): the capture ends with DISK_SLOW.
  *
  * Usage: test_replay_lifecycle <dv-pal.dv> <ep88-pal.bin>
  */
@@ -37,7 +36,7 @@
 #include "replay_test_util.h"
 
 typedef struct {
-    int ended, errors, scenes, passes;
+    int ended, errors, scenes;
     int ended_before_error;
     int ended_reason;
     char ended_text[PIN_PATH_MAX];
@@ -59,8 +58,6 @@ static void drain(pin_session_t *s, events_t *e)
             e->errors++;
         } else if (ev.kind == PIN_EVT_SCENE) {
             e->scenes++;
-        } else if (ev.kind == PIN_EVT_PASS) {
-            e->passes++;
         }
         ev.size = sizeof(ev);
     }
@@ -210,11 +207,10 @@ static void test_long_name(const char *dv)
     printf("OK: a long file name keeps the failure sentence whole\n");
 }
 
-/* Two passes of a raw dump, ending by themselves: the same frames in both files. */
-static void test_passes(const char *dump)
+/* A raw dump, ending by itself: END_OF_TAPE, and a file. */
+static void test_end_of_tape(const char *dump)
 {
     remove("lc_pass.dv");
-    remove("lc_pass-pass-2.dv");
     pin_session_t *s = pin_test_open_replay(dump);
     pin_test_prepare_dv(s);
     pin_status_snapshot_t snap = { .size = sizeof(snap) };
@@ -231,28 +227,23 @@ static void test_passes(const char *dump)
     pin_capture_opts_defaults(&o);
     snprintf(o.path, sizeof(o.path), "lc_pass");
     o.format_dv = PIN_FMT_DV_RAW;
-    o.passes = 2;
     CHECK_EQ_I(pin_capture_start(s, &o, 1), PIN_OK);
     events_t e = { 0 };
     wait_end(s, &snap, &e);
     CHECK_EQ_I(snap.stop_reason, PIN_STOP_END_OF_TAPE);
-    CHECK_EQ_I(e.passes, 1);
-    long a = file_size("lc_pass.dv"), b = file_size("lc_pass-pass-2.dv");
-    printf("passes: %ld and %ld bytes\n", a, b);
-    CHECK(a > 0 && a == b);
+    long a = file_size("lc_pass.dv");
+    printf("end of tape: %ld bytes\n", a);
+    CHECK(a > 0 && a % 144000 == 0);
     pin_close(s);
     remove("lc_pass.dv");
-    remove("lc_pass-pass-2.dv");
-    printf("OK: two passes of a raw dump hold the same frames\n");
+    printf("OK: a raw dump ends by itself\n");
 }
 
-/* Pass 1's last units overflow its queue as its file is finished (the units held back for a
- * scene cut go out together, onto a slow drive): the capture ends there with DISK_SLOW, instead
- * of starting pass 2. */
-static void test_disk_slow_at_pass_change(const char *dv)
+/* The last units overflow the queue as the file is finished (the units held back for a scene
+ * cut go out together, onto a slow drive): the capture ends with DISK_SLOW. */
+static void test_disk_slow_at_end(const char *dv)
 {
     remove("lc_slow.dv");
-    remove("lc_slow-pass-2.dv");
     /* a drive that keeps up with one frame at a time, behind a queue of two frames */
     pin_test_setenv("PIN_TEST_SINK_DELAY_MS", "25");
     pin_test_setenv("PIN_TEST_WRITER_QUEUE", "300000");
@@ -263,22 +254,18 @@ static void test_disk_slow_at_pass_change(const char *dv)
     snprintf(o.path, sizeof(o.path), "lc_slow");
     o.format_dv = PIN_FMT_DV_RAW;
     o.scene_split = 1;
-    o.passes = 2;
     CHECK_EQ_I(pin_capture_start(s, &o, 1), PIN_OK);
     events_t e = { 0 };
     pin_status_snapshot_t snap = { .size = sizeof(snap) };
     wait_end(s, &snap, &e);
-    printf("disk slow: stop %d, pass events %d, \"%s\", %s\n", (int)snap.stop_reason, e.passes,
-           snap.stop_text, snap.current_file);
+    printf("disk slow: stop %d, \"%s\", %s\n", (int)snap.stop_reason, snap.stop_text,
+           snap.current_file);
     CHECK_EQ_I(snap.stop_reason, PIN_STOP_DISK_SLOW);
-    CHECK_EQ_I(e.passes, 0);                                /* pass 2 never started */
-    CHECK(strstr(snap.current_file, "pass-2") == NULL);
-    CHECK(!pin_test_file_exists("lc_slow-pass-2.dv") && !pin_test_file_exists("lc_slow-pass-2-0001.dv"));
     pin_close(s);
     pin_test_setenv("PIN_TEST_SINK_DELAY_MS", "");
     pin_test_setenv("PIN_TEST_WRITER_QUEUE", "");
     remove("lc_slow-0001.dv");
-    printf("OK: an overflow at the pass change ends the capture there (DISK_SLOW)\n");
+    printf("OK: an overflow as the last file is finished ends the capture with DISK_SLOW\n");
 }
 
 /* Ctrl-C, then the capture's file cannot be closed completely: exit 4, not 130. */
@@ -330,8 +317,8 @@ int main(int argc, char **argv)
     test_commands(argv[1]);
     test_open_fail(argv[1]);
     test_long_name(argv[1]);
-    test_passes(argv[2]);
+    test_end_of_tape(argv[2]);
     test_cancel_then_close_fail(argv[1]);
-    test_disk_slow_at_pass_change(argv[1]);
+    test_disk_slow_at_end(argv[1]);
     return 0;
 }

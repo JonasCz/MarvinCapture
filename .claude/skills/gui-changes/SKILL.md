@@ -52,10 +52,12 @@ only a thin wrapper in `Core/Pin.swift`, if any). Prefer reusing an existing cal
   (keys `gui.*`, stored via the core settings); `ApplyLaunch` applies command
   line presets.
 - `ViewModels/KindSettingsViewModel.cs` + `Views/KindSettingsView.xaml`: the
-  per-kind (DV, HDV) format / aspect / split / idle / passes options. Aspect and title are
+  per-kind (DV, HDV) format / aspect / split / idle / retry options (the retry settings behind
+  the gear are one `RetryOptionsViewModel` shared by both tabs, keys `gui.retry_attempts`,
+  `gui.retry_window`, `gui.retry_preroll`, `gui.retry_on`; the check box `gui.retry_<kind>`). Aspect and title are
   per kind in the capture options too (`Aspect` = analog / DV files, `AspectHdv` = HDV
   files; the name always goes into `Title`, the core drops it where the format has none);
-  split, idle, duration and passes come from the tab of the kind arriving at the start. An
+  split, idle, duration and retry come from the tab of the kind arriving at the start. An
   aspect drop-down is disabled while its format has no `SupportsAspect` (raw `.dv` /
   `.m2t`), and `EffectiveAspect` (Auto then) is what the capture and the preview get. The
   name and aspect tooltips are the core's (`pin_format_title_help`, `pin_format_aspect_help`).

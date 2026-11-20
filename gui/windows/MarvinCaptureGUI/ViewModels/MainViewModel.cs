@@ -97,7 +97,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     private bool CaptureAllowed(PinCaptureAction action) =>
         Native.CaptureActionAllowed(SessionState, DeckAvailable, action);
 
-    /// <summary>Stop is possible while writing (or between passes); not while already finalising.</summary>
+    /// <summary>Stop is possible while writing (or while a retry winds back); not while already finalising.</summary>
     public bool CanStop => CaptureAllowed(PinCaptureAction.Stop);
 
     /// <summary>The Capture/Stop button (analog) and the Play-and-capture/Stop button (DV).</summary>
@@ -125,7 +125,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     return t;
                 }
             }
-            return "Captures whatever the camera or deck is sending, without issuing deck control commands. Always one pass: a new pass would need a deck rewind.";
+            return "Captures whatever the camera or deck is sending, without issuing deck control commands. No retry of bad sections: that needs deck control.";
         }
     }
 
@@ -174,6 +174,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         RefreshDevices();
         // The format settings apply at capture start: locked while capturing, like the other options.
         AnalogFormatOptions.IsEditable = DvSettings.FormatOptions.IsEditable = HdvSettings.FormatOptions.IsEditable = !value;
+        RetryOptions.IsEditable = !value;
     }
     /// <summary>Analog button's second line: what Capture records, or while capturing the stop countdown (none otherwise).</summary>
     public string AnalogSubtitle => IsFinishing ? "" : IsCapturing ? _analogStopLine
@@ -248,6 +249,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>The format settings the user chose (deinterlace, quality, FFV1 compression), stored per device.</summary>
     public FormatChoices FormatChoices { get; } = new();
+
+    /// <summary>How the retry of bad sections works, shared by the DV and HDV tabs (the gear next to the check box).</summary>
+    public RetryOptionsViewModel RetryOptions { get; } = new();
 
     /// <summary>The analog format's settings, behind the gear next to its drop-down.</summary>
     public FormatOptionsViewModel AnalogFormatOptions { get; }
@@ -473,7 +477,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// automation name (live region).</summary>
     [ObservableProperty] private string _statusShortText = "No device open";
 
-    /// <summary>Status bar, row 2 of the file item: "Capturing  ·  pass 2/3" while a capture runs, else "".</summary>
+    /// <summary>Status bar, row 2 of the file item: "Capturing" (and the retry, while it works on a section) while a capture runs, else "".</summary>
     [ObservableProperty] private string _statusSubText = "";
 
     [ObservableProperty] private string _timecode = "--:--:--:--";
@@ -569,11 +573,12 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // The format lists stay empty until the encoder probe is done (ProbeEncoders, RefreshFormats):
         // listing them would run the probe on the UI thread.
         AnalogFormatOptions = new FormatOptionsViewModel(FormatChoices, analog: true);
-        DvSettings = new KindSettingsViewModel(PinKind.Dv, "DV", FormatChoices);
-        HdvSettings = new KindSettingsViewModel(PinKind.Hdv, "HDV", FormatChoices);
+        DvSettings = new KindSettingsViewModel(PinKind.Dv, "DV", FormatChoices, RetryOptions);
+        HdvSettings = new KindSettingsViewModel(PinKind.Hdv, "HDV", FormatChoices, RetryOptions);
         KindTabs.Add(DvSettings);
         KindTabs.Add(HdvSettings);
         FormatChoices.PropertyChanged += (_, e) => OnFormatChoiceChanged(e.PropertyName);
+        RetryOptions.PropertyChanged += (_, e) => OnRetryOptionChanged(e.PropertyName);
 
         foreach (var c in new[] { PinControl.Brightness, PinControl.Contrast, PinControl.Saturation,
                                   PinControl.Hue, PinControl.Sharpness })
@@ -615,6 +620,26 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             Native.SetControl(Session, c, value);
         }
         SaveSetting($"gui.control_{(int)c}", value.ToString(CultureInfo.InvariantCulture));
+    }
+
+    private void OnRetryOptionChanged(string? property)
+    {
+        var r = RetryOptions;
+        static string Whole(double v) => double.IsNaN(v) ? "0" : ((int)Math.Round(v)).ToString(CultureInfo.InvariantCulture);
+        var (key, value) = property switch
+        {
+            nameof(RetryOptionsViewModel.Attempts) => ("gui.retry_attempts", Whole(r.Attempts)),
+            nameof(RetryOptionsViewModel.WindowSeconds) => ("gui.retry_window", Whole(r.WindowSeconds)),
+            nameof(RetryOptionsViewModel.PrerollSeconds) => ("gui.retry_preroll", Whole(r.PrerollSeconds)),
+            nameof(RetryOptionsViewModel.TriggerIndex) => ("gui.retry_on", r.TriggerIndex.ToString(CultureInfo.InvariantCulture)),
+            nameof(RetryOptionsViewModel.ModeIndex) => ("gui.retry_mode", r.ModeIndex.ToString(CultureInfo.InvariantCulture)),
+            nameof(RetryOptionsViewModel.StorageIndex) => ("gui.retry_store", r.StorageIndex.ToString(CultureInfo.InvariantCulture)),
+            _ => ("", ""),
+        };
+        if (key.Length > 0)
+        {
+            SaveSetting(key, value);
+        }
     }
 
     private void OnFormatChoiceChanged(string? property)
@@ -913,7 +938,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         // The DV input auto-detects DV vs HDV, and a tape can switch between them. Each file gets its
         // own kind's aspect (Aspect: analog or the DV tab, AspectHdv: the HDV tab; Auto where the format
         // stores none) and the name as its title (the core leaves it out of formats that have none).
-        // Scene split, the two stops and the passes come from the tab matching what is arriving now.
+        // Scene split, the two stops and the retry come from the tab matching what is arriving now.
         var kind = _lastStreamKind == PinKind.Hdv ? HdvSettings : DvSettings;
         o.Title = analog ? AnalogName : DvName;
         o.Aspect = analog ? AnalogEffectiveAspect : DvSettings.EffectiveAspect;
@@ -921,7 +946,9 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
         o.SceneSplit = !analog && kind.SplitChecked && (kind.SelectedFormat?.SupportsSceneSplit ?? false) ? 1 : 0;
         o.IdleStopMinutes = (int)Math.Max(0, analog ? AnalogIdleStopMinutes : kind.IdleStopMinutes);
         o.MaxDurationMinutes = (int)Math.Max(0, analog ? AnalogMaxDurationMinutes : kind.MaxDurationMinutes);
-        o.Passes = analog ? 1 : kind.EffectivePasses;
+        // the retry winds the deck: only for "Play and capture" (the core ignores it otherwise too)
+        o.Retry = !analog && startDeck && kind.Retry && kind.RetryEnabled ? 1 : 0;
+        RetryOptions.ApplyTo(ref o);
         o.StartDeck = startDeck ? 1 : 0;
         o.RewindFirst = rewindFirst ? 1 : 0; // "Play and capture": start of tape, then play
 
@@ -1177,7 +1204,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Second line of the stop buttons: only on the button the running capture was started with.
     /// The time is the no-signal countdown (", no signal") while no signal arrives and that timeout
-    /// counts, else the capture time limit; no line when neither runs or while rewinding between passes.
+    /// counts, else the capture time limit; no line when neither runs.
     /// </summary>
     private void UpdateStopSubtitles(in PinStatusSnapshot st)
     {
@@ -1202,10 +1229,6 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                 else if (!_captureWithDeck)
                 {
                     manual = $"Stopping in {t}";
-                }
-                else if (st.Pass < st.Passes)
-                {
-                    auto = $"Next pass in {t} (pass {st.Pass} of {st.Passes})";
                 }
                 else
                 {
@@ -1261,8 +1284,8 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             case PinEventKind.Scene:
                 LastLogLine = $"Scene {evt.A}";
                 break;
-            case PinEventKind.Pass:
-                LastLogLine = $"Pass {evt.A}";
+            case PinEventKind.Retry:
+                LastLogLine = evt.Text;
                 break;
             case PinEventKind.Deck:
                 ApplyDeckStatus((PinDeckState)evt.A, DeckBusy);
@@ -1398,7 +1421,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             SaveSetting($"gui.format_{p}", ((int)k.SelectedFormat.Format).ToString(CultureInfo.InvariantCulture));
         }
         SaveSetting($"gui.split_{p}", k.SplitIntoScenes ? "1" : "0");
-        SaveSetting($"gui.passes_{p}", ((int)k.Passes).ToString(CultureInfo.InvariantCulture));
+        SaveSetting($"gui.retry_{p}", k.Retry ? "1" : "0");
         SaveSetting($"gui.idle_{p}", ((int)k.IdleStopMinutes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.duration_{p}", ((int)k.MaxDurationMinutes).ToString(CultureInfo.InvariantCulture));
         SaveSetting($"gui.aspect_{p}", k.AspectIndex.ToString(CultureInfo.InvariantCulture));
@@ -1457,6 +1480,18 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
             FormatChoices.QualityDv = LoadInt("gui.quality_dv", -1);
             FormatChoices.Ffv1Compression = LoadInt("gui.ffv1_compression", -1);
 
+            // 0 / missing = the core's default (pin_retry_setting_range)
+            var (_, _, da) = Native.RetrySettingRange(Native.RetrySetting.Attempts);
+            var (_, _, dw) = Native.RetrySettingRange(Native.RetrySetting.WindowSeconds);
+            var (_, _, dp) = Native.RetrySettingRange(Native.RetrySetting.PrerollSeconds);
+            int ra = LoadInt("gui.retry_attempts", 0), rw = LoadInt("gui.retry_window", 0), rp = LoadInt("gui.retry_preroll", 0);
+            RetryOptions.Attempts = ra > 0 ? ra : da;
+            RetryOptions.WindowSeconds = rw > 0 ? rw : dw;
+            RetryOptions.PrerollSeconds = rp > 0 ? rp : dp;
+            RetryOptions.TriggerIndex = LoadInt("gui.retry_on", 0) == 1 ? 1 : 0;
+            RetryOptions.ModeIndex = Math.Clamp(LoadInt("gui.retry_mode", 0), 0, 2);
+            RetryOptions.StorageIndex = LoadInt("gui.retry_store", 0) == 1 ? 1 : 0;
+
             foreach (var k in KindTabs)
             {
                 var p = k.SettingsPrefix;
@@ -1466,7 +1501,7 @@ public sealed partial class MainViewModel : ObservableObject, IDisposable
                     k.ApplyFormat((PinFormat)f);
                 }
                 k.SplitIntoScenes = LoadInt($"gui.split_{p}", 0) != 0;
-                k.Passes = Math.Max(1, LoadInt($"gui.passes_{p}", 1));
+                k.Retry = LoadInt($"gui.retry_{p}", 0) != 0;
                 k.IdleStopMinutes = Math.Max(0, LoadInt($"gui.idle_{p}", 5));
                 k.MaxDurationMinutes = Math.Max(0, LoadInt($"gui.duration_{p}", 0));
                 k.AspectIndex = Math.Clamp(LoadInt($"gui.aspect_{p}", 0), 0, 2);

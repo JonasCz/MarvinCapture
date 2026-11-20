@@ -17,7 +17,7 @@ public sealed partial class FormatItem
     public string Extension { get; }
     public bool SupportsTitle => Info.SupportsTitle != 0;
     public bool SupportsSceneSplit => Info.SupportsSceneSplit != 0;
-    public bool SupportsMultiPass => Info.SupportsMultiPass != 0;
+    public bool SupportsRetry => Info.SupportsRetry != 0;
     public bool IsDefault => Info.IsDefault != 0;
     /// <summary>The file stores a display aspect (raw .dv / .m2t do not: players take it from the video).</summary>
     public bool SupportsAspect => Info.SupportsAspect != 0;
@@ -37,7 +37,8 @@ public sealed partial class FormatItem
 /// <summary>
 /// One tab of the "Settings for: DV | HDV" TabView: format (with its settings behind the
 /// gear, <see cref="FormatOptions"/>), aspect (disabled for a format that stores none), scene
-/// split, idle-stop minutes and pass count.
+/// split, the two stops and the retry of bad sections (its settings behind the gear, shared by both
+/// tabs: <see cref="RetryOptions"/>).
 /// </summary>
 public sealed partial class KindSettingsViewModel : ObservableObject
 {
@@ -47,7 +48,7 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     public ObservableCollection<FormatItem> Formats { get; } = new();
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(SplitEnabled), nameof(PassesEnabled), nameof(PassesUsable),
+    [NotifyPropertyChangedFor(nameof(SplitEnabled), nameof(RetryEnabled),
                               nameof(AspectEnabled), nameof(EffectiveAspect), nameof(AspectHelp),
                               nameof(SplitForced), nameof(SplitChecked), nameof(SplitHelp))]
     private FormatItem? _selectedFormat;
@@ -66,43 +67,23 @@ public sealed partial class KindSettingsViewModel : ObservableObject
     [NotifyPropertyChangedFor(nameof(SplitChecked))]
     private bool _splitIntoScenes;
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PassesAllowed), nameof(PassesUsable), nameof(DisplayPasses), nameof(PassesToolTip))]
     private double _idleStopMinutes = 5;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(PassesAllowed), nameof(PassesUsable), nameof(DisplayPasses), nameof(PassesToolTip))]
     private double _maxDurationMinutes;
 
-    /// <summary>The user's own pass count; kept (and saved) while the entry is greyed out, so it comes back.</summary>
+    /// <summary>"Retry bad sections": re-read damaged stretches of tape and keep the best of every read.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(DisplayPasses), nameof(EffectivePasses))]
-    private double _passes = 1;
+    private bool _retry;
 
-    /// <summary>The core's rule: passes need the no-signal timeout or the "stop after" limit.</summary>
-    public bool PassesAllowed => Native.PassesAllowed(IdleStopMinutes, MaxDurationMinutes);
+    /// <summary>How the retry works (the gear next to the check box); one object shared by the DV and HDV tabs.</summary>
+    public RetryOptionsViewModel RetryOptions { get; }
 
-    /// <summary>Entry enabled (before the editable-while-idle check): format supports passes and a limit is set.</summary>
-    public bool PassesUsable => PassesEnabled && PassesAllowed;
+    /// <summary>The check box is enabled for a DV / HDV format (all of them retry).</summary>
+    public bool RetryEnabled => SelectedFormat?.SupportsRetry ?? false;
 
-    /// <summary>What the entry shows: 1 while passes are not allowed, else the user's value.</summary>
-    public double DisplayPasses
-    {
-        get => PassesAllowed ? Passes : 1;
-        set
-        {
-            if (PassesAllowed)
-            {
-                Passes = value;
-            }
-        }
-    }
-
-    /// <summary>Pass count to capture with (what the core would also enforce).</summary>
-    public int EffectivePasses => PassesAllowed ? (int)Math.Max(1, double.IsNaN(Passes) ? 1 : Passes) : 1;
-
-    public string PassesToolTip => PassesAllowed
-        ? "1 captures the tape once. More passes rewind to the start of the tape and capture it again. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass."
-        : "Needs \"Stop no signal\" or \"Stop after\" to be set: multi-pass needs a way to detect the end of a pass. Set one of them to enable more than one pass. Only for Automatic rewind & capture: each new pass rewinds the tape, so Manual capture always captures one pass.";
+    /// <summary>The check box's tooltip, from the core.</summary>
+    public string RetryHelp => Native.RetrySettingHelp(Native.RetrySetting.Checkbox);
 
     /// <summary>Aspect override for this kind (PinAspect order: Auto, 4:3, 16:9): the user's choice, kept
     /// (and saved) while the drop-down is disabled, so it comes back with a format that stores an aspect.</summary>
@@ -152,16 +133,16 @@ public sealed partial class KindSettingsViewModel : ObservableObject
 
     /// <summary>The check box's tooltip, from the core: what it does, or why it is always on.</summary>
     public string SplitHelp => SelectedFormat is null ? "" : Native.FormatSceneSplitHelp(SelectedFormat.Format);
-    public bool PassesEnabled => SelectedFormat?.SupportsMultiPass ?? false;
 
     public string SettingsPrefix => Kind == PinKind.Dv ? "dv" : "hdv";
 
     /// <summary>The list stays empty until <see cref="RefreshFormats"/>: pin_formats() would run the
     /// encoder probe on the UI thread.</summary>
-    public KindSettingsViewModel(PinKind kind, string tabHeader, FormatChoices choices)
+    public KindSettingsViewModel(PinKind kind, string tabHeader, FormatChoices choices, RetryOptionsViewModel retry)
     {
         Kind = kind;
         TabHeader = tabHeader;
+        RetryOptions = retry;
         FormatOptions = new FormatOptionsViewModel(choices, analog: false); // DV and HDV share the DV choices
     }
 

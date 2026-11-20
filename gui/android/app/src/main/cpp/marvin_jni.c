@@ -314,7 +314,7 @@ MJ_FN(jint, formatFlags)(JNIEnv *env, jclass c, jint f)
     if (!format_info(f, &i))
         return 0;
     return (i.supports_title ? 1 : 0) | (i.supports_scene_split ? 2 : 0) |
-           (i.supports_multi_pass ? 4 : 0) | (i.is_default ? 8 : 0) | (i.supports_aspect ? 16 : 0) |
+           (i.supports_retry ? 4 : 0) | (i.is_default ? 8 : 0) | (i.supports_aspect ? 16 : 0) |
            (i.scene_split_forced ? 32 : 0) | ((jint)i.kind << 8);
 }
 
@@ -577,7 +577,7 @@ static int build_opts(JNIEnv *env, jstring path, jstring title, jintArray opts, 
     if (v[8] >= 0) o->deinterlace = v[8];
     if (v[9] >= 0) o->video_quality = v[9];
     if (v[10] >= 0) o->ffv1_compression = v[10];
-    o->passes = 1;
+    o->retry = 0;   /* a manual capture: no deck control, no retry of bad sections */
     o->start_deck = v[11] != 0;
     o->rewind_first = v[12] != 0;
     o->aspect_hdv = (pin_aspect_t)v[13];     /* HDV files; aspect (v[3]) is analog and DV files' */
@@ -673,7 +673,7 @@ MJ_FN(jint, getStatus)(JNIEnv *env, jclass c, jlong h, jintArray ints, jlongArra
     jint iv[N_INTS] = {
         st.state, st.input, st.stream_kind, st.signal, st.is_60hz, st.dar_num, st.dar_den,
         st.deck, st.camera_present, st.progress_percent, st.disk_low, st.stop_reason,
-        st.stop_no_video, st.pass, st.passes, st.last_error,
+        st.stop_no_video, st.retry_attempt, st.retry_attempts, st.last_error,
         pin_state_is_capturing(st.state),
         pin_manual_capture_allowed(st.state, deck_available, st.deck, st.signal),
         pin_capture_action_allowed(st.state, deck_available, PIN_CAPTURE_STOP),
